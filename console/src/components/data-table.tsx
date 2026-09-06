@@ -3,7 +3,6 @@
 import { flexRender, getCoreRowModel, getPaginationRowModel, getSortedRowModel, useReactTable, type ColumnDef, type PaginationState, type SortingState } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -15,7 +14,7 @@ export function DataTable<T>({ columns, data, loading, empty = "No records yet."
   const table = useReactTable({ data, columns, state: { sorting, pagination }, onSortingChange: setSorting, onPaginationChange: setPagination, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel(), getPaginationRowModel: getPaginationRowModel() });
   return <div>
     <Table>
-    <TableHeader><TableRow>{table.getHeaderGroups().map((group) => group.headers.map((header) => <TableHead key={header.id} className={cn(header.column.getCanSort() && "cursor-pointer select-none hover:text-slate-200")} onClick={header.column.getToggleSortingHandler()}>{header.isPlaceholder ? null : <span className="inline-flex items-center gap-1">{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getCanSort() ? header.column.getIsSorted() === "asc" ? <ArrowUp className="size-3" /> : header.column.getIsSorted() === "desc" ? <ArrowDown className="size-3" /> : <ChevronsUpDown className="size-3 opacity-50" /> : null}</span>}</TableHead>))}</TableRow></TableHeader>
+    <TableHeader><TableRow>{table.getHeaderGroups().map((group) => group.headers.map((header) => { const sorted = header.column.getIsSorted(); const label = <span className="inline-flex items-center gap-1">{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getCanSort() ? sorted === "asc" ? <ArrowUp className="size-3" /> : sorted === "desc" ? <ArrowDown className="size-3" /> : <ChevronsUpDown className="size-3 opacity-50" /> : null}</span>; return <TableHead key={header.id} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"}>{header.isPlaceholder ? null : header.column.getCanSort() ? <button type="button" className="rounded-sm text-left hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40" onClick={header.column.getToggleSortingHandler()}>{label}</button> : label}</TableHead>; }))}</TableRow></TableHeader>
     <TableBody>
       {loading ? Array.from({ length: 5 }, (_, index) => <TableRow key={index}>{columns.map((_, cell) => <TableCell key={cell}><Skeleton className="h-4 w-3/4" /></TableCell>)}</TableRow>) : table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => <TableRow key={row.id}>{row.getVisibleCells().map((cell) => <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>)}</TableRow>) : <TableRow><TableCell colSpan={columns.length} className="py-14 text-center text-sm text-stealth-muted">{empty}</TableCell></TableRow>}
     </TableBody>

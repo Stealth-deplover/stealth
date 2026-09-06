@@ -1,20 +1,59 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap, uploadMultipart } from "@/api/client";
+import { ApiError, api, unwrap, uploadMultipart } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
 import type { components } from "@/api/generated/schema";
+import { isSlug, toSlug } from "@/lib/utils";
 
 export function useLogin() {
-  return useMutation({ mutationFn: async (body: { email: string; password: string }) => unwrap(await api.POST("/v1/sessions/email-password", { body })) });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["LoginRequest"]) => unwrap(await api.POST("/v1/sessions/email-password", { body })),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
+      ]);
+    },
+  });
 }
 
 export function useRegister() {
-  return useMutation({ mutationFn: async (body: { email: string; password: string }) => unwrap(await api.POST("/v1/account/registrations", { body })) });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["RegisterRequest"]) => unwrap(await api.POST("/v1/account/registrations", { body })),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
+      ]);
+    },
+  });
 }
 
 export function useRecoveryRequest() {
-  return useMutation({ mutationFn: async (body: { email: string }) => unwrap(await api.POST("/v1/account/recovery", { body })) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["PasswordRecoveryRequest"]) => unwrap(await api.POST("/v1/account/recovery", { body })) });
+}
+
+export function useSendAccountVerification() {
+  return useMutation({ mutationFn: async (body: components["schemas"]["AuthVerificationRequest"] = {}) => unwrap(await api.POST("/v1/account/verification", { body })) });
+}
+
+export function useConfirmAccountVerification() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["AuthTokenRequest"]) => unwrap(await api.PUT("/v1/account/verification", { body })),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+  });
+}
+
+export function useConfirmAccountRecovery() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["PasswordResetRequest"]) => unwrap(await api.PUT("/v1/account/recovery", { body })),
+    onSuccess: () => queryClient.removeQueries({ queryKey: queryKeys.account }),
+  });
 }
 
 export function useLogout() {
@@ -39,12 +78,12 @@ export function useUpdateAccountPassword() {
 
 export function useCreateOrganization() {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { name: string; slug: string }) => unwrap(await api.POST("/v1/organizations", { body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.organizations }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateOrganizationRequest"]) => unwrap(await api.POST("/v1/organizations", { body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.organizations }) });
 }
 
 export function useCreateProject(organizationId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { name: string }) => unwrap(await api.POST("/v1/organizations/{organizationID}/projects", { params: { path: { organizationID: organizationId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.projects(organizationId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateProjectRequest"]) => { const name = toSlug(body.name); if (!isSlug(name)) throw new ApiError("Project name must become a 2–63 character slug using lowercase letters, numbers, or hyphens.", 422, "validation_error"); return unwrap(await api.POST("/v1/organizations/{organizationID}/projects", { params: { path: { organizationID: organizationId } }, body: { ...body, name } })); }, onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.projects(organizationId) }) });
 }
 
 export function useCreateFunction(projectId: string) {
@@ -59,17 +98,54 @@ export function useCreateSite(projectId: string) {
 
 export function useCreateDatabase(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { name: string }) => unwrap(await api.POST("/v1/projects/{projectID}/databases", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.databases(projectId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateDatabaseRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/databases", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.databases(projectId) }) });
+}
+
+export function useCreateDatabaseBackup(projectId: string, databaseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: async () => unwrap(await api.POST("/v1/projects/{projectID}/databases/{databaseID}/backups", { params: { path: { projectID: projectId, databaseID: databaseId }, query: { max_rows: 10000 } } })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.databaseBackups(projectId, databaseId) }) });
+}
+
+export function useDeleteDatabaseBackup(projectId: string, databaseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: async (backupId: string) => unwrap(await api.DELETE("/v1/projects/{projectID}/databases/{databaseID}/backups/{backupID}", { params: { path: { projectID: projectId, databaseID: databaseId, backupID: backupId } } })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.databaseBackups(projectId, databaseId) }) });
+}
+
+export function useRestoreDatabaseBackup(projectId: string, databaseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: async (backupId: string) => unwrap(await api.POST("/v1/projects/{projectID}/databases/{databaseID}/backups/{backupID}/restore", { params: { path: { projectID: projectId, databaseID: databaseId, backupID: backupId } } })), onSuccess: () => { queryClient.invalidateQueries({ queryKey: queryKeys.database(projectId, databaseId) }); queryClient.invalidateQueries({ queryKey: queryKeys.tables(projectId, databaseId) }); queryClient.invalidateQueries({ queryKey: queryKeys.databaseBackups(projectId, databaseId) }); } });
 }
 
 export function useCreateBucket(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { name: string; file_security: boolean }) => unwrap(await api.POST("/v1/projects/{projectID}/storage/buckets", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateStorageBucketRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/storage/buckets", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) }) });
+}
+
+export function useDeleteStorageFile(projectId: string, bucketId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (fileId: string) => unwrap(await api.DELETE("/v1/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}", { params: { path: { projectID: projectId, bucketID: bucketId, fileID: fileId } } })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.files(projectId, bucketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.bucket(projectId, bucketId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
+    },
+  });
+}
+
+export function useCreateFunctionVariable(projectId: string, functionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateFunctionVariableRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/functions/{functionID}/variables", { params: { path: { projectID: projectId, functionID: functionId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.functionVariables(projectId, functionId) }) });
+}
+
+export function useDeleteFunctionVariable(projectId: string, functionId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: async (variableId: string) => unwrap(await api.DELETE("/v1/projects/{projectID}/functions/{functionID}/variables/{variableID}", { params: { path: { projectID: projectId, functionID: functionId, variableID: variableId } } })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.functionVariables(projectId, functionId) }) });
 }
 
 export function useCreateProjectUser(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { email: string; password: string; name?: string | null }) => unwrap(await api.POST("/v1/projects/{projectID}/users", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.users(projectId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateProjectUserRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/users", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.users(projectId) }) });
 }
 
 export function useCreateWebhook(projectId: string) {
@@ -89,12 +165,23 @@ export function useCreateAgent(projectId: string) {
 
 export function useCreateAgentRun(agentId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { prompt: string }) => unwrap(await api.POST("/v1/agents/{agentID}/runs", { params: { path: { agentID: agentId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns(agentId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateAgentRunRequest"]) => unwrap(await api.POST("/v1/agents/{agentID}/runs", { params: { path: { agentID: agentId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns(agentId) }) });
+}
+
+export function useCancelAgentRun(agentId: string, runId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.POST("/v1/agents/{agentID}/runs/{runID}/cancel", { params: { path: { agentID: agentId, runID: runId } } })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentRun(agentId, runId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns(agentId) });
+    },
+  });
 }
 
 export function useUpdateAuthSettings(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { registration_enabled?: boolean; cors_origins?: string[] }) => unwrap(await api.PATCH("/v1/projects/{projectID}/auth/settings", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.authSettings(projectId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["UpdateProjectAuthSettingsRequest"]) => unwrap(await api.PATCH("/v1/projects/{projectID}/auth/settings", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.authSettings(projectId) }) });
 }
 
 export function useReplaceServiceLayout(projectId: string) {
@@ -115,4 +202,16 @@ export function useUploadFunctionDeployment(projectId: string, functionId: strin
 export function useUploadSiteDeployment(projectId: string, siteId: string) {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: async ({ file, activate = true }: { file: File; activate?: boolean }) => { const form = new FormData(); form.append("source", file); form.append("activate", activate ? "true" : "false"); return uploadMultipart(`/v1/projects/${projectId}/sites/${siteId}/deployments`, form); }, onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.siteDeployments(projectId, siteId) }) });
+}
+
+export function useActivateSiteDeployment(projectId: string, siteId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (deploymentId: string) => unwrap(await api.POST("/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}/activate", { params: { path: { projectID: projectId, siteID: siteId, deploymentID: deploymentId } } })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.site(projectId, siteId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.siteDeployments(projectId, siteId) });
+      queryClient.invalidateQueries({ queryKey: ["site-deployment", projectId, siteId] });
+    },
+  });
 }

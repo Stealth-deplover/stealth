@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/functionsecret"
 	"github.com/nazxf/stealth-api/internal/httpapi"
@@ -23,6 +22,7 @@ import (
 	"github.com/nazxf/stealth-api/internal/ratelimit"
 	"github.com/nazxf/stealth-api/internal/repository"
 	"github.com/nazxf/stealth-api/internal/tlsmanager"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {

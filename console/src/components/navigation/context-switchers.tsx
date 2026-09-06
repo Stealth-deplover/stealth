@@ -2,7 +2,7 @@
 
 import { ChevronsUpDown, FolderKanban, Plus, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useOrganizations, useProjects } from "@/api/queries";
 import type { Organization, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,6 @@ function SelectorItem({ icon, title, subtitle, selected, onClick }: { icon: Reac
 
 export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const router = useRouter();
-  const pathname = usePathname();
   const { data, isLoading } = useOrganizations();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -34,7 +33,7 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   };
   return <Dialog open={open} onOpenChange={setOpen}>
     <DialogTrigger asChild><Button variant="ghost" className="h-10 max-w-52 justify-start px-2.5"><span className="flex size-7 items-center justify-center rounded-md bg-cyan-300/10 text-[10px] font-semibold text-cyan-200">{getInitials(current?.name ?? "S")}</span><span className="min-w-0 flex-1 text-left"><span className="block truncate text-xs font-semibold text-white">{current?.name ?? "Organizations"}</span><span className="block truncate text-[10px] text-slate-500">Workspace</span></span><ChevronsUpDown className="size-3.5 text-slate-500" /></Button></DialogTrigger>
-    <DialogContent className="max-w-md"><DialogHeader><DialogTitle>Choose organization</DialogTitle><DialogDescription>Switch the workspace context for this console.</DialogDescription></DialogHeader><div className="relative mb-3"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search organizations" className="pl-9" /></div><div className="max-h-72 space-y-1 overflow-y-auto">{isLoading ? <p className="px-3 py-4 text-sm text-slate-500">Loading organizations…</p> : filtered.length ? filtered.map((organization) => <SelectorItem key={organization.id} icon={getInitials(organization.name)} title={organization.name} subtitle={organization.slug} selected={organization.id === currentId} onClick={() => navigate(organization)} />) : <p className="px-3 py-4 text-sm text-slate-500">No matching organizations.</p>}</div><Button variant="outline" className="mt-4 w-full" onClick={() => { setOpen(false); router.push(`${pathname.split("/organizations")[0]}/organizations`); }}><Plus className="size-4" /> Create organization</Button></DialogContent>
+    <DialogContent className="max-w-md"><DialogHeader><DialogTitle>Choose organization</DialogTitle><DialogDescription>Switch the workspace context for this console.</DialogDescription></DialogHeader><div className="relative mb-3"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search organizations" className="pl-9" /></div><div className="max-h-72 space-y-1 overflow-y-auto">{isLoading ? <p className="px-3 py-4 text-sm text-slate-500">Loading organizations…</p> : filtered.length ? filtered.map((organization) => <SelectorItem key={organization.id} icon={getInitials(organization.name)} title={organization.name} subtitle={organization.slug} selected={organization.id === currentId} onClick={() => navigate(organization)} />) : <p className="px-3 py-4 text-sm text-slate-500">No matching organizations.</p>}</div><Button variant="outline" className="mt-4 w-full" onClick={() => { setOpen(false); router.push("/organizations"); }}><Plus className="size-4" /> Create organization</Button></DialogContent>
   </Dialog>;
 }
 

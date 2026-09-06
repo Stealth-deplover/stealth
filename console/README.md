@@ -5,12 +5,13 @@ Presentation layer for the Stealth Go control-plane API. The browser talks direc
 ## Development
 
 ```bash
-npm install
+npm ci
+cp .env.example .env.local
 npm run api:generate
 npm run dev
 ```
 
-When running the API on `http://localhost:8080`, set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8080` and include the console origin in the Go API's `CONSOLE_CORS_ORIGINS`.
+When running the API on `http://localhost:8080`, set `NEXT_PUBLIC_API_BASE_URL=http://localhost:8080` in `.env.local` and include the console origin in the Go API's `CONSOLE_CORS_ORIGINS`. The checked-in [`./.env.example`](.env.example) documents the browser-safe variables.
 
 For same-origin production routing, leave `NEXT_PUBLIC_API_BASE_URL` empty. The browser then requests `/v1/*`, and Nginx/Caddy forwards that path to the Go API. The Go API owns the HttpOnly session cookie; the console never writes session tokens to localStorage.
 
@@ -30,7 +31,9 @@ npm run test
 npm run test:e2e
 ```
 
-The Playwright smoke suite exercises the login surface without requiring a running API. Authenticated flows require the Go API and a test account.
+The Playwright smoke suite and the fixture-backed critical navigation flow run without a Go API. For live authenticated coverage, point the same suite at a test API/account rather than committing credentials or tokens.
+
+CI runs the same API generation, stale-generated-file check, typecheck, lint, unit test, production build, Playwright setup, E2E suite, and root-context Docker build used by the repository workflow.
 
 ## Production
 

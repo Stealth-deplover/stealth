@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The repository's current default branch is init/backend-import. Keep this
+    # explicit so CI follows the real default branch instead of assuming main.
+    branches: [init/backend-import]
   pull_request:
 
 permissions:
@@ -13,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Vet, tests, and integration suite
+  backend:
+    name: Backend checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -53,6 +55,9 @@ jobs:
           go-version: 1.26.x
           cache-dependency-path: go.sum
 
+      - name: Check formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+
       - name: Vet
         run: go vet ./...
 
@@ -67,3 +72,56 @@ jobs:
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
+
+  console:
+    name: Console checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install console dependencies
+        working-directory: console
+        run: npm ci
+
+      - name: Generate OpenAPI client
+        working-directory: console
+        run: npm run api:generate
+
+      - name: Verify generated client is committed
+        run: git diff --exit-code -- console/src/api/generated
+
+      - name: Typecheck
+        working-directory: console
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: console
+        run: npm run lint
+
+      - name: Unit tests
+        working-directory: console
+        run: npm run test
+
+      - name: Production build
+        working-directory: console
+        run: npm run build
+
+      - name: Install Playwright browser
+        working-directory: console
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        working-directory: console
+        run: npm run test:e2e
+
+      - name: Docker image build
+        run: docker build -f console/Dockerfile -t stealth-console:test .

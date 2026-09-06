@@ -43,7 +43,15 @@ export async function uploadMultipart<T>(path: string, formData: FormData, metho
     credentials: "include",
   });
   const contentType = response.headers.get("content-type") ?? "";
-  const body: unknown = contentType.includes("json") ? await response.json() : undefined;
+  const raw = await response.text();
+  let body: unknown;
+  if (raw && contentType.includes("json")) {
+    try {
+      body = JSON.parse(raw) as unknown;
+    } catch {
+      body = undefined;
+    }
+  }
   if (!response.ok) throw getApiError(body, response.status);
   return body as T | undefined;
 }

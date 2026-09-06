@@ -10,7 +10,10 @@ export function errorMessage(error: unknown) {
     if (error.status === 401) return "Your session has expired. Sign in again to continue.";
     if (error.status === 403) return "You do not have permission to view this resource.";
     if (error.status === 404) return "This resource could not be found.";
+    if (error.status === 409) return `This change conflicts with the current resource state. ${error.message}`;
+    if (error.status === 400 || error.status === 422) return `The API rejected this request. ${error.message}`;
     if (error.status === 429) return "The API is rate limiting requests. Try again shortly.";
+    if (error.status >= 500) return "Stealth API encountered an unexpected server error. Try again shortly.";
     return error.message;
   }
   return error instanceof Error ? error.message : "Something unexpected happened.";

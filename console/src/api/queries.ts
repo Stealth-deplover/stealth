@@ -3,8 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import type { paths } from "@/api/generated/schema";
 
 const list = { limit: 100 } as const;
+type DatabaseRowsQuery = NonNullable<paths["/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows"]["get"]["parameters"]["query"]>;
 
 export function useCurrentAccount() {
   return useQuery({ queryKey: queryKeys.account, queryFn: async () => unwrap(await api.GET("/v1/account")), retry: false, staleTime: 60_000 });
@@ -74,8 +76,12 @@ export function useFunctionExecutions(projectId: string | undefined, functionId:
   return useQuery({ queryKey: queryKeys.functionExecutions(projectId ?? "", functionId ?? ""), enabled: Boolean(projectId && functionId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/functions/{functionID}/executions", { params: { path: { projectID: projectId!, functionID: functionId! }, query: list } })) });
 }
 
+export function useFunctionVariables(projectId: string | undefined, functionId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.functionVariables(projectId ?? "", functionId ?? ""), enabled: Boolean(projectId && functionId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/functions/{functionID}/variables", { params: { path: { projectID: projectId!, functionID: functionId! }, query: list } })) });
+}
+
 export function useFunctionDeployment(projectId: string | undefined, functionId: string | undefined, deploymentId: string | undefined) {
-  return useQuery({ queryKey: ["function-deployment", projectId, functionId, deploymentId], enabled: Boolean(projectId && functionId && deploymentId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}", { params: { path: { projectID: projectId!, functionID: functionId!, deploymentID: deploymentId! } } })) });
+  return useQuery({ queryKey: ["function-deployment", projectId, functionId, deploymentId], enabled: Boolean(projectId && functionId && deploymentId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}", { params: { path: { projectID: projectId!, functionID: functionId!, deploymentID: deploymentId! } } })), refetchInterval: (query) => { const deployment = query.state.data?.deployment; return deployment && (deployment.status === "queued" || deployment.build_status === "running" || deployment.build_status === "queued") ? 3_000 : false; } });
 }
 
 export function useSites(projectId: string | undefined) {
@@ -90,6 +96,10 @@ export function useSiteDeployments(projectId: string | undefined, siteId: string
   return useQuery({ queryKey: queryKeys.siteDeployments(projectId ?? "", siteId ?? ""), enabled: Boolean(projectId && siteId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/sites/{siteID}/deployments", { params: { path: { projectID: projectId!, siteID: siteId! }, query: list } })) });
 }
 
+export function useSiteDeployment(projectId: string | undefined, siteId: string | undefined, deploymentId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.siteDeployment(projectId ?? "", siteId ?? "", deploymentId ?? ""), enabled: Boolean(projectId && siteId && deploymentId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}", { params: { path: { projectID: projectId!, siteID: siteId!, deploymentID: deploymentId! } } })), refetchInterval: (query) => { const deployment = query.state.data?.deployment; return deployment && (deployment.status === "queued" || deployment.build_status === "running" || deployment.build_status === "queued" || deployment.build_status === "deferred") ? 3_000 : false; } });
+}
+
 export function useDatabases(projectId: string | undefined) {
   return useQuery({ queryKey: queryKeys.databases(projectId ?? ""), enabled: Boolean(projectId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/databases", { params: { path: { projectID: projectId! }, query: list } })) });
 }
@@ -102,7 +112,11 @@ export function useDatabaseTables(projectId: string | undefined, databaseId: str
   return useQuery({ queryKey: queryKeys.tables(projectId ?? "", databaseId ?? ""), enabled: Boolean(projectId && databaseId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/databases/{databaseID}/tables", { params: { path: { projectID: projectId!, databaseID: databaseId! }, query: list } })) });
 }
 
-export function useDatabaseRows(projectId: string | undefined, databaseId: string | undefined, tableId: string | undefined, query?: { cursor?: string; search?: string }) {
+export function useDatabaseBackups(projectId: string | undefined, databaseId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.databaseBackups(projectId ?? "", databaseId ?? ""), enabled: Boolean(projectId && databaseId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/databases/{databaseID}/backups", { params: { path: { projectID: projectId!, databaseID: databaseId! }, query: list } })) });
+}
+
+export function useDatabaseRows(projectId: string | undefined, databaseId: string | undefined, tableId: string | undefined, query?: Omit<DatabaseRowsQuery, "limit">) {
   return useQuery({ queryKey: [...queryKeys.rows(projectId ?? "", databaseId ?? "", tableId ?? ""), query], enabled: Boolean(projectId && databaseId && tableId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows", { params: { path: { projectID: projectId!, databaseID: databaseId!, tableID: tableId! }, query: { limit: 50, ...query } } })) });
 }
 
@@ -130,6 +144,10 @@ export function useWebhooks(projectId: string | undefined) {
   return useQuery({ queryKey: queryKeys.webhooks(projectId ?? ""), enabled: Boolean(projectId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/webhooks", { params: { path: { projectID: projectId! }, query: list } })) });
 }
 
+export function useWebhook(projectId: string | undefined, webhookId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.webhook(projectId ?? "", webhookId ?? ""), enabled: Boolean(projectId && webhookId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/webhooks/{webhookID}", { params: { path: { projectID: projectId!, webhookID: webhookId! } } })) });
+}
+
 export function useWebhookDeliveries(projectId: string | undefined, webhookId: string | undefined) {
   return useQuery({ queryKey: queryKeys.webhookDeliveries(projectId ?? "", webhookId ?? ""), enabled: Boolean(projectId && webhookId), queryFn: async () => unwrap(await api.GET("/v1/projects/{projectID}/webhooks/{webhookID}/deliveries", { params: { path: { projectID: projectId!, webhookID: webhookId! }, query: list } })) });
 }
@@ -148,6 +166,18 @@ export function useAgentCatalog() {
 
 export function useAgentRuns(agentId: string | undefined) {
   return useQuery({ queryKey: queryKeys.agentRuns(agentId ?? ""), enabled: Boolean(agentId), queryFn: async () => unwrap(await api.GET("/v1/agents/{agentID}/runs", { params: { path: { agentID: agentId! }, query: list } })) });
+}
+
+export function useAgentRun(agentId: string | undefined, runId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.agentRun(agentId ?? "", runId ?? ""),
+    enabled: Boolean(agentId && runId),
+    queryFn: async () => unwrap(await api.GET("/v1/agents/{agentID}/runs/{runID}", { params: { path: { agentID: agentId!, runID: runId! } } })),
+    refetchInterval: (query) => {
+      const status = query.state.data?.run.status;
+      return status === "queued" || status === "running" ? 3_000 : false;
+    },
+  });
 }
 
 export function useAuthSettings(projectId: string | undefined) {
