@@ -18,13 +18,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	"github.com/nazxf/stealth-api/internal/apikey"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/httpapi"
 	"github.com/nazxf/stealth-api/internal/migrate"
 	"github.com/nazxf/stealth-api/internal/ratelimit"
 	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestConsoleIdentityFlowIntegration(t *testing.T) {
