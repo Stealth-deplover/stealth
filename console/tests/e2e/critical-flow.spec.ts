@@ -35,7 +35,7 @@ test("critical console flow can move from login to a resource and logout", async
   await page.getByLabel("Password").fill("correct horse battery staple");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page).toHaveURL(/\/organizations$/);
-  await expect(page.getByRole("heading", { name: "Organizations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Organizations", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /Open workspace/ }).click();
   await expect(page).toHaveURL(/\/organizations\/org-1\/projects$/);
@@ -45,11 +45,11 @@ test("critical console flow can move from login to a resource and logout", async
 
   await page.getByRole("link", { name: "Functions", exact: true }).click();
   await expect(page).toHaveURL(/\/functions$/);
-  await expect(page.getByRole("heading", { name: "Functions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Functions", exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: "Logs", exact: true }).click();
   await expect(page).toHaveURL(/\/observability\/logs$/);
-  await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Logs", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Account menu" }).click();
   await page.getByRole("menuitem", { name: "Sign out" }).click();
