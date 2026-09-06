@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --color-stealth-bg: #080a0d;
+  --color-stealth-panel: #0d1015;
+  --color-stealth-elevated: #12161d;
+  --color-stealth-border: #202733;
+  --color-stealth-muted: #8d98a9;
+  --color-stealth-accent: #72e4dc;
+}
+
+:root {
+  color-scheme: dark;
+  --background: #080a0d;
+  --foreground: #eef3f7;
+  --muted: #8d98a9;
+  --border: #202733;
+  --panel: #0d1015;
+  --elevated: #12161d;
+  --accent: #72e4dc;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 75% -15%, rgba(114, 228, 220, 0.07), transparent 30rem),
+    var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  outline: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  box-shadow: 0 0 0 2px rgba(114, 228, 220, 0.36);
+}
+
+::selection {
+  background: rgba(114, 228, 220, 0.26);
+}
+
+.grid-noise {
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #2b3544 transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #2b3544;
+  border-radius: 999px;
+}
