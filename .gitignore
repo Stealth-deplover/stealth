@@ -1,0 +1,5 @@
+/stealth-api
+/stealth-worker
+*.test
+.env
+coverage.out

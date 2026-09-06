@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Vet, tests, and integration suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: stealth
+          POSTGRES_USER: stealth
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stealth -d stealth"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # This is a non-secret validation value: 32 bytes of `a`, Base64 encoded.
+      FUNCTIONS_SECRET_KEY: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./... -count=1
+
+      - name: PostgreSQL and Redis integration suite
+        env:
+          TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable
+          TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test ./internal/httpapi -run Integration -count=1
+
+      - name: Docker image build
+        run: docker build --target api -t stealth-api .
