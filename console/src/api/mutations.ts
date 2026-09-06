@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap, uploadMultipart } from "@/api/client";
+import { ApiError, api, unwrap, uploadMultipart } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
 import type { components } from "@/api/generated/schema";
+import { isSlug, toSlug } from "@/lib/utils";
 
 export function useLogin() {
   return useMutation({ mutationFn: async (body: { email: string; password: string }) => unwrap(await api.POST("/v1/sessions/email-password", { body })) });
@@ -44,7 +45,7 @@ export function useCreateOrganization() {
 
 export function useCreateProject(organizationId: string) {
   const queryClient = useQueryClient();
-  return useMutation({ mutationFn: async (body: { name: string }) => unwrap(await api.POST("/v1/organizations/{organizationID}/projects", { params: { path: { organizationID: organizationId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.projects(organizationId) }) });
+  return useMutation({ mutationFn: async (body: components["schemas"]["CreateProjectRequest"]) => { const name = toSlug(body.name); if (!isSlug(name)) throw new ApiError("Project name must become a 2–63 character slug using lowercase letters, numbers, or hyphens.", 422, "validation_error"); return unwrap(await api.POST("/v1/organizations/{organizationID}/projects", { params: { path: { organizationID: organizationId } }, body: { ...body, name } })); }, onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.projects(organizationId) }) });
 }
 
 export function useCreateFunction(projectId: string) {
