@@ -31,28 +31,7 @@ export function Badge({
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const normalized = status?.toLowerCase() ?? "unknown";
-  const variant =
-    normalized === "ready" ||
-    normalized === "active" ||
-    normalized === "available" ||
-    normalized === "succeeded" ||
-    normalized === "healthy" ||
-    normalized === "completed"
-      ? "success"
-      : normalized === "failed" ||
-          normalized === "error" ||
-          normalized === "blocked"
-        ? "error"
-        : normalized === "building" ||
-            normalized === "running" ||
-            normalized === "queued" ||
-            normalized === "processing"
-          ? "building"
-          : normalized === "warning" ||
-              normalized === "past_due" ||
-              normalized === "degraded"
-            ? "warning"
-            : "neutral";
+  const variant = getStatusVariant(normalized);
   const label = status
     ? status
         .replace(/_/g, " ")
@@ -69,6 +48,39 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
       {label}
     </Badge>
   );
+}
+
+function getStatusVariant(
+  status: string,
+): "default" | "neutral" | "success" | "warning" | "error" | "building" {
+  switch (status) {
+    case "ready":
+    case "active":
+    case "available":
+    case "succeeded":
+    case "healthy":
+    case "completed":
+      return "success";
+    case "failed":
+    case "error":
+    case "blocked":
+      return "error";
+    case "building":
+    case "running":
+    case "queued":
+    case "processing":
+    case "accepted":
+    case "deferred":
+      return "building";
+    case "warning":
+    case "past_due":
+    case "degraded":
+    case "cancelled":
+    case "canceled":
+      return "warning";
+    default:
+      return "neutral";
+  }
 }
 
 export function HttpStatusBadge({
@@ -92,7 +104,11 @@ export function HttpStatusBadge({
   return (
     <Badge
       variant={variant}
-      title={status ? `HTTP status ${status}` : undefined}
+      title={
+        status !== null && status !== undefined
+          ? `HTTP status ${status}`
+          : undefined
+      }
     >
       <span className="size-1.5 rounded-full bg-current" />
       {status ?? "Unknown"}

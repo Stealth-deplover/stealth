@@ -20,6 +20,11 @@ export const queryKeys = {
     ["function-deployments", projectId, functionId] as const,
   functionExecutions: (projectId: string, functionId: string) =>
     ["function-executions", projectId, functionId] as const,
+  functionExecution: (
+    projectId: string,
+    functionId: string,
+    executionId: string,
+  ) => ["function-execution", projectId, functionId, executionId] as const,
   functionVariables: (projectId: string, functionId: string) =>
     ["function-variables", projectId, functionId] as const,
   functionDeployment: (

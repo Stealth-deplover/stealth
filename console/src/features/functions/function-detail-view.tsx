@@ -2,7 +2,7 @@
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Upload } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, unwrap } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
@@ -39,6 +39,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
+import {
+  deploymentDurationMs,
+  getDeploymentLifecycleStatus,
+  isDeploymentInProgress,
+} from "@/lib/deployment-state";
 import { pageControls } from "@/lib/pagination";
 import { BackLink } from "@/features/resources/detail-shared";
 
@@ -195,11 +200,27 @@ export function FunctionDetailView({
   });
   const upload = useUploadFunctionDeployment(projectId, functionId);
   const activate = useActivateFunctionDeployment(projectId, functionId);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState("overview");
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const fn = query.data?.function;
   const activeDeploymentId = fn?.active_deployment_id;
-  const showFirstDeployment = deployments.data?.deployments.length === 0;
+  const showFirstDeployment =
+    !deploymentsNavigation.cursor && deployments.data?.deployments.length === 0;
+  const openFilePicker = () => fileInputRef.current?.click();
+  const handleDeploymentUpload = (file: File) => {
+    upload.mutate(
+      { file },
+      {
+        onSuccess: () => {
+          deploymentsNavigation.goFirst();
+          setTab("deployments");
+          toast.success("Deployment queued");
+        },
+        onError: () => toast.error("Could not queue function deployment"),
+      },
+    );
+  };
   const logs = useCallback(
     async (after?: number): Promise<LogLine[]> => {
       if (!activeDeploymentId) return [];
@@ -252,12 +273,23 @@ export function FunctionDetailView({
     {
       accessorKey: "status",
       header: "Status",
-      cell: ({ row }) => <StatusBadge status={row.original.status} />,
+      cell: ({ row }) => (
+        <StatusBadge status={getDeploymentLifecycleStatus(row.original)} />
+      ),
     },
     {
       accessorKey: "build_status",
       header: "Build",
       cell: ({ row }) => <StatusBadge status={row.original.build_status} />,
+    },
+    {
+      accessorKey: "source",
+      header: "Source",
+      cell: ({ row }) => (
+        <span className="text-xs text-slate-400">
+          {row.original.source_name ?? row.original.source}
+        </span>
+      ),
     },
     {
       accessorKey: "created_at",
@@ -275,10 +307,11 @@ export function FunctionDetailView({
           >
             Inspect
           </Link>
-          {row.original.status === "ready" ? (
+          {getDeploymentLifecycleStatus(row.original) === "ready" ? (
             <Button
               size="sm"
               variant="outline"
+              disabled={activate.isPending}
               onClick={() =>
                 activate.mutate(row.original.id, {
                   onSuccess: () => toast.success("Deployment activated"),
@@ -297,9 +330,13 @@ export function FunctionDetailView({
       accessorKey: "id",
       header: "Execution",
       cell: ({ row }) => (
-        <span className="font-mono text-xs text-slate-400">
+        <Link
+          href={`${base}/functions/${functionId}/executions/${row.original.id}`}
+          className="font-mono text-xs text-slate-400 hover:text-cyan-200"
+          title={row.original.id}
+        >
           {row.original.id.slice(0, 12)}…
-        </span>
+        </Link>
       ),
     },
     {
@@ -332,28 +369,28 @@ export function FunctionDetailView({
         title={fn.name}
         description="Deploy archive-based workloads and inspect builds, executions, and logs."
         actions={
-          <label
-            className={`inline-flex h-9 items-center gap-2 rounded-lg bg-cyan-300 px-3.5 text-sm font-medium text-slate-950 hover:bg-cyan-200 ${upload.isPending ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          <Button
+            type="button"
+            disabled={upload.isPending}
+            onClick={openFilePicker}
           >
             <Upload className="size-4" />
-            {upload.isPending ? "Uploading…" : "Deploy archive"}
-            <input
-              type="file"
-              accept=".zip,.tar,.gz,.tgz"
-              className="sr-only"
-              disabled={upload.isPending}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.currentTarget.value = "";
-                if (file)
-                  upload.mutate(
-                    { file },
-                    { onSuccess: () => toast.success("Deployment queued") },
-                  );
-              }}
-            />
-          </label>
+            {upload.isPending ? "Uploading…" : "Deploy function"}
+          </Button>
         }
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".zip,.tar,.gz,.tgz"
+        className="sr-only"
+        disabled={upload.isPending}
+        aria-label="Select function deployment archive"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.currentTarget.value = "";
+          if (file) handleDeploymentUpload(file);
+        }}
       />
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <StatusBadge status={fn.status} />
@@ -372,11 +409,18 @@ export function FunctionDetailView({
                 Ready for first deployment
               </p>
               <p className="mt-1 text-xs leading-5 text-amber-200/70">
-                Upload an archive to start building this function. Logs will
-                appear after it is deployed or runs.
+                Upload an archive to start building this function. Build logs
+                will be available from the deployment detail.
               </p>
             </div>
-            <Badge variant="neutral">Not deployed</Badge>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={upload.isPending}
+              onClick={openFilePicker}
+            >
+              <Upload className="size-4" /> Deploy function
+            </Button>
           </CardContent>
         </Card>
       ) : null}
@@ -385,7 +429,7 @@ export function FunctionDetailView({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="deployments">Deployments</TabsTrigger>
           <TabsTrigger value="executions">Executions</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="logs">Build logs</TabsTrigger>
           <TabsTrigger value="configuration">Configuration</TabsTrigger>
         </TabsList>
         <TabsContent value="overview">
@@ -489,11 +533,16 @@ export function FunctionDetailView({
         </TabsContent>
         <TabsContent value="logs">
           <LogViewer
-            title="Function build logs"
-            description="Incremental deployment log stream"
+            key={activeDeploymentId ?? "no-deployment"}
+            title="Active deployment build logs"
+            description="Build output from the active deployment. Open an execution to inspect runtime logs."
             fetchPage={logs}
             enabled={Boolean(fn.active_deployment_id)}
-            emptyMessage="No logs yet. Logs will appear after this function is deployed or runs."
+            emptyMessage={
+              fn.active_deployment_id
+                ? "No build logs yet. Output will appear when the deployment starts."
+                : "No active deployment. Build logs will appear after a deployment is activated."
+            }
           />
         </TabsContent>
         <TabsContent value="configuration">
@@ -559,12 +608,17 @@ export function FunctionDeploymentView({
         eyebrow="Deployment"
         title={`Version ${deployment.version}`}
         description="Immutable deployment metadata and incremental build logs."
-        actions={<StatusBadge status={deployment.status} />}
+        actions={
+          <StatusBadge status={getDeploymentLifecycleStatus(deployment)} />
+        }
       />
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <ResourceId id={deployment.id} label="Deployment ID" />
         <span className="text-xs text-slate-600">
           Updated {formatDate(deployment.updated_at)}
+        </span>
+        <span className="text-xs text-slate-600">
+          Queued {formatDate(deployment.queued_at)}
         </span>
       </div>
       <div className="grid gap-4 md:grid-cols-4">
@@ -592,15 +646,62 @@ export function FunctionDeploymentView({
         </Card>
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs text-slate-500">Queued</p>
+            <p className="text-xs text-slate-500">Duration</p>
             <p className="mt-2 text-sm text-white">
-              {formatDate(deployment.queued_at)}
+              {formatDuration(deploymentDurationMs(deployment))}
             </p>
+            {deployment.build_started_at ? (
+              <p className="mt-1 text-xs text-slate-600">
+                Started {formatDate(deployment.build_started_at)}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </div>
-      <div className="mt-5">
+      {isDeploymentInProgress(deployment) ? (
+        <Card className="mt-5 border-violet-300/20 bg-violet-300/[0.04]">
+          <CardContent className="p-5">
+            <p className="text-sm font-medium text-violet-100">
+              Build in progress
+            </p>
+            <p className="mt-1 text-xs leading-5 text-violet-200/70">
+              This deployment is queued or building. Its status and build logs
+              refresh automatically.
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+      {deployment.error_message ||
+      getDeploymentLifecycleStatus(deployment) === "failed" ? (
+        <Card className="mt-5 border-rose-300/20 bg-rose-400/[0.04]">
+          <CardContent className="space-y-3 p-5">
+            <div>
+              <p className="text-xs uppercase tracking-[0.14em] text-rose-300">
+                Deployment failed
+              </p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-rose-100">
+                {deployment.error_message ??
+                  "The build did not complete successfully."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline">
+                <a href="#build-logs">View build logs</a>
+              </Button>
+              <Button asChild variant="ghost">
+                <Link
+                  href={`/organizations/${organizationId}/projects/${projectId}/functions/${functionId}`}
+                >
+                  Deploy another archive
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+      <div id="build-logs" className="mt-5 scroll-mt-6">
         <LogViewer
+          key={deploymentId}
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
           fetchPage={logFetcher}

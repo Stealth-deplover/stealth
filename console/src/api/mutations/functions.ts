@@ -120,9 +120,13 @@ export function useUploadFunctionDeployment(
         form,
       );
     },
-    onSuccess: () =>
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.function(projectId, functionId),
+      });
       queryClient.invalidateQueries({
         queryKey: queryKeys.functionDeployments(projectId, functionId),
-      }),
+      });
+    },
   });
 }

@@ -42,6 +42,73 @@ const functionPageTwo = {
   id: "function-2",
   name: "worker-page-two",
 };
+const functionDeploymentBase = {
+  function_id: "function-1",
+  project_id: project.id,
+  version: 1,
+  source: "upload",
+  source_name: "function.zip",
+  size_bytes: 128,
+  checksum_sha256: "abc123",
+  error_message: null,
+  queued_at: "2026-01-02T00:00:00Z",
+  build_started_at: null,
+  built_at: null,
+  activated_at: null,
+  finished_at: null,
+  created_at: "2026-01-02T00:00:00Z",
+  updated_at: "2026-01-02T00:00:00Z",
+};
+const queuedFunctionDeployment = {
+  ...functionDeploymentBase,
+  id: "deployment-1",
+  status: "ready",
+  build_status: "queued",
+};
+const buildingFunctionDeployment = {
+  ...queuedFunctionDeployment,
+  build_status: "running",
+  build_started_at: "2026-01-02T00:00:02Z",
+  updated_at: "2026-01-02T00:00:02Z",
+};
+const failedFunctionDeployment = {
+  ...buildingFunctionDeployment,
+  build_status: "failed",
+  error_message: "The build command exited with status 1.",
+  updated_at: "2026-01-02T00:00:05Z",
+};
+const readyFunctionDeployment = {
+  ...functionDeploymentBase,
+  id: "deployment-2",
+  version: 2,
+  source_name: "function-fixed.zip",
+  status: "ready",
+  build_status: "succeeded",
+  build_started_at: "2026-01-02T00:01:02Z",
+  built_at: "2026-01-02T00:01:05Z",
+  updated_at: "2026-01-02T00:01:05Z",
+};
+const functionBuildLog = {
+  id: "build-log-1",
+  deployment_id: "deployment-1",
+  function_id: "function-1",
+  project_id: project.id,
+  sequence: 1,
+  level: "error",
+  message: "The build command exited with status 1.",
+  created_at: "2026-01-02T00:00:05Z",
+};
+const acceptedExecution = {
+  id: "execution-1",
+  deployment_id: "deployment-2",
+  function_id: "function-1",
+  project_id: project.id,
+  status: "accepted",
+  trigger: "manual",
+  input_json: { name: "Ada" },
+  created_at: "2026-01-02T00:02:00Z",
+  updated_at: "2026-01-02T00:02:00Z",
+};
 const onboardingOrganization = {
   id: "org-onboard",
   name: "Onboarding workspace",
@@ -250,6 +317,147 @@ async function installOnboardingFixtures(page: Page) {
   });
 }
 
+async function installDeploymentFixtures(page: Page) {
+  let uploadCount = 0;
+  let deploymentReads = 0;
+  let executionReads = 0;
+
+  await page.route("**/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const respond = (body: unknown, status = 200) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+
+    if (path === "/v1/account") return respond({ account });
+    if (path === "/v1/organizations")
+      return respond({ organizations: [organization], pagination });
+    if (path === "/v1/organizations/org-1/projects")
+      return respond({ projects: [project], pagination });
+    if (path === "/v1/projects/project-1") return respond({ project });
+    if (
+      path === "/v1/projects/project-1/functions/function-1" &&
+      method === "GET"
+    )
+      return respond({ function: functionPageOne });
+    if (
+      path === "/v1/projects/project-1/functions/function-1/executions" &&
+      method === "GET"
+    )
+      return respond({ executions: [acceptedExecution], pagination });
+    if (
+      path ===
+      "/v1/projects/project-1/functions/function-1/executions/execution-1"
+    ) {
+      executionReads += 1;
+      return respond({
+        execution: {
+          ...acceptedExecution,
+          ...(executionReads > 1 && {
+            status: "running",
+            started_at: "2026-01-02T00:02:01Z",
+          }),
+          ...(executionReads > 2 && {
+            status: "succeeded",
+            finished_at: "2026-01-02T00:02:03Z",
+            response_status: 200,
+            output_json: { greeting: "Hello, Ada" },
+          }),
+        },
+      });
+    }
+    if (
+      path ===
+      "/v1/projects/project-1/functions/function-1/executions/execution-1/logs"
+    ) {
+      const after = Number(
+        new URL(request.url()).searchParams.get("after") ?? 0,
+      );
+      const logs = [
+        { sequence: 1, message: "Runtime started" },
+        { sequence: 2, message: "Runtime completed" },
+      ].filter(
+        (line) =>
+          line.sequence > after && (line.sequence === 1 || executionReads > 2),
+      );
+      return respond({
+        logs: logs.map((line) => ({
+          ...line,
+          level: "info",
+          created_at: acceptedExecution.created_at,
+        })),
+        pagination,
+      });
+    }
+    if (
+      path === "/v1/projects/project-1/functions/function-1/deployments" &&
+      method === "GET"
+    ) {
+      if (!uploadCount) return respond({ deployments: [], pagination });
+
+      deploymentReads += 1;
+      const deployment =
+        uploadCount === 1
+          ? deploymentReads === 1
+            ? queuedFunctionDeployment
+            : deploymentReads === 2
+              ? buildingFunctionDeployment
+              : failedFunctionDeployment
+          : readyFunctionDeployment;
+      return respond({
+        deployments: [deployment],
+        pagination,
+        can_manage: true,
+      });
+    }
+    if (
+      path === "/v1/projects/project-1/functions/function-1/deployments" &&
+      method === "POST"
+    ) {
+      uploadCount += 1;
+      deploymentReads = 0;
+      return respond(
+        {
+          deployment:
+            uploadCount === 1
+              ? queuedFunctionDeployment
+              : readyFunctionDeployment,
+        },
+        201,
+      );
+    }
+    if (
+      path.match(
+        /^\/v1\/projects\/project-1\/functions\/function-1\/deployments\/(deployment-1|deployment-2)$/,
+      ) &&
+      method === "GET"
+    ) {
+      const deployment = path.endsWith("/deployment-1")
+        ? failedFunctionDeployment
+        : readyFunctionDeployment;
+      return respond({ deployment });
+    }
+    if (
+      path ===
+        "/v1/projects/project-1/functions/function-1/deployments/deployment-1/logs" &&
+      method === "GET"
+    )
+      return respond({
+        logs: new URL(request.url()).searchParams.has("after")
+          ? []
+          : [functionBuildLog],
+        pagination,
+      });
+    if (path.endsWith("/deployments/deployment-2/logs"))
+      return respond({ logs: [], pagination });
+    return respond({});
+  });
+}
+
 test("critical console flow can move from login to a resource and logout", async ({
   page,
 }) => {
@@ -382,4 +590,213 @@ test("first-use flow creates an organization, project, and first database", asyn
   await expect(
     page.getByRole("heading", { name: "application-data" }),
   ).toBeVisible();
+});
+
+test("deployment flow exposes build failure, logs, and a truthful redeploy path", async ({
+  page,
+}) => {
+  await installDeploymentFixtures(page);
+
+  await gotoWithDevRetry(
+    page,
+    "/organizations/org-1/projects/project-1/functions/function-1",
+  );
+  await expect(
+    page.getByRole("heading", { name: "worker-page-one" }),
+  ).toBeVisible();
+  await expect(page.getByText("Ready for first deployment")).toBeVisible();
+
+  const archive = {
+    name: "function.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("first archive"),
+  };
+  await page
+    .locator('input[aria-label="Select function deployment archive"]')
+    .setInputFiles(archive);
+  await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "Deployments", exact: true }),
+  ).toHaveAttribute("data-state", "active");
+  await expect(
+    page.getByRole("button", { name: "Activate", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Building", { exact: true }).first()).toBeVisible(
+    {
+      timeout: 10_000,
+    },
+  );
+  await expect(page.getByText("Failed", { exact: true }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(
+    page.getByRole("button", { name: "Activate", exact: true }),
+  ).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Inspect" }).click();
+  await expect(page).toHaveURL(/\/deployments\/deployment-1$/);
+  await expect(page.getByRole("heading", { name: "Version 1" })).toBeVisible();
+  await expect(page.getByText("Deployment failed")).toBeVisible();
+  await expect(
+    page.locator("#build-logs").getByText(functionBuildLog.message),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Deploy another archive" }),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Back to function" }).click();
+  await expect(page).toHaveURL(/\/functions\/function-1$/);
+  await page
+    .locator('input[aria-label="Select function deployment archive"]')
+    .setInputFiles({
+      name: "function-fixed.zip",
+      mimeType: "application/zip",
+      buffer: Buffer.from("fixed archive"),
+    });
+  await expect(page.getByText("Ready", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Activate", exact: true }),
+  ).toBeEnabled();
+
+  await page.getByRole("link", { name: "Inspect" }).click();
+  await expect(page).toHaveURL(/\/deployments\/deployment-2$/);
+  await expect(
+    page.getByRole("heading", { name: "Build logs", exact: true }),
+  ).toBeVisible();
+});
+
+test("function execution detail follows runtime status, output, and incremental logs", async ({
+  page,
+}) => {
+  await installDeploymentFixtures(page);
+  await gotoWithDevRetry(
+    page,
+    "/organizations/org-1/projects/project-1/functions/function-1",
+  );
+  await page.getByRole("tab", { name: "Executions", exact: true }).click();
+  await page.getByRole("link", { name: "execution-1" }).click();
+  await expect(page).toHaveURL(/\/executions\/execution-1$/);
+  await expect(
+    page.getByRole("heading", { name: "Execution", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Accepted", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("pre").filter({ hasText: '"name": "Ada"' }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#execution-logs")
+      .getByText("Runtime started", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Running", { exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByText("Succeeded", { exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByTitle("HTTP status 200")).toBeVisible();
+  await expect(page.getByText("2.00 s", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("pre").filter({ hasText: "Hello, Ada" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#execution-logs")
+      .getByText("Runtime completed", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#execution-logs")
+      .getByText("Runtime started", { exact: true }),
+  ).toHaveCount(1);
+});
+
+test("site deployment detail follows a deferred build through failure", async ({
+  page,
+}) => {
+  await installApiFixtures(page);
+  let deploymentReads = 0;
+  const deployment = {
+    ...functionDeploymentBase,
+    id: "site-deployment-1",
+    site_id: "site-1",
+    status: "queued",
+    build_status: "deferred",
+    source_name: "site.zip",
+    build_runtime: "node-22",
+    build_command: "npm run build",
+    output_directory: "dist",
+    activate_requested: true,
+    reserved_bytes: 128,
+    archive_size_bytes: 128,
+  };
+  await page.route(
+    "**/v1/projects/project-1/sites/site-1/deployments/**",
+    async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith("/logs")) {
+        return route.fulfill({
+          json: {
+            logs: url.searchParams.has("after")
+              ? []
+              : [
+                  {
+                    ...functionBuildLog,
+                    message: "Site build failed: missing index.html",
+                  },
+                ],
+            pagination,
+          },
+        });
+      }
+      deploymentReads += 1;
+      return route.fulfill({
+        json: {
+          deployment: {
+            ...deployment,
+            ...(deploymentReads > 1 && {
+              build_status: "running",
+              build_started_at: "2026-01-02T00:00:02Z",
+            }),
+            ...(deploymentReads > 2 && {
+              status: "failed",
+              build_status: "failed",
+              error_message: "The output directory has no index.html.",
+              finished_at: "2026-01-02T00:00:05Z",
+            }),
+          },
+        },
+      });
+    },
+  );
+  await gotoWithDevRetry(
+    page,
+    "/organizations/org-1/projects/project-1/sites/site-1/deployments/site-deployment-1",
+  );
+  await expect(page.getByRole("heading", { name: "Version 1" })).toBeVisible();
+  await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Build in progress", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Building", { exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(
+    page.getByText("Deployment failed", { exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    page.getByText("Build in progress", { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByText("3.00 s", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .locator("#build-logs")
+      .getByText("Site build failed: missing index.html"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Deploy another archive" }),
+  ).toHaveAttribute(
+    "href",
+    "/organizations/org-1/projects/project-1/sites/site-1",
+  );
 });

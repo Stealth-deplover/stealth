@@ -37,10 +37,17 @@ export function useUploadSiteDeployment(projectId: string, siteId: string) {
         form,
       );
     },
-    onSuccess: () =>
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.site(projectId, siteId),
+      });
       queryClient.invalidateQueries({
         queryKey: queryKeys.siteDeployments(projectId, siteId),
-      }),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.siteDeploymentScope(projectId, siteId),
+      });
+    },
   });
 }
 
