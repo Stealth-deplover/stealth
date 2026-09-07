@@ -3,7 +3,7 @@
 import { ChevronsUpDown, FolderKanban, Plus, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useOrganizations, useProjects } from "@/api/queries";
+import { useOrganization, useOrganizations, useProject, useProjects } from "@/api/queries";
 import type { Organization, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -21,9 +21,10 @@ function SelectorItem({ icon, title, subtitle, selected, onClick }: { icon: Reac
 export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const router = useRouter();
   const { data, isLoading } = useOrganizations();
+  const selectedOrganization = useOrganization(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const organizations = data?.organizations;
+  const organizations = useMemo(() => { const items = data?.organizations ?? []; const selected = selectedOrganization.data; return selected && !items.some((organization) => organization.id === selected.id) ? [selected, ...items] : items; }, [data?.organizations, selectedOrganization.data]);
   const filtered = useMemo(() => (organizations ?? []).filter((organization) => `${organization.name} ${organization.slug}`.toLowerCase().includes(search.toLowerCase())), [organizations, search]);
   const current = (organizations ?? []).find((organization) => organization.id === currentId);
   const navigate = (organization: Organization) => {
@@ -40,9 +41,10 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
 export function ProjectSwitcher({ organizationId, currentId }: { organizationId?: string; currentId?: string }) {
   const router = useRouter();
   const { data } = useProjects(organizationId);
+  const selectedProject = useProject(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const projects = data?.projects;
+  const projects = useMemo(() => { const items = data?.projects ?? []; const selected = selectedProject.data?.project; return selected && selected.organization_id === organizationId && !items.some((project) => project.id === selected.id) ? [selected, ...items] : items; }, [data?.projects, organizationId, selectedProject.data?.project]);
   const filtered = useMemo(() => (projects ?? []).filter((project) => project.name.toLowerCase().includes(search.toLowerCase())), [projects, search]);
   const current = (projects ?? []).find((project) => project.id === currentId);
   const navigate = (project: Project) => { setOpen(false); setSearch(""); router.push(`/organizations/${project.organization_id}/projects/${project.id}`); };

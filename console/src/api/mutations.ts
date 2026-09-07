@@ -153,6 +153,17 @@ export function useCreateWebhook(projectId: string) {
   return useMutation({ mutationFn: async (body: components["schemas"]["CreateWebhookRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/webhooks", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.webhooks(projectId) }) });
 }
 
+export function useRotateWebhookSecret(projectId: string, webhookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => unwrap(await api.POST("/v1/projects/{projectID}/webhooks/{webhookID}/rotate-secret", { params: { path: { projectID: projectId, webhookID: webhookId } } })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhooks(projectId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.webhook(projectId, webhookId) });
+    },
+  });
+}
+
 export function useCreateAPIKey(projectId: string) {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: async (body: components["schemas"]["CreateProjectAPIKeyRequest"]) => unwrap(await api.POST("/v1/projects/{projectID}/api-keys", { params: { path: { projectID: projectId } }, body })), onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys(projectId) }) });

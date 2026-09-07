@@ -181,3 +181,112 @@ The contract does not expose worker readiness, provider delivery health, or a co
 Recommendation:
 
 Add explicit worker/provider health and delivery capability fields before the console presents destructive or credential-writing workflows. The current console intentionally exposes metadata only and does not pretend that queue acceptance means provider delivery.
+
+## Runtime and capability catalog
+
+Frontend need:
+
+Keep Function runtimes, Site build runtimes/frameworks, regions, and future
+provider capabilities consistent between forms and backend validation.
+
+Existing backend:
+
+Function runtime values are present as an OpenAPI enum, and the Agent Catalog
+exposes provider/model values. There is no general capabilities endpoint.
+
+Missing:
+
+An authorized, versioned capability catalog with availability and deprecation
+metadata for all resource types.
+
+Recommendation:
+
+Add `GET /v1/capabilities` (or a scoped equivalent) and make it the source for
+runtime/framework/region choices. Until then, the console keeps the current
+Function runtime fallback in one module and validates the form against that
+same list.
+
+Current frontend behavior:
+
+Function runtimes are centralized from the generated OpenAPI enum. No Next.js
+endpoint is used to emulate a capability service.
+
+## Server-side filtering and sorting
+
+Frontend need:
+
+Search, filter, and sort controls that apply to the complete resource dataset.
+
+Existing backend:
+
+Most list endpoints expose only `limit` and cursor. Database rows additionally
+support declared indexed filter, search, and ordering parameters.
+
+Missing:
+
+Consistent server-side filter/sort parameters for Functions, Sites, Users,
+Webhooks, Agents, traces, and the other resource indexes.
+
+Recommendation:
+
+Add explicit query parameters and document their index and authorization
+behavior.
+
+Current frontend behavior:
+
+Cursor navigation is server-driven wherever the contract is paginated. The
+Function and Site list search is explicitly labeled current-page search rather
+than pretending to search the entire dataset.
+
+## Resource lookup by ID
+
+Frontend need:
+
+Load an organization directly when a deep link opens outside the first list
+page.
+
+Existing backend:
+
+The organization path currently exposes update but not a GET-by-ID operation.
+
+Missing:
+
+`GET /v1/organizations/{organizationID}`.
+
+Recommendation:
+
+Add an authorized GET operation with the same organization visibility rules as
+the list endpoint.
+
+Current frontend behavior:
+
+The detail hook follows organization list cursors until it finds the requested
+ID. This is correct but less efficient than a resource lookup endpoint.
+
+## CSRF model
+
+Frontend need:
+
+Safe mutation semantics when the Console session is represented by an
+HttpOnly cookie.
+
+Existing backend:
+
+The API owns the `stealth_session` cookie and authorization. The OpenAPI
+contract does not describe a CSRF token or origin-check requirement.
+
+Missing:
+
+An explicit CSRF defense contract for state-changing cookie-authenticated
+requests.
+
+Recommendation:
+
+Document and enforce SameSite/origin checks or a CSRF token strategy in the Go
+API. Do not add a Next.js proxy or a second session layer.
+
+Current frontend behavior:
+
+The browser sends the Go-owned cookie with `credentials: include`; no token is
+persisted in browser storage. Production same-origin routing remains the
+recommended deployment shape.

@@ -155,6 +155,11 @@ Put a reverse proxy in front of the two services:
 ```
 
 An Nginx example is available at [`console/deploy/nginx.conf`](console/deploy/nginx.conf).
+It includes baseline browser security headers. HSTS is emitted only when the
+TLS terminator forwards `X-Forwarded-Proto: https`; keep the console behind
+HTTPS in production and do not enable HSTS on a plain HTTP development host.
+The CSP assumes same-origin `/v1/*` routing. If the API is deployed on a
+separate origin, add that exact origin to `connect-src` in the proxy config.
 
 ## Verification
 
@@ -173,7 +178,8 @@ npm run test:e2e
 
 GitHub Actions runs backend vet/tests/integration/Docker checks and the full
 console generation, typecheck, lint, unit, production build, Playwright, and
-Docker checks on pull requests and the current default branch.
+Docker checks on every push and pull request, independent of the default branch
+name.
 
 ## Backend boundaries
 

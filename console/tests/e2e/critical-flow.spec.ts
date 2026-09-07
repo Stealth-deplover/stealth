@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 const account = { id: "account-1", email: "developer@example.com", email_verified: true, created_at: "2026-01-01T00:00:00Z" };
 const organization = { id: "org-1", name: "Acme Inc", slug: "acme-inc", created_at: "2026-01-01T00:00:00Z" };
 const project = { id: "project-1", organization_id: "org-1", name: "production-api", created_at: "2026-01-01T00:00:00Z" };
-const pagination = { limit: 100, next_cursor: null };
+const pagination = { limit: 20, next_cursor: null };
 
 async function installApiFixtures(page: Page) {
   await page.route("**/v1/**", async (route) => {
