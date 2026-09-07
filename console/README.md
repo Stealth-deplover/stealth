@@ -51,6 +51,6 @@ docker build -f console/Dockerfile -t stealth-console .
 docker run --rm -p 3000:3000 stealth-console
 ```
 
-For a separate API origin, pass `--build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com`; for the preferred same-origin setup, omit it. An Nginx upstream example lives at [`deploy/nginx.conf`](deploy/nginx.conf). The example also sets baseline browser security headers. HSTS is conditional on `X-Forwarded-Proto: https`, so local HTTP development is not pinned to HTTPS. The CSP assumes same-origin `/v1/*`; when using a separate API origin, allow that exact origin in `connect-src`.
+For a separate API origin, pass `--build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com`; for the preferred same-origin setup, omit it. An Nginx upstream example lives at [`deploy/nginx.conf`](deploy/nginx.conf). The example also sets baseline browser security headers and forwards a normalized external protocol to both upstreams. It assumes a trusted TLS-terminating ingress sanitizes `X-Forwarded-Proto`; if Nginx accepts direct public traffic, sanitize or replace forwarded headers at that boundary first. HSTS uses the normalized protocol, so local HTTP development is not pinned to HTTPS. The CSP assumes same-origin `/v1/*`; when using a separate API origin, allow that exact origin in `connect-src`.
 
 The OpenAPI input defaults to `../openapi/openapi.yaml`. For a separate checkout, set `OPENAPI_INPUT` to the contract location before running `npm run api:generate`.

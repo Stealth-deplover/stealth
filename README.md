@@ -155,9 +155,11 @@ Put a reverse proxy in front of the two services:
 ```
 
 An Nginx example is available at [`console/deploy/nginx.conf`](console/deploy/nginx.conf).
-It includes baseline browser security headers. HSTS is emitted only when the
-TLS terminator forwards `X-Forwarded-Proto: https`; keep the console behind
-HTTPS in production and do not enable HSTS on a plain HTTP development host.
+It includes baseline browser security headers. The example normalizes
+`X-Forwarded-Proto` from a trusted TLS terminator before forwarding it to both
+the console and Go API; the ingress must sanitize that header before traffic
+reaches Nginx. HSTS uses the same normalized protocol, so it is emitted only
+for externally HTTPS requests and never pins a plain HTTP development host.
 The CSP assumes same-origin `/v1/*` routing. If the API is deployed on a
 separate origin, add that exact origin to `connect-src` in the proxy config.
 
