@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import { FunctionSquare } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateFunction } from "@/api/mutations";
@@ -33,6 +34,7 @@ export function FunctionsView({
   organizationId: string;
   projectId: string;
 }) {
+  const router = useRouter();
   const navigation = useCursorPagination();
   const [createOpen, setCreateOpen] = useState(false);
   const query = useFunctions(projectId, { cursor: navigation.cursor });
@@ -43,7 +45,7 @@ export function FunctionsView({
       toast.error("Runtime is not supported by the current Stealth API.");
       return;
     }
-    await create.mutateAsync({
+    const result = await create.mutateAsync({
       name: values.name,
       runtime: values.runtime as components["schemas"]["FunctionRuntime"],
       entrypoint: values.entrypoint,
@@ -54,6 +56,9 @@ export function FunctionsView({
       description: values.description,
     });
     toast.success("Function created");
+    if (result?.function) {
+      router.push(`${base}/functions/${result.function.id}`);
+    }
   };
   const columns: ColumnDef<StealthFunction, unknown>[] = [
     {

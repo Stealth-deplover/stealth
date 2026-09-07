@@ -126,12 +126,14 @@ function LogBody({
   error,
   loading,
   localCleared,
+  emptyMessage,
   bottomRef,
 }: {
   lines: LogLine[];
   error: string | null;
   loading: boolean;
   localCleared: boolean;
+  emptyMessage: string;
   bottomRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -165,7 +167,7 @@ function LogBody({
               ? "Loading log lines…"
               : localCleared
                 ? "Local view cleared. New lines will appear here."
-                : "No log lines returned yet."}
+                : emptyMessage}
           </div>
         )}
         <div ref={bottomRef} />
@@ -179,11 +181,13 @@ export function LogViewer({
   description = "Incremental log stream",
   fetchPage,
   enabled = true,
+  emptyMessage = "No log lines returned yet.",
 }: {
   title?: string;
   description?: string;
   fetchPage: (after?: number) => Promise<LogLine[]>;
   enabled?: boolean;
+  emptyMessage?: string;
 }) {
   const { lines, after, loading, error, localCleared, clearLocal } =
     useLogStream({ fetchPage, enabled });
@@ -252,6 +256,7 @@ export function LogViewer({
         error={error}
         loading={loading}
         localCleared={localCleared}
+        emptyMessage={emptyMessage}
         bottomRef={bottomRef}
       />
     </Card>

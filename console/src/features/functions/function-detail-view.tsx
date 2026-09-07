@@ -199,6 +199,7 @@ export function FunctionDetailView({
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const fn = query.data?.function;
   const activeDeploymentId = fn?.active_deployment_id;
+  const showFirstDeployment = deployments.data?.deployments.length === 0;
   const logs = useCallback(
     async (after?: number): Promise<LogLine[]> => {
       if (!activeDeploymentId) return [];
@@ -363,6 +364,22 @@ export function FunctionDetailView({
         </span>
         <ResourceId id={fn.id} label="Function ID" />
       </div>
+      {showFirstDeployment ? (
+        <Card className="mb-4 border-amber-300/20 bg-amber-300/[0.03]">
+          <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-amber-100">
+                Ready for first deployment
+              </p>
+              <p className="mt-1 text-xs leading-5 text-amber-200/70">
+                Upload an archive to start building this function. Logs will
+                appear after it is deployed or runs.
+              </p>
+            </div>
+            <Badge variant="neutral">Not deployed</Badge>
+          </CardContent>
+        </Card>
+      ) : null}
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -476,6 +493,7 @@ export function FunctionDetailView({
             description="Incremental deployment log stream"
             fetchPage={logs}
             enabled={Boolean(fn.active_deployment_id)}
+            emptyMessage="No logs yet. Logs will appear after this function is deployed or runs."
           />
         </TabsContent>
         <TabsContent value="configuration">
@@ -586,6 +604,7 @@ export function FunctionDeploymentView({
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
           fetchPage={logFetcher}
+          emptyMessage="No logs yet. Build output will appear when this deployment starts."
         />
       </div>
     </>

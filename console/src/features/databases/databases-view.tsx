@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import { Database as DatabaseIcon, MoreHorizontal } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateDatabase } from "@/api/mutations";
@@ -27,14 +28,18 @@ export function DatabasesView({
   organizationId: string;
   projectId: string;
 }) {
+  const router = useRouter();
   const navigation = useCursorPagination();
   const [createOpen, setCreateOpen] = useState(false);
   const query = useDatabases(projectId, { cursor: navigation.cursor });
   const create = useCreateDatabase(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const handleCreateDatabase = async (values: Record<string, string>) => {
-    await create.mutateAsync({ name: values.name });
+    const result = await create.mutateAsync({ name: values.name });
     toast.success("Database created");
+    if (result?.database) {
+      router.push(`${base}/databases/${result.database.id}`);
+    }
   };
   const columns: ColumnDef<Database, unknown>[] = [
     {

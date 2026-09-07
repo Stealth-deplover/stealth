@@ -283,6 +283,7 @@ export function SiteDeploymentView({
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
           fetchPage={logFetcher}
+          emptyMessage="No logs yet. Build output will appear when this deployment starts."
         />
       </div>
     </>
