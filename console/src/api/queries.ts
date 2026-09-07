@@ -5,22 +5,17 @@ import { api, unwrap } from "@/api/client";
 import { type AgentListQuery, type CursorQuery, withAgentPage, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import type { paths } from "@/api/generated/schema";
-import { fetchAllCursorPages } from "@/lib/cursor-pagination";
+import { fetchAllCursorPages, findCursorItem } from "@/lib/cursor-pagination";
 
 type DatabaseRowsQuery = NonNullable<paths["/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows"]["get"]["parameters"]["query"]>;
 type ProjectAgentQuery = Omit<AgentListQuery, "project_id">;
 
 async function findOrganizationById(organizationId: string) {
-  let cursor: string | undefined;
-
-  while (true) {
-    const page = await unwrap(await api.GET("/v1/organizations", { params: { query: withCursorPage(cursor ? { cursor } : undefined) } }));
-    if (!page) return undefined;
-    const organization = page.organizations.find((item) => item.id === organizationId);
-    if (organization) return organization;
-    cursor = page.pagination.next_cursor ?? undefined;
-    if (!cursor) return undefined;
-  }
+  return findCursorItem(
+    (cursor) => api.GET("/v1/organizations", { params: { query: withCursorPage(cursor ? { cursor } : undefined) } }).then(unwrap),
+    (page) => page.organizations,
+    (organization) => organization.id === organizationId,
+  );
 }
 
 export function useCurrentAccount() {

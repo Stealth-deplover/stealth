@@ -25,7 +25,7 @@ import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { FUNCTION_RUNTIME_OPTIONS, isFunctionRuntime, SITE_FRAMEWORK_OPTIONS } from "@/lib/capabilities/runtime-catalog";
 
 function pageControls(navigation: ReturnType<typeof useCursorPagination>, next: string | null, isFetching: boolean): ServerPagination {
-  return { canPrevious: navigation.canPrevious, canNext: Boolean(next), onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching };
+  return { canFirst: navigation.canFirst, canPrevious: navigation.canPrevious, canNext: Boolean(next), onFirst: navigation.goFirst, onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching };
 }
 
 function ProjectResourceIntro({ icon: Icon, title, description }: { icon: typeof FunctionSquare; title: string; description: string }) {

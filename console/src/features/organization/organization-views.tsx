@@ -22,7 +22,7 @@ import { formatCount, formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 
 function pageControls(navigation: ReturnType<typeof useCursorPagination>, next: string | null, isFetching: boolean) {
-  return { canPrevious: navigation.canPrevious, canNext: Boolean(next), onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching };
+  return { canFirst: navigation.canFirst, canPrevious: navigation.canPrevious, canNext: Boolean(next), onFirst: navigation.goFirst, onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching };
 }
 
 function ProjectList({ organizationId }: { organizationId: string }) {

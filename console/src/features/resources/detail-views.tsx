@@ -31,7 +31,7 @@ import { Input } from "@/components/ui/input";
 function BackLink({ href, label }: { href: string; label: string }) { return <Link href={href} className="mb-5 inline-flex items-center gap-2 text-xs text-slate-500 hover:text-cyan-200"><ArrowLeft className="size-3.5" /> {label}</Link>; }
 
 function pageControls(navigation: ReturnType<typeof useCursorPagination>, next: string | null, isFetching: boolean, label?: string): ServerPagination {
-  return { canPrevious: navigation.canPrevious, canNext: Boolean(next), onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching, label };
+  return { canFirst: navigation.canFirst, canPrevious: navigation.canPrevious, canNext: Boolean(next), onFirst: navigation.goFirst, onPrevious: navigation.goPrevious, onNext: () => navigation.goNext(next), isFetching, label };
 }
 
 function FunctionVariablesPanel({ projectId, functionId }: { projectId: string; functionId: string }) {
