@@ -37,7 +37,9 @@ function createInitialValues(fields: CreateField[]) {
 }
 
 type CreateDialogProps = {
-  label?: string;
+  triggerLabel: string;
+  submitLabel: string;
+  pendingLabel: string;
   title: string;
   description: string;
   fields: CreateField[];
@@ -50,7 +52,9 @@ type CreateDialogProps = {
 };
 
 export function CreateDialog({
-  label = "Create",
+  triggerLabel,
+  submitLabel,
+  pendingLabel,
   title,
   description,
   fields,
@@ -96,8 +100,8 @@ export function CreateDialog({
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       ) : (
         <DialogTrigger asChild>
-          <Button data-create-dialog disabled={disabled}>
-            <Plus className="size-4" /> {label}
+          <Button disabled={disabled}>
+            <Plus className="size-4" /> {triggerLabel}
           </Button>
         </DialogTrigger>
       )}
@@ -166,7 +170,7 @@ export function CreateDialog({
             </Button>
             <Button type="submit" disabled={pending}>
               {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-              {pending ? "Creating…" : `Create ${label.toLowerCase()}`}
+              {pending ? pendingLabel : submitLabel}
             </Button>
           </DialogFooter>
         </form>

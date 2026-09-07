@@ -1,6 +1,5 @@
 "use client";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Mail } from "lucide-react";
 import { nextCursor } from "@/api/pagination";
 import { useMemberships } from "@/api/queries";
 import type { Membership } from "@/api/types";
@@ -8,7 +7,6 @@ import { DataTable } from "@/components/data-table";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
@@ -55,11 +53,6 @@ export function OrganizationMembersView({
         eyebrow="Organization"
         title="Members"
         description="Membership and roles are enforced by the Go API."
-        actions={
-          <Button variant="outline">
-            <Mail className="size-4" /> Invite member
-          </Button>
-        }
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />

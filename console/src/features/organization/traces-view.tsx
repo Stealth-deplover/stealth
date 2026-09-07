@@ -4,9 +4,10 @@ import { useOrganizationTraces } from "@/api/queries";
 import { DataTable } from "@/components/data-table";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatDuration } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
 
@@ -24,7 +25,7 @@ export function OrganizationTracesView({
       <PageHeader
         eyebrow="Organization"
         title="Traces"
-        description="Durable root HTTP request traces. The backend does not currently expose span hierarchy or server-side status filters."
+        description="Inspect durable root HTTP request traces from across the organization."
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
@@ -66,20 +67,18 @@ export function OrganizationTracesView({
               {
                 accessorKey: "duration_ms",
                 header: "Duration",
-                cell: ({ row }) => `${row.original.duration_ms} ms`,
+                cell: ({ row }) => formatDuration(row.original.duration_ms),
               },
               {
                 accessorKey: "trace_id",
                 header: "Trace ID",
                 cell: ({ row }) => (
-                  <span className="font-mono text-xs text-slate-500">
-                    {row.original.trace_id}
-                  </span>
+                  <ResourceId id={row.original.trace_id} label="Trace ID" />
                 ),
               },
             ]}
             loading={query.isLoading}
-            empty="No traces returned."
+            empty="No traces recorded for this organization."
             serverPagination={pageControls(
               navigation,
               nextCursor(query.data),

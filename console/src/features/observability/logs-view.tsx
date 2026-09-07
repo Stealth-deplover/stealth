@@ -38,7 +38,7 @@ export function LogsView({
       <PageHeader
         eyebrow="Observability"
         title="Logs"
-        description="Logs are contextual to Function builds/executions, Site builds, and Agent runs. Pick a resource to preserve the backend's incremental cursor semantics."
+        description="Open build and execution logs from the resource that produced them."
       />
       <div className="grid gap-4 md:grid-cols-3">
         {functions.data?.functions.map((item) => (

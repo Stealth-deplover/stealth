@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LogViewer, type LogLine } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -118,7 +119,7 @@ export function AgentRunsView({
           data={runs.data?.runs ?? []}
           columns={columns}
           loading={runs.isLoading}
-          empty="No runs yet."
+          empty="No runs yet. Create a run to queue a task for this agent."
           serverPagination={pageControls(
             runsNavigation,
             nextCursor(runs.data),
@@ -202,6 +203,12 @@ export function AgentRunDetailView({
           </div>
         }
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <ResourceId id={run.id} label="Run ID" />
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(run.updated_at)}
+        </span>
+      </div>
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardContent className="p-4">

@@ -4,6 +4,7 @@ import { useProjectTraces } from "@/api/queries";
 import { DataTable } from "@/components/data-table";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatDate, formatDuration } from "@/lib/format";
@@ -19,7 +20,7 @@ export function TracesView({ projectId }: { projectId: string }) {
       <PageHeader
         eyebrow="Observability"
         title="Traces"
-        description="Root HTTP request index persisted by the backend. Filters are limited to the API contract currently available."
+        description="Inspect backend-owned root HTTP requests and their timing."
       />
       <Card>
         <DataTable
@@ -74,13 +75,11 @@ export function TracesView({ projectId }: { projectId: string }) {
               accessorKey: "trace_id",
               header: "Trace ID",
               cell: ({ row }) => (
-                <span className="font-mono text-xs text-slate-500">
-                  {row.original.trace_id}
-                </span>
+                <ResourceId id={row.original.trace_id} label="Trace ID" />
               ),
             },
           ]}
-          empty="No traces returned."
+          empty="No traces recorded for this project."
           serverPagination={{
             canFirst: navigation.canFirst,
             canPrevious: navigation.canPrevious,

@@ -24,6 +24,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -149,7 +150,7 @@ function DatabaseBackupsPanel({
           data={query.data?.backups ?? []}
           columns={columns}
           loading={query.isLoading}
-          empty="No database backups yet."
+          empty="No backups yet. Create one to preserve this database state."
           serverPagination={pageControls(
             navigation,
             nextCursor(query.data),
@@ -222,8 +223,14 @@ export function DatabaseDetailView({
       <PageHeader
         eyebrow="Database"
         title={database.name}
-        description="Schema browsing, row operations, and immutable backups backed by the database API."
+        description="Browse typed schemas, rows, indexes, relationships, and backups."
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(database.updated_at)}
+        </span>
+        <ResourceId id={database.id} label="Database ID" />
+      </div>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -234,7 +241,7 @@ export function DatabaseDetailView({
           data={tables.data?.tables ?? []}
           columns={columns}
           loading={tables.isLoading}
-          empty="No tables yet."
+          empty="No tables yet. Create a table to start storing structured data."
           serverPagination={pageControls(
             tablesNavigation,
             nextCursor(tables.data),

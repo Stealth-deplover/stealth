@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
@@ -100,9 +101,12 @@ export function AgentsView({
       <PageHeader
         eyebrow="Developer tooling"
         title="Agents"
-        description="Coding agents are modeled as durable task runners. Their execution readiness comes from the API catalog."
+        description="Run backend-owned coding tasks with catalog-backed providers and models."
         actions={
           <CreateDialog
+            triggerLabel="Create agent"
+            submitLabel="Create agent"
+            pendingLabel="Creating agent…"
             title="Create an agent"
             description={
               catalog.data?.execution.message ??
@@ -161,7 +165,7 @@ export function AgentsView({
             data={query.data?.agents ?? []}
             columns={columns}
             loading={query.isLoading}
-            empty="No agents in this project yet."
+            empty="No agents yet. Create a task runner when the API catalog is ready."
             serverPagination={{
               canFirst: navigation.canFirst,
               canPrevious: navigation.canPrevious,
@@ -208,6 +212,12 @@ export function AgentDetailView({
         description={`${agent.role} · ${agent.provider}/${agent.model}`}
         actions={<StatusBadge status={agent.status} />}
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(agent.updated_at)}
+        </span>
+        <ResourceId id={agent.id} label="Agent ID" />
+      </div>
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardContent className="p-5">

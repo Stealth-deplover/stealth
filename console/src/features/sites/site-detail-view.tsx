@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LogViewer, type LogLine } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -116,16 +117,21 @@ export function SiteDetailView({
       <PageHeader
         eyebrow="Site"
         title={site.name}
-        description="Static site deployment boundary."
+        description="Deploy immutable static site archives and inspect their build history."
         actions={
-          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-cyan-300 px-3.5 text-sm font-medium text-slate-950 hover:bg-cyan-200">
-            <FileUp className="size-4" /> Upload archive
+          <label
+            className={`inline-flex h-9 items-center gap-2 rounded-lg bg-cyan-300 px-3.5 text-sm font-medium text-slate-950 hover:bg-cyan-200 ${upload.isPending ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          >
+            <FileUp className="size-4" />
+            {upload.isPending ? "Uploading…" : "Upload archive"}
             <input
               type="file"
               accept=".zip,.tar,.gz,.tgz"
               className="sr-only"
+              disabled={upload.isPending}
               onChange={(event) => {
                 const file = event.target.files?.[0];
+                event.currentTarget.value = "";
                 if (file)
                   upload.mutate(
                     { file },
@@ -138,11 +144,15 @@ export function SiteDetailView({
           </label>
         }
       />
-      <div className="mb-5 flex items-center gap-2">
+      <div className="mb-5 flex flex-wrap items-center gap-2">
         <StatusBadge status={site.status} />
         <span className="text-xs text-slate-600">
           {site.framework} · {formatBytes(site.artifact_used_bytes)} used
         </span>
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(site.updated_at)}
+        </span>
+        <ResourceId id={site.id} label="Site ID" />
       </div>
       <Card>
         <CardHeader>
@@ -218,6 +228,12 @@ export function SiteDeploymentView({
         description="Immutable site deployment metadata and incremental build logs."
         actions={<StatusBadge status={deployment.status} />}
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <ResourceId id={deployment.id} label="Deployment ID" />
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(deployment.updated_at)}
+        </span>
+      </div>
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardContent className="p-4">

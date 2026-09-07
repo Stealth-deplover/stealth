@@ -42,7 +42,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
       <PageHeader
         eyebrow="Integrations"
         title="Messaging"
-        description="Provider credentials and message content stay protected by the backend. The console exposes safe metadata only."
+        description="Inspect messaging metadata without exposing provider credentials or message content."
       />
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

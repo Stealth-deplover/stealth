@@ -18,7 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CopyButton } from "@/components/copy-button";
+import { ResourceId } from "@/components/resource-id";
 import { formatBytes, formatCount, formatDate } from "@/lib/format";
 
 function Metric({
@@ -91,16 +91,7 @@ export function ProjectOverviewView({
             Snapshot {formatDate(usageData.captured_at)}
           </span>
         ) : null}
-        <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-          <span className="font-mono text-[11px] text-slate-500">
-            {projectId.slice(0, 8)}…
-          </span>
-          <CopyButton
-            value={projectId}
-            label="Copy project ID"
-            className="size-6 text-slate-600 hover:text-slate-200"
-          />
-        </span>
+        <ResourceId id={projectId} label="Project ID" />
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric

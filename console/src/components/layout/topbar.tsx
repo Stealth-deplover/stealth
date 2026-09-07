@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Command, LogOut, Menu, Search, UserRound } from "lucide-react";
+import { Command, LogOut, Menu, Search, UserRound } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
   OrganizationSwitcher,
@@ -71,14 +71,6 @@ export function Topbar({
           <span className="ml-2 rounded border border-stealth-border px-1.5 py-0.5 text-[10px] text-slate-600">
             ⌘ K
           </span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="hidden sm:inline-flex"
-          aria-label="Notifications"
-        >
-          <Bell className="size-4 text-slate-500" />
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

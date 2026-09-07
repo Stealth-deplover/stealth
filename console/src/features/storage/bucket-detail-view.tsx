@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -152,12 +153,23 @@ export function BucketDetailView({
               disabled={uploading}
               onChange={(event) => {
                 const file = event.target.files?.[0];
+                event.currentTarget.value = "";
                 if (file) void upload(file);
               }}
             />
           </label>
         }
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">
+          {formatBytes(current.used_bytes)} of{" "}
+          {formatBytes(current.quota_bytes)} used
+        </span>
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(current.updated_at)}
+        </span>
+        <ResourceId id={current.id} label="Bucket ID" />
+      </div>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -168,7 +180,7 @@ export function BucketDetailView({
           data={files.data?.files ?? []}
           columns={columns}
           loading={files.isLoading}
-          empty="No files in this bucket."
+          empty="No files yet. Upload an object to start using this bucket."
           serverPagination={pageControls(
             filesNavigation,
             nextCursor(files.data),

@@ -267,7 +267,7 @@ export function ServicesCanvasView({
       <PageHeader
         eyebrow="Topology"
         title="Services"
-        description="A durable map of every resource returned by the cursor-paginated APIs. Relationships are intentionally absent until the backend exposes explicit dependency edges."
+        description="Map project resources with persisted positions. Dependency edges appear only when the API provides them."
         actions={
           layout.data?.can_manage ? (
             <Button onClick={saveLayout} disabled={save.isPending || loading}>

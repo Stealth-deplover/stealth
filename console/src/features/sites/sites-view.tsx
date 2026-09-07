@@ -95,6 +95,9 @@ export function SitesView({
           <CreateDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
+            triggerLabel="Create site"
+            submitLabel="Create site"
+            pendingLabel="Creating site…"
             title="Create a site"
             description="Create the site boundary first, then add a deployment."
             fields={[
@@ -139,7 +142,7 @@ export function SitesView({
       ) : (
         <EmptyState
           title="No sites yet"
-          description="Create a site when you are ready to publish a static application or documentation surface."
+          description="Sites publish static applications and documentation. Create one to deploy your first archive."
           actionLabel="Create site"
           action={() => setCreateOpen(true)}
         />

@@ -74,6 +74,9 @@ export function UsersView({ projectId }: { projectId: string }) {
           <CreateDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
+            triggerLabel="Create user"
+            submitLabel="Create user"
+            pendingLabel="Creating user…"
             title="Create an application user"
             description="The password is accepted by the API and is not stored in the console."
             fields={[
