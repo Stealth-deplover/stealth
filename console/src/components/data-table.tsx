@@ -31,7 +31,7 @@ export function DataTable<T>({ columns, data, loading, empty = "No records yet."
     getCoreRowModel: getCoreRowModel(),
     ...(isServerPaginated ? { manualPagination: true, enableSorting: false } : { onPaginationChange: setPagination, getSortedRowModel: getSortedRowModel(), getPaginationRowModel: getPaginationRowModel() }),
   });
-  return <div>
+  return <div aria-busy={loading || undefined}>
     <Table>
     <TableHeader><TableRow>{table.getHeaderGroups().map((group) => group.headers.map((header) => { const sorted = header.column.getIsSorted(); const label = <span className="inline-flex items-center gap-1">{flexRender(header.column.columnDef.header, header.getContext())}{header.column.getCanSort() ? sorted === "asc" ? <ArrowUp className="size-3" /> : sorted === "desc" ? <ArrowDown className="size-3" /> : <ChevronsUpDown className="size-3 opacity-50" /> : null}</span>; return <TableHead key={header.id} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"}>{header.isPlaceholder ? null : header.column.getCanSort() ? <button type="button" className="rounded-sm text-left hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40" onClick={header.column.getToggleSortingHandler()}>{label}</button> : label}</TableHead>; }))}</TableRow></TableHeader>
     <TableBody>

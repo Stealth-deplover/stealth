@@ -11,7 +11,7 @@ export const DialogClose = DialogPrimitive.Close;
 export const DialogContent = ({ className, children, showClose = true, ...props }: React.ComponentProps<typeof DialogPrimitive.Content> & { showClose?: boolean }) => (
   <DialogPrimitive.Portal>
     <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" />
-    <DialogPrimitive.Content className={cn("fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-stealth-border bg-stealth-elevated p-6 shadow-2xl", className)} {...props}>
+    <DialogPrimitive.Content className={cn("fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-stealth-border bg-stealth-elevated p-6 shadow-2xl", className)} {...props}>
       {children}
       {showClose ? <DialogPrimitive.Close className="absolute right-4 top-4 rounded-md p-1 text-slate-500 hover:bg-white/[0.06] hover:text-white" aria-label="Close dialog"><X className="size-4" /></DialogPrimitive.Close> : null}
     </DialogPrimitive.Content>
