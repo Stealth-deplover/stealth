@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { ServerPagination } from "@/components/data-table";
 
-export function ResourceTableCard<T extends object>({ data, searchable, searchPlaceholder = "Search resources", children }: { data: T[]; searchable?: (item: T, term: string) => boolean; searchPlaceholder?: string; children: (filtered: T[]) => ReactNode }) {
+export function ResourceTableCard<T extends object>({ data, searchable, searchPlaceholder = "Search this page", serverPagination, children }: { data: T[]; searchable?: (item: T, term: string) => boolean; searchPlaceholder?: string; serverPagination?: ServerPagination; children: (filtered: T[], pagination?: ServerPagination) => ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -21,7 +22,7 @@ export function ResourceTableCard<T extends object>({ data, searchable, searchPl
   };
   const filtered = useMemo(() => searchable && search ? data.filter((item) => searchable(item, search.toLowerCase())) : data, [data, search, searchable]);
   return <Card>
-    {searchable ? <div className="border-b border-stealth-border p-4"><div className="relative max-w-sm"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input value={search} onChange={(event) => updateSearch(event.target.value)} placeholder={searchPlaceholder} className="pl-9" aria-label={searchPlaceholder} /></div></div> : null}
-    {children(filtered)}
+    {searchable ? <div className="border-b border-stealth-border p-4"><div className="relative max-w-sm"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input value={search} onChange={(event) => updateSearch(event.target.value)} placeholder={searchPlaceholder} className="pl-9" aria-label={searchPlaceholder} /></div><p className="mt-2 text-[11px] text-slate-600">Searches the records on this page. The API does not expose a global resource search for this list.</p></div> : null}
+    {children(filtered, serverPagination)}
   </Card>;
 }
