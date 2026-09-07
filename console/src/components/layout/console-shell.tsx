@@ -23,6 +23,7 @@ export function ConsoleShell({ children }: Readonly<{ children: React.ReactNode 
   const pathname = usePathname();
   const account = useCurrentAccount();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const context = useMemo(() => contextFromPath(pathname), [pathname]);
   const unauthorized = account.error instanceof ApiError && account.error.status === 401;
 
@@ -36,5 +37,5 @@ export function ConsoleShell({ children }: Readonly<{ children: React.ReactNode 
   if (unauthorized) return <div className="flex min-h-screen items-center justify-center bg-stealth-bg"><div className="w-72 space-y-3"><Skeleton className="mx-auto size-12 rounded-2xl" /><p className="text-center text-xs text-slate-500">Session expired. Returning to sign in…</p></div></div>;
   if (account.error) return <main className="mx-auto flex min-h-screen max-w-2xl items-center px-6"><ErrorState error={account.error} retry={() => account.refetch()} /></main>;
 
-  return <div className="min-h-screen bg-stealth-bg"><div className="flex min-h-screen"><Sidebar {...context} />{mobileOpen ? <div className="fixed inset-0 z-40 bg-black/70 lg:hidden" onClick={() => setMobileOpen(false)}><div className="h-full w-72" onClick={(event) => event.stopPropagation()}><Sidebar {...context} mobile /></div></div> : null}<div className="min-w-0 flex-1"><Topbar {...context} onMenu={() => setMobileOpen(true)} /><main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-10">{children}</main></div></div></div>;
+  return <div className="min-h-screen bg-stealth-bg"><div className="flex min-h-screen"><Sidebar {...context} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((value) => !value)} />{mobileOpen ? <div className="fixed inset-0 z-40 lg:hidden"><button type="button" className="absolute inset-0 cursor-default bg-black/70" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /><div className="relative z-10 h-full w-72" role="dialog" aria-label="Navigation menu"><Sidebar {...context} mobile /></div></div> : null}<div className="min-w-0 flex-1"><Topbar {...context} onMenu={() => setMobileOpen(true)} /><main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-10">{children}</main></div></div></div>;
 }

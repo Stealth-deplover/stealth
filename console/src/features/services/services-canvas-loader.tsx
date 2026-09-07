@@ -8,6 +8,6 @@ const ServicesCanvasView = dynamic(() => import("./services-canvas-view").then((
   loading: () => <Skeleton className="h-[calc(100vh-15rem)] min-h-[520px] w-full rounded-2xl" />,
 });
 
-export function ServicesCanvasLoader({ projectId }: { projectId: string }) {
-  return <ServicesCanvasView projectId={projectId} />;
+export function ServicesCanvasLoader({ organizationId, projectId }: { organizationId: string; projectId: string }) {
+  return <ServicesCanvasView organizationId={organizationId} projectId={projectId} />;
 }

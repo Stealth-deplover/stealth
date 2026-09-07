@@ -6,9 +6,14 @@
   --color-stealth-bg: #080a0d;
   --color-stealth-panel: #0d1015;
   --color-stealth-elevated: #12161d;
+  --color-stealth-subtle: #171d26;
   --color-stealth-border: #202733;
   --color-stealth-muted: #8d98a9;
   --color-stealth-accent: #72e4dc;
+  --color-stealth-success: #73d6a2;
+  --color-stealth-warning: #f2c66d;
+  --color-stealth-danger: #f28b9d;
+  --color-stealth-info: #91b7ff;
 }
 
 :root {
@@ -19,6 +24,7 @@
   --border: #202733;
   --panel: #0d1015;
   --elevated: #12161d;
+  --subtle: #171d26;
   --accent: #72e4dc;
 }
 
@@ -38,6 +44,8 @@ body {
     var(--background);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -80,4 +88,15 @@ select:focus-visible {
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background: #2b3544;
   border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

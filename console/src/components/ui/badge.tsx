@@ -22,11 +22,12 @@ export function Badge({ className, variant, ...props }: React.HTMLAttributes<HTM
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const normalized = status?.toLowerCase() ?? "unknown";
-  const variant = normalized === "ready" || normalized === "active" || normalized === "succeeded" || normalized === "healthy" || normalized === "completed" ? "success" : normalized === "failed" || normalized === "error" || normalized === "blocked" ? "error" : normalized === "building" || normalized === "running" || normalized === "queued" || normalized === "processing" ? "building" : normalized === "warning" || normalized === "past_due" ? "warning" : "neutral";
+  const variant = normalized === "ready" || normalized === "active" || normalized === "available" || normalized === "succeeded" || normalized === "healthy" || normalized === "completed" ? "success" : normalized === "failed" || normalized === "error" || normalized === "blocked" ? "error" : normalized === "building" || normalized === "running" || normalized === "queued" || normalized === "processing" ? "building" : normalized === "warning" || normalized === "past_due" || normalized === "degraded" ? "warning" : "neutral";
+  const label = status ? status.replace(/_/g, " ").replace(/^\w/, (character) => character.toUpperCase()) : "Unknown";
   return (
     <Badge variant={variant}>
       <span className={cn("size-1.5 rounded-full bg-current", variant === "building" && "animate-pulse")} />
-      {status ? status.replace(/_/g, " ") : "Unknown"}
+      {label}
     </Badge>
   );
 }
