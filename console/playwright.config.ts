@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const port = process.env.PLAYWRIGHT_PORT ?? "3100";
-const useProductionServer = Boolean(process.env.CI || process.env.PLAYWRIGHT_USE_PRODUCTION);
+const useProductionServer = Boolean(
+  process.env.CI || process.env.PLAYWRIGHT_USE_PRODUCTION,
+);
 const productionServerCommand = [
   "mkdir -p .next/standalone/.next",
   "if [ ! -e .next/standalone/.next/static ]; then cp -R .next/static .next/standalone/.next/static; fi",
@@ -24,7 +26,9 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: useProductionServer ? productionServerCommand : `npm run dev -- --port ${port}`,
+    command: useProductionServer
+      ? productionServerCommand
+      : `npm run dev -- --port ${port}`,
     url: `http://127.0.0.1:${port}/login`,
     reuseExistingServer: !process.env.CI,
   },

@@ -1,4 +1,7 @@
-import { CreateSiteRequestFramework, FunctionRuntime } from "@/api/generated/schema";
+import {
+  CreateSiteRequestFramework,
+  FunctionRuntime,
+} from "@/api/generated/schema";
 
 /**
  * Temporary console fallback: the current Go API exposes the runtime enum in
@@ -10,7 +13,9 @@ export const FUNCTION_RUNTIME_OPTIONS = [
   { value: FunctionRuntime.go_1_24, label: "Go 1.24" },
 ] as const;
 
-export const FUNCTION_RUNTIME_VALUES = FUNCTION_RUNTIME_OPTIONS.map((option) => option.value);
+export const FUNCTION_RUNTIME_VALUES = FUNCTION_RUNTIME_OPTIONS.map(
+  (option) => option.value,
+);
 
 export function isFunctionRuntime(value: string): value is FunctionRuntime {
   return FUNCTION_RUNTIME_VALUES.includes(value as FunctionRuntime);

@@ -15,7 +15,8 @@ export function formatRelative(value: string | null | undefined) {
 }
 
 export function formatBytes(value: number | null | undefined) {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === null || value === undefined || !Number.isFinite(value))
+    return "—";
   if (value < 1024) return `${value} B`;
   const units = ["KB", "MB", "GB", "TB"];
   let amount = value;
@@ -29,7 +30,9 @@ export function formatBytes(value: number | null | undefined) {
 
 export function formatCount(value: number | null | undefined) {
   if (value === null || value === undefined) return "—";
-  return new Intl.NumberFormat("en-US", { notation: value > 9999 ? "compact" : "standard" }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    notation: value > 9999 ? "compact" : "standard",
+  }).format(value);
 }
 
 export function formatDuration(value: number | null | undefined) {

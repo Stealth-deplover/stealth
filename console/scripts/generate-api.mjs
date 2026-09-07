@@ -5,7 +5,9 @@ import openapiTS, { astToString } from "openapi-typescript";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const consoleDirectory = resolve(scriptDirectory, "..");
-const input = process.env.OPENAPI_INPUT ?? resolve(consoleDirectory, "../openapi/openapi.yaml");
+const input =
+  process.env.OPENAPI_INPUT ??
+  resolve(consoleDirectory, "../openapi/openapi.yaml");
 const outputDirectory = resolve(consoleDirectory, "src/api/generated");
 const output = resolve(outputDirectory, "schema.ts");
 const inputLabel = relative(consoleDirectory, input).split(sep).join("/");

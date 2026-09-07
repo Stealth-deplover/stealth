@@ -24,19 +24,37 @@ export class ApiError extends Error {
 export function getApiError(error: unknown, status = 500) {
   if (error instanceof ApiError) return error;
   if (isRecord(error) && isRecord(error.error)) {
-    const message = typeof error.error.message === "string" ? error.error.message : "The API request failed.";
-    const code = typeof error.error.code === "string" ? error.error.code : "request_failed";
+    const message =
+      typeof error.error.message === "string"
+        ? error.error.message
+        : "The API request failed.";
+    const code =
+      typeof error.error.code === "string"
+        ? error.error.code
+        : "request_failed";
     return new ApiError(message, status, code);
   }
-  return new ApiError(error instanceof Error ? error.message : "The API request failed.", status);
+  return new ApiError(
+    error instanceof Error ? error.message : "The API request failed.",
+    status,
+  );
 }
 
-export async function unwrap<T>(result: { data?: T; error?: unknown; response: Response }) {
-  if (!result.response.ok) throw getApiError(result.error, result.response.status);
+export async function unwrap<T>(result: {
+  data?: T;
+  error?: unknown;
+  response: Response;
+}) {
+  if (!result.response.ok)
+    throw getApiError(result.error, result.response.status);
   return result.data as T | undefined;
 }
 
-export async function uploadMultipart<T>(path: string, formData: FormData, method = "POST") {
+export async function uploadMultipart<T>(
+  path: string,
+  formData: FormData,
+  method = "POST",
+) {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method,
     body: formData,

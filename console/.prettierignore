@@ -1,0 +1,11 @@
+.next
+node_modules
+coverage
+playwright-report
+test-results
+dist
+build
+
+# Generated OpenAPI output is intentionally excluded. The generator owns its
+# formatting and api:generate must remain deterministic.
+src/api/generated

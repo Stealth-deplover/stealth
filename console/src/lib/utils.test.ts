@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { cn, getInitials, humanize, isRecord, isSlug, toSlug } from "@/lib/utils";
+import {
+  cn,
+  getInitials,
+  humanize,
+  isRecord,
+  isSlug,
+  toSlug,
+} from "@/lib/utils";
 
 describe("console utility helpers", () => {
   it("merges utility classes with later precedence", () => {
