@@ -33,6 +33,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LogViewer, type LogLine } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
+import { ResourceId } from "@/components/resource-id";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,6 +138,9 @@ function FunctionVariablesPanel({
           </p>
         </div>
         <CreateDialog
+          triggerLabel="Add variable"
+          submitLabel="Add variable"
+          pendingLabel="Adding variable…"
           title="Add environment variable"
           description="The value is encrypted by the Go API and cannot be recovered after submission."
           fields={[
@@ -325,16 +329,21 @@ export function FunctionDetailView({
       <PageHeader
         eyebrow="Function"
         title={fn.name}
-        description={`${fn.runtime} · ${fn.entrypoint}`}
+        description="Deploy archive-based workloads and inspect builds, executions, and logs."
         actions={
-          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg bg-cyan-300 px-3.5 text-sm font-medium text-slate-950 hover:bg-cyan-200">
-            <Upload className="size-4" /> Deploy archive
+          <label
+            className={`inline-flex h-9 items-center gap-2 rounded-lg bg-cyan-300 px-3.5 text-sm font-medium text-slate-950 hover:bg-cyan-200 ${upload.isPending ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}
+          >
+            <Upload className="size-4" />
+            {upload.isPending ? "Uploading…" : "Deploy archive"}
             <input
               type="file"
               accept=".zip,.tar,.gz,.tgz"
               className="sr-only"
+              disabled={upload.isPending}
               onChange={(event) => {
                 const file = event.target.files?.[0];
+                event.currentTarget.value = "";
                 if (file)
                   upload.mutate(
                     { file },
@@ -345,11 +354,14 @@ export function FunctionDetailView({
           </label>
         }
       />
-      <div className="mb-5 flex items-center gap-2">
+      <div className="mb-5 flex flex-wrap items-center gap-2">
         <StatusBadge status={fn.status} />
+        <span className="font-mono text-xs text-slate-500">{fn.runtime}</span>
+        <span className="text-xs text-slate-600">Entry {fn.entrypoint}</span>
         <span className="text-xs text-slate-600">
           Updated {formatDate(fn.updated_at)}
         </span>
+        <ResourceId id={fn.id} label="Function ID" />
       </div>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
@@ -372,11 +384,16 @@ export function FunctionDetailView({
             <Card>
               <CardContent className="p-5">
                 <p className="text-xs text-slate-500">Active deployment</p>
-                <p className="mt-2 font-mono text-sm text-white">
-                  {fn.active_deployment_id
-                    ? `${fn.active_deployment_id.slice(0, 12)}…`
-                    : "Not deployed"}
-                </p>
+                <div className="mt-1">
+                  {fn.active_deployment_id ? (
+                    <ResourceId
+                      id={fn.active_deployment_id}
+                      label="Deployment ID"
+                    />
+                  ) : (
+                    <p className="text-sm text-slate-500">Not deployed</p>
+                  )}
+                </div>
               </CardContent>
             </Card>
             <Card>
@@ -526,6 +543,12 @@ export function FunctionDeploymentView({
         description="Immutable deployment metadata and incremental build logs."
         actions={<StatusBadge status={deployment.status} />}
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <ResourceId id={deployment.id} label="Deployment ID" />
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(deployment.updated_at)}
+        </span>
+      </div>
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardContent className="p-4">

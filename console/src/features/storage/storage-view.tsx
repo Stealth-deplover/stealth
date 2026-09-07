@@ -83,6 +83,9 @@ export function StorageView({
           <CreateDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
+            triggerLabel="Create bucket"
+            submitLabel="Create bucket"
+            pendingLabel="Creating bucket…"
             title="Create a bucket"
             description="Bucket names are lowercase and hyphenated. Folders are not modeled by this API."
             fields={[{ name: "name", label: "Name", placeholder: "assets" }]}

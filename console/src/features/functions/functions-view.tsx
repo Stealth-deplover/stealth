@@ -111,6 +111,9 @@ export function FunctionsView({
           <CreateDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
+            triggerLabel="Create function"
+            submitLabel="Create function"
+            pendingLabel="Creating function…"
             title="Create a function"
             description="The function definition is stored by the Go API. Source deployment happens separately through an archive."
             fields={[
@@ -143,7 +146,7 @@ export function FunctionsView({
       <ProjectResourceIntro
         icon={FunctionSquare}
         title="Functions"
-        description="Deploy immutable source archives, then inspect builds and executions without mixing backend business logic into the console."
+        description="Deploy immutable source archives, then inspect builds and executions."
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
@@ -176,7 +179,7 @@ export function FunctionsView({
       ) : (
         <EmptyState
           title="No functions yet"
-          description="Functions give your project a small, deployable compute surface with logs and execution history."
+          description="Functions run backend workloads on demand. Create one to deploy your first workload."
           actionLabel="Create function"
           action={() => setCreateOpen(true)}
         />

@@ -40,7 +40,7 @@ export function DeploymentsView({
       <PageHeader
         eyebrow="Compute"
         title="Deployments"
-        description="The backend exposes deployment history under each Function and Site. This page links the actual resource-scoped views instead of inventing a global deployment endpoint."
+        description="Inspect immutable deployment history for Functions and Sites."
       />
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -74,7 +74,9 @@ export function DeploymentsView({
                 </Link>
               ))
             ) : (
-              <p className="text-sm text-slate-500">No functions returned.</p>
+              <p className="text-sm text-slate-500">
+                No functions on this page.
+              </p>
             )}
           </CardContent>
           <CursorPaginationControls
@@ -121,7 +123,7 @@ export function DeploymentsView({
                 </Link>
               ))
             ) : (
-              <p className="text-sm text-slate-500">No sites returned.</p>
+              <p className="text-sm text-slate-500">No sites on this page.</p>
             )}
           </CardContent>
           <CursorPaginationControls

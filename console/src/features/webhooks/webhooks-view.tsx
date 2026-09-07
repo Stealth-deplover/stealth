@@ -95,6 +95,9 @@ export function WebhooksView({
         description="Deliver platform events to HTTPS endpoints and inspect delivery metadata."
         actions={
           <CreateDialog
+            triggerLabel="Create webhook"
+            submitLabel="Create webhook"
+            pendingLabel="Creating webhook…"
             title="Create a webhook"
             description="Copy the signing secret before closing this dialog. Stealth will not show it again."
             fields={[
@@ -126,7 +129,7 @@ export function WebhooksView({
             data={query.data?.webhooks ?? []}
             columns={columns}
             loading={query.isLoading}
-            empty="No webhooks yet."
+            empty="No webhooks yet. Create one to start receiving project events."
             serverPagination={pageControls(
               navigation,
               nextCursor(query.data),

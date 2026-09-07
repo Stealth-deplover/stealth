@@ -50,7 +50,9 @@ export function OrganizationProjectList({
         <CreateDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
-          label="Project"
+          triggerLabel="Create project"
+          submitLabel="Create project"
+          pendingLabel="Creating project…"
           title="Create a project"
           description="Project names are normalized to stable API slugs, for example Production API becomes production-api."
           fields={[
@@ -179,7 +181,9 @@ export function OrganizationsIndexView() {
         description="Choose a workspace, then open a project to operate its services."
         actions={
           <CreateDialog
-            label="Organization"
+            triggerLabel="Create organization"
+            submitLabel="Create organization"
+            pendingLabel="Creating organization…"
             title="Create an organization"
             description="Organizations group people, projects, and plan limits."
             fields={[

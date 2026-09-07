@@ -80,11 +80,14 @@ export function DatabasesView({
       <PageHeader
         eyebrow="Data"
         title="Databases"
-        description="Browse typed tables, indexes, relationships, backups, and rows without exposing a fake SQL editor."
+        description="Browse typed schemas, rows, indexes, relationships, and backups."
         actions={
           <CreateDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
+            triggerLabel="Create database"
+            submitLabel="Create database"
+            pendingLabel="Creating database…"
             title="Create a database"
             description="A database gives your project a typed schema boundary."
             fields={[{ name: "name", label: "Name", placeholder: "primary" }]}

@@ -14,6 +14,8 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { OneTimeSecretDialog } from "@/components/one-time-secret-dialog";
 import { PageHeader } from "@/components/page-header";
+import { CopyButton } from "@/components/copy-button";
+import { ResourceId } from "@/components/resource-id";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,7 +87,7 @@ export function WebhookDetailView({
       <PageHeader
         eyebrow="Webhook"
         title={current.name}
-        description="Delivery metadata and backend-owned configuration. Signing secrets are never returned by the read API."
+        description="Deliver platform events and inspect delivery history."
         actions={
           <div className="flex items-center gap-2">
             <StatusBadge status={current.enabled ? "active" : "inactive"} />
@@ -107,6 +109,12 @@ export function WebhookDetailView({
           </div>
         }
       />
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">
+          Updated {formatDate(current.updated_at)}
+        </span>
+        <ResourceId id={current.id} label="Webhook ID" />
+      </div>
       <Card className="mb-5">
         <CardHeader>
           <CardTitle>Configuration</CardTitle>
@@ -115,8 +123,13 @@ export function WebhookDetailView({
           <dl className="grid gap-4 md:grid-cols-2">
             <div>
               <dt className="text-xs text-slate-600">Endpoint</dt>
-              <dd className="mt-1 break-all font-mono text-xs text-slate-300">
-                {current.url}
+              <dd className="mt-1 flex items-start gap-1 break-all font-mono text-xs text-slate-300">
+                <span>{current.url}</span>
+                <CopyButton
+                  value={current.url}
+                  label="Copy webhook URL"
+                  className="size-6 shrink-0 text-slate-600 hover:text-slate-200"
+                />
               </dd>
             </div>
             <div>
@@ -152,7 +165,7 @@ export function WebhookDetailView({
           data={query.data?.deliveries ?? []}
           columns={columns}
           loading={query.isLoading}
-          empty="No deliveries returned."
+          empty="No deliveries yet. Delivery attempts will appear here after an event is sent."
           serverPagination={pageControls(
             deliveriesNavigation,
             nextCursor(query.data),

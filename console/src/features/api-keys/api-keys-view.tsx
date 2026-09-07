@@ -88,6 +88,9 @@ export function APIKeysView({ projectId }: { projectId: string }) {
         description="Project-bound keys are managed by the Go API. Secrets are shown once and never persisted by this UI."
         actions={
           <CreateDialog
+            triggerLabel="Create API key"
+            submitLabel="Create API key"
+            pendingLabel="Creating API key…"
             title="Create an API key"
             description="Copy the secret before closing this dialog. Stealth will not show it again."
             fields={[
@@ -109,7 +112,7 @@ export function APIKeysView({ projectId }: { projectId: string }) {
           data={query.data?.keys ?? []}
           columns={columns}
           loading={query.isLoading}
-          empty="No API keys yet."
+          empty="No API keys yet. Create one for an integration or deployment."
           serverPagination={pageControls(
             navigation,
             nextCursor(query.data),
