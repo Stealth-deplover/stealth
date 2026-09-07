@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import { HardDrive } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateBucket } from "@/api/mutations";
@@ -27,17 +28,21 @@ export function StorageView({
   organizationId: string;
   projectId: string;
 }) {
+  const router = useRouter();
   const navigation = useCursorPagination();
   const [createOpen, setCreateOpen] = useState(false);
   const query = useStorageBuckets(projectId, { cursor: navigation.cursor });
   const create = useCreateBucket(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const handleCreateBucket = async (values: Record<string, string>) => {
-    await create.mutateAsync({
+    const result = await create.mutateAsync({
       name: values.name,
       file_security: true,
     });
     toast.success("Bucket created");
+    if (result?.bucket) {
+      router.push(`${base}/storage/${result.bucket.id}`);
+    }
   };
   const columns: ColumnDef<StorageBucket, unknown>[] = [
     {

@@ -307,6 +307,7 @@ export function AgentRunDetailView({
           description="Incremental worker log stream"
           fetchPage={logFetcher}
           enabled
+          emptyMessage="No logs yet. Worker output will appear as this run progresses."
         />
       </div>
     </>

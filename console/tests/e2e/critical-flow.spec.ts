@@ -42,6 +42,50 @@ const functionPageTwo = {
   id: "function-2",
   name: "worker-page-two",
 };
+const onboardingOrganization = {
+  id: "org-onboard",
+  name: "Onboarding workspace",
+  slug: "onboarding-workspace",
+  created_at: "2026-01-02T00:00:00Z",
+};
+const onboardingProject = {
+  id: "project-onboard",
+  organization_id: onboardingOrganization.id,
+  name: "first-project",
+  created_at: "2026-01-02T00:00:00Z",
+};
+const onboardingDatabase = {
+  id: "database-onboard",
+  project_id: onboardingProject.id,
+  name: "application-data",
+  created_at: "2026-01-02T00:00:00Z",
+  updated_at: "2026-01-02T00:00:00Z",
+};
+const emptyProjectUsage = {
+  project_id: onboardingProject.id,
+  captured_at: "2026-01-02T00:00:00Z",
+  application_users: 0,
+  database_count: 0,
+  database_table_count: 0,
+  database_row_count: 0,
+  storage_file_count: 0,
+  storage_bytes: 0,
+  storage_quota_bytes: 100000,
+  function_count: 0,
+  function_artifact_bytes: 0,
+  function_quota_bytes: 100000,
+  site_count: 0,
+  site_artifact_bytes: 0,
+  site_reserved_bytes: 0,
+  site_quota_bytes: 100000,
+  realtime_event_count: 0,
+  webhook_delivery_count_7d: 0,
+  api_request_count_30d: 0,
+  api_egress_bytes_30d: 0,
+  function_invocation_count_30d: 0,
+  function_failure_count_30d: 0,
+  function_compute_ms_30d: 0,
+};
 
 async function gotoWithDevRetry(page: Page, url: string) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -126,6 +170,86 @@ async function installApiFixtures(page: Page) {
   });
 }
 
+async function installOnboardingFixtures(page: Page) {
+  let organizationCreated = false;
+  let projectCreated = false;
+  let databaseCreated = false;
+
+  await page.route("**/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const respond = (body: unknown, status = 200) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+
+    if (path === "/v1/account") return respond({ account });
+    if (path === "/v1/organizations" && method === "GET")
+      return respond({
+        organizations: organizationCreated ? [onboardingOrganization] : [],
+        pagination,
+      });
+    if (path === "/v1/organizations" && method === "POST") {
+      organizationCreated = true;
+      return respond({ organization: onboardingOrganization }, 201);
+    }
+    if (path === "/v1/organizations/org-onboard/projects" && method === "GET")
+      return respond({
+        projects: projectCreated ? [onboardingProject] : [],
+        pagination,
+      });
+    if (
+      path === "/v1/organizations/org-onboard/projects" &&
+      method === "POST"
+    ) {
+      projectCreated = true;
+      return respond({ project: onboardingProject }, 201);
+    }
+    if (path === "/v1/projects/project-onboard" && method === "GET")
+      return respond({ project: onboardingProject });
+    if (path === "/v1/projects/project-onboard/usage")
+      return respond({ usage: emptyProjectUsage });
+    if (path === "/v1/projects/project-onboard/audit-events")
+      return respond({ events: [], pagination });
+    if (path === "/v1/projects/project-onboard/storage/buckets")
+      return respond({ buckets: [], pagination, can_manage: true });
+    if (path === "/v1/projects/project-onboard/databases" && method === "GET")
+      return respond({
+        databases: databaseCreated ? [onboardingDatabase] : [],
+        pagination,
+        can_manage: true,
+      });
+    if (
+      path === "/v1/projects/project-onboard/databases" &&
+      method === "POST"
+    ) {
+      databaseCreated = true;
+      return respond({ database: onboardingDatabase }, 201);
+    }
+    if (
+      path === "/v1/projects/project-onboard/databases/database-onboard" &&
+      method === "GET"
+    )
+      return respond({ database: onboardingDatabase });
+    if (
+      path ===
+        "/v1/projects/project-onboard/databases/database-onboard/tables" &&
+      method === "GET"
+    )
+      return respond({ tables: [], pagination, can_manage: true });
+    if (
+      path ===
+        "/v1/projects/project-onboard/databases/database-onboard/backups" &&
+      method === "GET"
+    )
+      return respond({ backups: [], pagination });
+    return respond({});
+  });
+}
+
 test("critical console flow can move from login to a resource and logout", async ({
   page,
 }) => {
@@ -204,4 +328,60 @@ test("cursor deep links expose First without inventing Previous", async ({
   await page.getByRole("button", { name: "First" }).click();
   await expect(page).toHaveURL(/\/functions\?status=active$/);
   await expect(page.getByText("worker-page-one")).toBeVisible();
+});
+
+test("first-use flow creates an organization, project, and first database", async ({
+  page,
+}) => {
+  await installOnboardingFixtures(page);
+
+  await gotoWithDevRetry(page, "/organizations");
+  await expect(
+    page.getByRole("heading", { name: "Welcome to Stealth" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Create organization" })
+    .last()
+    .click();
+  await page.getByLabel("Display name").fill("Onboarding workspace");
+  await page.getByLabel("Slug").fill("onboarding-workspace");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create organization" })
+    .click();
+
+  await expect(page).toHaveURL(/\/organizations\/org-onboard\/projects$/);
+  await expect(
+    page.getByRole("heading", { name: "No projects yet" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Create project" }).first().click();
+  await page.getByLabel("Project name").fill("First project");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create project" })
+    .click();
+
+  await expect(page).toHaveURL(
+    /\/organizations\/org-onboard\/projects\/project-onboard$/,
+  );
+  await expect(
+    page.getByRole("heading", { name: "Your project is ready" }),
+  ).toBeVisible();
+  await page
+    .getByRole("link", { name: "Create database", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/databases$/);
+  await page.getByRole("button", { name: "Create database" }).first().click();
+  await page.getByLabel("Name").fill("Application data");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create database" })
+    .click();
+
+  await expect(page).toHaveURL(
+    /\/organizations\/org-onboard\/projects\/project-onboard\/databases\/database-onboard$/,
+  );
+  await expect(
+    page.getByRole("heading", { name: "application-data" }),
+  ).toBeVisible();
 });

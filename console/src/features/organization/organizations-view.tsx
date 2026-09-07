@@ -1,6 +1,7 @@
 "use client";
 import { ArrowUpRight } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateOrganization } from "@/api/mutations";
 import { nextCursor } from "@/api/pagination";
@@ -20,14 +21,18 @@ import { pageControls } from "@/lib/pagination";
 export function OrganizationsIndexView() {
   const router = useRouter();
   const navigation = useCursorPagination();
+  const [createOpen, setCreateOpen] = useState(false);
   const query = useOrganizations({ cursor: navigation.cursor });
   const create = useCreateOrganization();
   const handleCreateOrganization = async (values: Record<string, string>) => {
-    await create.mutateAsync({
+    const result = await create.mutateAsync({
       name: values.name,
       slug: values.slug,
     });
     toast.success("Organization created");
+    if (result?.organization) {
+      router.replace(`/organizations/${result.organization.id}/projects`);
+    }
   };
   const organizations = query.data?.organizations ?? [];
   return (
@@ -38,6 +43,8 @@ export function OrganizationsIndexView() {
         description="Choose a workspace, then open a project to operate its services."
         actions={
           <CreateDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
             triggerLabel="Create organization"
             submitLabel="Create organization"
             pendingLabel="Creating organization…"
@@ -59,6 +66,18 @@ export function OrganizationsIndexView() {
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
+      ) : query.isLoading ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 3 }, (_, index) => (
+            <Card key={index}>
+              <CardContent className="space-y-4 p-5">
+                <div className="h-10 w-10 animate-pulse rounded-xl bg-white/[0.06]" />
+                <div className="h-5 w-36 animate-pulse rounded bg-white/[0.06]" />
+                <div className="h-3 w-24 animate-pulse rounded bg-white/[0.04]" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : organizations.length || navigation.canPrevious ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -107,8 +126,10 @@ export function OrganizationsIndexView() {
         </>
       ) : (
         <EmptyState
-          title="No organizations yet"
-          description="Create a workspace to start mapping projects to the Stealth API."
+          title="Welcome to Stealth"
+          description="Create an organization to start managing projects and resources."
+          actionLabel="Create organization"
+          action={() => setCreateOpen(true)}
         />
       )}
     </>

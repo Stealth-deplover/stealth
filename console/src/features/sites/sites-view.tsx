@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { type ColumnDef } from "@tanstack/react-table";
 import { Globe2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateSite } from "@/api/mutations";
@@ -29,18 +30,22 @@ export function SitesView({
   organizationId: string;
   projectId: string;
 }) {
+  const router = useRouter();
   const navigation = useCursorPagination();
   const [createOpen, setCreateOpen] = useState(false);
   const query = useSites(projectId, { cursor: navigation.cursor });
   const create = useCreateSite(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const handleCreateSite = async (values: Record<string, string>) => {
-    await create.mutateAsync({
+    const result = await create.mutateAsync({
       name: values.name,
       framework: SITE_FRAMEWORK_OPTIONS[0].value,
       enabled: true,
     });
     toast.success("Site created");
+    if (result?.site) {
+      router.push(`${base}/sites/${result.site.id}`);
+    }
   };
   const columns: ColumnDef<Site, unknown>[] = [
     {

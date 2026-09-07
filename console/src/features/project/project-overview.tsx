@@ -11,7 +11,13 @@ import {
   History,
   Users,
 } from "lucide-react";
-import { useProject, useProjectAudit, useProjectUsage } from "@/api/queries";
+import {
+  useProject,
+  useProjectAudit,
+  useProjectUsage,
+  useStorageBuckets,
+} from "@/api/queries";
+import type { ProjectUsage } from "@/api/types";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
@@ -49,6 +55,96 @@ function Metric({
   );
 }
 
+type ProjectResourceUsage = Pick<
+  ProjectUsage,
+  "function_count" | "site_count" | "database_count"
+>;
+
+export function isEmptyProject(
+  usage: ProjectResourceUsage | undefined,
+  storageBucketCount: number | undefined,
+) {
+  if (!usage || storageBucketCount === undefined) return false;
+  return (
+    usage.function_count === 0 &&
+    usage.site_count === 0 &&
+    usage.database_count === 0 &&
+    storageBucketCount === 0
+  );
+}
+
+function QuickStart({ base }: { base: string }) {
+  const items = [
+    {
+      label: "Create function",
+      description: "Run backend code on demand.",
+      href: `${base}/functions`,
+      icon: FunctionSquare,
+    },
+    {
+      label: "Create site",
+      description: "Publish a static application.",
+      href: `${base}/sites`,
+      icon: Globe2,
+    },
+    {
+      label: "Create database",
+      description: "Start a typed data layer.",
+      href: `${base}/databases`,
+      icon: Database,
+    },
+    {
+      label: "Create storage bucket",
+      description: "Store application files and objects.",
+      href: `${base}/storage`,
+      icon: HardDrive,
+    },
+  ];
+
+  return (
+    <Card className="mb-6 border-cyan-300/20 bg-cyan-300/[0.03]">
+      <CardHeader className="flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <CardTitle>Your project is ready</CardTitle>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">
+            Create a resource, configure or deploy it, then inspect its logs and
+            status.
+          </p>
+        </div>
+        <Badge variant="neutral">Quick start</Badge>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {items.map(({ label, description, href, icon: Icon }) => (
+            <Link
+              key={href}
+              href={href}
+              className="group flex items-start gap-3 rounded-lg border border-stealth-border bg-stealth-panel/60 p-3 transition hover:border-cyan-300/30 hover:bg-white/[0.04]"
+            >
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-cyan-300/10 text-cyan-200">
+                <Icon className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-slate-200 group-hover:text-white">
+                  {label}
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-5 text-slate-600">
+                  {description}
+                </span>
+              </span>
+              <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-slate-600 group-hover:text-cyan-300" />
+            </Link>
+          ))}
+        </div>
+        <p className="mt-4 text-[11px] text-slate-600">
+          1. Create a resource · 2. Configure or deploy it · 3. Inspect logs and
+          status.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ProjectOverviewView({
   projectId,
   organizationId,
@@ -59,12 +155,17 @@ export function ProjectOverviewView({
   const project = useProject(projectId);
   const usage = useProjectUsage(projectId);
   const audit = useProjectAudit(projectId);
+  const storageBuckets = useStorageBuckets(projectId);
   if (project.error)
     return <ErrorState error={project.error} retry={() => project.refetch()} />;
   if (project.isPending) return <LoadingState rows={6} />;
   const current = project.data?.project;
   const usageData = usage.data?.usage;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
+  const showQuickStart = isEmptyProject(
+    usageData,
+    storageBuckets.data?.buckets.length,
+  );
   return (
     <>
       <PageHeader
@@ -93,6 +194,7 @@ export function ProjectOverviewView({
         ) : null}
         <ResourceId id={projectId} label="Project ID" />
       </div>
+      {showQuickStart ? <QuickStart base={base} /> : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
           label="Functions"
