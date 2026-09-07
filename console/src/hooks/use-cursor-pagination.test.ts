@@ -28,7 +28,10 @@ describe("useCursorPagination", () => {
     expect(result.current.canPrevious).toBe(false);
 
     act(() => result.current.goNext("page-two"));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/functions?cursor=page-two", { scroll: false });
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/functions?cursor=page-two",
+      { scroll: false },
+    );
 
     navigation.search = new URLSearchParams("cursor=page-two");
     rerender();
@@ -36,7 +39,9 @@ describe("useCursorPagination", () => {
     expect(result.current.canPrevious).toBe(true);
 
     act(() => result.current.goPrevious());
-    expect(navigation.replace).toHaveBeenLastCalledWith("/functions", { scroll: false });
+    expect(navigation.replace).toHaveBeenLastCalledWith("/functions", {
+      scroll: false,
+    });
   });
 
   it("does not invent a previous cursor for a deep link and supports First", () => {
@@ -50,7 +55,10 @@ describe("useCursorPagination", () => {
     expect(navigation.replace).not.toHaveBeenCalled();
 
     act(() => result.current.goFirst());
-    expect(navigation.replace).toHaveBeenCalledWith("/functions?status=active", { scroll: false });
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "/functions?status=active",
+      { scroll: false },
+    );
   });
 
   it("resets previous history when the filter context changes", () => {

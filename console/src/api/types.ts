@@ -13,7 +13,8 @@ export type StealthFunction = components["schemas"]["Function"];
 export type FunctionDeployment = components["schemas"]["FunctionDeployment"];
 export type FunctionExecution = components["schemas"]["FunctionExecution"];
 export type FunctionBuildLog = components["schemas"]["FunctionBuildLog"];
-export type FunctionExecutionLog = components["schemas"]["FunctionExecutionLog"];
+export type FunctionExecutionLog =
+  components["schemas"]["FunctionExecutionLog"];
 export type FunctionVariable = components["schemas"]["FunctionVariable"];
 export type Site = components["schemas"]["Site"];
 export type SiteDeployment = components["schemas"]["SiteDeployment"];
@@ -36,7 +37,9 @@ export type AgentCatalog = components["schemas"]["AgentCatalogResponse"];
 export type AuthSettings = components["schemas"]["ProjectAuthSettings"];
 export type Pagination = components["schemas"]["Pagination"];
 
-export type Page<T> = { pagination?: Pagination } & Record<string, unknown> & { items: T[] };
+export type Page<T> = { pagination?: Pagination } & Record<string, unknown> & {
+    items: T[];
+  };
 
 export function pageItems<T>(page: unknown, key: string): T[] {
   if (!page || typeof page !== "object") return [];

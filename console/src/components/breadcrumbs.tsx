@@ -30,18 +30,33 @@ function fallbackName(value: string | undefined, prefix: string) {
   return `${prefix} ${value.slice(0, 8)}`;
 }
 
-export function Breadcrumbs({ organizationId, projectId }: { organizationId?: string; projectId?: string }) {
+export function Breadcrumbs({
+  organizationId,
+  projectId,
+}: {
+  organizationId?: string;
+  projectId?: string;
+}) {
   const pathname = usePathname();
   const organization = useOrganization(organizationId);
   const project = useProject(projectId);
   if (!organizationId) return null;
 
   const orgBase = `/organizations/${organizationId}`;
-  const items: Array<{ label: string; href?: string }> = [{ label: organization.data?.name ?? fallbackName(organizationId, "Organization"), href: `${orgBase}/projects` }];
+  const items: Array<{ label: string; href?: string }> = [
+    {
+      label:
+        organization.data?.name ?? fallbackName(organizationId, "Organization"),
+      href: `${orgBase}/projects`,
+    },
+  ];
   if (!projectId) {
-    items.push({ label: pathname.includes("/projects") ? "Projects" : "Workspace" });
+    items.push({
+      label: pathname.includes("/projects") ? "Projects" : "Workspace",
+    });
   } else {
-    const projectName = project.data?.project?.name ?? fallbackName(projectId, "Project");
+    const projectName =
+      project.data?.project?.name ?? fallbackName(projectId, "Project");
     const projectBase = `${orgBase}/projects/${projectId}`;
     items.push({ label: projectName, href: projectBase });
     const rest = pathname.slice(projectBase.length).split("/").filter(Boolean);
@@ -51,10 +66,36 @@ export function Breadcrumbs({ organizationId, projectId }: { organizationId?: st
     }
   }
 
-  return <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1 text-xs text-slate-500 xl:flex">
-    {items.map((item, index) => <span key={`${item.label}-${index}`} className="inline-flex min-w-0 items-center gap-1">
-      {index > 0 ? <ChevronRight className="size-3 shrink-0 text-slate-700" /> : null}
-      {item.href && index < items.length - 1 ? <Link href={item.href} className={cn("max-w-36 truncate transition hover:text-slate-200", index === 0 && "max-w-28")}>{item.label}</Link> : <span className="max-w-40 truncate text-slate-300">{item.label}</span>}
-    </span>)}
-  </nav>;
+  return (
+    <nav
+      aria-label="Breadcrumb"
+      className="hidden min-w-0 items-center gap-1 text-xs text-slate-500 xl:flex"
+    >
+      {items.map((item, index) => (
+        <span
+          key={`${item.label}-${index}`}
+          className="inline-flex min-w-0 items-center gap-1"
+        >
+          {index > 0 ? (
+            <ChevronRight className="size-3 shrink-0 text-slate-700" />
+          ) : null}
+          {item.href && index < items.length - 1 ? (
+            <Link
+              href={item.href}
+              className={cn(
+                "max-w-36 truncate transition hover:text-slate-200",
+                index === 0 && "max-w-28",
+              )}
+            >
+              {item.label}
+            </Link>
+          ) : (
+            <span className="max-w-40 truncate text-slate-300">
+              {item.label}
+            </span>
+          )}
+        </span>
+      ))}
+    </nav>
+  );
 }
