@@ -5,7 +5,7 @@ import { DataTable } from "@/components/data-table";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
-import { StatusBadge } from "@/components/ui/badge";
+import { HttpStatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatDate, formatDuration } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
@@ -53,15 +53,7 @@ export function OrganizationTracesView({
                 accessorKey: "status",
                 header: "Status",
                 cell: ({ row }) => (
-                  <StatusBadge
-                    status={
-                      row.original.status >= 500
-                        ? "error"
-                        : row.original.status >= 400
-                          ? "warning"
-                          : "success"
-                    }
-                  />
+                  <HttpStatusBadge status={row.original.status} />
                 ),
               },
               {

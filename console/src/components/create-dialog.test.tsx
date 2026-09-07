@@ -87,4 +87,73 @@ describe("CreateDialog", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
   });
+
+  it("resets values after an uncontrolled dialog is cancelled", async () => {
+    render(
+      <CreateDialog
+        triggerLabel="Create function"
+        submitLabel="Create function"
+        pendingLabel="Creating function…"
+        title="Create a function"
+        description="Run backend code on demand."
+        fields={fields}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create function" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "temporary" },
+    });
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create function" }));
+
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("");
+  });
+
+  it("resets values when a controlled parent closes the dialog", async () => {
+    function ControlledCreateDialog() {
+      const [open, setOpen] = useState(true);
+
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(false)}>
+            Close from parent
+          </button>
+          <CreateDialog
+            open={open}
+            onOpenChange={setOpen}
+            triggerLabel="Create project"
+            submitLabel="Create project"
+            pendingLabel="Creating project…"
+            title="Create a project"
+            description="Create a project boundary."
+            fields={fields}
+            onSubmit={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<ControlledCreateDialog />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "temporary" },
+    });
+    fireEvent.click(screen.getByText("Close from parent"));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create project" }));
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("");
+  });
 });

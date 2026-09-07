@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -75,27 +75,32 @@ export function CreateDialog({
     onOpenChange?.(nextOpen);
     if (!controlled) setInternalOpen(nextOpen);
   };
-  const resetValues = () => setValues(createInitialValues(fields));
+  const resetValues = useCallback(
+    () => setValues(createInitialValues(fields)),
+    [fields],
+  );
+  const handleOpenChange = (nextOpen: boolean) => {
+    setDialogOpen(nextOpen);
+    if (!nextOpen) resetValues();
+  };
+  const previousOpen = useRef(dialogOpen);
+  useEffect(() => {
+    if (previousOpen.current && !dialogOpen) resetValues();
+    previousOpen.current = dialogOpen;
+  }, [dialogOpen, resetValues]);
   const updateValue = (name: string, value: string) =>
     setValues((current) => ({ ...current, [name]: value }));
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
       await onSubmit(values);
-      setDialogOpen(false);
-      resetValues();
+      handleOpenChange(false);
     } catch (error) {
       toast.error(errorMessage(error));
     }
   };
   return (
-    <Dialog
-      open={dialogOpen}
-      onOpenChange={(value) => {
-        setDialogOpen(value);
-        if (value) resetValues();
-      }}
-    >
+    <Dialog open={dialogOpen} onOpenChange={handleOpenChange}>
       {trigger ? (
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       ) : (
@@ -163,7 +168,7 @@ export function CreateDialog({
             <Button
               type="button"
               variant="ghost"
-              onClick={() => setDialogOpen(false)}
+              onClick={() => handleOpenChange(false)}
               disabled={pending}
             >
               Cancel

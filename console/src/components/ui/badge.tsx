@@ -70,3 +70,32 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
     </Badge>
   );
 }
+
+export function HttpStatusBadge({
+  status,
+}: {
+  status: number | null | undefined;
+}) {
+  const variant =
+    status === null || status === undefined
+      ? "neutral"
+      : status >= 500
+        ? "error"
+        : status >= 400
+          ? "warning"
+          : status >= 300
+            ? "default"
+            : status >= 200
+              ? "success"
+              : "neutral";
+
+  return (
+    <Badge
+      variant={variant}
+      title={status ? `HTTP status ${status}` : undefined}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {status ?? "Unknown"}
+    </Badge>
+  );
+}

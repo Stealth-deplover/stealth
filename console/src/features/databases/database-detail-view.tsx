@@ -2,12 +2,14 @@
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 import { Table2 } from "lucide-react";
 import { toast } from "sonner";
 import { apiUrl } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
 import {
   useCreateDatabaseBackup,
+  useCreateDatabaseTable,
   useDeleteDatabaseBackup,
   useRestoreDatabaseBackup,
 } from "@/api/mutations";
@@ -18,6 +20,7 @@ import {
   useDatabaseTables,
 } from "@/api/queries";
 import type { DatabaseBackup, DatabaseRow, DatabaseTable } from "@/api/types";
+import { CreateDialog } from "@/components/create-dialog";
 import { DataTable } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -176,8 +179,17 @@ export function DatabaseDetailView({
   const tables = useDatabaseTables(projectId, databaseId, {
     cursor: tablesNavigation.cursor,
   });
+  const [createTableOpen, setCreateTableOpen] = useState(false);
+  const createTable = useCreateDatabaseTable(projectId, databaseId);
   const database = query.data?.database;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
+  const handleCreateTable = async (values: Record<string, string>) => {
+    await createTable.mutateAsync({
+      name: values.name.trim(),
+      row_security: true,
+    });
+    toast.success("Table created");
+  };
   if (query.error)
     return <ErrorState error={query.error} retry={() => query.refetch()} />;
   if (tables.error)
@@ -217,6 +229,11 @@ export function DatabaseDetailView({
       cell: ({ row }) => formatDate(row.original.updated_at),
     },
   ];
+  const tableData = tables.data?.tables ?? [];
+  const showTableEmptyState =
+    !tables.isLoading &&
+    tableData.length === 0 &&
+    !tablesNavigation.canPrevious;
   return (
     <>
       <BackLink href={`${base}/databases`} label="Back to databases" />
@@ -232,22 +249,57 @@ export function DatabaseDetailView({
         <ResourceId id={database.id} label="Database ID" />
       </div>
       <Card>
-        <CardHeader>
+        <CardHeader className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2">
             <Table2 className="size-4 text-amber-300" /> Tables
           </CardTitle>
+          <CreateDialog
+            open={createTableOpen}
+            onOpenChange={setCreateTableOpen}
+            triggerLabel="Create table"
+            submitLabel="Create table"
+            pendingLabel="Creating table…"
+            title="Create a table"
+            description="Create a typed table for structured application data."
+            fields={[
+              {
+                name: "name",
+                label: "Table name",
+                placeholder: "users",
+                help: "Use 2–120 characters. New tables start with permissions denied.",
+              },
+            ]}
+            onSubmit={handleCreateTable}
+            pending={createTable.isPending}
+          />
         </CardHeader>
-        <DataTable
-          data={tables.data?.tables ?? []}
-          columns={columns}
-          loading={tables.isLoading}
-          empty="No tables yet. Create a table to start storing structured data."
-          serverPagination={pageControls(
-            tablesNavigation,
-            nextCursor(tables.data),
-            tables.isFetching,
+        <CardContent>
+          {showTableEmptyState ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <h3 className="text-sm font-semibold text-white">
+                No tables yet
+              </h3>
+              <p className="mt-2 max-w-md text-sm leading-6 text-stealth-muted">
+                Create a table to start storing structured application data.
+              </p>
+              <Button className="mt-5" onClick={() => setCreateTableOpen(true)}>
+                Create table
+              </Button>
+            </div>
+          ) : (
+            <DataTable
+              data={tableData}
+              columns={columns}
+              loading={tables.isLoading}
+              empty="No tables on this page."
+              serverPagination={pageControls(
+                tablesNavigation,
+                nextCursor(tables.data),
+                tables.isFetching,
+              )}
+            />
           )}
-        />
+        </CardContent>
       </Card>
       <DatabaseBackupsPanel projectId={projectId} databaseId={databaseId} />
     </>

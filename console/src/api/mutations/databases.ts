@@ -21,6 +21,30 @@ export function useCreateDatabase(projectId: string) {
   });
 }
 
+export function useCreateDatabaseTable(projectId: string, databaseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["CreateDatabaseTableRequest"],
+    ) =>
+      unwrap(
+        await api.POST(
+          "/v1/projects/{projectID}/databases/{databaseID}/tables",
+          {
+            params: {
+              path: { projectID: projectId, databaseID: databaseId },
+            },
+            body,
+          },
+        ),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.tables(projectId, databaseId),
+      }),
+  });
+}
+
 export function useCreateDatabaseBackup(projectId: string, databaseId: string) {
   const queryClient = useQueryClient();
   return useMutation({
