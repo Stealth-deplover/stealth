@@ -367,9 +367,7 @@ test("first-use flow creates an organization, project, and first database", asyn
   await expect(
     page.getByRole("heading", { name: "Your project is ready" }),
   ).toBeVisible();
-  await page
-    .getByRole("link", { name: "Create database", exact: true })
-    .click();
+  await page.getByRole("link", { name: /^Create database/ }).click();
   await expect(page).toHaveURL(/\/databases$/);
   await page.getByRole("button", { name: "Create database" }).first().click();
   await page.getByLabel("Name").fill("Application data");
