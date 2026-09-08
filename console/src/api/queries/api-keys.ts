@@ -21,3 +21,19 @@ export function useProjectAPIKeys(
     placeholderData: keepPreviousData,
   });
 }
+
+export function useProjectAPIKey(
+  projectId: string | undefined,
+  keyId: string | undefined,
+) {
+  return useQuery({
+    queryKey: queryKeys.apiKey(projectId ?? "", keyId ?? ""),
+    enabled: Boolean(projectId && keyId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/v1/projects/{projectID}/api-keys/{keyID}", {
+          params: { path: { projectID: projectId!, keyID: keyId! } },
+        }),
+      ),
+  });
+}

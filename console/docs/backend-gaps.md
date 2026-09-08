@@ -395,3 +395,57 @@ Project-user activity/session/profile endpoints, an invitation resend endpoint, 
 Current frontend behavior:
 
 The Console shows only returned user/member/invitation fields, gates mutations with `can_manage`, calls the real accept endpoint from the email token flow, and does not show session, activity, profile-edit, resend, or fake organization-preview controls.
+
+## Webhook delivery inspection and retry
+
+Frontend need:
+
+Inspect an individual delivery's request/response payload, headers, latency, trace correlation, and retry or redelivery it after a failure.
+
+Existing backend:
+
+`GET /v1/projects/{projectID}/webhooks/{webhookID}/deliveries` returns cursor-paginated delivery metadata: event, lifecycle status, attempt count, last HTTP status, last error, and timestamps. Response bodies and secrets are not exposed, and there is no single-delivery or retry endpoint.
+
+Missing:
+
+An authorized delivery detail schema with backend-redacted request/response data, latency/trace metadata, and an explicit retry or redelivery operation with idempotency semantics.
+
+Current frontend behavior:
+
+The Console keeps lifecycle status separate from the original HTTP status, displays available failure context, polls only pending/running deliveries, and does not show request/response inspectors or a fake Retry action.
+
+## Webhook event catalog
+
+Frontend need:
+
+Offer an authoritative event picker instead of asking developers to enter event names manually.
+
+Existing backend:
+
+Webhook events are validated as wildcard or lowercase event-name strings. The OpenAPI contract does not expose a closed enum or project capability catalog.
+
+Missing:
+
+An authorized, versioned event catalog with availability and deprecation metadata.
+
+Current frontend behavior:
+
+The Console accepts event names or `*` and relies on Go validation. It does not invent a different event list.
+
+## API key rotation and usage metadata
+
+Frontend need:
+
+Atomically rotate a project API key and display richer audit metadata such as creator or last-used IP.
+
+Existing backend:
+
+The API exposes create, safe metadata lookup/list, and revoke. It returns `last_used_at` and expiry/revocation timestamps, but no atomic rotate endpoint, `created_by`, or `last_used_ip` fields.
+
+Missing:
+
+An explicit rotation contract with overlap/revocation semantics and any additional audit fields needed by the Console.
+
+Current frontend behavior:
+
+The Console shows only safe prefix/metadata, reveals the create secret once, and offers revoke. It does not show a fake Rotate action or infer usage history from missing fields.

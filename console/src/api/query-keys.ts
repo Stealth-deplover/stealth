@@ -89,6 +89,8 @@ export const queryKeys = {
   projectUser: (projectId: string, userId: string) =>
     ["project-user", projectId, userId] as const,
   apiKeys: (projectId: string) => ["api-keys", projectId] as const,
+  apiKey: (projectId: string, keyId: string) =>
+    ["api-key", projectId, keyId] as const,
   webhooks: (projectId: string) => ["webhooks", projectId] as const,
   webhook: (projectId: string, webhookId: string) =>
     ["webhook", projectId, webhookId] as const,

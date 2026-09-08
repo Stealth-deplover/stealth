@@ -20,3 +20,23 @@ export function useCreateAPIKey(projectId: string) {
       queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys(projectId) }),
   });
 }
+
+export function useRevokeAPIKey(projectId: string, keyId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.DELETE("/v1/projects/{projectID}/api-keys/{keyID}", {
+          params: { path: { projectID: projectId, keyID: keyId } },
+        }),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.apiKeys(projectId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.apiKey(projectId, keyId),
+      });
+    },
+  });
+}
