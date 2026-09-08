@@ -26,6 +26,7 @@ import {
   formatAPIKeyScope,
   parseCommaSeparatedValues,
 } from "@/features/integrations/integration-values";
+import { getApiKeyStatus } from "@/features/api-keys/api-key-status";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
 
@@ -35,9 +36,6 @@ const scopeOptions = Object.values(CreateProjectAPIKeyRequestScopes).map(
     label: formatAPIKeyScope(scope),
   }),
 );
-const defaultScopeValues = scopeOptions
-  .filter((scope) => scope.value.endsWith(".read"))
-  .map((scope) => scope.value);
 
 function APIKeyRevokeAction({
   projectId,
@@ -88,7 +86,7 @@ export function APIKeysView({
     const scopes = parseCommaSeparatedValues(
       values.scopes,
     ) as components["schemas"]["CreateProjectAPIKeyRequest"]["scopes"];
-    if (!scopes.length) throw new Error("Select at least one key permission.");
+    if (!scopes.length) throw new Error("Select at least one permission.");
     const expiresAt = values.expires_at
       ? new Date(values.expires_at)
       : undefined;
@@ -160,20 +158,17 @@ export function APIKeysView({
     {
       accessorKey: "revoked_at",
       header: "State",
-      cell: ({ row }) =>
-        row.original.revoked_at ? (
-          <StatusBadge status="revoked" />
-        ) : (
-          <StatusBadge status="active" />
-        ),
+      cell: ({ row }) => <StatusBadge status={getApiKeyStatus(row.original)} />,
     },
     {
       id: "actions",
       header: "",
-      cell: ({ row }) =>
-        canManage && !row.original.revoked_at ? (
+      cell: ({ row }) => {
+        const status = getApiKeyStatus(row.original);
+        return canManage && status !== "revoked" ? (
           <APIKeyRevokeAction projectId={projectId} apiKey={row.original} />
-        ) : null,
+        ) : null;
+      },
     },
   ];
 
@@ -202,7 +197,6 @@ export function APIKeysView({
                   name: "scopes",
                   label: "Permissions",
                   type: "multiselect",
-                  defaultValue: defaultScopeValues.join(","),
                   options: scopeOptions,
                   help: "Select the exact API scopes this integration needs. Read and write access are separate permissions.",
                 },

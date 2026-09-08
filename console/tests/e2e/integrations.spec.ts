@@ -24,6 +24,7 @@ type FixtureOptions = {
   canManage?: boolean;
   withWebhook?: boolean;
   withAPIKey?: boolean;
+  apiKeyExpiresAt?: string | null;
 };
 
 async function installFixtures(page: Page, options: FixtureOptions = {}) {
@@ -68,7 +69,7 @@ async function installFixtures(page: Page, options: FixtureOptions = {}) {
           name: "existing-key",
           prefix: "stl_key_existing",
           scopes: ["functions.read"],
-          expires_at: null,
+          expires_at: options.apiKeyExpiresAt ?? null,
           revoked_at: null,
           last_used_at: "2026-01-03T00:00:00Z",
           created_at: "2026-01-02T00:00:00Z",
@@ -231,9 +232,16 @@ test("creates and revokes an API key without persisting its secret", async ({
   await page.getByRole("button", { name: "Create API key" }).first().click();
   const createDialog = page.getByRole("dialog");
   await createDialog.getByLabel("Name", { exact: true }).fill("ci-key");
+  const permissionCheckboxes = createDialog.getByRole("checkbox");
+  for (let index = 0; index < (await permissionCheckboxes.count()); index++) {
+    await expect(permissionCheckboxes.nth(index)).not.toBeChecked();
+  }
   await createDialog
-    .getByRole("checkbox", { name: "Functions · Read" })
-    .uncheck();
+    .getByRole("button", { name: "Create API key", exact: true })
+    .click();
+  await expect(
+    page.getByText("Select at least one permission.", { exact: true }),
+  ).toBeVisible();
   await createDialog
     .getByRole("checkbox", { name: "Functions · Write" })
     .check();
@@ -260,6 +268,19 @@ test("creates and revokes an API key without persisting its secret", async ({
   await expect(page).toHaveURL(/\/api-keys$/);
   await expect(page.getByText("Revoked", { exact: true })).toBeVisible();
   await expect(page.getByTestId("one-time-secret")).toHaveCount(0);
+});
+
+test("shows expired API keys as expired instead of active", async ({
+  page,
+}) => {
+  await installFixtures(page, {
+    withAPIKey: true,
+    apiKeyExpiresAt: "2000-01-01T00:00:00Z",
+  });
+  await page.goto("/organizations/org-1/projects/project-1/api-keys");
+
+  await expect(page.getByText("Expired", { exact: true })).toBeVisible();
+  await expect(page.getByText("Active", { exact: true })).toHaveCount(0);
 });
 
 test("hides integration mutations for read-only members", async ({ page }) => {

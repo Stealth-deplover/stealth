@@ -15,6 +15,7 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatAPIKeyScope } from "@/features/integrations/integration-values";
+import { getApiKeyStatus } from "@/features/api-keys/api-key-status";
 import { formatDate } from "@/lib/format";
 import { BackLink } from "@/features/resources/detail-shared";
 
@@ -52,6 +53,8 @@ export function APIKeyDetailView({
       />
     );
 
+  const status = getApiKeyStatus(key);
+
   const handleRevoke = async () => {
     await revoke.mutateAsync();
     toast.success("API key revoked");
@@ -67,8 +70,8 @@ export function APIKeyDetailView({
         description="Safe key metadata from the Go API. The secret cannot be recovered after creation."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={key.revoked_at ? "revoked" : "active"} />
-            {canManage && !key.revoked_at ? (
+            <StatusBadge status={status} />
+            {canManage && status !== "revoked" ? (
               <ConfirmDialog
                 trigger={
                   <Button variant="destructive" disabled={revoke.isPending}>
@@ -122,7 +125,7 @@ export function APIKeyDetailView({
               <div>
                 <dt className="text-xs text-slate-500">Status</dt>
                 <dd className="mt-1">
-                  <StatusBadge status={key.revoked_at ? "revoked" : "active"} />
+                  <StatusBadge status={status} />
                 </dd>
               </div>
               <div>
@@ -137,7 +140,7 @@ export function APIKeyDetailView({
                   {formatDate(key.expires_at)}
                 </dd>
               </div>
-              {key.revoked_at ? (
+              {status === "revoked" ? (
                 <div>
                   <dt className="text-xs text-slate-500">Revoked</dt>
                   <dd className="mt-1 text-sm text-slate-300">
