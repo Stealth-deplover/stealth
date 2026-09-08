@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { FileUp } from "lucide-react";
 import { useCallback, useRef } from "react";
@@ -41,6 +42,7 @@ export function SiteDetailView({
   siteId: string;
 }) {
   const query = useSite(projectId, siteId);
+  const router = useRouter();
   const deploymentsNavigation = useCursorPagination("site_deployments_cursor");
   const deployments = useSiteDeployments(projectId, siteId, {
     cursor: deploymentsNavigation.cursor,
@@ -55,8 +57,14 @@ export function SiteDetailView({
     upload.mutate(
       { file },
       {
-        onSuccess: () => {
-          deploymentsNavigation.goFirst();
+        onSuccess: (result) => {
+          if (result?.deployment.id) {
+            router.push(
+              `${base}/sites/${siteId}/deployments/${result.deployment.id}`,
+            );
+          } else {
+            deploymentsNavigation.goFirst();
+          }
           toast.success("Site deployment uploaded");
         },
         onError: () => toast.error("Could not upload site deployment"),

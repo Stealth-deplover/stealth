@@ -5,6 +5,32 @@ import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
 
+export function useStorageFile(
+  projectId: string,
+  bucketId: string,
+  fileId: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.file(projectId, bucketId, fileId),
+    enabled: Boolean(fileId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET(
+          "/v1/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                bucketID: bucketId,
+                fileID: fileId,
+              },
+            },
+          },
+        ),
+      ),
+  });
+}
+
 export function useStorageBuckets(
   projectId: string | undefined,
   query?: CursorQuery,

@@ -307,7 +307,10 @@ export function FunctionDetailView({
           >
             Inspect
           </Link>
-          {getDeploymentLifecycleStatus(row.original) === "ready" ? (
+          {row.original.id === activeDeploymentId ||
+          row.original.status === "active" ? (
+            <StatusBadge status="active" />
+          ) : getDeploymentLifecycleStatus(row.original) === "ready" ? (
             <Button
               size="sm"
               variant="outline"

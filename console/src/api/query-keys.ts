@@ -46,6 +46,18 @@ export const queryKeys = {
     ["database", projectId, databaseId] as const,
   tables: (projectId: string, databaseId: string) =>
     ["tables", projectId, databaseId] as const,
+  table: (projectId: string, databaseId: string, tableId: string) =>
+    ["table", projectId, databaseId, tableId] as const,
+  columns: (projectId: string, databaseId: string, tableId: string) =>
+    ["columns", projectId, databaseId, tableId] as const,
+  indexes: (projectId: string, databaseId: string, tableId: string) =>
+    ["indexes", projectId, databaseId, tableId] as const,
+  row: (
+    projectId: string,
+    databaseId: string,
+    tableId: string,
+    rowId: string,
+  ) => ["row", projectId, databaseId, tableId, rowId] as const,
   databaseBackups: (projectId: string, databaseId: string) =>
     ["database-backups", projectId, databaseId] as const,
   rows: (projectId: string, databaseId: string, tableId: string) =>
@@ -55,6 +67,8 @@ export const queryKeys = {
     ["bucket", projectId, bucketId] as const,
   files: (projectId: string, bucketId: string) =>
     ["files", projectId, bucketId] as const,
+  file: (projectId: string, bucketId: string, fileId: string) =>
+    ["file", projectId, bucketId, fileId] as const,
   users: (projectId: string) => ["users", projectId] as const,
   apiKeys: (projectId: string) => ["api-keys", projectId] as const,
   webhooks: (projectId: string) => ["webhooks", projectId] as const,

@@ -10,7 +10,7 @@ export function pageControls(
   return {
     canFirst: navigation.canFirst,
     canPrevious: navigation.canPrevious,
-    canNext: Boolean(next),
+    canNext: Boolean(next) && next !== navigation.cursor,
     onFirst: navigation.goFirst,
     onPrevious: navigation.goPrevious,
     onNext: () => navigation.goNext(next),

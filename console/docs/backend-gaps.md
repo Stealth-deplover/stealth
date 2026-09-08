@@ -319,3 +319,61 @@ Current frontend behavior:
 
 Failed deployment detail exposes build logs and links back to the Function or
 Site to upload another archive. The Console does not show a fake Retry button.
+
+## Database overview metadata and aggregates
+
+Frontend need:
+
+Database engine/status, total table and column counts, and the latest backup without scanning every resource page.
+
+Existing backend:
+
+ProjectDatabase exposes ID, project ID, name, and creation/update timestamps only. Tables and columns are separate cursor-paginated resources with no aggregate counts. Backups are ordered by ascending ID and have no latest-first option.
+
+Missing:
+
+Engine/status fields, aggregate counts, and an efficient latest-backup endpoint or descending backup ordering.
+
+Current frontend behavior:
+
+No engine, health, size, or fabricated count is displayed. Overview shows table count and latest backup only when the initial response contains the complete collection. Otherwise users browse the paginated lists. Table lists omit column counts rather than fetching schema separately for every table.
+
+## Database schema and backup lifecycle
+
+Frontend need:
+
+Edit column definitions and show asynchronous backup status/progress or retained failure details.
+
+Existing backend:
+
+Columns can be listed, created, and deleted; there is no update-column endpoint. Backups are synchronous complete logical snapshots limited to 10,000 rows and 50 MB. Oversized snapshots fail rather than silently omitting rows. Backup metadata contains ID, size, checksum, and created_at, but no status enum or error field. Restore atomically replaces schema, rows, indexes, and relationships.
+
+Missing:
+
+Column update semantics and an asynchronous backup job/lifecycle contract.
+
+Current frontend behavior:
+
+Schema supports typed column creation and read-only existing definitions. Backup requests show a pending button and contextual request errors; persisted backups do not receive invented Pending/Ready/Failed statuses. Restore uses explicit destructive confirmation and invalidates table, column, index, and row caches.
+
+## Storage object capabilities
+
+Frontend need:
+
+Object key/path, public URL, copy, global object search, or folder operations.
+
+Existing backend:
+
+Storage uses flat file IDs and display names; separators are rejected. File metadata includes content type, size, SHA-256, permissions, and timestamps. Authenticated download, display-name rename, delete, bucket settings, and cursor pagination exist. Upload uses the multipart filename; a separate name field cannot accompany that filename. File security is not a public/private visibility flag.
+
+Missing:
+
+Path/folder, public URL, copy, object count, and server-side file filter/sort contracts.
+
+Current frontend behavior:
+
+The browser sends the File as multipart data, with local selection and pending state only. The Console shows a flat object list, actual metadata, Go download links, rename, and contextual delete confirmation. It does not expose folders, public URLs, global file filtering, or invented visibility/counts.
+
+## Database and Storage capability audit
+
+The existing contract also supports database/table deletion, table permission replacement, index and relationship management, row import/export, and row transactions. These are backend capabilities, not gaps. This focused UX change keeps existing routes and does not add a SQL editor or a general administration framework. Row filtering uses equality JSON with indexed columns; sorting on user columns requires required indexed columns, and full-text search requires a declared full-text index. The schema browser follows all metadata cursors to validate row fields; row/object datasets remain server-paginated.

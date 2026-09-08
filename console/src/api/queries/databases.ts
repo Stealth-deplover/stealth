@@ -6,9 +6,122 @@ import type { paths } from "@/api/generated/schema";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
 
-type DatabaseRowsQuery = NonNullable<
+export type DatabaseRowsQuery = NonNullable<
   paths["/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows"]["get"]["parameters"]["query"]
 >;
+
+export function useDatabaseTable(
+  projectId: string,
+  databaseId: string,
+  tableId: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.table(projectId, databaseId, tableId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET(
+          "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                databaseID: databaseId,
+                tableID: tableId,
+              },
+            },
+          },
+        ),
+      ),
+  });
+}
+
+export function useDatabaseColumns(
+  projectId: string,
+  databaseId: string,
+  tableId: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.columns(projectId, databaseId, tableId),
+    queryFn: () =>
+      fetchAllCursorPages(
+        (cursor) =>
+          api
+            .GET(
+              "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/columns",
+              {
+                params: {
+                  path: {
+                    projectID: projectId,
+                    databaseID: databaseId,
+                    tableID: tableId,
+                  },
+                  query: withCursorPage({ cursor }),
+                },
+              },
+            )
+            .then(unwrap),
+        (page) => page.columns,
+      ),
+  });
+}
+
+export function useDatabaseIndexes(
+  projectId: string,
+  databaseId: string,
+  tableId: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.indexes(projectId, databaseId, tableId),
+    queryFn: () =>
+      fetchAllCursorPages(
+        (cursor) =>
+          api
+            .GET(
+              "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/indexes",
+              {
+                params: {
+                  path: {
+                    projectID: projectId,
+                    databaseID: databaseId,
+                    tableID: tableId,
+                  },
+                  query: withCursorPage({ cursor }),
+                },
+              },
+            )
+            .then(unwrap),
+        (page) => page.indexes,
+      ),
+  });
+}
+
+export function useDatabaseRow(
+  projectId: string,
+  databaseId: string,
+  tableId: string,
+  rowId: string,
+) {
+  return useQuery({
+    queryKey: queryKeys.row(projectId, databaseId, tableId, rowId),
+    enabled: Boolean(rowId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET(
+          "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows/{rowID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                databaseID: databaseId,
+                tableID: tableId,
+                rowID: rowId,
+              },
+            },
+          },
+        ),
+      ),
+  });
+}
 
 export function useDatabases(
   projectId: string | undefined,
