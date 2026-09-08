@@ -35,7 +35,10 @@ export function LoginView() {
   });
   const submit = form.handleSubmit(async (values) => {
     await mutation.mutateAsync(values);
-    router.replace("/organizations");
+    const next = searchParams.get("next");
+    const destination =
+      next?.startsWith("/") && !next.startsWith("//") ? next : "/organizations";
+    router.replace(destination);
   });
   return (
     <Card className="w-full max-w-md border-stealth-border/80 bg-stealth-panel">

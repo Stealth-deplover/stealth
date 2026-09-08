@@ -21,3 +21,19 @@ export function useProjectUsers(
     placeholderData: keepPreviousData,
   });
 }
+
+export function useProjectUser(
+  projectId: string | undefined,
+  userId: string | undefined,
+) {
+  return useQuery({
+    queryKey: queryKeys.projectUser(projectId ?? "", userId ?? ""),
+    enabled: Boolean(projectId && userId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/v1/projects/{projectID}/users/{userID}", {
+          params: { path: { projectID: projectId!, userID: userId! } },
+        }),
+      ),
+  });
+}

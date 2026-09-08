@@ -377,3 +377,21 @@ The browser sends the File as multipart data, with local selection and pending s
 ## Database and Storage capability audit
 
 The existing contract also supports database/table deletion, table permission replacement, index and relationship management, row import/export, and row transactions. These are backend capabilities, not gaps. This focused UX change keeps existing routes and does not add a SQL editor or a general administration framework. Row filtering uses equality JSON with indexed columns; sorting on user columns requires required indexed columns, and full-text search requires a declared full-text index. The schema browser follows all metadata cursors to validate row fields; row/object datasets remain server-paginated.
+
+## Users and organization invitations
+
+Frontend need:
+
+Show project-user activity, sessions, editable profiles, and resendable organization invitations.
+
+Existing backend:
+
+Project users expose identity, verification, status, timestamps, create, block/unblock, and delete operations. Organization membership exposes role updates/removal, and invitations expose create, pending/expired listing, revoke, and one-time acceptance. Invitation creation reports whether the configured mailer accepted delivery.
+
+Missing:
+
+Project-user activity/session/profile endpoints, an invitation resend endpoint, and an invitation preview endpoint that returns organization metadata before acceptance. The invitation list also intentionally returns pending/expired records only.
+
+Current frontend behavior:
+
+The Console shows only returned user/member/invitation fields, gates mutations with `can_manage`, calls the real accept endpoint from the email token flow, and does not show session, activity, profile-edit, resend, or fake organization-preview controls.

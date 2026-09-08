@@ -3,8 +3,8 @@ import { UsersView } from "@/features/resources/collection-views";
 export default async function UsersPage({
   params,
 }: {
-  params: Promise<{ projectId: string }>;
+  params: Promise<{ organizationId: string; projectId: string }>;
 }) {
-  const { projectId } = await params;
-  return <UsersView projectId={projectId} />;
+  const { organizationId, projectId } = await params;
+  return <UsersView organizationId={organizationId} projectId={projectId} />;
 }

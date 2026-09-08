@@ -37,7 +37,7 @@ export function useCreateDatabaseColumn(
         queryKey: queryKeys.rows(projectId, databaseId, tableId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["row", projectId, databaseId, tableId],
+        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
       });
     },
   });
@@ -73,7 +73,7 @@ export function useCreateDatabaseRow(
         queryKey: queryKeys.rows(projectId, databaseId, tableId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["row", projectId, databaseId, tableId],
+        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
       });
     },
   });
@@ -114,7 +114,7 @@ export function useUpdateDatabaseRow(
         queryKey: queryKeys.rows(projectId, databaseId, tableId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["row", projectId, databaseId, tableId],
+        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
       });
     },
   });
@@ -148,7 +148,7 @@ export function useDeleteDatabaseRow(
         queryKey: queryKeys.rows(projectId, databaseId, tableId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["row", projectId, databaseId, tableId],
+        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
       });
     },
   });
@@ -264,13 +264,18 @@ export function useRestoreDatabaseBackup(
         ),
       ),
     onSuccess: () => {
+      const scopes = [
+        queryKeys.rowsScope(projectId, databaseId),
+        queryKeys.rowDatabaseScope(projectId, databaseId),
+        queryKeys.tableScope(projectId, databaseId),
+        queryKeys.columnsScope(projectId, databaseId),
+        queryKeys.indexesScope(projectId, databaseId),
+      ];
       queryClient.invalidateQueries({
         predicate: (query) =>
-          ["rows", "row", "table", "columns", "indexes"].includes(
-            String(query.queryKey[0]),
-          ) &&
-          query.queryKey[1] === projectId &&
-          query.queryKey[2] === databaseId,
+          scopes.some((scope) =>
+            scope.every((value, index) => query.queryKey[index] === value),
+          ),
       });
       queryClient.invalidateQueries({
         queryKey: queryKeys.database(projectId, databaseId),

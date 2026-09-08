@@ -224,7 +224,11 @@ test("database creates a table, schema, typed rows, and a restorable backup", as
         return route.fulfill({ status: 201, json: { backup } });
       }
       return route.fulfill({
-        json: { backups: backupCreated ? [backup] : [], pagination },
+        json: {
+          backups: backupCreated ? [backup] : [],
+          pagination,
+          can_manage: true,
+        },
       });
     }
     if (path.endsWith("/backups/backup-1/restore")) {
@@ -358,6 +362,40 @@ test("database creates a table, schema, typed rows, and a restorable backup", as
     .getByRole("button", { name: "Delete row", exact: true })
     .click();
   await expect(page.getByText("No rows yet", { exact: true })).toBeVisible();
+});
+
+test("database backup mutations stay hidden for read-only members", async ({
+  page,
+}) => {
+  await workspace(page);
+  await page.route("**/v1/projects/project-1/databases/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/database-1"))
+      return route.fulfill({ json: { database } });
+    if (path.endsWith("/tables"))
+      return route.fulfill({
+        json: { tables: [], pagination, can_manage: false },
+      });
+    if (path.endsWith("/backups"))
+      return route.fulfill({
+        json: { backups: [], pagination, can_manage: false },
+      });
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto(`${base}/databases/database-1`);
+  await page.getByRole("tab", { name: "Backups", exact: true }).click();
+  await expect(page.getByText("No backups yet", { exact: true })).toBeVisible();
+  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create backup", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Restore", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Delete", exact: true }),
+  ).toHaveCount(0);
 });
 
 test("storage creates a bucket, retries upload, inspects, renames, downloads, and deletes an object", async ({

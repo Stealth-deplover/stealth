@@ -3780,7 +3780,9 @@ export interface components {
              */
             readonly project_id?: string;
             /** @description Typed row data; its keys must match declared columns. */
-            data: Record<string, never>;
+            data: {
+                [key: string]: unknown;
+            };
             read_permissions?: components["schemas"]["DatabasePermission"][];
             update_permissions?: components["schemas"]["DatabasePermission"][];
             delete_permissions?: components["schemas"]["DatabasePermission"][];
@@ -3812,7 +3814,9 @@ export interface components {
              */
             id?: string;
             /** @description Typed data for create or partial data for update. */
-            data?: Record<string, never>;
+            data?: {
+                [key: string]: unknown;
+            };
             read_permissions?: components["schemas"]["DatabasePermission"][];
             update_permissions?: components["schemas"]["DatabasePermission"][];
             delete_permissions?: components["schemas"]["DatabasePermission"][];
@@ -3866,6 +3870,8 @@ export interface components {
         DatabaseBackupsPage: {
             backups: components["schemas"]["DatabaseBackup"][];
             pagination: components["schemas"]["Pagination"];
+            /** @description Whether the current project membership may create */
+            can_manage: boolean;
         };
         DatabaseBackupRestoreResult: {
             tables: number;

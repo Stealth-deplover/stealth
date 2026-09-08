@@ -90,37 +90,43 @@ function DatabaseBackupsPanel({
               Download
             </a>
           </Button>
-          <ConfirmDialog
-            trigger={
-              <Button variant="ghost" size="sm">
-                Restore
-              </Button>
-            }
-            title="Restore this backup?"
-            description={`Backup ${row.original.id} replaces all current tables, rows, columns, indexes, and relationships in this database. Any validation failure cancels the entire restore.`}
-            confirmLabel="Restore backup"
-            pending={restore.isPending}
-            onConfirm={async () => {
-              await restore.mutateAsync(row.original.id);
-              toast.success("Database restored");
-            }}
-          />
-          <ConfirmDialog
-            trigger={
-              <Button variant="ghost" size="sm" className="text-rose-300">
-                Delete
-              </Button>
-            }
-            title="Delete this backup?"
-            description={`Permanently delete backup ${row.original.id}. Current database data is not changed.`}
-            confirmLabel="Delete backup"
-            pending={remove.isPending}
-            onConfirm={async () => {
-              await remove.mutateAsync(row.original.id);
-              if (created?.id === row.original.id) setCreated(undefined);
-              toast.success("Backup deleted");
-            }}
-          />
+          {query.data?.can_manage === true ? (
+            <>
+              <ConfirmDialog
+                trigger={
+                  <Button variant="ghost" size="sm">
+                    Restore
+                  </Button>
+                }
+                title="Restore this backup?"
+                description={`Backup ${row.original.id} replaces all current tables, rows, columns, indexes, and relationships in this database. Any validation failure cancels the entire restore.`}
+                confirmLabel="Restore backup"
+                pending={restore.isPending}
+                onConfirm={async () => {
+                  await restore.mutateAsync(row.original.id);
+                  toast.success("Database restored");
+                }}
+              />
+              <ConfirmDialog
+                trigger={
+                  <Button variant="ghost" size="sm" className="text-rose-300">
+                    Delete
+                  </Button>
+                }
+                title="Delete this backup?"
+                description={`Permanently delete backup ${row.original.id}. Current database data is not changed.`}
+                confirmLabel="Delete backup"
+                pending={remove.isPending}
+                onConfirm={async () => {
+                  await remove.mutateAsync(row.original.id);
+                  if (created?.id === row.original.id) setCreated(undefined);
+                  toast.success("Backup deleted");
+                }}
+              />
+            </>
+          ) : (
+            <span className="text-xs text-slate-600">Read-only</span>
+          )}
         </div>
       ),
     },
@@ -143,9 +149,13 @@ function DatabaseBackupsPanel({
             databases cannot be backed up through this operation.
           </p>
         </div>
-        <Button disabled={create.isPending} onClick={handleCreate}>
-          {create.isPending ? "Creating backup…" : "Create backup"}
-        </Button>
+        {query.data?.can_manage === true ? (
+          <Button disabled={create.isPending} onClick={handleCreate}>
+            {create.isPending ? "Creating backup…" : "Create backup"}
+          </Button>
+        ) : query.data?.can_manage === false ? (
+          <Badge variant="neutral">Read-only</Badge>
+        ) : null}
       </CardHeader>
       <CardContent className="space-y-4">
         {create.error ? (

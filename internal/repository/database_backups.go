@@ -255,35 +255,36 @@ func (r *Repository) CreateDatabaseBackup(ctx context.Context, id, projectID, da
 	return item, nil
 }
 
-func (r *Repository) ListDatabaseBackups(ctx context.Context, projectID, databaseID uuid.UUID, actor DatabaseActor, limit int, cursor *uuid.UUID) ([]domain.DatabaseBackup, string, error) {
-	if _, err := r.requireDatabaseRead(ctx, projectID, actor); err != nil {
-		return nil, "", err
+func (r *Repository) ListDatabaseBackups(ctx context.Context, projectID, databaseID uuid.UUID, actor DatabaseActor, limit int, cursor *uuid.UUID) ([]domain.DatabaseBackup, string, bool, error) {
+	canManage, err := r.requireDatabaseRead(ctx, projectID, actor)
+	if err != nil {
+		return nil, "", false, err
 	}
 	if err := r.ensureDatabaseProject(ctx, projectID, databaseID); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	rows, err := r.pool.Query(ctx, `SELECT `+databaseBackupProjection+` FROM database_backups WHERE project_id=$1 AND database_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`, projectID, databaseID, cursor, limit+1)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 	items := make([]domain.DatabaseBackup, 0, limit)
 	for rows.Next() {
 		item, _, scanErr := scanDatabaseBackup(rows)
 		if scanErr != nil {
-			return nil, "", scanErr
+			return nil, "", false, scanErr
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	next := ""
 	if len(items) > limit {
 		next = items[limit-1].ID
 		items = items[:limit]
 	}
-	return items, next, nil
+	return items, next, canManage, nil
 }
 
 func (r *Repository) GetDatabaseBackup(ctx context.Context, projectID, databaseID, backupID uuid.UUID, actor DatabaseActor) (domain.DatabaseBackup, string, error) {

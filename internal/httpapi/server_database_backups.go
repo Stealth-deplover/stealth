@@ -51,7 +51,7 @@ func (s *Server) listDatabaseBackups(w http.ResponseWriter, r *http.Request) {
 		}
 		cursorID = &parsed
 	}
-	items, next, err := s.repo.ListDatabaseBackups(r.Context(), projectID, databaseID, databaseActorFrom(r), limit, cursorID)
+	items, next, canManage, err := s.repo.ListDatabaseBackups(r.Context(), projectID, databaseID, databaseActorFrom(r), limit, cursorID)
 	if databaseBackupResourceError(w, err) {
 		return
 	}
@@ -59,7 +59,7 @@ func (s *Server) listDatabaseBackups(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"backups": items, "pagination": paginationOf(limit, next)})
+	writeJSON(w, http.StatusOK, map[string]any{"backups": items, "pagination": paginationOf(limit, next), "can_manage": canManage})
 }
 
 func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,6 @@
 "use client";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { type ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -12,31 +14,62 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge, StatusBadge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
 
-export function UsersView({ projectId }: { projectId: string }) {
+export function UsersView({
+  organizationId,
+  projectId,
+}: {
+  organizationId: string;
+  projectId: string;
+}) {
+  const router = useRouter();
   const navigation = useCursorPagination();
   const [createOpen, setCreateOpen] = useState(false);
   const query = useProjectUsers(projectId, { cursor: navigation.cursor });
   const create = useCreateProjectUser(projectId);
+  const users = query.data?.users ?? [];
   const handleCreateUser = async (values: Record<string, string>) => {
-    await create.mutateAsync({
+    const result = await create.mutateAsync({
       email: values.email,
       password: values.password,
       name: values.name || null,
     });
     toast.success("User created");
+    if (result?.user.id)
+      router.push(
+        "/organizations/" +
+          organizationId +
+          "/projects/" +
+          projectId +
+          "/users/" +
+          result.user.id,
+      );
   };
+  const canManage = query.data?.can_manage === true;
   const columns: ColumnDef<ProjectUser, unknown>[] = [
     {
       accessorKey: "email",
       header: "Identity",
       cell: ({ row }) => (
         <div>
-          <p className="font-medium text-white">{row.original.email}</p>
+          <Link
+            href={
+              "/organizations/" +
+              organizationId +
+              "/projects/" +
+              projectId +
+              "/users/" +
+              row.original.id
+            }
+            className="font-medium text-white hover:text-cyan-200"
+          >
+            {row.original.email}
+          </Link>
           <p className="text-xs text-slate-500">
             {row.original.name ?? "Unnamed user"}
           </p>
@@ -63,6 +96,26 @@ export function UsersView({ projectId }: { projectId: string }) {
       header: "Created",
       cell: ({ row }) => formatDate(row.original.created_at),
     },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }) => (
+        <Button asChild variant="ghost" size="sm">
+          <Link
+            href={
+              "/organizations/" +
+              organizationId +
+              "/projects/" +
+              projectId +
+              "/users/" +
+              row.original.id
+            }
+          >
+            Open user
+          </Link>
+        </Button>
+      ),
+    },
   ];
   return (
     <>
@@ -71,35 +124,41 @@ export function UsersView({ projectId }: { projectId: string }) {
         title="Users"
         description="Application users for this project. Console account sessions and project users are separate domains."
         actions={
-          <CreateDialog
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-            triggerLabel="Create user"
-            submitLabel="Create user"
-            pendingLabel="Creating user…"
-            title="Create an application user"
-            description="The password is accepted by the API and is not stored in the console."
-            fields={[
-              { name: "email", label: "Email", type: "email" },
-              {
-                name: "password",
-                label: "Temporary password",
-                type: "password",
-                help: "Minimum 12 characters.",
-              },
-              { name: "name", label: "Name", required: false },
-            ]}
-            pending={create.isPending}
-            onSubmit={handleCreateUser}
-          />
+          canManage ? (
+            <CreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              triggerLabel="Create user"
+              submitLabel="Create user"
+              pendingLabel="Creating user…"
+              title="Create an application user"
+              description="The password is accepted by the API and is not stored in the console."
+              fields={[
+                { name: "email", label: "Email", type: "email" },
+                {
+                  name: "password",
+                  label: "Temporary password",
+                  type: "password",
+                  help: "Minimum 12 characters.",
+                },
+                { name: "name", label: "Name", required: false },
+              ]}
+              pending={create.isPending}
+              onSubmit={handleCreateUser}
+            />
+          ) : null
         }
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
-      ) : query.data?.users.length ? (
+      ) : query.isPending ? (
+        <Card>
+          <DataTable data={[]} columns={columns} loading />
+        </Card>
+      ) : users.length || navigation.canFirst || nextCursor(query.data) ? (
         <Card>
           <DataTable
-            data={query.data.users}
+            data={users}
             columns={columns}
             serverPagination={pageControls(
               navigation,
@@ -108,16 +167,16 @@ export function UsersView({ projectId }: { projectId: string }) {
             )}
           />
         </Card>
-      ) : query.isLoading ? (
-        <Card>
-          <DataTable data={[]} columns={columns} loading />
-        </Card>
       ) : (
         <EmptyState
           title="No application users yet"
-          description="Create an application identity to test authentication and user-scoped data."
-          actionLabel="Create user"
-          action={() => setCreateOpen(true)}
+          description={
+            canManage
+              ? "Create an application identity to test authentication and user-scoped data."
+              : "No application identities are visible in this project."
+          }
+          actionLabel={canManage ? "Create user" : undefined}
+          action={canManage ? () => setCreateOpen(true) : undefined}
         />
       )}
     </>

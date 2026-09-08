@@ -104,7 +104,7 @@ function RowDetail({
               {formatDate(row.updated_at)}
             </p>
             <dl className="divide-y divide-stealth-border">
-              {Object.entries(row.data).map(([key, value]) => (
+              {Object.entries(row.data ?? {}).map(([key, value]) => (
                 <div
                   key={key}
                   className="grid gap-2 py-3 sm:grid-cols-[10rem_1fr]"
@@ -285,14 +285,16 @@ export function DatabaseRowsView({
     ...Array.from(
       new Set([
         ...schema.map((column) => column.key),
-        ...(rows.data?.rows ?? []).flatMap((row) => Object.keys(row.data)),
+        ...(rows.data?.rows ?? []).flatMap((row) =>
+          Object.keys(row.data ?? {}),
+        ),
       ]),
     ).map((key): ColumnDef<DatabaseRow, unknown> => ({
       id: `data:${key}`,
       header: key,
       cell: ({ row }) => (
         <RowValue
-          value={row.original.data[key]}
+          value={row.original.data?.[key]}
           type={schema.find((column) => column.key === key)?.type}
         />
       ),
