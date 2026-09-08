@@ -4,6 +4,7 @@ import { api, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
+import { isDeploymentInProgress } from "@/lib/deployment-state";
 
 export function useSites(projectId: string | undefined, query?: CursorQuery) {
   const params = withCursorPage(query);
@@ -79,6 +80,10 @@ export function useSiteDeployments(
         }),
       ),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      query.state.data?.deployments.some(isDeploymentInProgress)
+        ? 3_000
+        : false,
   });
 }
 
@@ -111,13 +116,7 @@ export function useSiteDeployment(
       ),
     refetchInterval: (query) => {
       const deployment = query.state.data?.deployment;
-      return deployment &&
-        (deployment.status === "queued" ||
-          deployment.build_status === "running" ||
-          deployment.build_status === "queued" ||
-          deployment.build_status === "deferred")
-        ? 3_000
-        : false;
+      return deployment && isDeploymentInProgress(deployment) ? 3_000 : false;
     },
   });
 }

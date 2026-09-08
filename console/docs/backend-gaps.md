@@ -290,3 +290,32 @@ Current frontend behavior:
 The browser sends the Go-owned cookie with `credentials: include`; no token is
 persisted in browser storage. Production same-origin routing remains the
 recommended deployment shape.
+
+## Deployment retry and redeploy
+
+Frontend need:
+
+Retry a failed build or redeploy the same source without making the developer
+upload the archive again.
+
+Existing backend:
+
+Function and Site uploads create a new immutable deployment. Ready deployments
+can be activated. There is no retry or redeploy operation for an existing
+deployment, and source archives are not returned to the Console.
+
+Missing:
+
+An explicit retry/redeploy endpoint that safely creates a new deployment from
+the original source, with clear idempotency and authorization semantics.
+
+Recommendation:
+
+Add a backend-owned retry/redeploy operation when the artifact lifecycle and
+source retention policy support it. The operation should return the new
+deployment and preserve the existing immutable deployment history.
+
+Current frontend behavior:
+
+Failed deployment detail exposes build logs and links back to the Function or
+Site to upload another archive. The Console does not show a fake Retry button.

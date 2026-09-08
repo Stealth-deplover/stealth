@@ -4,6 +4,7 @@ import { api, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
+import { isDeploymentInProgress } from "@/lib/deployment-state";
 
 export function useFunctions(
   projectId: string | undefined,
@@ -91,6 +92,10 @@ export function useFunctionDeployments(
         ),
       ),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      query.state.data?.deployments.some(isDeploymentInProgress)
+        ? 3_000
+        : false,
   });
 }
 
@@ -119,6 +124,13 @@ export function useFunctionExecutions(
         ),
       ),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      query.state.data?.executions.some(
+        (execution) =>
+          execution.status === "accepted" || execution.status === "running",
+      )
+        ? 3_000
+        : false,
   });
 }
 
@@ -179,12 +191,41 @@ export function useFunctionDeployment(
       ),
     refetchInterval: (query) => {
       const deployment = query.state.data?.deployment;
-      return deployment &&
-        (deployment.status === "queued" ||
-          deployment.build_status === "running" ||
-          deployment.build_status === "queued")
-        ? 3_000
-        : false;
+      return deployment && isDeploymentInProgress(deployment) ? 3_000 : false;
+    },
+  });
+}
+
+export function useFunctionExecution(
+  projectId: string | undefined,
+  functionId: string | undefined,
+  executionId: string | undefined,
+) {
+  return useQuery({
+    queryKey: queryKeys.functionExecution(
+      projectId ?? "",
+      functionId ?? "",
+      executionId ?? "",
+    ),
+    enabled: Boolean(projectId && functionId && executionId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET(
+          "/v1/projects/{projectID}/functions/{functionID}/executions/{executionID}",
+          {
+            params: {
+              path: {
+                projectID: projectId!,
+                functionID: functionId!,
+                executionID: executionId!,
+              },
+            },
+          },
+        ),
+      ),
+    refetchInterval: (query) => {
+      const status = query.state.data?.execution.status;
+      return status === "accepted" || status === "running" ? 3_000 : false;
     },
   });
 }
