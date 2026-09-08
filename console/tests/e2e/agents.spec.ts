@@ -88,8 +88,8 @@ async function installFixtures(
   scenario: Scenario,
   withAgent = true,
 ) {
-  let currentAgent = { ...baseAgent };
-  const agents = withAgent ? [currentAgent] : [];
+  const agentStore = new Map<string, typeof baseAgent>();
+  if (withAgent) agentStore.set(agentId, { ...baseAgent });
   let run: ReturnType<typeof buildRun> | null = null;
   let runDetailReads = 0;
   let cancelled = false;
@@ -128,7 +128,7 @@ async function installFixtures(
       });
 
     if (path === "/v1/agents" && method === "GET")
-      return respond({ agents, pagination });
+      return respond({ agents: [...agentStore.values()], pagination });
     if (path === "/v1/agents" && method === "POST") {
       const body = request.postDataJSON() as {
         name: string;
@@ -140,7 +140,7 @@ async function installFixtures(
         tools?: string[];
         instructions?: string | null;
       };
-      currentAgent = {
+      const createdAgent = {
         ...baseAgent,
         id: "agent-created",
         name: body.name,
@@ -152,11 +152,19 @@ async function installFixtures(
         tools: body.tools ?? [],
         instructions: body.instructions ?? null,
       };
-      agents.push(currentAgent);
-      return respond({ agent: currentAgent }, 201);
+      agentStore.set(createdAgent.id, createdAgent);
+      return respond({ agent: createdAgent }, 201);
     }
-    if (/^\/v1\/agents\/[^/]+$/.test(path) && method === "GET")
-      return respond({ agent: currentAgent });
+    if (/^\/v1\/agents\/[^/]+$/.test(path) && method === "GET") {
+      const requestedAgentId = path.split("/").at(-1) ?? "";
+      const requestedAgent = agentStore.get(requestedAgentId);
+      if (!requestedAgent)
+        return respond(
+          { error: { code: "not_found", message: "agent not found" } },
+          404,
+        );
+      return respond({ agent: requestedAgent });
+    }
 
     if (path === `/v1/agents/${agentId}/runs` && method === "POST") {
       const body = request.postDataJSON() as { prompt: string };
@@ -260,7 +268,7 @@ test("runs a task from queued through running logs to completed result", async (
   await page.getByRole("button", { name: "Run agent" }).first().click();
 
   await expect(page).toHaveURL(/\/runs\/run-1$/);
-  await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+  await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
   await expect(
     page.getByText("This run is waiting for a worker."),
   ).toBeVisible();
