@@ -13,6 +13,7 @@ export {
 } from "@/features/databases/database-detail-view";
 export { BucketDetailView } from "@/features/storage/bucket-detail-view";
 export { WebhookDetailView } from "@/features/webhooks/webhook-detail-view";
+export { APIKeyDetailView } from "@/features/api-keys/api-key-detail-view";
 export {
   AgentRunsView,
   AgentRunDetailView,

@@ -23,7 +23,15 @@ export type CreateField = {
   name: string;
   label: string;
   placeholder?: string;
-  type?: "text" | "email" | "password" | "url" | "textarea" | "select";
+  type?:
+    | "text"
+    | "email"
+    | "password"
+    | "url"
+    | "datetime-local"
+    | "textarea"
+    | "select"
+    | "multiselect";
   options?: readonly { value: string; label: string }[];
   defaultValue?: string;
   required?: boolean;
@@ -145,6 +153,52 @@ export function CreateDialog({
                     </option>
                   ))}
                 </select>
+              ) : field.type === "multiselect" ? (
+                <div
+                  id={field.name}
+                  role="group"
+                  aria-label={field.label}
+                  className="grid gap-2 rounded-lg border border-stealth-border bg-stealth-panel p-3 sm:grid-cols-2"
+                >
+                  {field.options?.map((option) => {
+                    const selected = (values[field.name] ?? "")
+                      .split(",")
+                      .map((value) => value.trim())
+                      .includes(option.value);
+                    return (
+                      <label
+                        key={option.value}
+                        className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-slate-300 hover:bg-white/[0.04]"
+                      >
+                        <Input
+                          type="checkbox"
+                          aria-label={option.label}
+                          checked={selected}
+                          onChange={(event) => {
+                            const next = new Set(
+                              (values[field.name] ?? "")
+                                .split(",")
+                                .map((value) => value.trim())
+                                .filter(Boolean),
+                            );
+                            if (event.target.checked) next.add(option.value);
+                            else next.delete(option.value);
+                            updateValue(field.name, Array.from(next).join(","));
+                          }}
+                          className="mt-0.5 size-4 accent-cyan-300"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-slate-200">
+                            {option.label}
+                          </span>
+                          <span className="font-mono text-[10px] text-slate-600">
+                            {option.value}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
               ) : (
                 <Input
                   id={field.name}

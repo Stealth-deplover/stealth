@@ -58,6 +58,7 @@ function getStatusVariant(
     case "active":
     case "available":
     case "succeeded":
+    case "delivered":
     case "healthy":
     case "completed":
       return "success";
@@ -67,6 +68,8 @@ function getStatusVariant(
       return "error";
     case "building":
     case "running":
+    case "delivering":
+    case "pending":
     case "queued":
     case "processing":
     case "accepted":

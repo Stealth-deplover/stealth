@@ -63,5 +63,14 @@ export function useWebhookDeliveries(
         ),
       ),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) => {
+      const deliveries = query.state.data?.deliveries ?? [];
+      return deliveries.some(
+        (delivery) =>
+          delivery.status === "pending" || delivery.status === "running",
+      )
+        ? 5000
+        : false;
+    },
   });
 }

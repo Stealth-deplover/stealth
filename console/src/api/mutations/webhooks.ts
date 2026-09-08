@@ -41,3 +41,44 @@ export function useRotateWebhookSecret(projectId: string, webhookId: string) {
     },
   });
 }
+
+export function useUpdateWebhook(projectId: string, webhookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["UpdateWebhookRequest"]) =>
+      unwrap(
+        await api.PATCH("/v1/projects/{projectID}/webhooks/{webhookID}", {
+          params: { path: { projectID: projectId, webhookID: webhookId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.webhooks(projectId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.webhook(projectId, webhookId),
+      });
+    },
+  });
+}
+
+export function useDeleteWebhook(projectId: string, webhookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await api.DELETE("/v1/projects/{projectID}/webhooks/{webhookID}", {
+          params: { path: { projectID: projectId, webhookID: webhookId } },
+        }),
+      ),
+    onSuccess: () => {
+      queryClient.removeQueries({
+        queryKey: queryKeys.webhook(projectId, webhookId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.webhooks(projectId),
+      });
+    },
+  });
+}
