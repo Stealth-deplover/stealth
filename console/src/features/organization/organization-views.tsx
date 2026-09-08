@@ -2,6 +2,7 @@ export { OrganizationsIndexView } from "./organizations-view";
 export { OrganizationProjectsView } from "./projects-view";
 export { OrganizationOverviewView } from "./overview-view";
 export { OrganizationMembersView } from "./members-view";
+export { OrganizationInvitationsView } from "./invitations-view";
 export { OrganizationPlanView } from "./plan-view";
 export { OrganizationAuditView } from "./audit-view";
 export { OrganizationIncidentsView } from "./incidents-view";

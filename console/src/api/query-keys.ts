@@ -8,6 +8,8 @@ export const queryKeys = {
     ["organization-plan", organizationId] as const,
   memberships: (organizationId: string | undefined) =>
     ["memberships", organizationId] as const,
+  invitations: (organizationId: string | undefined) =>
+    ["invitations", organizationId] as const,
   projects: (organizationId: string) => ["projects", organizationId] as const,
   project: (projectId: string) => ["project", projectId] as const,
   usage: (projectId: string) => ["usage", projectId] as const,
@@ -48,20 +50,32 @@ export const queryKeys = {
     ["tables", projectId, databaseId] as const,
   table: (projectId: string, databaseId: string, tableId: string) =>
     ["table", projectId, databaseId, tableId] as const,
+  tableScope: (projectId: string, databaseId: string) =>
+    ["table", projectId, databaseId] as const,
   columns: (projectId: string, databaseId: string, tableId: string) =>
     ["columns", projectId, databaseId, tableId] as const,
+  columnsScope: (projectId: string, databaseId: string) =>
+    ["columns", projectId, databaseId] as const,
   indexes: (projectId: string, databaseId: string, tableId: string) =>
     ["indexes", projectId, databaseId, tableId] as const,
+  indexesScope: (projectId: string, databaseId: string) =>
+    ["indexes", projectId, databaseId] as const,
   row: (
     projectId: string,
     databaseId: string,
     tableId: string,
     rowId: string,
   ) => ["row", projectId, databaseId, tableId, rowId] as const,
+  rowScope: (projectId: string, databaseId: string, tableId: string) =>
+    ["row", projectId, databaseId, tableId] as const,
+  rowDatabaseScope: (projectId: string, databaseId: string) =>
+    ["row", projectId, databaseId] as const,
   databaseBackups: (projectId: string, databaseId: string) =>
     ["database-backups", projectId, databaseId] as const,
   rows: (projectId: string, databaseId: string, tableId: string) =>
     ["rows", projectId, databaseId, tableId] as const,
+  rowsScope: (projectId: string, databaseId: string) =>
+    ["rows", projectId, databaseId] as const,
   buckets: (projectId: string) => ["storage", projectId] as const,
   bucket: (projectId: string, bucketId: string) =>
     ["bucket", projectId, bucketId] as const,
@@ -69,7 +83,11 @@ export const queryKeys = {
     ["files", projectId, bucketId] as const,
   file: (projectId: string, bucketId: string, fileId: string) =>
     ["file", projectId, bucketId, fileId] as const,
+  fileScope: (projectId: string, bucketId: string) =>
+    ["file", projectId, bucketId] as const,
   users: (projectId: string) => ["users", projectId] as const,
+  projectUser: (projectId: string, userId: string) =>
+    ["project-user", projectId, userId] as const,
   apiKeys: (projectId: string) => ["api-keys", projectId] as const,
   webhooks: (projectId: string) => ["webhooks", projectId] as const,
   webhook: (projectId: string, webhookId: string) =>

@@ -312,7 +312,7 @@ async function installOnboardingFixtures(page: Page) {
         "/v1/projects/project-onboard/databases/database-onboard/backups" &&
       method === "GET"
     )
-      return respond({ backups: [], pagination });
+      return respond({ backups: [], pagination, can_manage: true });
     return respond({});
   });
 }

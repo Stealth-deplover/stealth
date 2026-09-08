@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Loader2 } from "lucide-react";
-import { useLogin } from "@/api/mutations";
+import { useRegister } from "@/api/mutations";
 import { errorMessage } from "@/components/feedback/error-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,20 +22,20 @@ import { getSafeNextPath } from "@/lib/navigation";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email address."),
-  password: z.string().min(1, "Enter your password."),
+  password: z.string().min(12, "Use at least 12 characters."),
 });
 type FormValues = z.infer<typeof schema>;
 
-export function LoginView() {
+export function RegisterView() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const mutation = useLogin();
+  const mutation = useRegister();
   const rawNext = searchParams.get("next");
   const destination = getSafeNextPath(rawNext);
-  const registerHref =
+  const signInHref =
     rawNext === null
-      ? "/register"
-      : "/register?next=" + encodeURIComponent(destination);
+      ? "/login"
+      : "/login?next=" + encodeURIComponent(destination);
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { email: "", password: "" },
@@ -48,19 +48,14 @@ export function LoginView() {
     <Card className="w-full max-w-md border-stealth-border/80 bg-stealth-panel">
       <CardHeader className="p-7 pb-4">
         <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">
-          Welcome back
+          Start building
         </p>
-        <CardTitle className="text-2xl">Sign in to Stealth</CardTitle>
+        <CardTitle className="text-2xl">Create your Console</CardTitle>
         <CardDescription>
-          Use your Console account to access projects and services.
+          Your first organization is created with the account.
         </CardDescription>
       </CardHeader>
       <CardContent className="p-7 pt-2">
-        {searchParams.get("reset") === "success" ? (
-          <p className="mb-4 rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs leading-5 text-emerald-200">
-            Password updated. Sign in with your new password.
-          </p>
-        ) : null}
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
@@ -77,21 +72,14 @@ export function LoginView() {
             ) : null}
           </div>
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="password">Password</Label>
-              <Link
-                href="/recovery"
-                className="text-xs text-cyan-300 hover:text-cyan-200"
-              >
-                Forgot password?
-              </Link>
-            </div>
+            <Label htmlFor="password">Password</Label>
             <Input
               id="password"
               type="password"
-              autoComplete="current-password"
+              autoComplete="new-password"
               {...form.register("password")}
             />
+            <p className="text-xs text-slate-600">Minimum 12 characters.</p>
             {form.formState.errors.password ? (
               <p className="text-xs text-rose-300">
                 {form.formState.errors.password.message}
@@ -109,16 +97,16 @@ export function LoginView() {
             ) : (
               <ArrowRight className="size-4" />
             )}
-            {mutation.isPending ? "Signing in…" : "Continue"}
+            {mutation.isPending ? "Creating…" : "Create account"}
           </Button>
         </form>
         <p className="mt-6 text-center text-sm text-slate-500">
-          New to Stealth?{" "}
+          Already have access?{" "}
           <Link
-            href={registerHref}
+            href={signInHref}
             className="font-medium text-cyan-300 hover:text-cyan-200"
           >
-            Create an account
+            Sign in
           </Link>
         </p>
       </CardContent>

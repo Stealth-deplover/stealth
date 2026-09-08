@@ -51,7 +51,7 @@ export function useRenameStorageFile(projectId: string, bucketId: string) {
         queryKey: queryKeys.files(projectId, bucketId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["file", projectId, bucketId],
+        queryKey: queryKeys.fileScope(projectId, bucketId),
       });
     },
   });

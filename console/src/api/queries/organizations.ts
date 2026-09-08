@@ -67,3 +67,21 @@ export function useMemberships(
     placeholderData: keepPreviousData,
   });
 }
+
+export function useOrganizationInvitations(
+  organizationId: string | undefined,
+  query?: CursorQuery,
+) {
+  const params = withCursorPage(query);
+  return useQuery({
+    queryKey: [...queryKeys.invitations(organizationId), params],
+    enabled: Boolean(organizationId),
+    queryFn: async () =>
+      unwrap(
+        await api.GET("/v1/organizations/{organizationID}/invitations", {
+          params: { path: { organizationID: organizationId! }, query: params },
+        }),
+      ),
+    placeholderData: keepPreviousData,
+  });
+}

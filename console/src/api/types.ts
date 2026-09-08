@@ -3,6 +3,10 @@ import type { components } from "@/api/generated/schema";
 export type Account = components["schemas"]["Account"];
 export type Organization = components["schemas"]["Organization"];
 export type Membership = components["schemas"]["Membership"];
+export type OrganizationInvitation =
+  components["schemas"]["OrganizationInvitation"];
+export type OrganizationInvitationResponse =
+  components["schemas"]["OrganizationInvitationResponse"];
 export type OrganizationPlan = components["schemas"]["OrganizationPlan"];
 export type Project = components["schemas"]["Project"];
 export type AuditEvent = components["schemas"]["AuditEvent"];
