@@ -32,7 +32,7 @@ export function useUploadSiteDeployment(projectId: string, siteId: string) {
       const form = new FormData();
       form.append("source", file);
       form.append("activate", activate ? "true" : "false");
-      return uploadMultipart(
+      return uploadMultipart<components["schemas"]["SiteDeploymentResponse"]>(
         `/v1/projects/${projectId}/sites/${siteId}/deployments`,
         form,
       );

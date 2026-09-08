@@ -1,8 +1,82 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, unwrap, uploadMultipart } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
 import type { components } from "@/api/generated/schema";
+
+export function useUploadStorageFile(projectId: string, bucketId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      return uploadMultipart<components["schemas"]["StorageFileResponse"]>(
+        `/v1/projects/${projectId}/storage/buckets/${bucketId}/files`,
+        form,
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.files(projectId, bucketId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.bucket(projectId, bucketId),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
+    },
+  });
+}
+
+export function useRenameStorageFile(projectId: string, bucketId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ fileId, name }: { fileId: string; name: string }) =>
+      unwrap(
+        await api.PATCH(
+          "/v1/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                bucketID: bucketId,
+                fileID: fileId,
+              },
+            },
+            body: { name },
+          },
+        ),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.files(projectId, bucketId),
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["file", projectId, bucketId],
+      });
+    },
+  });
+}
+
+export function useUpdateStorageBucket(projectId: string, bucketId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["UpdateStorageBucketRequest"],
+    ) =>
+      unwrap(
+        await api.PATCH("/v1/projects/{projectID}/storage/buckets/{bucketID}", {
+          params: { path: { projectID: projectId, bucketID: bucketId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.bucket(projectId, bucketId),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
+    },
+  });
+}
 
 export function useCreateBucket(projectId: string) {
   const queryClient = useQueryClient();

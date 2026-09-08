@@ -20,6 +20,7 @@ import { formatBytes, formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ProjectResourceIntro } from "@/features/resources/collection-shared";
 import { pageControls } from "@/lib/pagination";
+import { bucketName } from "./storage-values";
 
 export function StorageView({
   organizationId,
@@ -36,11 +37,11 @@ export function StorageView({
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const handleCreateBucket = async (values: Record<string, string>) => {
     const result = await create.mutateAsync({
-      name: values.name,
+      name: bucketName.parse(values.name),
       file_security: true,
     });
     toast.success("Bucket created");
-    if (result?.bucket) {
+    if (result?.bucket.id) {
       router.push(`${base}/storage/${result.bucket.id}`);
     }
   };
@@ -73,6 +74,11 @@ export function StorageView({
       ),
     },
     {
+      accessorKey: "created_at",
+      header: "Created",
+      cell: ({ row }) => formatDate(row.original.created_at),
+    },
+    {
       accessorKey: "updated_at",
       header: "Updated",
       cell: ({ row }) => formatDate(row.original.updated_at),
@@ -102,15 +108,19 @@ export function StorageView({
       <ProjectResourceIntro
         icon={HardDrive}
         title="Buckets"
-        description="Files are stored as safe object names. The console keeps the explorer flat because the backend does not expose folder semantics."
+        description="Store application files, inspect metadata, and manage bucket limits."
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
-      ) : query.data?.buckets.length ? (
+      ) : query.data?.buckets.length ||
+        navigation.canFirst ||
+        nextCursor(query.data) ? (
         <Card>
           <DataTable
-            data={query.data.buckets}
+            data={query.data?.buckets ?? []}
             columns={columns}
+            loading={query.isLoading}
+            empty="No buckets on this page."
             serverPagination={pageControls(
               navigation,
               nextCursor(query.data),
@@ -124,8 +134,8 @@ export function StorageView({
         </Card>
       ) : (
         <EmptyState
-          title="No buckets yet"
-          description="Create a bucket for user uploads, public assets, or build artifacts."
+          title="No storage buckets yet"
+          description="Create a bucket to store files and application objects."
           actionLabel="Create bucket"
           action={() => setCreateOpen(true)}
         />

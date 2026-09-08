@@ -3677,7 +3677,9 @@ export interface components {
             /** Format: uuid */
             project_id: string;
             /** @description Typed user columns; unknown/system keys are rejected. */
-            data: Record<string, never>;
+            data: {
+                [key: string]: unknown;
+            };
             read_permissions: components["schemas"]["DatabasePermission"][];
             update_permissions: components["schemas"]["DatabasePermission"][];
             delete_permissions: components["schemas"]["DatabasePermission"][];
@@ -3745,14 +3747,18 @@ export interface components {
         };
         CreateDatabaseRowRequest: {
             /** @description Typed row data; its keys must match declared columns. */
-            data: Record<string, never>;
+            data: {
+                [key: string]: unknown;
+            };
             read_permissions?: components["schemas"]["DatabasePermission"][];
             update_permissions?: components["schemas"]["DatabasePermission"][];
             delete_permissions?: components["schemas"]["DatabasePermission"][];
         };
         UpdateDatabaseRowRequest: {
             /** @description Partial typed row data; omitted values remain unchanged. */
-            data?: Record<string, never>;
+            data?: {
+                [key: string]: unknown;
+            };
             read_permissions?: components["schemas"]["DatabasePermission"][];
             update_permissions?: components["schemas"]["DatabasePermission"][];
             delete_permissions?: components["schemas"]["DatabasePermission"][];

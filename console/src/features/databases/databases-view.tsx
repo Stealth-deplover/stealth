@@ -20,6 +20,8 @@ import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ProjectResourceIntro } from "@/features/resources/collection-shared";
 import { pageControls } from "@/lib/pagination";
+import { ResourceId } from "@/components/resource-id";
+import { databaseName } from "./data-values";
 
 export function DatabasesView({
   organizationId,
@@ -35,9 +37,11 @@ export function DatabasesView({
   const create = useCreateDatabase(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const handleCreateDatabase = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({ name: values.name });
+    const result = await create.mutateAsync({
+      name: databaseName.parse(values.name),
+    });
     toast.success("Database created");
-    if (result?.database) {
+    if (result?.database.id) {
       router.push(`${base}/databases/${result.database.id}`);
     }
   };
@@ -58,10 +62,13 @@ export function DatabasesView({
       accessorKey: "id",
       header: "Database ID",
       cell: ({ row }) => (
-        <span className="font-mono text-xs text-slate-500">
-          {row.original.id.slice(0, 8)}…
-        </span>
+        <ResourceId id={row.original.id} label="Database ID" />
       ),
+    },
+    {
+      accessorKey: "created_at",
+      header: "Created",
+      cell: ({ row }) => formatDate(row.original.created_at),
     },
     {
       accessorKey: "updated_at",
@@ -104,15 +111,19 @@ export function DatabasesView({
       <ProjectResourceIntro
         icon={DatabaseIcon}
         title="Typed data layer"
-        description="The API exposes schema and row operations. Query execution is intentionally not presented because the backend does not provide it."
+        description="Organize structured application data into tables, inspect rows, and manage backups."
       />
       {query.isError ? (
         <ErrorState error={query.error} retry={() => query.refetch()} />
-      ) : query.data?.databases.length ? (
+      ) : query.data?.databases.length ||
+        navigation.canFirst ||
+        nextCursor(query.data) ? (
         <Card>
           <DataTable
-            data={query.data.databases}
+            data={query.data?.databases ?? []}
             columns={columns}
+            loading={query.isLoading}
+            empty="No databases on this page."
             serverPagination={pageControls(
               navigation,
               nextCursor(query.data),
