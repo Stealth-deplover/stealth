@@ -257,7 +257,7 @@ test("runs a task from queued through running logs to completed result", async (
   await page
     .getByLabel("Agent task prompt")
     .fill("Fix failing tests in this repository.");
-  await page.getByRole("button", { name: "Run agent" }).click();
+  await page.getByRole("button", { name: "Run agent" }).first().click();
 
   await expect(page).toHaveURL(/\/runs\/run-1$/);
   await expect(page.getByText("Queued", { exact: true })).toBeVisible();
@@ -281,7 +281,7 @@ test("keeps failed run context and exposes its logs", async ({ page }) => {
   await page
     .getByLabel("Agent task prompt")
     .fill("Fix failing tests in this repository.");
-  await page.getByRole("button", { name: "Run agent" }).click();
+  await page.getByRole("button", { name: "Run agent" }).first().click();
 
   await expect(page.getByText("Failed", { exact: true })).toBeVisible();
   await expect(
@@ -303,7 +303,7 @@ test("cancels a running Agent Run and stops showing the cancel action", async ({
   await page
     .getByLabel("Agent task prompt")
     .fill("Inspect the repository state.");
-  await page.getByRole("button", { name: "Run agent" }).click();
+  await page.getByRole("button", { name: "Run agent" }).first().click();
 
   await expect(page.getByText("Running", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Cancel run" }).click();
