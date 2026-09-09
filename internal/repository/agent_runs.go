@@ -196,9 +196,21 @@ func validAgentRunStep(step domain.AgentRunStep) bool {
 	return step.Status == "pending" || step.Status == "done"
 }
 
-func (r *Repository) ListAgentRuns(ctx context.Context, accountID, agentID uuid.UUID, limit int, cursor *uuid.UUID) ([]domain.AgentRun, string, error) {
+func (r *Repository) ListAgentRuns(ctx context.Context, accountID, agentID uuid.UUID, limit int, cursor *uuid.UUID) ([]domain.AgentRun, string, bool, error) {
 	if limit < 1 || limit > 100 {
-		return nil, "", fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidAgentRun)
+		return nil, "", false, fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidAgentRun)
+	}
+	agent, err := r.AgentByID(ctx, accountID, agentID)
+	if err != nil {
+		return nil, "", false, err
+	}
+	projectID, err := uuid.Parse(agent.ProjectID)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("parse Agent project id: %w", err)
+	}
+	canManage, err := r.AgentProjectCanManage(ctx, accountID, projectID)
+	if err != nil {
+		return nil, "", false, err
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+agentRunProjection+`
@@ -210,26 +222,26 @@ func (r *Repository) ListAgentRuns(ctx context.Context, accountID, agentID uuid.
 		ORDER BY r.id DESC
 		LIMIT $4`, agentID, accountID, cursor, limit+1)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 	items := make([]domain.AgentRun, 0, limit)
 	for rows.Next() {
 		item, scanErr := scanAgentRun(rows)
 		if scanErr != nil {
-			return nil, "", scanErr
+			return nil, "", false, scanErr
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	next := ""
 	if len(items) > limit {
 		next = items[limit-1].ID
 		items = items[:limit]
 	}
-	return items, next, nil
+	return items, next, canManage, nil
 }
 
 func (r *Repository) AgentRunByID(ctx context.Context, accountID, agentID, runID uuid.UUID) (domain.AgentRun, error) {

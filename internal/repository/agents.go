@@ -77,9 +77,17 @@ type AgentPatch struct {
 	Instructions *string
 }
 
-func (r *Repository) ListAgents(ctx context.Context, accountID uuid.UUID, limit int, cursor *uuid.UUID, projectID *uuid.UUID) ([]domain.Agent, string, error) {
+func (r *Repository) ListAgents(ctx context.Context, accountID uuid.UUID, limit int, cursor *uuid.UUID, projectID *uuid.UUID) ([]domain.Agent, string, bool, error) {
 	if limit < 1 || limit > 100 {
-		return nil, "", fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidAgent)
+		return nil, "", false, fmt.Errorf("%w: limit must be between 1 and 100", ErrInvalidAgent)
+	}
+	canManage := false
+	if projectID != nil {
+		var err error
+		canManage, err = r.AgentProjectCanManage(ctx, accountID, *projectID)
+		if err != nil {
+			return nil, "", false, err
+		}
 	}
 	var cursorArg any
 	if cursor != nil {
@@ -100,26 +108,37 @@ func (r *Repository) ListAgents(ctx context.Context, accountID uuid.UUID, limit 
 		ORDER BY a.id
 		LIMIT $4`, accountID, projectArg, cursorArg, limit+1)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 	items := make([]domain.Agent, 0, limit)
 	for rows.Next() {
 		item, scanErr := scanAgent(rows)
 		if scanErr != nil {
-			return nil, "", scanErr
+			return nil, "", false, scanErr
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	next := ""
 	if len(items) > limit {
 		next = items[limit-1].ID
 		items = items[:limit]
 	}
-	return items, next, nil
+	return items, next, canManage, nil
+}
+
+// AgentProjectCanManage reports the capability shared by Agent configuration
+// mutations and Run enqueue/cancel actions. Read access is intentionally
+// broader and is enforced separately by the resource queries.
+func (r *Repository) AgentProjectCanManage(ctx context.Context, accountID, projectID uuid.UUID) (bool, error) {
+	role, err := r.projectRole(ctx, projectID, accountID)
+	if err != nil {
+		return false, err
+	}
+	return role == "owner" || role == "admin", nil
 }
 
 func (r *Repository) AgentByID(ctx context.Context, accountID, agentID uuid.UUID) (domain.Agent, error) {

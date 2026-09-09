@@ -39,7 +39,14 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := httpapi.New(config.Config{SessionCookieName: "stealth_session", SessionTTL: time.Hour}, repository.New(pool), logger)
+	server := httpapi.New(config.Config{
+		SessionCookieName: "stealth_session",
+		SessionTTL:        time.Hour,
+		AgentProviderCatalog: []config.AgentProviderCatalogItem{
+			{ID: "local", Name: "Local gateway", Models: []string{"model-a", "model-b"}},
+			{ID: "remote", Name: "Remote gateway", Models: []string{"model-x"}},
+		},
+	}, repository.New(pool), logger)
 	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
 
@@ -81,6 +88,9 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	if len(catalog.Providers) < 1 || catalog.Providers[0].ID == "" || len(catalog.Providers[0].Models) < 1 || len(catalog.Roles) < 1 || len(catalog.Tools) < 1 || catalog.Execution.Mode != "queue_only" || catalog.Execution.Ready {
 		t.Fatalf("unexpected Agent catalog: %+v", catalog)
 	}
+	if len(catalog.Providers) != 2 || catalog.Providers[0].ID != "local" || len(catalog.Providers[0].Models) != 2 || catalog.Providers[1].ID != "remote" || catalog.Providers[1].Models[0] != "model-x" {
+		t.Fatalf("unexpected provider/model catalog: %+v", catalog.Providers)
+	}
 
 	viewerClient := newIntegrationClient(t)
 	viewerID := uuid.Must(uuid.NewV7())
@@ -111,8 +121,8 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 		"description":  "Build and review the web console.",
 		"role":         "Frontend",
 		"branch":       "main",
-		"provider":     "OpenAI",
-		"model":        "GPT-5.6",
+		"provider":     "local",
+		"model":        "model-a",
 		"tools":        []string{"Read files", "Edit files", "Run tests"},
 		"instructions": "Inspect the repository before editing.",
 	}, http.StatusCreated)
@@ -126,13 +136,38 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 			Status      string   `json:"status"`
 			Tools       []string `json:"tools"`
 		} `json:"agent"`
+		CanManage bool `json:"can_manage"`
 	}
 	if err := json.Unmarshal(createBody, &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Agent.ID == "" || created.Agent.ProjectID != project.Project.ID || created.Agent.ProjectName == "" || created.Agent.Name != "Frontend Engineer" || created.Agent.Role != "Frontend" || created.Agent.Status != "idle" || len(created.Agent.Tools) != 3 {
+	if created.Agent.ID == "" || created.Agent.ProjectID != project.Project.ID || created.Agent.ProjectName == "" || created.Agent.Name != "Frontend Engineer" || created.Agent.Role != "Frontend" || created.Agent.Status != "idle" || len(created.Agent.Tools) != 3 || !created.CanManage {
 		t.Fatalf("unexpected agent response: %s", createBody)
 	}
+
+	invalidPairBody := requestJSONRaw(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents", map[string]any{
+		"project_id": project.Project.ID, "name": "Cross-provider Agent", "role": "General", "provider": "local", "model": "model-x",
+	}, http.StatusUnprocessableEntity)
+	var invalidPairError struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(invalidPairBody, &invalidPairError); err != nil {
+		t.Fatal(err)
+	}
+	if invalidPairError.Error.Code != "provider_model_invalid" {
+		t.Fatalf("unexpected provider/model validation error: %s", invalidPairBody)
+	}
+	requestJSON(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents", map[string]any{
+		"project_id": project.Project.ID, "name": "Unknown-provider Agent", "role": "General", "provider": "missing", "model": "model-a",
+	}, http.StatusUnprocessableEntity, nil)
+	requestJSON(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents", map[string]any{
+		"project_id": project.Project.ID, "name": "Unknown-model Agent", "role": "General", "provider": "local", "model": "missing",
+	}, http.StatusUnprocessableEntity, nil)
+	requestJSON(t, ownerClient, http.MethodPatch, httpServer.URL+"/v1/agents/"+created.Agent.ID, map[string]any{
+		"provider": "remote", "model": "model-a",
+	}, http.StatusUnprocessableEntity, nil)
 
 	var list struct {
 		Agents []struct {
@@ -141,13 +176,20 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 		Pagination struct {
 			NextCursor *string `json:"next_cursor"`
 		} `json:"pagination"`
+		CanManage bool `json:"can_manage"`
 	}
 	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents?limit=1", nil, http.StatusOK, &list)
-	if len(list.Agents) != 1 || list.Agents[0].ID != created.Agent.ID {
+	if len(list.Agents) != 1 || list.Agents[0].ID != created.Agent.ID || !list.CanManage {
 		t.Fatalf("unexpected agent list: %+v", list)
 	}
 
-	requestJSON(t, viewerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID, nil, http.StatusOK, &struct{}{})
+	var viewerAgent struct {
+		CanManage bool `json:"can_manage"`
+	}
+	requestJSON(t, viewerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID, nil, http.StatusOK, &viewerAgent)
+	if viewerAgent.CanManage {
+		t.Fatal("viewer received can_manage=true for Agent detail")
+	}
 	runBody := requestJSONRaw(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs", map[string]any{
 		"prompt": "Inspect the project and report the first safe improvement.",
 	}, http.StatusAccepted)
@@ -161,17 +203,30 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 			Steps     []any  `json:"steps"`
 			Changes   []any  `json:"changes"`
 		} `json:"run"`
+		CanManage bool `json:"can_manage"`
 	}
 	if err := json.Unmarshal(runBody, &createdRun); err != nil {
 		t.Fatal(err)
 	}
-	if createdRun.Run.ID == "" || createdRun.Run.AgentID != created.Agent.ID || createdRun.Run.ProjectID != project.Project.ID || createdRun.Run.Prompt == "" || createdRun.Run.Status != "queued" || createdRun.Run.Steps == nil || createdRun.Run.Changes == nil {
+	if createdRun.Run.ID == "" || createdRun.Run.AgentID != created.Agent.ID || createdRun.Run.ProjectID != project.Project.ID || createdRun.Run.Prompt == "" || createdRun.Run.Status != "queued" || createdRun.Run.Steps == nil || createdRun.Run.Changes == nil || !createdRun.CanManage {
 		t.Fatalf("unexpected run response: %s", runBody)
 	}
-	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs", nil, http.StatusOK, &struct{}{})
+	var ownerRuns struct {
+		CanManage bool `json:"can_manage"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs", nil, http.StatusOK, &ownerRuns)
+	if !ownerRuns.CanManage {
+		t.Fatal("owner did not receive can_manage=true for Agent runs")
+	}
+	var viewerRun struct {
+		CanManage bool `json:"can_manage"`
+	}
+	requestJSON(t, viewerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID, nil, http.StatusOK, &viewerRun)
+	if viewerRun.CanManage {
+		t.Fatal("viewer received can_manage=true for Agent run")
+	}
 	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID, nil, http.StatusOK, &struct{}{})
 	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID+"/logs", nil, http.StatusOK, &struct{}{})
-	requestJSON(t, viewerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID, nil, http.StatusOK, &struct{}{})
 	requestJSON(t, viewerClient, http.MethodPost, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs", map[string]string{"prompt": "Viewer cannot enqueue"}, http.StatusForbidden, nil)
 	requestJSON(t, viewerClient, http.MethodPost, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID+"/cancel", nil, http.StatusForbidden, nil)
 	requestJSON(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents/"+created.Agent.ID+"/runs/"+createdRun.Run.ID+"/cancel", nil, http.StatusOK, &struct{}{})
@@ -188,7 +243,7 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	repo := repository.New(pool)
 	workerID := "agent-integration-worker"
 	registry := agentrunner.NewRegistry()
-	if err := registry.Register("openai", agentrunner.AdapterFunc(func(_ context.Context, job agentrunner.Job) (repository.AgentRunResult, error) {
+	if err := registry.Register("local", agentrunner.AdapterFunc(func(_ context.Context, job agentrunner.Job) (repository.AgentRunResult, error) {
 		if job.Run.ID != workerRun.Run.ID || job.Agent.ID != created.Agent.ID {
 			t.Fatalf("adapter received unexpected job: %+v", job)
 		}
@@ -225,13 +280,13 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 		t.Fatalf("unexpected completed run: %+v", completedRun.Run)
 	}
 	requestJSON(t, viewerClient, http.MethodPost, httpServer.URL+"/v1/agents", map[string]any{
-		"project_id": project.Project.ID, "name": "Viewer Agent", "role": "General", "provider": "OpenAI", "model": "GPT-5.6",
+		"project_id": project.Project.ID, "name": "Viewer Agent", "role": "General", "provider": "local", "model": "model-a",
 	}, http.StatusForbidden, nil)
 	requestJSON(t, viewerClient, http.MethodPatch, httpServer.URL+"/v1/agents/"+created.Agent.ID, map[string]string{"name": "Viewer Rename"}, http.StatusForbidden, nil)
 	requestJSON(t, viewerClient, http.MethodDelete, httpServer.URL+"/v1/agents/"+created.Agent.ID, nil, http.StatusForbidden, nil)
 
 	requestJSON(t, ownerClient, http.MethodPost, httpServer.URL+"/v1/agents", map[string]any{
-		"project_id": project.Project.ID, "name": "Frontend Engineer", "role": "Frontend", "provider": "OpenAI", "model": "GPT-5.6",
+		"project_id": project.Project.ID, "name": "Frontend Engineer", "role": "Frontend", "provider": "local", "model": "model-a",
 	}, http.StatusConflict, nil)
 	requestJSON(t, ownerClient, http.MethodPatch, httpServer.URL+"/v1/agents/"+created.Agent.ID, map[string]any{
 		"name": "Frontend Platform Engineer", "current_task": "Wire the Agent control plane", "tools": []string{"Search code", "Read files"},

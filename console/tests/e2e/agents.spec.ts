@@ -87,6 +87,7 @@ async function installFixtures(
   page: Page,
   scenario: Scenario,
   withAgent = true,
+  canManage = true,
 ) {
   const agentStore = new Map<string, typeof baseAgent>();
   if (withAgent) agentStore.set(agentId, { ...baseAgent });
@@ -116,7 +117,12 @@ async function installFixtures(
     if (path === "/v1/agent-catalog")
       return respond({
         providers: [
-          { id: "local", name: "Local gateway", models: ["model-a"] },
+          {
+            id: "local",
+            name: "Local gateway",
+            models: ["model-a", "model-b"],
+          },
+          { id: "remote", name: "Remote gateway", models: ["model-x"] },
         ],
         roles: ["General", "Reviewer"],
         tools: ["Read files", "Search code"],
@@ -128,7 +134,11 @@ async function installFixtures(
       });
 
     if (path === "/v1/agents" && method === "GET")
-      return respond({ agents: [...agentStore.values()], pagination });
+      return respond({
+        agents: [...agentStore.values()],
+        pagination,
+        can_manage: canManage,
+      });
     if (path === "/v1/agents" && method === "POST") {
       const body = request.postDataJSON() as {
         name: string;
@@ -153,7 +163,7 @@ async function installFixtures(
         instructions: body.instructions ?? null,
       };
       agentStore.set(createdAgent.id, createdAgent);
-      return respond({ agent: createdAgent }, 201);
+      return respond({ agent: createdAgent, can_manage: canManage }, 201);
     }
     const agentDetailPath = path.replace(/\/+$/, "");
     if (/^\/v1\/agents\/[^/]+$/.test(agentDetailPath) && method === "GET") {
@@ -164,7 +174,7 @@ async function installFixtures(
           { error: { code: "not_found", message: "agent not found" } },
           404,
         );
-      return respond({ agent: requestedAgent });
+      return respond({ agent: requestedAgent, can_manage: canManage });
     }
 
     const agentRunsPath = /^\/v1\/agents\/[^/]+\/runs$/;
@@ -173,10 +183,14 @@ async function installFixtures(
       run = buildRun("queued", body.prompt);
       runDetailReads = 0;
       cancelled = false;
-      return respond({ run }, 202);
+      return respond({ run, can_manage: canManage }, 202);
     }
     if (agentRunsPath.test(path) && method === "GET")
-      return respond({ runs: run ? [run] : [], pagination });
+      return respond({
+        runs: run ? [run] : [],
+        pagination,
+        can_manage: canManage,
+      });
 
     if (
       /^\/v1\/agents\/[^/]+\/runs\/[^/]+\/cancel$/.test(path) &&
@@ -184,7 +198,7 @@ async function installFixtures(
     ) {
       cancelled = true;
       run = buildRun("cancelled", run?.prompt);
-      return respond({ run });
+      return respond({ run, can_manage: canManage });
     }
     if (/^\/v1\/agents\/[^/]+\/runs\/run-1$/.test(path) && method === "GET") {
       if (!run)
@@ -208,7 +222,7 @@ async function installFixtures(
               : "queued";
         run = buildRun(status, run.prompt);
       }
-      return respond({ run });
+      return respond({ run, can_manage: canManage });
     }
     if (
       /^\/v1\/agents\/[^/]+\/runs\/run-1\/logs$/.test(path) &&
@@ -244,9 +258,22 @@ test("creates an Agent from the server catalog and opens its detail", async ({
     page.getByRole("heading", { name: "No agents yet" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Create agent" }).first().click();
+  const createAgentButton = page
+    .getByRole("button", { name: "Create agent" })
+    .first();
+  await expect(createAgentButton).toBeVisible();
+  await createAgentButton.click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("Name", { exact: true }).fill("Test runner");
+  const provider = dialog.getByLabel("Provider", { exact: true });
+  const model = dialog.getByLabel("Model", { exact: true });
+  await provider.selectOption("local");
+  await expect(model.locator("option")).toHaveText(["model-a", "model-b"]);
+  await model.selectOption("model-a");
+  await provider.selectOption("remote");
+  await expect(model.locator("option")).toHaveText(["model-x"]);
+  await expect(model).toHaveValue("model-x");
+  await model.selectOption("model-x");
   await dialog
     .getByRole("button", { name: "Create agent", exact: true })
     .click();
@@ -282,6 +309,31 @@ test("runs a task from queued through running logs to completed result", async (
   await expect(
     page.getByText("All tests completed successfully."),
   ).toBeVisible();
+});
+
+test("keeps a read-only Agent visible without mutation actions", async ({
+  page,
+}) => {
+  await installFixtures(page, "complete", true, false);
+  await page.goto(`/organizations/org-1/projects/project-1/agents/${agentId}`);
+
+  await expect(
+    page.getByRole("heading", { name: "Repository agent" }),
+  ).toBeVisible();
+  await expect(page.getByText("local/model-a")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Run agent/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Edit configuration" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete agent" })).toHaveCount(
+    0,
+  );
+
+  await page.goto(
+    `/organizations/org-1/projects/project-1/agents/${agentId}/runs`,
+  );
+  await expect(page.getByRole("heading", { name: "Run agent" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run agent" })).toHaveCount(0);
 });
 
 test("keeps failed run context and exposes its logs", async ({ page }) => {

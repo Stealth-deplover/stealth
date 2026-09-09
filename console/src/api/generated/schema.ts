@@ -2320,10 +2320,14 @@ export interface components {
         };
         AgentResponse: {
             agent: components["schemas"]["Agent"];
+            /** @description Whether the current project member may create */
+            can_manage: boolean;
         };
         AgentsPage: {
             agents: components["schemas"]["Agent"][];
             pagination: components["schemas"]["Pagination"];
+            /** @description Whether the current project filter may be managed; false when no project filter is supplied. */
+            can_manage: boolean;
         };
         AgentRunStep: {
             id: string;
@@ -2389,10 +2393,14 @@ export interface components {
         };
         AgentRunResponse: {
             run: components["schemas"]["AgentRun"];
+            /** @description Whether the current project member may enqueue or cancel Agent runs. */
+            can_manage: boolean;
         };
         AgentRunsPage: {
             runs: components["schemas"]["AgentRun"][];
             pagination: components["schemas"]["Pagination"];
+            /** @description Whether the current project member may enqueue or cancel Agent runs. */
+            can_manage: boolean;
         };
         AgentRunLogsPage: {
             logs: components["schemas"]["AgentRunLog"][];

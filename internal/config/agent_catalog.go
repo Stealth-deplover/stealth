@@ -28,6 +28,34 @@ func DefaultAgentProviderCatalog() []AgentProviderCatalogItem {
 	return cloneAgentProviderCatalog(defaultAgentProviderCatalog)
 }
 
+// AgentProviderCatalogOrDefault returns the catalog that should be used by
+// both the public catalog endpoint and Agent configuration validation.
+func AgentProviderCatalogOrDefault(items []AgentProviderCatalogItem) []AgentProviderCatalogItem {
+	if len(items) == 0 {
+		return DefaultAgentProviderCatalog()
+	}
+	return cloneAgentProviderCatalog(items)
+}
+
+// AgentProviderModelValid reports whether model is published by provider in
+// the same catalog exposed to Console clients.
+func AgentProviderModelValid(items []AgentProviderCatalogItem, provider, model string) bool {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	for _, item := range items {
+		if item.ID != provider {
+			continue
+		}
+		for _, candidate := range item.Models {
+			if candidate == model {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 func parseAgentProviderCatalog(raw string) ([]AgentProviderCatalogItem, error) {
 	if strings.TrimSpace(raw) == "" {
 		return DefaultAgentProviderCatalog(), nil

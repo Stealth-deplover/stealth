@@ -32,6 +32,13 @@ import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
+import {
+  agentModelAfterProviderChange,
+  agentModelOptions,
+  agentProvider,
+  defaultAgentModel,
+  isValidAgentProviderModel,
+} from "@/features/agents/agent-configuration";
 import { formatAgentRunDuration } from "@/features/agents/agent-run-state";
 import { AgentRunStatusBadge } from "@/features/agents/agent-run-status-badge";
 import { formatDate } from "@/lib/format";
@@ -54,17 +61,25 @@ function catalogReady(catalog: AgentCatalog | undefined) {
   );
 }
 
+function selectedAgentProviderModel(
+  catalog: AgentCatalog | undefined,
+  values: Record<string, string>,
+) {
+  const provider = values.provider?.trim() ?? "";
+  const model = values.model?.trim() ?? "";
+  if (!isValidAgentProviderModel(catalog, provider, model)) {
+    throw new Error("Select a model supported by the selected provider.");
+  }
+  return { provider, model };
+}
+
 function agentFields(
   catalog: AgentCatalog | undefined,
   current?: Agent,
 ): CreateField[] {
   const providers = catalog?.providers ?? [];
   const selectedProvider =
-    providers.find((provider) => provider.id === current?.provider) ??
-    providers[0];
-  const models = [...new Set(providers.flatMap((provider) => provider.models))];
-  if (current?.model && !models.includes(current.model))
-    models.push(current.model);
+    agentProvider(catalog, current?.provider) ?? providers[0];
 
   return [
     {
@@ -100,13 +115,24 @@ function agentFields(
         value: provider.id,
         label: provider.name,
       })),
+      onChange: (value, values) => ({
+        model: agentModelAfterProviderChange(catalog, value, values.model),
+      }),
     },
     {
       name: "model",
       label: "Model",
       type: "select",
-      defaultValue: current?.model ?? selectedProvider?.models[0] ?? "",
-      options: models.map((model) => ({ value: model, label: model })),
+      defaultValue: defaultAgentModel(
+        catalog,
+        selectedProvider?.id,
+        current?.model,
+      ),
+      optionsForValues: (values) =>
+        agentModelOptions(catalog, values.provider).map((model) => ({
+          value: model,
+          label: model,
+        })),
       help: "Provider and model values come from the server catalog; selections are sent unchanged to the Go API.",
     },
     {
@@ -174,15 +200,17 @@ export function AgentsView({
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const ready = catalogReady(catalog.data);
   const agents = query.data?.agents ?? [];
+  const canManage = query.data?.can_manage === true;
 
   const handleCreateAgent = async (values: Record<string, string>) => {
+    const selected = selectedAgentProviderModel(catalog.data, values);
     const result = await create.mutateAsync({
       project_id: projectId,
       name: values.name.trim(),
       description: values.description?.trim() ?? "",
       role: values.role as components["schemas"]["AgentRole"],
-      provider: values.provider,
-      model: values.model,
+      provider: selected.provider,
+      model: selected.model,
       branch: values.branch.trim(),
       tools: parseAgentTools(values.tools),
       instructions: optionalText(values.instructions),
@@ -250,22 +278,23 @@ export function AgentsView({
         title="Agents"
         description="Run backend-owned developer tasks through durable Agent Runs."
         actions={
-          <CreateDialog
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-            triggerLabel="Create agent"
-            submitLabel="Create agent"
-            pendingLabel="Creating agent…"
-            title="Create an agent"
-            description={
-              catalog.data?.execution.message ??
-              "Configure a durable task runner from the server catalog."
-            }
-            disabled={!ready}
-            fields={agentFields(catalog.data)}
-            pending={create.isPending}
-            onSubmit={handleCreateAgent}
-          />
+          canManage && ready ? (
+            <CreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              triggerLabel="Create agent"
+              submitLabel="Create agent"
+              pendingLabel="Creating agent…"
+              title="Create an agent"
+              description={
+                catalog.data?.execution.message ??
+                "Configure a durable task runner from the server catalog."
+              }
+              fields={agentFields(catalog.data)}
+              pending={create.isPending}
+              onSubmit={handleCreateAgent}
+            />
+          ) : null
         }
       />
       {catalog.error ? (
@@ -319,9 +348,13 @@ export function AgentsView({
       ) : (
         <EmptyState
           title="No agents yet"
-          description="Create an agent to run developer tasks."
-          action={ready ? () => setCreateOpen(true) : undefined}
-          actionLabel={ready ? "Create agent" : undefined}
+          description={
+            canManage
+              ? "Create an agent to run developer tasks."
+              : "No agents are available to manage in this project."
+          }
+          action={ready && canManage ? () => setCreateOpen(true) : undefined}
+          actionLabel={ready && canManage ? "Create agent" : undefined}
         />
       )}
     </>
@@ -347,6 +380,7 @@ export function AgentDetailView({
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const ready = catalogReady(catalog.data);
   const latestRun = runs.data?.runs[0];
+  const canManage = query.data?.can_manage === true;
 
   if (query.error)
     return (
@@ -366,12 +400,13 @@ export function AgentDetailView({
     );
 
   const handleUpdate = async (values: Record<string, string>) => {
+    const selected = selectedAgentProviderModel(catalog.data, values);
     await update.mutateAsync({
       name: values.name.trim(),
       description: values.description?.trim() ?? "",
       role: values.role as components["schemas"]["AgentRole"],
-      provider: values.provider,
-      model: values.model,
+      provider: selected.provider,
+      model: selected.model,
       branch: values.branch.trim(),
       tools: parseAgentTools(values.tools),
       instructions: optionalText(values.instructions),
@@ -402,43 +437,48 @@ export function AgentDetailView({
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={agent.status} />
-            <Button asChild size="sm">
-              <Link href={`${base}/agents/${agentId}/runs`}>
-                <Play className="size-3.5" /> Run agent
-              </Link>
-            </Button>
-            <CreateDialog
-              triggerLabel="Edit configuration"
-              submitLabel="Save changes"
-              pendingLabel="Saving changes…"
-              title="Edit agent configuration"
-              description="Configuration fields are persisted by the Go API. Runtime status and activity remain backend-owned."
-              fields={agentFields(catalog.data, agent)}
-              pending={update.isPending}
-              disabled={!ready}
-              trigger={
-                <Button variant="outline" size="sm" disabled={!ready}>
-                  <Settings2 className="size-3.5" /> Edit configuration
+            {canManage ? (
+              <>
+                <Button asChild size="sm">
+                  <Link href={`${base}/agents/${agentId}/runs`}>
+                    <Play className="size-3.5" /> Run agent
+                  </Link>
                 </Button>
-              }
-              onSubmit={handleUpdate}
-            />
-            <ConfirmDialog
-              trigger={
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  disabled={remove.isPending}
-                >
-                  <Trash2 className="size-3.5" /> Delete agent
-                </Button>
-              }
-              title="Delete agent?"
-              description="The backend deletes this agent's run history with the agent."
-              confirmLabel="Delete agent"
-              pending={remove.isPending}
-              onConfirm={handleDelete}
-            />
+                {ready ? (
+                  <CreateDialog
+                    triggerLabel="Edit configuration"
+                    submitLabel="Save changes"
+                    pendingLabel="Saving changes…"
+                    title="Edit agent configuration"
+                    description="Configuration fields are persisted by the Go API. Runtime status and activity remain backend-owned."
+                    fields={agentFields(catalog.data, agent)}
+                    pending={update.isPending}
+                    trigger={
+                      <Button variant="outline" size="sm">
+                        <Settings2 className="size-3.5" /> Edit configuration
+                      </Button>
+                    }
+                    onSubmit={handleUpdate}
+                  />
+                ) : null}
+                <ConfirmDialog
+                  trigger={
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={remove.isPending}
+                    >
+                      <Trash2 className="size-3.5" /> Delete agent
+                    </Button>
+                  }
+                  title="Delete agent?"
+                  description="The backend deletes this agent's run history with the agent."
+                  confirmLabel="Delete agent"
+                  pending={remove.isPending}
+                  onConfirm={handleDelete}
+                />
+              </>
+            ) : null}
           </div>
         }
       />
@@ -536,13 +576,17 @@ export function AgentDetailView({
               <div>
                 <p className="text-sm text-white">No runs yet</p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Run this agent to start its first task.
+                  {canManage
+                    ? "Run this agent to start its first task."
+                    : "No runs have been created for this agent."}
                 </p>
-                <Button asChild className="mt-4" size="sm">
-                  <Link href={`${base}/agents/${agentId}/runs`}>
-                    <Play className="size-3.5" /> Run agent
-                  </Link>
-                </Button>
+                {canManage ? (
+                  <Button asChild className="mt-4" size="sm">
+                    <Link href={`${base}/agents/${agentId}/runs`}>
+                      <Play className="size-3.5" /> Run agent
+                    </Link>
+                  </Button>
+                ) : null}
               </div>
             )}
           </CardContent>

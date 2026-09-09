@@ -55,6 +55,7 @@ export function AgentRunsView({
   const [createError, setCreateError] = useState<string | null>(null);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const runBase = `${base}/agents/${agentId}/runs`;
+  const canManage = runs.data?.can_manage === true;
 
   const handleCreateRun = async () => {
     const task = prompt.trim();
@@ -144,39 +145,41 @@ export function AgentRunsView({
         title="Run agent"
         description="Create durable task executions and inspect their backend-owned status, steps, logs, and output."
       />
-      <Card className="mb-5">
-        <CardHeader>
-          <CardTitle>Task</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Textarea
-            id="agent-task-prompt"
-            className="min-h-24"
-            value={prompt}
-            onChange={(event) => {
-              setPrompt(event.target.value);
-              if (createError) setCreateError(null);
-            }}
-            placeholder="Describe the developer task for this agent…"
-            aria-label="Agent task prompt"
-          />
-          {createError ? (
-            <p
-              className="mt-3 rounded-lg border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-200"
-              role="alert"
+      {canManage ? (
+        <Card className="mb-5">
+          <CardHeader>
+            <CardTitle>Task</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Textarea
+              id="agent-task-prompt"
+              className="min-h-24"
+              value={prompt}
+              onChange={(event) => {
+                setPrompt(event.target.value);
+                if (createError) setCreateError(null);
+              }}
+              placeholder="Describe the developer task for this agent…"
+              aria-label="Agent task prompt"
+            />
+            {createError ? (
+              <p
+                className="mt-3 rounded-lg border border-rose-300/20 bg-rose-400/10 p-3 text-sm text-rose-200"
+                role="alert"
+              >
+                Could not start run. {createError}
+              </p>
+            ) : null}
+            <Button
+              className="mt-3"
+              disabled={!prompt.trim() || create.isPending}
+              onClick={() => void handleCreateRun()}
             >
-              Could not start run. {createError}
-            </p>
-          ) : null}
-          <Button
-            className="mt-3"
-            disabled={!prompt.trim() || create.isPending}
-            onClick={() => void handleCreateRun()}
-          >
-            <Play className="size-4" /> Run agent
-          </Button>
-        </CardContent>
-      </Card>
+              <Play className="size-4" /> Run agent
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
       {hasRows ? (
         <Card>
           <DataTable
@@ -197,9 +200,17 @@ export function AgentRunsView({
       ) : (
         <EmptyState
           title="No runs yet"
-          description="Run this agent to start its first task."
-          action={() => document.getElementById("agent-task-prompt")?.focus()}
-          actionLabel="Run agent"
+          description={
+            canManage
+              ? "Run this agent to start its first task."
+              : "No runs have been created for this agent."
+          }
+          action={
+            canManage
+              ? () => document.getElementById("agent-task-prompt")?.focus()
+              : undefined
+          }
+          actionLabel={canManage ? "Run agent" : undefined}
         />
       )}
     </>
@@ -257,6 +268,7 @@ export function AgentRunDetailView({
     );
 
   const active = isAgentRunActive(run.status);
+  const canManage = query.data?.can_manage === true;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const runBase = `${base}/agents/${agentId}/runs`;
   const duration = agentRunDurationMs(run);
@@ -288,7 +300,7 @@ export function AgentRunDetailView({
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <AgentRunStatusBadge status={run.status} />
-            {active ? (
+            {active && canManage ? (
               <ConfirmDialog
                 trigger={
                   <Button variant="outline" disabled={cancel.isPending}>
