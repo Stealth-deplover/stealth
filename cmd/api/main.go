@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nazxf/stealth-api/internal/buildinfo"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/functionsecret"
 	"github.com/nazxf/stealth-api/internal/httpapi"
@@ -44,6 +45,7 @@ func main() {
 		logger.Error("sites configuration error", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("starting API", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
 	telemetryShutdown, err := observability.Setup(context.Background(), observability.TracerConfig{
 		Endpoint:    cfg.TelemetryOTLPEndpoint,
 		ServiceName: firstNonEmpty(cfg.TelemetryServiceName, "stealth-api"),

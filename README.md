@@ -97,6 +97,10 @@ and recovery links return to the console.
 Backend execution-path mapping, recovery semantics, rate-limit scopes, health
 checks, metrics access, proxy trust, and remaining operational gaps are
 documented in [`docs/backend-production-readiness.md`](docs/backend-production-readiness.md).
+The repeatable self-hosting path is documented in
+[`docs/production-deployment.md`](docs/production-deployment.md), with
+upgrade/rollback guidance in [`docs/upgrade.md`](docs/upgrade.md) and the
+backup runbook in [`docs/backup-restore.md`](docs/backup-restore.md).
 
 ## API contract
 
@@ -143,6 +147,7 @@ Build the backend images from the repository root:
 ```bash
 docker build --target api -t stealth-api .
 docker build --target worker -t stealth-worker .
+docker build --target migrate -t stealth-migrate .
 ```
 
 Build the self-hosted console image:
@@ -180,6 +185,10 @@ Nginx `X-Forwarded-For` chain first, then standards-based `Forwarded`, then
 `X-Real-IP`, and falls back to the direct peer on malformed input. Do not use
 `0.0.0.0/0` or expose the API listener directly while trusting forwarded
 headers.
+
+For a versioned production deployment, copy
+[`.env.production.example`](.env.production.example) to `.env.production` and
+follow [`docs/production-deployment.md`](docs/production-deployment.md).
 
 ## Verification
 

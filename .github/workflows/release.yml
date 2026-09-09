@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Validate SemVer tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      - name: Go formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go tests
+        run: go test ./... -count=1
+
+      - name: Validate production Compose file
+        run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
+
+      - name: Validate smoke scripts
+        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+
+      - name: Install console dependencies
+        working-directory: console
+        run: npm ci
+
+      - name: Console format
+        working-directory: console
+        run: npm run format:check
+
+      - name: Generate OpenAPI client
+        working-directory: console
+        run: npm run api:generate
+
+      - name: Verify generated client
+        run: git diff --exit-code -- console/src/api/generated
+
+      - name: Console typecheck
+        working-directory: console
+        run: npm run typecheck
+
+      - name: Console lint
+        working-directory: console
+        run: npm run lint
+
+      - name: Console unit tests
+        working-directory: console
+        run: npm run test
+
+      - name: Console production build
+        working-directory: console
+        run: npm run build
+
+  images:
+    name: Build and publish release images
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAMESPACE: ghcr.io/${{ github.repository_owner }}
+      VERSION: ${{ github.ref_name }}
+      COMMIT_SHA: ${{ github.sha }}
+      BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: api
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-api:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-api:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: worker
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-worker:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-worker:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-migrate:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-migrate:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push Console image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./console/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-console:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-console:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+  github-release:
+    name: Create GitHub Release
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Create release notes and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes_file" <<EOF
+          ## Highlights
+
+          - Published coordinated API, worker, migration, and standalone Console images for $GITHUB_REF_NAME.
+
+          ## Breaking changes
+
+          - Review the configuration and migration notes before upgrading.
+
+          ## Database migrations
+
+          - Run the versioned \`stealth-migrate\` image before starting API and worker processes.
+
+          ## Configuration changes
+
+          - Compare \`.env.production.example\` with the deployment environment.
+
+          ## Upgrade notes
+
+          - Follow \`docs/upgrade.md\` and verify health, readiness, version metadata, and HTTP smoke checks.
+
+          ## Known limitations
+
+          - Rolling mixed API/worker/schema versions are not guaranteed compatible; external provider side effects remain at-least-once.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Stealth $GITHUB_REF_NAME" \
+            --notes-file "$notes_file"

@@ -3,11 +3,16 @@ package httpapi
 import (
 	"net/http"
 
+	"github.com/nazxf/stealth-api/internal/buildinfo"
 	"github.com/nazxf/stealth-api/internal/observability"
 )
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, buildinfo.Current())
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
