@@ -27,6 +27,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { formatDate } from "@/lib/format";
 import { cn, getInitials } from "@/lib/utils";
 
 function SelectorItem({
@@ -259,7 +260,7 @@ export function ProjectSwitcher({
                 key={project.id}
                 icon={<FolderKanban className="size-3.5" />}
                 title={project.name}
-                subtitle={`Created ${new Date(project.created_at).toLocaleDateString()}`}
+                subtitle={`Created ${formatDate(project.created_at)}`}
                 selected={project.id === currentId}
                 onClick={() => navigate(project)}
               />
@@ -270,16 +271,18 @@ export function ProjectSwitcher({
             </p>
           )}
         </div>
-        <Button
-          variant="outline"
-          className="mt-4 w-full"
-          onClick={() => {
-            setOpen(false);
-            router.push(`/organizations/${organizationId}/projects`);
-          }}
-        >
-          <Plus className="size-4" /> Create project
-        </Button>
+        {data?.can_manage === true ? (
+          <Button
+            variant="outline"
+            className="mt-4 w-full"
+            onClick={() => {
+              setOpen(false);
+              router.push(`/organizations/${organizationId}/projects`);
+            }}
+          >
+            <Plus className="size-4" /> Create project
+          </Button>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

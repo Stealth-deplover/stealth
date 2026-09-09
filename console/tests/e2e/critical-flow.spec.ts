@@ -163,7 +163,17 @@ async function gotoWithDevRetry(page: Page, url: string) {
   throw new Error(`The development server continued returning 404 for ${url}.`);
 }
 
-async function installApiFixtures(page: Page) {
+type OverviewFixtureOptions = {
+  emptyProject?: boolean;
+  auditError?: boolean;
+  usageError?: boolean;
+  storageError?: boolean;
+};
+
+async function installApiFixtures(
+  page: Page,
+  options: OverviewFixtureOptions = {},
+) {
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -184,13 +194,18 @@ async function installApiFixtures(page: Page) {
     if (path === "/v1/organizations/org-1/projects")
       return respond({ projects: [project], pagination });
     if (path === "/v1/projects/project-1") return respond({ project });
-    if (path === "/v1/projects/project-1/usage")
+    if (path === "/v1/projects/project-1/usage") {
+      if (options.usageError)
+        return respond(
+          { error: { code: "usage_unavailable", message: "Usage failed." } },
+          500,
+        );
       return respond({
         usage: {
           project_id: project.id,
           captured_at: "2026-01-01T00:00:00Z",
           application_users: 2,
-          database_count: 1,
+          database_count: options.emptyProject ? 0 : 1,
           database_table_count: 1,
           database_row_count: 12,
           storage_file_count: 3,
@@ -212,8 +227,15 @@ async function installApiFixtures(page: Page) {
           function_compute_ms_30d: 0,
         },
       });
-    if (path === "/v1/projects/project-1/audit-events")
+    }
+    if (path === "/v1/projects/project-1/audit-events") {
+      if (options.auditError)
+        return respond(
+          { error: { code: "audit_unavailable", message: "Audit failed." } },
+          500,
+        );
       return respond({ events: [], pagination });
+    }
     if (path === "/v1/projects/project-1/functions") {
       const cursor = new URL(request.url()).searchParams.get("cursor");
       return respond({
@@ -229,8 +251,19 @@ async function installApiFixtures(page: Page) {
     }
     if (path === "/v1/projects/project-1/sites")
       return respond({ sites: [], pagination, can_manage: false });
-    if (path === "/v1/projects/project-1/storage/buckets")
+    if (path === "/v1/projects/project-1/storage/buckets") {
+      if (options.storageError)
+        return respond(
+          {
+            error: {
+              code: "storage_unavailable",
+              message: "Storage failed.",
+            },
+          },
+          500,
+        );
       return respond({ buckets: [], pagination, can_manage: false });
+    }
     if (path === "/v1/projects/project-1/databases")
       return respond({ databases: [], pagination, can_manage: false });
     return respond({});
@@ -267,6 +300,7 @@ async function installOnboardingFixtures(page: Page) {
       return respond({
         projects: projectCreated ? [onboardingProject] : [],
         pagination,
+        can_manage: true,
       });
     if (
       path === "/v1/organizations/org-onboard/projects" &&
@@ -476,7 +510,7 @@ test("critical console flow can move from login to a resource and logout", async
   await expect(page).toHaveURL(/\/organizations\/org-1\/projects$/);
   await page.getByRole("link", { name: /Open/ }).click();
   await expect(page).toHaveURL(/\/organizations\/org-1\/projects\/project-1$/);
-  await expect(page.getByText("API connected")).toBeVisible();
+  await expect(page.getByText("Project loaded")).toBeVisible();
 
   await page.getByRole("link", { name: "Functions", exact: true }).click();
   await expect(page).toHaveURL(/\/functions$/);
@@ -496,6 +530,53 @@ test("critical console flow can move from login to a resource and logout", async
   await expect(
     page.getByRole("heading", { name: "Sign in to Stealth" }),
   ).toBeVisible();
+});
+
+test("read-only project overview hides every Quick Start create action", async ({
+  page,
+}) => {
+  await installApiFixtures(page, { emptyProject: true });
+
+  await gotoWithDevRetry(page, "/organizations/org-1/projects/project-1");
+
+  await expect(page.getByText("Project loaded")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your project is ready" }),
+  ).toHaveCount(0);
+  for (const label of [
+    "Create function",
+    "Create site",
+    "Create database",
+    "Create storage bucket",
+  ]) {
+    await expect(
+      page.getByRole("link", { name: new RegExp(`^${label}`) }),
+    ).toHaveCount(0);
+  }
+});
+
+test("project overview keeps usage, activity, and storage failures local", async ({
+  page,
+}) => {
+  await installApiFixtures(page, {
+    auditError: true,
+    storageError: true,
+    usageError: true,
+  });
+
+  await gotoWithDevRetry(page, "/organizations/org-1/projects/project-1");
+
+  await expect(
+    page.getByRole("heading", { name: "production-api", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Project loaded")).toBeVisible();
+  await expect(page.getByText("Could not load project usage")).toBeVisible();
+  await expect(page.getByText("Could not load recent activity")).toBeVisible();
+  await expect(page.getByText("Could not load storage summary")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(3);
+  await expect(
+    page.getByText("No audit events returned yet.", { exact: true }),
+  ).toHaveCount(0);
 });
 
 test("cursor pagination navigates next and previous server pages", async ({
@@ -575,6 +656,16 @@ test("first-use flow creates an organization, project, and first database", asyn
   await expect(
     page.getByRole("heading", { name: "Your project is ready" }),
   ).toBeVisible();
+  for (const label of [
+    "Create function",
+    "Create site",
+    "Create database",
+    "Create storage bucket",
+  ]) {
+    await expect(
+      page.getByRole("link", { name: new RegExp(`^${label}`) }),
+    ).toBeVisible();
+  }
   await page.getByRole("link", { name: /^Create database/ }).click();
   await expect(page).toHaveURL(/\/databases$/);
   await page.getByRole("button", { name: "Create database" }).first().click();

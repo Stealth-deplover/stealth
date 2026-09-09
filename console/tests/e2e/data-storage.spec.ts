@@ -386,7 +386,11 @@ test("database backup mutations stay hidden for read-only members", async ({
   await page.goto(`${base}/databases/database-1`);
   await page.getByRole("tab", { name: "Backups", exact: true }).click();
   await expect(page.getByText("No backups yet", { exact: true })).toBeVisible();
-  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Backups" })
+      .getByText("Read-only", { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Create backup", exact: true }),
   ).toHaveCount(0);

@@ -63,7 +63,11 @@ export function ConsoleShell({
   if (account.error)
     return (
       <main className="mx-auto flex min-h-screen max-w-2xl items-center px-6">
-        <ErrorState error={account.error} retry={() => account.refetch()} />
+        <ErrorState
+          title="Could not load account"
+          error={account.error}
+          retry={() => account.refetch()}
+        />
       </main>
     );
 

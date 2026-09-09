@@ -60,6 +60,7 @@ function FunctionVariablesPanel({
   });
   const create = useCreateFunctionVariable(projectId, functionId);
   const remove = useDeleteFunctionVariable(projectId, functionId);
+  const canManage = query.data?.can_manage === true;
   const handleCreateVariable = async (values: Record<string, string>) => {
     const kind =
       values.kind === "secret"
@@ -111,23 +112,24 @@ function FunctionVariablesPanel({
     {
       id: "actions",
       header: "",
-      cell: ({ row }) => (
-        <ConfirmDialog
-          trigger={
-            <Button variant="ghost" size="sm" className="text-rose-300">
-              Delete
-            </Button>
-          }
-          title="Delete this variable?"
-          description={`The value for ${row.original.key} will be removed from the function configuration.`}
-          confirmLabel="Delete variable"
-          pending={remove.isPending}
-          onConfirm={async () => {
-            await remove.mutateAsync(row.original.id);
-            toast.success("Variable deleted");
-          }}
-        />
-      ),
+      cell: ({ row }) =>
+        canManage ? (
+          <ConfirmDialog
+            trigger={
+              <Button variant="ghost" size="sm" className="text-rose-300">
+                Delete
+              </Button>
+            }
+            title="Delete this variable?"
+            description={`The value for ${row.original.key} will be removed from the function configuration.`}
+            confirmLabel="Delete variable"
+            pending={remove.isPending}
+            onConfirm={async () => {
+              await remove.mutateAsync(row.original.id);
+              toast.success("Variable deleted");
+            }}
+          />
+        ) : null,
     },
   ];
   if (query.error)
@@ -142,26 +144,30 @@ function FunctionVariablesPanel({
             plaintext values back to this browser.
           </p>
         </div>
-        <CreateDialog
-          triggerLabel="Add variable"
-          submitLabel="Add variable"
-          pendingLabel="Adding variable…"
-          title="Add environment variable"
-          description="The value is encrypted by the Go API and cannot be recovered after submission."
-          fields={[
-            { name: "key", label: "Key", placeholder: "DATABASE_URL" },
-            { name: "value", label: "Value", type: "password" },
-            {
-              name: "kind",
-              label: "Kind",
-              defaultValue: "variable",
-              help: "Use variable or secret. Secret values are marked as sensitive.",
-            },
-            { name: "description", label: "Description", required: false },
-          ]}
-          pending={create.isPending}
-          onSubmit={handleCreateVariable}
-        />
+        {canManage ? (
+          <CreateDialog
+            triggerLabel="Add variable"
+            submitLabel="Add variable"
+            pendingLabel="Adding variable…"
+            title="Add environment variable"
+            description="The value is encrypted by the Go API and cannot be recovered after submission."
+            fields={[
+              { name: "key", label: "Key", placeholder: "DATABASE_URL" },
+              { name: "value", label: "Value", type: "password" },
+              {
+                name: "kind",
+                label: "Kind",
+                defaultValue: "variable",
+                help: "Use variable or secret. Secret values are marked as sensitive.",
+              },
+              { name: "description", label: "Description", required: false },
+            ]}
+            pending={create.isPending}
+            onSubmit={handleCreateVariable}
+          />
+        ) : query.data ? (
+          <Badge variant="neutral">Read-only</Badge>
+        ) : null}
       </CardHeader>
       <CardContent>
         <DataTable
@@ -204,6 +210,7 @@ export function FunctionDetailView({
   const [tab, setTab] = useState("overview");
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const fn = query.data?.function;
+  const canManage = deployments.data?.can_manage === true;
   const activeDeploymentId = fn?.active_deployment_id;
   const showFirstDeployment =
     !deploymentsNavigation.cursor && deployments.data?.deployments.length === 0;
@@ -310,7 +317,8 @@ export function FunctionDetailView({
           {row.original.id === activeDeploymentId ||
           row.original.status === "active" ? (
             <StatusBadge status="active" />
-          ) : getDeploymentLifecycleStatus(row.original) === "ready" ? (
+          ) : canManage &&
+            getDeploymentLifecycleStatus(row.original) === "ready" ? (
             <Button
               size="sm"
               variant="outline"
@@ -372,14 +380,18 @@ export function FunctionDetailView({
         title={fn.name}
         description="Deploy archive-based workloads and inspect builds, executions, and logs."
         actions={
-          <Button
-            type="button"
-            disabled={upload.isPending}
-            onClick={openFilePicker}
-          >
-            <Upload className="size-4" />
-            {upload.isPending ? "Uploading…" : "Deploy function"}
-          </Button>
+          canManage ? (
+            <Button
+              type="button"
+              disabled={upload.isPending}
+              onClick={openFilePicker}
+            >
+              <Upload className="size-4" />
+              {upload.isPending ? "Uploading…" : "Deploy function"}
+            </Button>
+          ) : deployments.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <input
@@ -416,14 +428,16 @@ export function FunctionDetailView({
                 will be available from the deployment detail.
               </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={upload.isPending}
-              onClick={openFilePicker}
-            >
-              <Upload className="size-4" /> Deploy function
-            </Button>
+            {canManage ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={upload.isPending}
+                onClick={openFilePicker}
+              >
+                <Upload className="size-4" /> Deploy function
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

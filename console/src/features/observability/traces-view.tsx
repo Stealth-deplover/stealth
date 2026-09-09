@@ -14,7 +14,13 @@ export function TracesView({ projectId }: { projectId: string }) {
   const navigation = useCursorPagination();
   const query = useProjectTraces(projectId, { cursor: navigation.cursor });
   if (query.error)
-    return <ErrorState error={query.error} retry={() => query.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load traces"
+        error={query.error}
+        retry={() => query.refetch()}
+      />
+    );
   return (
     <>
       <PageHeader

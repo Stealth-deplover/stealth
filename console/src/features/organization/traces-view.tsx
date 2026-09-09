@@ -28,7 +28,11 @@ export function OrganizationTracesView({
         description="Inspect durable root HTTP request traces from across the organization."
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load organization traces"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : (
         <Card>
           <DataTable

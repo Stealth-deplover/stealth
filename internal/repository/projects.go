@@ -9,32 +9,37 @@ import (
 	"github.com/nazxf/stealth-api/internal/domain"
 )
 
-func (r *Repository) ListProjects(ctx context.Context, organizationID, accountID uuid.UUID, limit int, cursor string) ([]domain.Project, string, error) {
+func (r *Repository) ListProjects(ctx context.Context, organizationID, accountID uuid.UUID, limit int, cursor string) ([]domain.Project, string, bool, error) {
 	if err := r.requireMembership(ctx, organizationID, accountID); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
+	var role string
+	if err := r.pool.QueryRow(ctx, `SELECT role FROM organization_memberships WHERE organization_id=$1 AND account_id=$2`, organizationID, accountID).Scan(&role); err != nil {
+		return nil, "", false, err
+	}
+	canManage := role == "owner" || role == "admin" || role == "developer"
 	rows, err := r.pool.Query(ctx, `SELECT id,organization_id,name,created_at FROM projects WHERE organization_id=$1 AND ($2='' OR id::text>$2) ORDER BY id LIMIT $3`, organizationID, cursor, limit+1)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 	items := make([]domain.Project, 0, limit)
 	for rows.Next() {
 		var item domain.Project
 		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.CreatedAt); err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	next := ""
 	if len(items) > limit {
 		next = items[limit-1].ID
 		items = items[:limit]
 	}
-	return items, next, nil
+	return items, next, canManage, nil
 }
 func (r *Repository) CreateProject(ctx context.Context, id, organizationID, accountID uuid.UUID, name string) (domain.Project, error) {
 	tx, err := r.pool.Begin(ctx)

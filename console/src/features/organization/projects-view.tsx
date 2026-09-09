@@ -13,6 +13,7 @@ import { DataTable } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
@@ -29,6 +30,7 @@ export function OrganizationProjectList({
   const [createOpen, setCreateOpen] = useState(false);
   const query = useProjects(organizationId, { cursor: navigation.cursor });
   const create = useCreateProject(organizationId);
+  const canManage = query.data?.can_manage === true;
   const handleCreateProject = async (values: Record<string, string>) => {
     const result = await create.mutateAsync({ name: values.name });
     toast.success("Project created");
@@ -40,7 +42,13 @@ export function OrganizationProjectList({
   };
   const projects = query.data?.projects ?? [];
   if (query.isError)
-    return <ErrorState error={query.error} retry={() => query.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load projects"
+        error={query.error}
+        retry={() => query.refetch()}
+      />
+    );
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -50,25 +58,29 @@ export function OrganizationProjectList({
             Each project maps to one isolated Stealth application boundary.
           </p>
         </div>
-        <CreateDialog
-          open={createOpen}
-          onOpenChange={setCreateOpen}
-          triggerLabel="Create project"
-          submitLabel="Create project"
-          pendingLabel="Creating project…"
-          title="Create a project"
-          description="Project names are normalized to stable API slugs, for example Production API becomes production-api."
-          fields={[
-            {
-              name: "name",
-              label: "Project name",
-              placeholder: "Production API",
-              help: "Use a readable name; the console sends the lowercase hyphenated slug required by the API.",
-            },
-          ]}
-          pending={create.isPending}
-          onSubmit={handleCreateProject}
-        />
+        {canManage ? (
+          <CreateDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+            triggerLabel="Create project"
+            submitLabel="Create project"
+            pendingLabel="Creating project…"
+            title="Create a project"
+            description="Project names are normalized to stable API slugs, for example Production API becomes production-api."
+            fields={[
+              {
+                name: "name",
+                label: "Project name",
+                placeholder: "Production API",
+                help: "Use a readable name; the console sends the lowercase hyphenated slug required by the API.",
+              },
+            ]}
+            pending={create.isPending}
+            onSubmit={handleCreateProject}
+          />
+        ) : query.data ? (
+          <Badge variant="neutral">Read-only</Badge>
+        ) : null}
       </div>
       {query.isLoading ? (
         <DataTable
@@ -137,9 +149,13 @@ export function OrganizationProjectList({
       ) : (
         <EmptyState
           title="No projects yet"
-          description="Create a project to get a resource-aware developer console and a clean API boundary."
-          actionLabel="Create project"
-          action={() => setCreateOpen(true)}
+          description={
+            canManage
+              ? "Create a project to get a resource-aware developer console and a clean API boundary."
+              : "No projects are available to manage in this organization."
+          }
+          actionLabel={canManage ? "Create project" : undefined}
+          action={canManage ? () => setCreateOpen(true) : undefined}
         />
       )}
     </div>

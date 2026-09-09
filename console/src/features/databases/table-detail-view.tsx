@@ -522,7 +522,11 @@ export function DatabaseRowsView({
                     ? "Add row"
                     : undefined
                 }
-                action={() => setAddOpen(true)}
+                action={
+                  canManage && !columns.error && !columns.isPending
+                    ? () => setAddOpen(true)
+                    : undefined
+                }
               />
             ) : (
               <DataTable

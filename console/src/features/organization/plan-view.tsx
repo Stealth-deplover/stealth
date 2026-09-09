@@ -14,7 +14,13 @@ export function OrganizationPlanView({
   const query = useOrganizationPlan(organizationId);
   const plan = query.data?.plan;
   if (query.isError)
-    return <ErrorState error={query.error} retry={() => query.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load organization plan"
+        error={query.error}
+        retry={() => query.refetch()}
+      />
+    );
   return (
     <>
       <PageHeader

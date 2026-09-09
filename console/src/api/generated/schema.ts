@@ -2697,6 +2697,8 @@ export interface components {
         ProjectsPage: {
             projects: components["schemas"]["Project"][];
             pagination: components["schemas"]["Pagination"];
+            /** @description Whether the current organization member may create projects. */
+            can_manage: boolean;
         };
         ProjectUsersPage: {
             users: components["schemas"]["ProjectUser"][];

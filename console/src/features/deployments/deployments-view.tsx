@@ -28,6 +28,7 @@ export function DeploymentsView({
   if (functions.error || sites.error)
     return (
       <ErrorState
+        title="Could not load deployments"
         error={functions.error ?? sites.error}
         retry={() => {
           void functions.refetch();
