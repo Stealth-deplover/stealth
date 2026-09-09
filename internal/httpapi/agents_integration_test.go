@@ -178,7 +178,7 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 		} `json:"pagination"`
 		CanManage bool `json:"can_manage"`
 	}
-	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents?limit=1", nil, http.StatusOK, &list)
+	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents?limit=1&project_id="+project.Project.ID, nil, http.StatusOK, &list)
 	if len(list.Agents) != 1 || list.Agents[0].ID != created.Agent.ID || !list.CanManage {
 		t.Fatalf("unexpected agent list: %+v", list)
 	}
