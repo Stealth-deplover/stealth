@@ -94,7 +94,7 @@ export function useFunctionDeployments(
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       query.state.data?.deployments.some(isDeploymentInProgress)
-        ? 10_000
+        ? 3_000
         : false,
   });
 }
@@ -129,7 +129,7 @@ export function useFunctionExecutions(
         (execution) =>
           execution.status === "accepted" || execution.status === "running",
       )
-        ? 10_000
+        ? 3_000
         : false,
   });
 }
@@ -191,7 +191,7 @@ export function useFunctionDeployment(
       ),
     refetchInterval: (query) => {
       const deployment = query.state.data?.deployment;
-      return deployment && isDeploymentInProgress(deployment) ? 10_000 : false;
+      return deployment && isDeploymentInProgress(deployment) ? 3_000 : false;
     },
   });
 }
@@ -225,7 +225,7 @@ export function useFunctionExecution(
       ),
     refetchInterval: (query) => {
       const status = query.state.data?.execution.status;
-      return status === "accepted" || status === "running" ? 10_000 : false;
+      return status === "accepted" || status === "running" ? 3_000 : false;
     },
   });
 }

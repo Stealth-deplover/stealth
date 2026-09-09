@@ -82,7 +82,7 @@ export function useSiteDeployments(
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       query.state.data?.deployments.some(isDeploymentInProgress)
-        ? 10_000
+        ? 3_000
         : false,
   });
 }
@@ -116,7 +116,7 @@ export function useSiteDeployment(
       ),
     refetchInterval: (query) => {
       const deployment = query.state.data?.deployment;
-      return deployment && isDeploymentInProgress(deployment) ? 10_000 : false;
+      return deployment && isDeploymentInProgress(deployment) ? 3_000 : false;
     },
   });
 }

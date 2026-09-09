@@ -69,7 +69,7 @@ export function useWebhookDeliveries(
         (delivery) =>
           delivery.status === "pending" || delivery.status === "running",
       )
-        ? 10_000
+        ? 5000
         : false;
     },
   });
