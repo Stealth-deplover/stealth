@@ -105,6 +105,16 @@ func ProjectIPKey(operation, projectID, clientIP string) string {
 	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":ip:" + hex.EncodeToString(ipHash[:])
 }
 
+// ActorKey scopes an operation to a stable authenticated actor and the
+// project/resource scope supplied by the caller. It deliberately has no IP
+// dimension: an authenticated actor keeps one budget when their network
+// changes. Use ProjectIPKey separately when a public/shared-source budget is
+// also needed.
+func ActorKey(operation, scope, actorID string) string {
+	actorHash := sha256.Sum256([]byte(actorID))
+	return "stealth:ratelimit:v1:" + operation + ":scope:" + scope + ":actor:" + hex.EncodeToString(actorHash[:])
+}
+
 type NoopLimiter struct{}
 
 func (NoopLimiter) Allow(context.Context, string, int, time.Duration) (Decision, error) {

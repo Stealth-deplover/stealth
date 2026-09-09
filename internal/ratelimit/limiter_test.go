@@ -58,6 +58,30 @@ func TestMemoryLimiterSupportsAggregateAndEmailBuckets(t *testing.T) {
 	}
 }
 
+func TestActorBucketIsStableAcrossIPsAndSeparatesActorsAndProjects(t *testing.T) {
+	limiter := NewMemoryLimiter()
+	window := time.Minute
+
+	// Agent A and Agent B in the same project share the account's actor
+	// budget; the IP is deliberately not part of the actor key.
+	projectOneActor := ActorKey("agent_run", "project-1", "account-1")
+	if decision, err := limiter.Allow(context.Background(), projectOneActor, 1, window); err != nil || !decision.Allowed {
+		t.Fatalf("first project actor request: %+v %v", decision, err)
+	}
+	if decision, err := limiter.Allow(context.Background(), projectOneActor, 1, window); err != nil || decision.Allowed {
+		t.Fatalf("second same-project Agent request bypassed actor budget: %+v %v", decision, err)
+	}
+
+	otherActor := ActorKey("agent_run", "project-1", "account-2")
+	if decision, err := limiter.Allow(context.Background(), otherActor, 1, window); err != nil || !decision.Allowed {
+		t.Fatalf("different actor was not isolated: %+v %v", decision, err)
+	}
+	otherProject := ActorKey("agent_run", "project-2", "account-1")
+	if decision, err := limiter.Allow(context.Background(), otherProject, 1, window); err != nil || !decision.Allowed {
+		t.Fatalf("different project was not isolated: %+v %v", decision, err)
+	}
+}
+
 func TestUnavailableLimiterFailsClosed(t *testing.T) {
 	if _, err := (UnavailableLimiter{}).Allow(context.Background(), "key", 1, time.Minute); err != ErrUnavailable {
 		t.Fatalf("got %v, want ErrUnavailable", err)

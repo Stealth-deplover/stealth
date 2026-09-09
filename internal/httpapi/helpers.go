@@ -156,6 +156,6 @@ func projectUpdateError(w http.ResponseWriter, err error) bool {
 }
 
 func internalError(s *Server, w http.ResponseWriter, err error) {
-	s.logger.Error("request failed", "error", err)
+	s.logger.Error("request failed", "request_id", w.Header().Get(requestIDHeader), "error", err)
 	writeError(w, 500, "internal_error", "internal server error")
 }

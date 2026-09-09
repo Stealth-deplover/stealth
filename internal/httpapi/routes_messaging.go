@@ -27,7 +27,7 @@ func (s *Server) registerMessagingRoutes(r chi.Router) {
 	r.With(s.requireProjectManagement).Get("/projects/{projectID}/messaging/topics/{topicID}/subscribers/{subscriberID}", s.getMessagingSubscriber)
 	r.With(s.requireProjectManagement).Delete("/projects/{projectID}/messaging/topics/{topicID}/subscribers/{subscriberID}", s.deleteMessagingSubscriber)
 	r.With(s.requireProjectManagement).Get("/projects/{projectID}/messaging/messages", s.listMessagingMessages)
-	r.With(s.requireProjectManagement).Post("/projects/{projectID}/messaging/messages", s.createMessagingMessage)
+	r.With(s.requireProjectManagement, s.rateLimitProjectOperation("messaging_message")).Post("/projects/{projectID}/messaging/messages", s.createMessagingMessage)
 	r.With(s.requireProjectManagement).Get("/projects/{projectID}/messaging/messages/{messageID}", s.getMessagingMessage)
 	r.With(s.requireProjectManagement).Post("/projects/{projectID}/messaging/messages/{messageID}/cancel", s.cancelMessagingMessage)
 	r.With(s.requireProjectManagement).Get("/projects/{projectID}/messaging/messages/{messageID}/deliveries", s.listMessagingDeliveries)

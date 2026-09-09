@@ -1096,7 +1096,8 @@ func (r *Repository) ClaimNextFunctionDeployment(ctx context.Context, workerID s
 		JOIN project_functions f ON f.id=d.function_id AND f.project_id=d.project_id
 		WHERE d.status IN ('ready','active') AND d.build_status IN ('queued','deferred')
 		ORDER BY d.queued_at,d.id
-		LIMIT 1`).Scan(&deploymentID, &projectID, &functionID)
+		LIMIT 1
+		FOR UPDATE OF d SKIP LOCKED`).Scan(&deploymentID, &projectID, &functionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return FunctionBuildJob{}, ErrNoDeploymentJob
 	}
@@ -1888,7 +1889,8 @@ func (r *Repository) ClaimNextFunctionExecution(ctx context.Context, workerID st
 		JOIN function_deployments d ON d.id=e.deployment_id AND d.function_id=e.function_id AND d.project_id=e.project_id
 		WHERE e.status='accepted' AND d.status='active' AND d.build_status='succeeded'
 		ORDER BY e.created_at,e.id
-		LIMIT 1`).Scan(&executionID, &projectID, &functionID, &deploymentID)
+		LIMIT 1
+		FOR UPDATE OF e SKIP LOCKED`).Scan(&executionID, &projectID, &functionID, &deploymentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return FunctionExecutionJob{}, ErrNoExecutionJob
 	}

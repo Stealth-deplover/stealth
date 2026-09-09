@@ -61,7 +61,16 @@ func main() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database configuration error", "error", err)
+		os.Exit(1)
+	}
+	poolConfig.MaxConns = cfg.DatabaseMaxConns
+	poolConfig.MinConns = cfg.DatabaseMinConns
+	poolConfig.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
+	poolConfig.MaxConnIdleTime = cfg.DatabaseMaxConnIdleTime
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		logger.Error("database connection error", "error", err)
 		os.Exit(1)
@@ -211,7 +220,7 @@ func main() {
 	defer stop()
 	metricsServer := &http.Server{
 		Addr:              cfg.FunctionsRunnerMetricsAddress,
-		Handler:           workerMetricsHandler(worker.MetricsHandler()),
+		Handler:           workerMetricsHandler(worker.MetricsHandler(), cfg.MetricsToken),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -389,9 +398,9 @@ func waitAgentWorker(errCh <-chan error) error {
 // orchestrator as well as a scraper. The health endpoint intentionally only
 // reports that the worker process and listener are alive; the process exits
 // when its queue loops fail, so a supervisor can restart it from that signal.
-func workerMetricsHandler(metrics http.Handler) http.Handler {
+func workerMetricsHandler(metrics http.Handler, metricsToken string) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", metrics)
+	mux.Handle("/metrics", observability.ProtectedMetricsHandler(metrics, metricsToken))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

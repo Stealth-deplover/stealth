@@ -16,7 +16,7 @@ func (s *Server) routes() http.Handler {
 	r := chi.NewRouter()
 	// Request telemetry is outside recovery so a recovered panic is counted as
 	// the 500 response that callers actually receive.
-	r.Use(observability.HTTPMiddlewareWithRecorder(s.recordHTTPTrace), s.requestLog, s.recoverer, s.limitRequestBody, s.cors)
+	r.Use(s.requestID, observability.HTTPMiddlewareWithRecorder(s.recordHTTPTrace), s.requestLog, s.recoverer, s.limitRequestBody, s.cors)
 	r.Get("/healthz", s.health)
 	r.Get("/readyz", s.ready)
 	r.Get("/metrics", s.metricsHandler)

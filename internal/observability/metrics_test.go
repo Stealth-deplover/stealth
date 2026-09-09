@@ -27,6 +27,33 @@ func TestAPIMetricsHandlerExposesRecordedValues(t *testing.T) {
 	}
 }
 
+func TestProtectedMetricsHandlerRequiresConfiguredToken(t *testing.T) {
+	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	for name, token := range map[string]string{"missing": "", "wrong": "expected"} {
+		t.Run(name, func(t *testing.T) {
+			handler := ProtectedMetricsHandler(metrics, token)
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			if name == "wrong" {
+				request.Header.Set("X-Metrics-Token", "wrong")
+			}
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", recorder.Code)
+			}
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("X-Metrics-Token", "expected")
+	recorder := httptest.NewRecorder()
+	ProtectedMetricsHandler(metrics, "expected").ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("valid token status = %d, want 418", recorder.Code)
+	}
+}
+
 func TestWorkerMetricsHandlerExposesBoundedResultLabels(t *testing.T) {
 	metrics := NewWorkerMetrics()
 	metrics.JobsClaimed.Inc()

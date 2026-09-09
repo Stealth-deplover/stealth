@@ -50,6 +50,7 @@ func (w *Worker) RunBuildOnce(ctx context.Context) (bool, error) {
 		// carry the operator-facing detail.
 		span.RecordError(errors.New("function build failed"))
 		span.SetStatus(codes.Error, "function build failed")
+		w.Logger.Error("function build failed", "deployment_id", job.Deployment.ID, "function_id", job.Deployment.FunctionID, "project_id", job.Deployment.ProjectID, "error", buildErr)
 	} else {
 		span.SetStatus(codes.Ok, "")
 	}

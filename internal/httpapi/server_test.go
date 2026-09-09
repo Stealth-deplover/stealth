@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/ratelimit"
@@ -42,6 +44,7 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 		FunctionsMaxArtifactSize:   1 << 20,
 		FunctionsDefaultQuotaBytes: 2 << 20,
 		FunctionsSecretKey:         secret,
+		MetricsToken:               "metrics-test-token",
 	}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{AuthLimiter: ratelimit.NoopLimiter{}})
 	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
 	protected := httptest.NewRecorder()
@@ -51,7 +54,9 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 	}
 
 	metrics := httptest.NewRecorder()
-	handler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRequest.Header.Set("X-Metrics-Token", "metrics-test-token")
+	handler.ServeHTTP(metrics, metricsRequest)
 	body := metrics.Body.String()
 	if metrics.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d, want 200", metrics.Code)
@@ -61,6 +66,90 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 	}
 	if strings.Contains(body, projectID) {
 		t.Fatalf("raw project ID leaked into Prometheus output:\n%s", body)
+	}
+}
+
+func TestProjectOperationRateLimitIsScopedAndReturnsRetryAfter(t *testing.T) {
+	server := &Server{
+		config:  config.Config{ProjectOperationRateLimit: 1, ProjectOperationRateWindow: time.Minute},
+		limiter: ratelimit.NewMemoryLimiter(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	router := chi.NewRouter()
+	router.With(server.rateLimitProjectOperation("test_operation")).Post("/v1/projects/{projectID}/expensive", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/expensive", nil))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first operation status = %d, want 204", first.Code)
+	}
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/expensive", nil))
+	if second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" || !strings.Contains(second.Body.String(), `"rate_limited"`) {
+		t.Fatalf("second operation response = status %d headers=%v body=%q, want 429 with Retry-After and envelope", second.Code, second.Header(), second.Body.String())
+	}
+}
+
+func TestAuthenticatedOperationRateLimitSharesActorAcrossIPs(t *testing.T) {
+	server := &Server{
+		config:  config.Config{ProjectOperationRateLimit: 1, ProjectOperationRateWindow: time.Minute},
+		limiter: ratelimit.NewMemoryLimiter(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
+	first := httptest.NewRequest(http.MethodPost, "/", nil)
+	first.RemoteAddr = "198.51.100.10:41000"
+	if !server.allowOperationRateLimit(httptest.NewRecorder(), first, "function_execution", projectID, "account:one") {
+		t.Fatal("first actor request was unexpectedly limited")
+	}
+	secondRecorder := httptest.NewRecorder()
+	second := httptest.NewRequest(http.MethodPost, "/", nil)
+	second.RemoteAddr = "198.51.100.11:41000"
+	if server.allowOperationRateLimit(secondRecorder, second, "function_execution", projectID, "account:one") {
+		t.Fatal("same actor bypassed budget by changing IP")
+	}
+	if secondRecorder.Code != http.StatusTooManyRequests || secondRecorder.Header().Get("Retry-After") == "" {
+		t.Fatalf("same actor response = status=%d retry-after=%q", secondRecorder.Code, secondRecorder.Header().Get("Retry-After"))
+	}
+	if !server.allowOperationRateLimit(httptest.NewRecorder(), second, "function_execution", projectID, "account:two") {
+		t.Fatal("different actor was unexpectedly limited")
+	}
+}
+
+func TestAnonymousOperationRateLimitUsesResolvedClientIP(t *testing.T) {
+	_, trustedProxy, err := net.ParseCIDR("10.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{
+		config:  config.Config{ProjectOperationRateLimit: 1, ProjectOperationRateWindow: time.Minute, TrustedProxyCIDRs: []*net.IPNet{trustedProxy}},
+		limiter: ratelimit.NewMemoryLimiter(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
+	first := httptest.NewRequest(http.MethodPost, "/", nil)
+	first.RemoteAddr = "10.1.2.3:443"
+	first.Header.Set("X-Forwarded-For", "198.51.100.10")
+	if !server.allowOperationRateLimit(httptest.NewRecorder(), first, "function_execution", projectID, "") {
+		t.Fatal("first anonymous client was unexpectedly limited")
+	}
+	second := httptest.NewRequest(http.MethodPost, "/", nil)
+	second.RemoteAddr = "10.1.2.3:443"
+	second.Header.Set("X-Forwarded-For", "198.51.100.11")
+	if !server.allowOperationRateLimit(httptest.NewRecorder(), second, "function_execution", projectID, "") {
+		t.Fatal("different forwarded client was unexpectedly limited")
+	}
+	retryRecorder := httptest.NewRecorder()
+	third := httptest.NewRequest(http.MethodPost, "/", nil)
+	third.RemoteAddr = "10.1.2.3:443"
+	third.Header.Set("X-Forwarded-For", "198.51.100.10")
+	if server.allowOperationRateLimit(retryRecorder, third, "function_execution", projectID, "") {
+		t.Fatal("same forwarded client bypassed IP budget")
+	}
+	if retryRecorder.Code != http.StatusTooManyRequests || retryRecorder.Header().Get("Retry-After") == "" {
+		t.Fatalf("anonymous IP response = status=%d retry-after=%q", retryRecorder.Code, retryRecorder.Header().Get("Retry-After"))
 	}
 }
 

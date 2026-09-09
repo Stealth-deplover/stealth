@@ -4,11 +4,32 @@
 package observability
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// ProtectedMetricsHandler keeps Prometheus output off an application-facing
+// listener unless an operator explicitly configures a metrics token. The
+// token is compared in constant time and is sent in a dedicated header so it
+// cannot be confused with application credentials.
+func ProtectedMetricsHandler(next http.Handler, token string) http.Handler {
+	if next == nil || token == "" {
+		return http.NotFoundHandler()
+	}
+	expected := sha256.Sum256([]byte(token))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := sha256.Sum256([]byte(r.Header.Get("X-Metrics-Token")))
+		if subtle.ConstantTimeCompare(expected[:], provided[:]) != 1 {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // APIMetrics is the bounded-cardinality HTTP telemetry emitted by the public
 // API. Callers must use a route template (for example

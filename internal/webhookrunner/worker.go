@@ -22,6 +22,7 @@ import (
 
 	"github.com/nazxf/stealth-api/internal/functionsecret"
 	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/nazxf/stealth-api/internal/retry"
 )
 
 const (
@@ -124,7 +125,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 // RunOnce claims and processes at most one delivery. It returns false when no
 // due delivery exists, allowing callers to back off without busy-spinning.
-func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	if w == nil || w.Repository == nil || w.Cipher == nil {
 		return false, errors.New("webhook worker is not configured")
 	}
@@ -135,6 +136,11 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) && w.Logger != nil {
+			w.Logger.Error("webhook delivery failed", "delivery_id", job.DeliveryID, "webhook_id", job.WebhookID, "event_id", job.EventID, "project_id", job.ProjectID, "error", runErr)
+		}
+	}()
 	maxAttempts := w.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
@@ -232,15 +238,7 @@ func (w *Worker) retryAt(attempt int, retryAfter time.Duration) time.Time {
 	if attempt < 1 {
 		attempt = 1
 	}
-	// 30s, 60s, ... with a hard 24h cap and no unbounded duration shift.
-	delay := 30 * time.Second
-	for i := 1; i < attempt && delay < maxRetryDelay; i++ {
-		delay *= 2
-		if delay > maxRetryDelay {
-			delay = maxRetryDelay
-		}
-	}
-	return time.Now().UTC().Add(delay)
+	return time.Now().UTC().Add(retry.Exponential(attempt, 30*time.Second, maxRetryDelay))
 }
 
 func retryableStatus(status int) bool {

@@ -771,7 +771,8 @@ func (r *Repository) ClaimNextSiteDeployment(ctx context.Context, workerID strin
 		  AND d.status='queued'
 		  AND d.build_status IN ('queued','deferred')
 		ORDER BY d.queued_at,d.id
-		LIMIT 1`).Scan(&deploymentID, &projectID, &siteID)
+		LIMIT 1
+		FOR UPDATE OF d SKIP LOCKED`).Scan(&deploymentID, &projectID, &siteID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SiteBuildJob{}, ErrNoSiteDeploymentJob
 	}

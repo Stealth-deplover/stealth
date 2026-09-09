@@ -22,7 +22,7 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.logger.Error("panic recovered", "path", r.URL.Path, "panic", fmt.Sprint(recovered))
+				s.logger.Error("panic recovered", "request_id", requestIDFrom(r.Context()), "path", r.URL.Path, "panic", fmt.Sprint(recovered))
 				writeError(w, 500, "internal_error", "internal server error")
 			}
 		}()
@@ -46,7 +46,7 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 			s.metrics.RequestDuration.WithLabelValues(r.Method, route).Observe(duration.Seconds())
 			s.metrics.ResponseBytes.WithLabelValues(r.Method, route, status).Add(float64(recorder.BytesWritten()))
 		}
-		s.logger.Info("request", "method", r.Method, "path", r.URL.Path, "route", route, "status", recorder.Status(), "bytes", recorder.BytesWritten(), "duration", duration.String())
+		s.logger.Info("request", "request_id", requestIDFrom(r.Context()), "method", r.Method, "path", r.URL.Path, "route", route, "status", recorder.Status(), "bytes", recorder.BytesWritten(), "duration", duration.String())
 	})
 }
 
@@ -103,7 +103,7 @@ func (s *Server) recordHTTPTrace(requestContext context.Context, observation obs
 		Status: observation.Status, Duration: observation.Duration, ResponseBytes: observation.ResponseBytes,
 		StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt,
 	}); err != nil {
-		s.logger.Warn("trace index write failed", "error", err, "route", observation.Route)
+		s.logger.Warn("trace index write failed", "request_id", requestIDFrom(requestContext), "error", err, "route", observation.Route)
 	}
 }
 
