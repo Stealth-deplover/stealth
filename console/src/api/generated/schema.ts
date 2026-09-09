@@ -3986,7 +3986,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
-        /** @description Public Auth rate limit exceeded */
+        /** @description Operation rate limit exceeded */
         RateLimited: {
             headers: {
                 /** @description Seconds until another attempt may be made */

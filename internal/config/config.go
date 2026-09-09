@@ -11,12 +11,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type Config struct {
-	DatabaseURL string
-	RedisURL    string
-	HTTPAddress string
+	DatabaseURL             string
+	DatabaseMaxConns        int32
+	DatabaseMinConns        int32
+	DatabaseMaxConnLifetime time.Duration
+	DatabaseMaxConnIdleTime time.Duration
+	RedisURL                string
+	HTTPAddress             string
+	MetricsToken            string
 	// ACME terminates HTTPS for verified Site custom domains when enabled. The
 	// default keeps certificate issuance off for local development; production
 	// deployments must opt in explicitly and persist ACMECertCacheDir.
@@ -35,29 +41,31 @@ type Config struct {
 	// ConsoleCORSOrigins is the explicit allowlist for the browser-hosted
 	// management console. Project application origins remain tenant-scoped and
 	// are handled by httpapi's project CORS policy.
-	ConsoleCORSOrigins       []string
-	EmailDeliveryMode        string
-	SMTPHost                 string
-	SMTPPort                 int
-	SMTPUsername             string
-	SMTPPassword             string
-	SMTPFrom                 string
-	CookieSecure             bool
-	AuthRateLimit            int
-	AuthRateWindow           time.Duration
-	StorageRoot              string
-	StorageMaxFileSize       int64
-	StorageDefaultQuotaBytes int64
-	StorageDriver            string
-	StorageS3Endpoint        string
-	StorageS3Region          string
-	StorageS3Bucket          string
-	StorageS3AccessKey       string
-	StorageS3SecretKey       string
-	StorageS3UseSSL          bool
-	StorageS3PathStyle       bool
-	StorageS3Prefix          string
-	StorageS3StagingRoot     string
+	ConsoleCORSOrigins         []string
+	EmailDeliveryMode          string
+	SMTPHost                   string
+	SMTPPort                   int
+	SMTPUsername               string
+	SMTPPassword               string
+	SMTPFrom                   string
+	CookieSecure               bool
+	AuthRateLimit              int
+	AuthRateWindow             time.Duration
+	ProjectOperationRateLimit  int
+	ProjectOperationRateWindow time.Duration
+	StorageRoot                string
+	StorageMaxFileSize         int64
+	StorageDefaultQuotaBytes   int64
+	StorageDriver              string
+	StorageS3Endpoint          string
+	StorageS3Region            string
+	StorageS3Bucket            string
+	StorageS3AccessKey         string
+	StorageS3SecretKey         string
+	StorageS3UseSSL            bool
+	StorageS3PathStyle         bool
+	StorageS3Prefix            string
+	StorageS3StagingRoot       string
 	// Functions source archives use a separate child store under StorageRoot.
 	// The global storage values are used as fallbacks for older deployments.
 	FunctionsMaxArtifactSize      int64
@@ -101,6 +109,26 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	databaseMaxConns, err := strconv.Atoi(value("DATABASE_MAX_CONNS", "16"))
+	if err != nil || databaseMaxConns < 1 || databaseMaxConns > 256 {
+		return Config{}, fmt.Errorf("DATABASE_MAX_CONNS must be an integer between 1 and 256")
+	}
+	databaseMinConns, err := strconv.Atoi(value("DATABASE_MIN_CONNS", "2"))
+	if err != nil || databaseMinConns < 0 || databaseMinConns > databaseMaxConns {
+		return Config{}, fmt.Errorf("DATABASE_MIN_CONNS must be an integer between 0 and DATABASE_MAX_CONNS")
+	}
+	databaseMaxConnLifetime, err := time.ParseDuration(value("DATABASE_MAX_CONN_LIFETIME", "1h"))
+	if err != nil || databaseMaxConnLifetime <= 0 || databaseMaxConnLifetime > 7*24*time.Hour {
+		return Config{}, fmt.Errorf("DATABASE_MAX_CONN_LIFETIME must be a positive duration no longer than 168h")
+	}
+	databaseMaxConnIdleTime, err := time.ParseDuration(value("DATABASE_MAX_CONN_IDLE_TIME", "30m"))
+	if err != nil || databaseMaxConnIdleTime <= 0 || databaseMaxConnIdleTime > 7*24*time.Hour {
+		return Config{}, fmt.Errorf("DATABASE_MAX_CONN_IDLE_TIME must be a positive duration no longer than 168h")
+	}
+	metricsToken := strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
+	if len(metricsToken) > 256 || strings.IndexFunc(metricsToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return Config{}, fmt.Errorf("METRICS_TOKEN must be at most 256 characters and contain no whitespace or control characters")
+	}
 	ttl, err := time.ParseDuration(value("SESSION_TTL", "720h"))
 	if err != nil || ttl <= 0 {
 		return Config{}, fmt.Errorf("SESSION_TTL must be a positive duration")
@@ -149,6 +177,14 @@ func Load() (Config, error) {
 	rateWindow, err := time.ParseDuration(value("AUTH_RATE_WINDOW", "1m"))
 	if err != nil || rateWindow <= 0 || rateWindow > time.Hour {
 		return Config{}, fmt.Errorf("AUTH_RATE_WINDOW must be a positive duration no longer than 1h")
+	}
+	projectOperationRateLimit, err := strconv.Atoi(value("PROJECT_OPERATION_RATE_LIMIT", "120"))
+	if err != nil || projectOperationRateLimit < 1 || projectOperationRateLimit > 10000 {
+		return Config{}, fmt.Errorf("PROJECT_OPERATION_RATE_LIMIT must be an integer between 1 and 10000")
+	}
+	projectOperationRateWindow, err := time.ParseDuration(value("PROJECT_OPERATION_RATE_WINDOW", "1m"))
+	if err != nil || projectOperationRateWindow <= 0 || projectOperationRateWindow > time.Hour {
+		return Config{}, fmt.Errorf("PROJECT_OPERATION_RATE_WINDOW must be a positive duration no longer than 1h")
 	}
 	storageMaxFileSize, err := parseBytes(value("STORAGE_MAX_FILE_SIZE", "50MiB"))
 	if err != nil || storageMaxFileSize < 1 {
@@ -224,7 +260,7 @@ func Load() (Config, error) {
 	if len(stagingVolume) > 255 || !isDockerName(stagingVolume) {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_VOLUME must be a valid Docker volume name")
 	}
-	workerMetricsAddress := value("FUNCTIONS_RUNNER_METRICS_ADDR", ":9091")
+	workerMetricsAddress := value("FUNCTIONS_RUNNER_METRICS_ADDR", "127.0.0.1:9091")
 	if !isListenAddress(workerMetricsAddress) {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_METRICS_ADDR must be a TCP host:port with a port between 1 and 65535")
 	}
@@ -340,8 +376,13 @@ func Load() (Config, error) {
 	}
 	config := Config{
 		DatabaseURL:                   strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DatabaseMaxConns:              int32(databaseMaxConns),
+		DatabaseMinConns:              int32(databaseMinConns),
+		DatabaseMaxConnLifetime:       databaseMaxConnLifetime,
+		DatabaseMaxConnIdleTime:       databaseMaxConnIdleTime,
 		RedisURL:                      value("REDIS_URL", "redis://127.0.0.1:6379/0"),
 		HTTPAddress:                   value("HTTP_ADDR", ":8080"),
+		MetricsToken:                  metricsToken,
 		ACMEEnabled:                   acmeEnabled,
 		ACMEEmail:                     acmeEmail,
 		ACMEDirectoryURL:              acmeDirectoryURL,
@@ -364,6 +405,8 @@ func Load() (Config, error) {
 		CookieSecure:                  secure,
 		AuthRateLimit:                 rateLimit,
 		AuthRateWindow:                rateWindow,
+		ProjectOperationRateLimit:     projectOperationRateLimit,
+		ProjectOperationRateWindow:    projectOperationRateWindow,
 		StorageRoot:                   filepath.Clean(storageRoot),
 		StorageMaxFileSize:            storageMaxFileSize,
 		StorageDefaultQuotaBytes:      storageDefaultQuota,

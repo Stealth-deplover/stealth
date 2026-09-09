@@ -38,6 +38,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		span.RecordError(errors.New("function execution failed"))
 		span.SetStatus(codes.Error, "function execution failed")
+		w.Logger.Error("function execution failed", "execution_id", job.Execution.ID, "function_id", job.Execution.FunctionID, "deployment_id", job.Execution.DeploymentID, "project_id", job.Execution.ProjectID, "error", err)
 	} else {
 		span.SetStatus(codes.Ok, "")
 	}

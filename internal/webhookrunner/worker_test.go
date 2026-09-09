@@ -48,10 +48,10 @@ func TestRetryHelpers(t *testing.T) {
 	}
 	worker := &Worker{}
 	first := worker.retryAt(1, 0)
-	if first.Before(time.Now().Add(29*time.Second)) || first.After(time.Now().Add(31*time.Second)) {
+	if first.Before(time.Now().Add(23*time.Second)) || first.After(time.Now().Add(37*time.Second)) {
 		t.Fatalf("first retry at %v", first)
 	}
-	if got := worker.retryAt(99, 0).Sub(time.Now()); got > maxRetryDelay || got < maxRetryDelay-time.Second {
+	if got := worker.retryAt(99, 0).Sub(time.Now()); got > maxRetryDelay || got < (maxRetryDelay*4)/5-time.Second {
 		t.Fatalf("retry cap = %v", got)
 	}
 }

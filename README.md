@@ -94,6 +94,10 @@ value empty and route `/v1/*` to the Go API.
 The API's `PUBLIC_APP_URL` should point to the console origin so verification
 and recovery links return to the console.
 
+Backend execution-path mapping, recovery semantics, rate-limit scopes, health
+checks, metrics access, proxy trust, and remaining operational gaps are
+documented in [`docs/backend-production-readiness.md`](docs/backend-production-readiness.md).
+
 ## API contract
 
 `openapi/openapi.yaml` is the source of truth for every console request. The
@@ -113,8 +117,13 @@ Backend variables are documented in `.env.example` and validated by
 `internal/config`. The most important values are:
 
 - `DATABASE_URL` and `REDIS_URL`
+- `DATABASE_MAX_CONNS`, `DATABASE_MIN_CONNS`, `DATABASE_MAX_CONN_LIFETIME`,
+  and `DATABASE_MAX_CONN_IDLE_TIME` for bounded PostgreSQL pools
 - `FUNCTIONS_SECRET_KEY`
+- `PROJECT_OPERATION_RATE_LIMIT` and `PROJECT_OPERATION_RATE_WINDOW` for
+  per-project/per-actor safety limits on expensive operations
 - `HTTP_ADDR`
+- `METRICS_TOKEN` to explicitly enable protected Prometheus output
 - `PUBLIC_APP_URL`
 - `CONSOLE_CORS_ORIGINS` when the console is served from another origin
 - `STORAGE_*`, `SMTP_*`, and `AUTH_*` for optional storage and email flows

@@ -69,7 +69,16 @@ func main() {
 	defer redisClient.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database configuration error", "error", err)
+		os.Exit(1)
+	}
+	poolConfig.MaxConns = cfg.DatabaseMaxConns
+	poolConfig.MinConns = cfg.DatabaseMinConns
+	poolConfig.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
+	poolConfig.MaxConnIdleTime = cfg.DatabaseMaxConnIdleTime
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		logger.Error("database connection error", "error", err)
 		os.Exit(1)

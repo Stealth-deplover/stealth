@@ -299,7 +299,103 @@ func (s *Server) allowAccountAuth(w http.ResponseWriter, r *http.Request, operat
 	return true
 }
 
+// rateLimitProjectOperation applies a bounded safety budget after the route's
+// authentication middleware has established an actor. The key is scoped to a
+// project and actor, so one noisy tenant cannot consume another tenant's
+// budget and one tenant cannot be blocked globally by a shared limiter.
+func (s *Server) rateLimitProjectOperation(operation string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			projectID, err := repository.ParseUUID(chi.URLParam(r, "projectID"))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "validation_error", "projectID must be a UUID")
+				return
+			}
+			if !s.allowOperationRateLimit(w, r, operation, projectID.String(), rateLimitActorID(r)) {
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (s *Server) rateLimitAgentRun(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agentID, err := repository.ParseUUID(chi.URLParam(r, "agentID"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "agentID must be a UUID")
+			return
+		}
+		actorID := "anonymous"
+		if account, ok := r.Context().Value(accountContextKey).(domain.Account); ok {
+			actorID = "account:" + account.ID
+		}
+		if !s.allowOperationRateLimit(w, r, "agent_run", agentID.String(), actorID) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) allowOperationRateLimit(w http.ResponseWriter, r *http.Request, operation, scope, actorID string) bool {
+	decision, err := s.limiter.Allow(r.Context(), ratelimit.ActorKey(operation, scope, actorID, requestClientIP(r)), s.config.ProjectOperationRateLimit, s.config.ProjectOperationRateWindow)
+	if err != nil {
+		s.logger.Error("project operation rate limiter failed", "operation", operation, "scope", scope, "request_id", requestIDFrom(r.Context()), "error", err)
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "rate limiting protection is temporarily unavailable")
+		return false
+	}
+	if !decision.Allowed {
+		return writeOperationRateLimited(w, decision.RetryAfter)
+	}
+	return true
+}
+
+func rateLimitActorID(r *http.Request) string {
+	if actor, ok := r.Context().Value(projectActorContextKey).(projectActor); ok {
+		if actor.kind == apiKeyProjectActor {
+			return "api_key:" + actor.apiKeyID.String()
+		}
+		if account, ok := r.Context().Value(accountContextKey).(domain.Account); ok {
+			return "account:" + account.ID
+		}
+	}
+	if actor, ok := r.Context().Value(projectDataActorContextKey).(projectDataActor); ok {
+		return databaseRateLimitActorID(actor.actor)
+	}
+	if actor, ok := r.Context().Value(projectStorageActorContextKey).(repository.StorageActor); ok {
+		return databaseRateLimitActorID(actor)
+	}
+	if user, ok := r.Context().Value(projectUserContextKey).(domain.ApplicationUser); ok {
+		return "project_user:" + user.ID
+	}
+	if account, ok := r.Context().Value(accountContextKey).(domain.Account); ok {
+		return "account:" + account.ID
+	}
+	return "anonymous"
+}
+
+func databaseRateLimitActorID(actor repository.DatabaseActor) string {
+	switch actor.Kind {
+	case repository.DatabaseConsoleActor:
+		return "account:" + actor.AccountID.String()
+	case repository.DatabaseAPIKeyActor:
+		return "api_key:" + actor.APIKeyID.String()
+	case repository.DatabaseApplicationActor:
+		return "project_user:" + actor.ProjectUserID.String()
+	default:
+		return "anonymous"
+	}
+}
+
 func writeRateLimited(w http.ResponseWriter, retryAfter time.Duration) bool {
+	return writeRateLimitedMessage(w, retryAfter, "too many authentication attempts; retry later")
+}
+
+func writeOperationRateLimited(w http.ResponseWriter, retryAfter time.Duration) bool {
+	return writeRateLimitedMessage(w, retryAfter, "operation rate limit exceeded; retry later")
+}
+
+func writeRateLimitedMessage(w http.ResponseWriter, retryAfter time.Duration, message string) bool {
 	retryAfterSeconds := int(retryAfter / time.Second)
 	if retryAfter%time.Second != 0 {
 		retryAfterSeconds++
@@ -308,7 +404,7 @@ func writeRateLimited(w http.ResponseWriter, retryAfter time.Duration) bool {
 		retryAfterSeconds = 1
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
-	writeError(w, http.StatusTooManyRequests, "rate_limited", "too many authentication attempts; retry later")
+	writeError(w, http.StatusTooManyRequests, "rate_limited", message)
 	return false
 }
 

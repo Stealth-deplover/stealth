@@ -146,6 +146,7 @@ func (w *SiteWorker) RunOnce(ctx context.Context) (bool, error) {
 	if buildErr != nil {
 		span.RecordError(errors.New("site build failed"))
 		span.SetStatus(codes.Error, "site build failed")
+		w.Logger.Error("site build failed", "deployment_id", job.Deployment.ID, "site_id", job.Deployment.SiteID, "project_id", job.Deployment.ProjectID, "error", buildErr)
 	} else {
 		span.SetStatus(codes.Ok, "")
 	}

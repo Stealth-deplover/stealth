@@ -2042,7 +2042,7 @@ components:
     NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     NotReady: { description: Dependency unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
-    RateLimited: { description: Public Auth rate limit exceeded, headers: { Retry-After: { description: Seconds until another attempt may be made, schema: { type: integer, minimum: 1 } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    RateLimited: { description: Operation rate limit exceeded, headers: { Retry-After: { description: Seconds until another attempt may be made, schema: { type: integer, minimum: 1 } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     ServiceUnavailable: { description: Public Auth protection or a required dependency is unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     PayloadTooLarge: { description: Request body exceeds the endpoint's configured limit (JSON requests are bounded separately from multipart uploads), content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     UnsupportedMediaType: { description: Content-Type must be application/json except for file upload multipart/form-data endpoints, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }

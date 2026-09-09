@@ -20,6 +20,7 @@ import (
 	"github.com/nazxf/stealth-api/internal/functionsecret"
 	"github.com/nazxf/stealth-api/internal/mailer"
 	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/nazxf/stealth-api/internal/retry"
 )
 
 const (
@@ -206,7 +207,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	if w == nil || w.Repository == nil || w.Cipher == nil || w.Adapters == nil {
 		return false, errors.New("messaging worker is not configured")
 	}
@@ -217,6 +218,11 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer func() {
+		if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) && w.Logger != nil {
+			w.Logger.Error("messaging delivery failed", "delivery_id", job.DeliveryID, "message_id", job.MessageID, "subscriber_id", job.SubscriberID, "project_id", job.ProjectID, "error", runErr)
+		}
+	}()
 	maxAttempts := w.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
@@ -286,14 +292,7 @@ func (w *Worker) retryAt(attempt int) time.Time {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := 30 * time.Second
-	for i := 1; i < attempt && delay < maxRetryDelay; i++ {
-		delay *= 2
-		if delay > maxRetryDelay {
-			delay = maxRetryDelay
-		}
-	}
-	return time.Now().UTC().Add(delay)
+	return time.Now().UTC().Add(retry.Exponential(attempt, 30*time.Second, maxRetryDelay))
 }
 
 type LogAdapter struct{ Logger *slog.Logger }

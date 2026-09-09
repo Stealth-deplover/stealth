@@ -9,7 +9,7 @@ func (s *Server) registerStorageRoutes(r chi.Router) {
 	r.With(s.requireProjectManagement).Patch("/projects/{projectID}/storage/buckets/{bucketID}", s.updateStorageBucket)
 	r.With(s.requireProjectManagement).Delete("/projects/{projectID}/storage/buckets/{bucketID}", s.deleteStorageBucket)
 	r.With(s.requireProjectStorageActor).Get("/projects/{projectID}/storage/buckets/{bucketID}/files", s.listStorageFiles)
-	r.With(s.requireProjectStorageActor).Post("/projects/{projectID}/storage/buckets/{bucketID}/files", s.uploadStorageFile)
+	r.With(s.requireProjectStorageActor, s.rateLimitProjectOperation("storage_upload")).Post("/projects/{projectID}/storage/buckets/{bucketID}/files", s.uploadStorageFile)
 	r.With(s.requireProjectStorageActor).Get("/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}", s.getStorageFile)
 	r.With(s.requireProjectStorageActor).Patch("/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}", s.updateStorageFile)
 	r.With(s.requireProjectStorageActor).Get("/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}/download", s.downloadStorageFile)

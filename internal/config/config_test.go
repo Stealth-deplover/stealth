@@ -106,6 +106,32 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadDatabasePoolSettings(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
+	t.Setenv("DATABASE_MAX_CONNS", "32")
+	t.Setenv("DATABASE_MIN_CONNS", "4")
+	t.Setenv("DATABASE_MAX_CONN_LIFETIME", "2h")
+	t.Setenv("DATABASE_MAX_CONN_IDLE_TIME", "15m")
+	t.Setenv("METRICS_TOKEN", "scrape-token")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseMaxConns != 32 || cfg.DatabaseMinConns != 4 || cfg.DatabaseMaxConnLifetime != 2*time.Hour || cfg.DatabaseMaxConnIdleTime != 15*time.Minute || cfg.MetricsToken != "scrape-token" {
+		t.Fatalf("unexpected database/metrics config: %+v", cfg)
+	}
+
+	t.Setenv("DATABASE_MIN_CONNS", "33")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DATABASE_MIN_CONNS") {
+		t.Fatalf("invalid minimum pool size returned %v", err)
+	}
+	t.Setenv("DATABASE_MIN_CONNS", "4")
+	t.Setenv("METRICS_TOKEN", "bad token")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "METRICS_TOKEN") {
+		t.Fatalf("invalid metrics token returned %v", err)
+	}
+}
+
 func TestLoadS3StorageConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
 	t.Setenv("STORAGE_DRIVER", "s3")

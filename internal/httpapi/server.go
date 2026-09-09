@@ -126,6 +126,7 @@ type contextKey string
 
 const accountContextKey contextKey = "account"
 const sessionContextKey contextKey = "session"
+const requestIDContextKey contextKey = "request-id"
 const projectUserContextKey contextKey = "project-user"
 const projectUserSessionContextKey contextKey = "project-user-session"
 const projectActorContextKey contextKey = "project-actor"

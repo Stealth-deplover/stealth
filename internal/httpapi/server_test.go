@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/ratelimit"
@@ -42,6 +43,7 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 		FunctionsMaxArtifactSize:   1 << 20,
 		FunctionsDefaultQuotaBytes: 2 << 20,
 		FunctionsSecretKey:         secret,
+		MetricsToken:               "metrics-test-token",
 	}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{AuthLimiter: ratelimit.NoopLimiter{}})
 	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
 	protected := httptest.NewRecorder()
@@ -51,7 +53,9 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 	}
 
 	metrics := httptest.NewRecorder()
-	handler.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRequest.Header.Set("X-Metrics-Token", "metrics-test-token")
+	handler.ServeHTTP(metrics, metricsRequest)
 	body := metrics.Body.String()
 	if metrics.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d, want 200", metrics.Code)
@@ -61,6 +65,29 @@ func TestMetricsEndpointUsesRouteTemplates(t *testing.T) {
 	}
 	if strings.Contains(body, projectID) {
 		t.Fatalf("raw project ID leaked into Prometheus output:\n%s", body)
+	}
+}
+
+func TestProjectOperationRateLimitIsScopedAndReturnsRetryAfter(t *testing.T) {
+	server := &Server{
+		config:  config.Config{ProjectOperationRateLimit: 1, ProjectOperationRateWindow: time.Minute},
+		limiter: ratelimit.NewMemoryLimiter(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	router := chi.NewRouter()
+	router.With(server.rateLimitProjectOperation("test_operation")).Post("/v1/projects/{projectID}/expensive", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	projectID := "018f27e3-5d1a-7c44-ae35-1db4ea12e6d2"
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/expensive", nil))
+	if first.Code != http.StatusNoContent {
+		t.Fatalf("first operation status = %d, want 204", first.Code)
+	}
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/projects/"+projectID+"/expensive", nil))
+	if second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" || !strings.Contains(second.Body.String(), `"rate_limited"`) {
+		t.Fatalf("second operation response = status %d headers=%v body=%q, want 429 with Retry-After and envelope", second.Code, second.Header(), second.Body.String())
 	}
 }
 

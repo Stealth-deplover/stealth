@@ -1,6 +1,10 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/nazxf/stealth-api/internal/observability"
+)
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -11,7 +15,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.metrics.Handler().ServeHTTP(w, r)
+	observability.ProtectedMetricsHandler(s.metrics.Handler(), s.config.MetricsToken).ServeHTTP(w, r)
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {

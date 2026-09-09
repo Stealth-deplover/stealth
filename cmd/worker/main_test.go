@@ -13,7 +13,7 @@ func TestWorkerMetricsHandlerExposesHealthAndMetrics(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = io.WriteString(w, "metrics")
 	})
-	handler := workerMetricsHandler(metrics)
+	handler := workerMetricsHandler(metrics, "metrics-test-token")
 
 	health := httptest.NewRecorder()
 	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -22,7 +22,9 @@ func TestWorkerMetricsHandlerExposesHealthAndMetrics(t *testing.T) {
 	}
 
 	probe := httptest.NewRecorder()
-	handler.ServeHTTP(probe, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricsRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRequest.Header.Set("X-Metrics-Token", "metrics-test-token")
+	handler.ServeHTTP(probe, metricsRequest)
 	if probe.Code != http.StatusTeapot || !strings.Contains(probe.Body.String(), "metrics") {
 		t.Fatalf("metrics response = status %d body %q, want delegated handler", probe.Code, probe.Body.String())
 	}

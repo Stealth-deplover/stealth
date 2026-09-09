@@ -205,7 +205,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 // RunOnce claims and processes one run for a registered provider. Unknown
 // providers remain queued because they are excluded from the atomic claim.
-func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	if w == nil || w.Repository == nil || w.Adapters == nil {
 		return false, ErrInvalidWorker
 	}
@@ -221,6 +221,11 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.observeError("claim")
 		return false, err
 	}
+	defer func() {
+		if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) && w.Logger != nil {
+			w.Logger.Error("Agent run failed", "run_id", job.Run.ID, "agent_id", job.Run.AgentID, "project_id", job.Run.ProjectID, "error", runErr)
+		}
+	}()
 	if metrics := w.Metrics; metrics != nil {
 		metrics.AgentJobsClaimed.Inc()
 		metrics.AgentInFlight.Inc()
@@ -279,6 +284,9 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 
 func (w *Worker) finishFailure(ctx context.Context, job repository.AgentRunJob, cause error) (bool, error) {
 	message := publicFailure(cause)
+	if w.Logger != nil {
+		w.Logger.Error("Agent run terminal failure", "run_id", job.Run.ID, "agent_id", job.Run.AgentID, "project_id", job.Run.ProjectID, "error", message)
+	}
 	result := repository.AgentRunResult{Status: "failed", ErrorMessage: &message}
 	projectID, agentID, runID, err := parseJobIDs(job)
 	if err != nil {
