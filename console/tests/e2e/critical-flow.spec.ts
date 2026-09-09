@@ -267,6 +267,7 @@ async function installOnboardingFixtures(page: Page) {
       return respond({
         projects: projectCreated ? [onboardingProject] : [],
         pagination,
+        can_manage: true,
       });
     if (
       path === "/v1/organizations/org-onboard/projects" &&
