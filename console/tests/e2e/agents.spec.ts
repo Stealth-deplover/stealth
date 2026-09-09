@@ -247,9 +247,7 @@ test("creates an Agent from the server catalog and opens its detail", async ({
     .click();
 
   await expect(page).toHaveURL(/\/agents\/agent-created$/);
-  await expect(
-    page.getByRole("heading", { name: "Test runner" }),
-  ).toBeVisible();
+  await expect(page.getByTitle("agent-created")).toBeVisible();
   await expect(page.getByText("Configuration", { exact: true })).toBeVisible();
 });
 
