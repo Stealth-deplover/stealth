@@ -8,6 +8,7 @@ import {
   withCursorPage,
 } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
+import { isAgentRunActive } from "@/features/agents/agent-run-state";
 
 type ProjectAgentQuery = Omit<AgentListQuery, "project_id">;
 
@@ -58,6 +59,10 @@ export function useAgentRuns(agentId: string | undefined, query?: CursorQuery) {
         }),
       ),
     placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      (query.state.data?.runs ?? []).some((run) => isAgentRunActive(run.status))
+        ? 1_000
+        : false,
   });
 }
 
@@ -76,7 +81,7 @@ export function useAgentRun(
       ),
     refetchInterval: (query) => {
       const status = query.state.data?.run.status;
-      return status === "queued" || status === "running" ? 3_000 : false;
+      return status && isAgentRunActive(status) ? 1_000 : false;
     },
   });
 }

@@ -181,16 +181,18 @@ export function LogViewer({
   description = "Incremental log stream",
   fetchPage,
   enabled = true,
+  polling = enabled,
   emptyMessage = "No log lines returned yet.",
 }: {
   title?: string;
   description?: string;
   fetchPage: (after?: number) => Promise<LogLine[]>;
   enabled?: boolean;
+  polling?: boolean;
   emptyMessage?: string;
 }) {
   const { lines, after, loading, error, localCleared, clearLocal } =
-    useLogStream({ fetchPage, enabled });
+    useLogStream({ fetchPage, enabled, polling });
   const [search, setSearch] = useState("");
   const [autoFollow, setAutoFollow] = useState(true);
   const [copied, setCopied] = useState(false);

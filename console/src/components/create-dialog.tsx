@@ -33,6 +33,13 @@ export type CreateField = {
     | "select"
     | "multiselect";
   options?: readonly { value: string; label: string }[];
+  optionsForValues?: (
+    values: Readonly<Record<string, string>>,
+  ) => readonly { value: string; label: string }[];
+  onChange?: (
+    value: string,
+    values: Readonly<Record<string, string>>,
+  ) => Partial<Record<string, string>>;
   defaultValue?: string;
   required?: boolean;
   help?: string;
@@ -97,7 +104,20 @@ export function CreateDialog({
     previousOpen.current = dialogOpen;
   }, [dialogOpen, resetValues]);
   const updateValue = (name: string, value: string) =>
-    setValues((current) => ({ ...current, [name]: value }));
+    setValues((current) => {
+      const field = fields.find((candidate) => candidate.name === name);
+      const next: Record<string, string> = {
+        ...current,
+        [name]: value,
+      };
+      const dependentValues = field?.onChange?.(value, current);
+      if (dependentValues) {
+        for (const [key, nextValue] of Object.entries(dependentValues)) {
+          if (nextValue !== undefined) next[key] = nextValue;
+        }
+      }
+      return next;
+    });
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     try {
@@ -147,11 +167,13 @@ export function CreateDialog({
                   }
                   className="flex h-10 w-full rounded-lg border border-stealth-border bg-stealth-panel px-3 text-sm text-white outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
                 >
-                  {field.options?.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
+                  {(field.optionsForValues?.(values) ?? field.options)?.map(
+                    (option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ),
+                  )}
                 </select>
               ) : field.type === "multiselect" ? (
                 <div

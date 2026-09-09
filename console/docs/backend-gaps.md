@@ -449,3 +449,21 @@ An explicit rotation contract with overlap/revocation semantics and any addition
 Current frontend behavior:
 
 The Console shows only safe prefix/metadata, reveals the create secret once, and offers revoke. It does not show a fake Rotate action or infer usage history from missing fields.
+
+## Agent task execution
+
+Frontend need:
+
+Create durable Agent Runs and inspect their lifecycle, worker-reported steps, incremental logs, output, and changes.
+
+Existing backend:
+
+The OpenAPI contract provides Agent CRUD, a prompt-only run creation endpoint, cursor-paginated run history, run detail, queued/running/completed/failed/cancelled statuses, worker-produced steps/output/changes, incremental logs with an `after` sequence, and cancellation for queued or running runs. The Agent Catalog provides provider/model/role/tool metadata. This installation currently reports `queue_only` with execution not ready, so creating a run only accepts it into the durable queue.
+
+Missing:
+
+There is no retry or resume endpoint, realtime run/log transport, queue position, explicit current-step field, token/cost usage, artifact/file result, or trace-correlation contract. These cannot be represented as controls or progress indicators until the backend exposes them.
+
+Current frontend behavior:
+
+The Console models the backend run enum in one lifecycle helper, polls run and run-list data only while queued or running, uses sequence-based polling through the existing LogViewer, and renders steps, output, changes, and errors only when returned by the Go API. It does not show fake progress, infer steps from logs, or add Retry/Resume actions.

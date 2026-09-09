@@ -156,4 +156,54 @@ describe("CreateDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create project" }));
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("");
   });
+
+  it("supports dependent select values and options", () => {
+    render(
+      <CreateDialog
+        triggerLabel="Create agent"
+        submitLabel="Create agent"
+        pendingLabel="Creating agent…"
+        title="Create an agent"
+        description="Configure an Agent."
+        fields={[
+          {
+            name: "provider",
+            label: "Provider",
+            type: "select",
+            defaultValue: "local",
+            options: [
+              { value: "local", label: "Local" },
+              { value: "remote", label: "Remote" },
+            ],
+            onChange: (value) => ({
+              model: value === "remote" ? "model-x" : "model-a",
+            }),
+          },
+          {
+            name: "model",
+            label: "Model",
+            type: "select",
+            defaultValue: "model-a",
+            optionsForValues: (values) =>
+              values.provider === "remote"
+                ? [{ value: "model-x", label: "model-x" }]
+                : [
+                    { value: "model-a", label: "model-a" },
+                    { value: "model-b", label: "model-b" },
+                  ],
+          },
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+    const provider = screen.getByRole("combobox", { name: "Provider" });
+    const model = screen.getByRole("combobox", { name: "Model" });
+    expect(within(model).getAllByRole("option")).toHaveLength(2);
+
+    fireEvent.change(provider, { target: { value: "remote" } });
+    expect(model).toHaveValue("model-x");
+    expect(within(model).getAllByRole("option")).toHaveLength(1);
+  });
 });

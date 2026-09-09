@@ -17,10 +17,7 @@ type agentCatalogExecution struct {
 }
 
 func (s *Server) agentCatalog(w http.ResponseWriter, _ *http.Request) {
-	providers := s.config.AgentProviderCatalog
-	if len(providers) == 0 {
-		providers = config.DefaultAgentProviderCatalog()
-	}
+	providers := config.AgentProviderCatalogOrDefault(s.config.AgentProviderCatalog)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providers": providers,
 		"roles":     repository.SupportedAgentRoles(),

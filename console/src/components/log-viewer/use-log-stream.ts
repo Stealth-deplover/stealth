@@ -11,11 +11,13 @@ export type LogLine = {
 type UseLogStreamOptions = {
   fetchPage: (after?: number) => Promise<LogLine[]>;
   enabled?: boolean;
+  polling?: boolean;
 };
 
 export function useLogStream({
   fetchPage,
   enabled = true,
+  polling = enabled,
 }: UseLogStreamOptions) {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [after, setAfter] = useState<number | undefined>();
@@ -58,9 +60,10 @@ export function useLogStream({
     // The initial pull starts an external request; its async completion updates the viewer state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void pull();
+    if (!polling) return;
     const timer = window.setInterval(() => void pull(), 3_000);
     return () => window.clearInterval(timer);
-  }, [enabled, pull]);
+  }, [enabled, polling, pull]);
 
   const clearLocal = useCallback(() => {
     setLines([]);

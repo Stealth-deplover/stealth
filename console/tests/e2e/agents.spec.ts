@@ -1,0 +1,379 @@
+import { expect, test, type Page } from "@playwright/test";
+
+const account = {
+  id: "account-1",
+  email: "owner@example.com",
+  email_verified: true,
+  created_at: "2026-01-01T00:00:00Z",
+};
+const organization = {
+  id: "org-1",
+  name: "Acme Inc",
+  slug: "acme-inc",
+  created_at: "2026-01-01T00:00:00Z",
+};
+const project = {
+  id: "project-1",
+  organization_id: organization.id,
+  name: "production-api",
+  created_at: "2026-01-01T00:00:00Z",
+};
+const pagination = { limit: 20, next_cursor: null };
+const agentId = "agent-1";
+
+type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+type Scenario = "complete" | "fail" | "cancel";
+
+const baseAgent = {
+  id: agentId,
+  project_id: project.id,
+  project_name: project.name,
+  name: "Repository agent",
+  description: "Runs deterministic repository maintenance tasks.",
+  role: "General",
+  status: "idle",
+  branch: "main",
+  provider: "local",
+  model: "model-a",
+  current_task: null,
+  last_active_at: null,
+  tools: ["Read files"],
+  instructions: null,
+  created_by_account_id: account.id,
+  created_at: "2026-01-02T00:00:00Z",
+  updated_at: "2026-01-02T00:00:00Z",
+};
+
+function buildRun(
+  status: RunStatus,
+  prompt = "Fix failing tests in this repository.",
+) {
+  const started = status === "queued" ? null : "2026-01-02T00:00:02Z";
+  const terminal =
+    status === "completed" || status === "failed" || status === "cancelled";
+  return {
+    id: "run-1",
+    agent_id: agentId,
+    project_id: project.id,
+    prompt,
+    status,
+    output_text:
+      status === "completed" ? "All tests completed successfully." : null,
+    error_message:
+      status === "failed" ? "The test command returned failures." : null,
+    steps:
+      status === "queued"
+        ? []
+        : [
+            {
+              id: "step-1",
+              type: "command",
+              label: "Run tests",
+              target: "npm run test",
+              status: status === "completed" ? "done" : "pending",
+            },
+          ],
+    changes: [],
+    created_by_account_id: account.id,
+    queued_at: "2026-01-02T00:00:00Z",
+    started_at: started,
+    finished_at: terminal ? "2026-01-02T00:00:10Z" : null,
+    created_at: "2026-01-02T00:00:00Z",
+    updated_at: "2026-01-02T00:00:10Z",
+  };
+}
+
+async function installFixtures(
+  page: Page,
+  scenario: Scenario,
+  withAgent = true,
+  canManage = true,
+) {
+  const agentStore = new Map<string, typeof baseAgent>();
+  if (withAgent) agentStore.set(agentId, { ...baseAgent });
+  let run: ReturnType<typeof buildRun> | null = null;
+  let runDetailReads = 0;
+  let cancelled = false;
+
+  await page.route("**/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const respond = (body: unknown, status = 200) =>
+      route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+
+    if (path === "/v1/account") return respond({ account });
+    if (path === "/v1/organizations" && method === "GET")
+      return respond({ organizations: [organization], pagination });
+    if (path === "/v1/organizations/org-1/projects" && method === "GET")
+      return respond({ projects: [project], pagination });
+    if (path === "/v1/projects/project-1" && method === "GET")
+      return respond({ project });
+
+    if (path === "/v1/agent-catalog")
+      return respond({
+        providers: [
+          {
+            id: "local",
+            name: "Local gateway",
+            models: ["model-a", "model-b"],
+          },
+          { id: "remote", name: "Remote gateway", models: ["model-x"] },
+        ],
+        roles: ["General", "Reviewer"],
+        tools: ["Read files", "Search code"],
+        execution: {
+          mode: "queue_only",
+          ready: false,
+          message: "Runs are accepted into the durable queue.",
+        },
+      });
+
+    if (path === "/v1/agents" && method === "GET")
+      return respond({
+        agents: [...agentStore.values()],
+        pagination,
+        can_manage: canManage,
+      });
+    if (path === "/v1/agents" && method === "POST") {
+      const body = request.postDataJSON() as {
+        name: string;
+        description?: string;
+        role: string;
+        provider: string;
+        model: string;
+        branch: string;
+        tools?: string[];
+        instructions?: string | null;
+      };
+      const createdAgent = {
+        ...baseAgent,
+        id: "agent-created",
+        name: body.name,
+        description: body.description ?? "",
+        role: body.role,
+        provider: body.provider,
+        model: body.model,
+        branch: body.branch,
+        tools: body.tools ?? [],
+        instructions: body.instructions ?? null,
+      };
+      agentStore.set(createdAgent.id, createdAgent);
+      return respond({ agent: createdAgent, can_manage: canManage }, 201);
+    }
+    const agentDetailPath = path.replace(/\/+$/, "");
+    if (/^\/v1\/agents\/[^/]+$/.test(agentDetailPath) && method === "GET") {
+      const requestedAgentId = agentDetailPath.split("/").at(-1) ?? "";
+      const requestedAgent = agentStore.get(requestedAgentId);
+      if (!requestedAgent)
+        return respond(
+          { error: { code: "not_found", message: "agent not found" } },
+          404,
+        );
+      return respond({ agent: requestedAgent, can_manage: canManage });
+    }
+
+    const agentRunsPath = /^\/v1\/agents\/[^/]+\/runs$/;
+    if (agentRunsPath.test(path) && method === "POST") {
+      const body = request.postDataJSON() as { prompt: string };
+      run = buildRun("queued", body.prompt);
+      runDetailReads = 0;
+      cancelled = false;
+      return respond({ run, can_manage: canManage }, 202);
+    }
+    if (agentRunsPath.test(path) && method === "GET")
+      return respond({
+        runs: run ? [run] : [],
+        pagination,
+        can_manage: canManage,
+      });
+
+    if (
+      /^\/v1\/agents\/[^/]+\/runs\/[^/]+\/cancel$/.test(path) &&
+      method === "POST"
+    ) {
+      cancelled = true;
+      run = buildRun("cancelled", run?.prompt);
+      return respond({ run, can_manage: canManage });
+    }
+    if (/^\/v1\/agents\/[^/]+\/runs\/run-1$/.test(path) && method === "GET") {
+      if (!run)
+        return respond(
+          { error: { code: "not_found", message: "run not found" } },
+          404,
+        );
+      runDetailReads += 1;
+      if (cancelled) {
+        run = buildRun("cancelled", run.prompt);
+      } else if (scenario === "cancel") {
+        run = buildRun(runDetailReads >= 2 ? "running" : "queued", run.prompt);
+      } else {
+        const status =
+          runDetailReads >= 3
+            ? scenario === "fail"
+              ? "failed"
+              : "completed"
+            : runDetailReads >= 2
+              ? "running"
+              : "queued";
+        run = buildRun(status, run.prompt);
+      }
+      return respond({ run, can_manage: canManage });
+    }
+    if (
+      /^\/v1\/agents\/[^/]+\/runs\/run-1\/logs$/.test(path) &&
+      method === "GET"
+    ) {
+      const logs =
+        run && runDetailReads >= 2
+          ? [
+              {
+                id: "log-1",
+                run_id: "run-1",
+                project_id: project.id,
+                sequence: 1,
+                level: "info",
+                message: "worker: task execution started",
+                created_at: "2026-01-02T00:00:03Z",
+              },
+            ]
+          : [];
+      return respond({ logs, pagination });
+    }
+
+    return respond({});
+  });
+}
+
+test("creates an Agent from the server catalog and opens its detail", async ({
+  page,
+}) => {
+  await installFixtures(page, "complete", false);
+  await page.goto("/organizations/org-1/projects/project-1/agents");
+  await expect(
+    page.getByRole("heading", { name: "No agents yet" }),
+  ).toBeVisible();
+
+  const createAgentButton = page
+    .getByRole("button", { name: "Create agent" })
+    .first();
+  await expect(createAgentButton).toBeVisible();
+  await createAgentButton.click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Name", { exact: true }).fill("Test runner");
+  const provider = dialog.getByLabel("Provider", { exact: true });
+  const model = dialog.getByLabel("Model", { exact: true });
+  await provider.selectOption("local");
+  await expect(model.locator("option")).toHaveText(["model-a", "model-b"]);
+  await model.selectOption("model-a");
+  await provider.selectOption("remote");
+  await expect(model.locator("option")).toHaveText(["model-x"]);
+  await expect(model).toHaveValue("model-x");
+  await model.selectOption("model-x");
+  await dialog
+    .getByRole("button", { name: "Create agent", exact: true })
+    .click();
+
+  await expect(page).toHaveURL(/\/agents\/agent-created$/);
+  await expect(page.getByTitle("agent-created")).toBeVisible();
+  await expect(page.getByText("Configuration", { exact: true })).toBeVisible();
+});
+
+test("runs a task from queued through running logs to completed result", async ({
+  page,
+}) => {
+  await installFixtures(page, "complete");
+  await page.goto(`/organizations/org-1/projects/project-1/agents/${agentId}`);
+  await page
+    .getByRole("link", { name: /Run agent/ })
+    .first()
+    .click();
+  await page
+    .getByLabel("Agent task prompt")
+    .fill("Fix failing tests in this repository.");
+  await page.getByRole("button", { name: "Run agent" }).first().click();
+
+  await expect(page).toHaveURL(/\/runs\/run-1$/);
+  await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("This run is waiting for a worker."),
+  ).toBeVisible();
+  await expect(page.getByText("Running", { exact: true })).toBeVisible();
+  await expect(page.getByText("worker: task execution started")).toBeVisible();
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Result" })).toBeVisible();
+  await expect(
+    page.getByText("All tests completed successfully."),
+  ).toBeVisible();
+});
+
+test("keeps a read-only Agent visible without mutation actions", async ({
+  page,
+}) => {
+  await installFixtures(page, "complete", true, false);
+  await page.goto(`/organizations/org-1/projects/project-1/agents/${agentId}`);
+
+  await expect(
+    page.getByRole("heading", { name: "Repository agent" }),
+  ).toBeVisible();
+  await expect(page.getByText("local/model-a")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Run agent/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Edit configuration" }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete agent" })).toHaveCount(
+    0,
+  );
+
+  await page.goto(
+    `/organizations/org-1/projects/project-1/agents/${agentId}/runs`,
+  );
+  await expect(page.getByRole("heading", { name: "Run agent" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run agent" })).toHaveCount(0);
+});
+
+test("keeps failed run context and exposes its logs", async ({ page }) => {
+  await installFixtures(page, "fail");
+  await page.goto(
+    `/organizations/org-1/projects/project-1/agents/${agentId}/runs`,
+  );
+  await page
+    .getByLabel("Agent task prompt")
+    .fill("Fix failing tests in this repository.");
+  await page.getByRole("button", { name: "Run agent" }).first().click();
+
+  await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Run failed", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByText("The test command returned failures."),
+  ).toBeVisible();
+  await expect(page.getByText("worker: task execution started")).toBeVisible();
+});
+
+test("cancels a running Agent Run and stops showing the cancel action", async ({
+  page,
+}) => {
+  await installFixtures(page, "cancel");
+  await page.goto(
+    `/organizations/org-1/projects/project-1/agents/${agentId}/runs`,
+  );
+  await page
+    .getByLabel("Agent task prompt")
+    .fill("Inspect the repository state.");
+  await page.getByRole("button", { name: "Run agent" }).first().click();
+
+  await expect(page.getByText("Running", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel run" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Cancel run", exact: true })
+    .click();
+  await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
+});

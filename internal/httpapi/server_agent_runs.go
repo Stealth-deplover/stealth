@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
 	"github.com/nazxf/stealth-api/internal/repository"
 )
 
@@ -29,7 +28,7 @@ func (s *Server) listAgentRuns(w http.ResponseWriter, r *http.Request) {
 		parsed := mustUUID(cursor)
 		cursorID = &parsed
 	}
-	items, next, err := s.repo.ListAgentRuns(r.Context(), mustUUID(accountFrom(r).ID), agentID, limit, cursorID)
+	items, next, canManage, err := s.repo.ListAgentRuns(r.Context(), mustUUID(accountFrom(r).ID), agentID, limit, cursorID)
 	if agentRunResourceError(w, err) {
 		return
 	}
@@ -37,7 +36,7 @@ func (s *Server) listAgentRuns(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": items, "pagination": paginationOf(limit, next)})
+	writeJSON(w, http.StatusOK, map[string]any{"runs": items, "pagination": paginationOf(limit, next), "can_manage": canManage})
 }
 
 // createAgentRun only records an accepted queue item. It never invokes a
@@ -60,7 +59,7 @@ func (s *Server) createAgentRun(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]domain.AgentRun{"run": item})
+	writeJSON(w, http.StatusAccepted, map[string]any{"run": item, "can_manage": true})
 }
 
 func (s *Server) getAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +75,17 @@ func (s *Server) getAgentRun(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]domain.AgentRun{"run": item})
+	projectID, err := repository.ParseUUID(item.ProjectID)
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	canManage, err := s.repo.AgentProjectCanManage(r.Context(), mustUUID(accountFrom(r).ID), projectID)
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": item, "can_manage": canManage})
 }
 
 func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +101,7 @@ func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]domain.AgentRun{"run": item})
+	writeJSON(w, http.StatusOK, map[string]any{"run": item, "can_manage": true})
 }
 
 func (s *Server) listAgentRunLogs(w http.ResponseWriter, r *http.Request) {
