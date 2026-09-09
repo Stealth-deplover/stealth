@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nazxf/stealth-api/internal/requestcontext"
 )
 
 const requestIDHeader = "X-Request-ID"
@@ -22,6 +23,7 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set(requestIDHeader, requestID)
 		ctx := context.WithValue(r.Context(), requestIDContextKey, requestID)
+		ctx = requestcontext.WithCorrelationID(ctx, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

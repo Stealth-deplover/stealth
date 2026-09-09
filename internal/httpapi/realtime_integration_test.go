@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -75,11 +76,40 @@ func TestProjectRealtimeSSEIntegration(t *testing.T) {
 	// The project event is retained even though no webhook is configured. It
 	// can therefore be replayed by an SSE client from the event outbox.
 	var eventCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM webhook_events WHERE project_id=$1 AND event_name='project.create'`, project.Project.ID).Scan(&eventCount); err != nil {
+	var eventVersion int
+	var organizationID string
+	var publishStatus string
+	if err := pool.QueryRow(ctx, `SELECT count(*),max(event_version),min(organization_id::text),min(publish_status) FROM webhook_events WHERE project_id=$1 AND event_name='project.create'`, project.Project.ID).Scan(&eventCount, &eventVersion, &organizationID, &publishStatus); err != nil {
 		t.Fatal(err)
 	}
 	if eventCount != 1 {
 		t.Fatalf("project.create event count = %d, want 1", eventCount)
+	}
+	if eventVersion != 1 || organizationID != registration.Organization.ID || publishStatus != "pending" {
+		t.Fatalf("outbox metadata version=%d organization=%q status=%q", eventVersion, organizationID, publishStatus)
+	}
+	realtimeRepo := repository.New(pool)
+	claimed, err := realtimeRepo.ClaimNextRealtimeEvent(ctx, "integration-publisher-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.ProjectID.String() != project.Project.ID || claimed.AttemptCount != 1 {
+		t.Fatalf("claimed realtime event = %#v", claimed)
+	}
+	if _, err := realtimeRepo.ClaimNextRealtimeEvent(ctx, "integration-publisher-b", time.Minute); !errors.Is(err, repository.ErrNoRealtimeEvent) {
+		t.Fatalf("second publisher claim error = %v, want ErrNoRealtimeEvent", err)
+	}
+	retryAt := time.Now().UTC().Add(time.Hour)
+	if err := realtimeRepo.FinishRealtimeEvent(ctx, claimed.EventID, "integration-publisher-a", false, &retryAt, "temporary fanout outage"); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var attempts int
+	if err := pool.QueryRow(ctx, `SELECT publish_status,publish_attempts FROM webhook_events WHERE id=$1`, claimed.EventID).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || attempts != 1 {
+		t.Fatalf("retried outbox event status=%q attempts=%d", status, attempts)
 	}
 
 	streamContext, streamCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -138,4 +168,32 @@ func TestProjectRealtimeSSEIntegration(t *testing.T) {
 	}{}
 	requestJSON(t, ownerClient, http.MethodPost, projectURL+"/api-keys", map[string]any{"name": "database-only", "scopes": []string{"databases.read"}}, http.StatusCreated, &limitedKey)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/realtime", nil, http.StatusForbidden, map[string]string{"X-Stealth-Key": limitedKey.Secret})
+
+	// A valid Console session from another organization must not turn a
+	// project identifier into a cross-tenant subscription capability.
+	otherClient := newIntegrationClient(t)
+	otherOwnerID := uuid.Must(uuid.NewV7())
+	otherRegistration := struct {
+		Account struct {
+			ID string `json:"id"`
+		} `json:"account"`
+		Organization struct {
+			ID string `json:"id"`
+		} `json:"organization"`
+	}{}
+	requestJSON(t, otherClient, http.MethodPost, server.URL+"/v1/account/registrations", map[string]string{
+		"email":    fmt.Sprintf("realtime-other-%s@example.test", otherOwnerID),
+		"password": "correct-horse-battery-staple",
+	}, http.StatusCreated, &otherRegistration)
+	otherProject := struct {
+		Project struct {
+			ID string `json:"id"`
+		} `json:"project"`
+	}{}
+	requestJSON(t, otherClient, http.MethodPost, server.URL+"/v1/organizations/"+otherRegistration.Organization.ID+"/projects", map[string]string{"name": "other-realtime-" + otherOwnerID.String()[:8]}, http.StatusCreated, &otherProject)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherRegistration.Organization.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM accounts WHERE id=$1`, otherRegistration.Account.ID)
+	})
+	requestJSONWithHeaders(t, ownerClient, http.MethodGet, server.URL+"/v1/projects/"+otherProject.Project.ID+"/realtime", nil, http.StatusNotFound, nil)
 }

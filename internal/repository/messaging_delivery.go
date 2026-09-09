@@ -488,6 +488,9 @@ func (r *Repository) ClaimNextMessagingDelivery(ctx context.Context, workerID st
 	if _, err := tx.Exec(ctx, `UPDATE project_messaging_messages SET status='processing',updated_at=now() WHERE project_id=$1 AND id=$2 AND status='queued'`, job.ProjectID, job.MessageID); err != nil {
 		return MessagingDeliveryJob{}, err
 	}
+	if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, job.ProjectID, "messaging.delivery.updated", "messaging_delivery", job.DeliveryID, map[string]any{"message_id": job.MessageID.String(), "status": "running"}); err != nil {
+		return MessagingDeliveryJob{}, err
+	}
 	job.AttemptCount++
 	if err := tx.Commit(ctx); err != nil {
 		return MessagingDeliveryJob{}, err
@@ -545,10 +548,13 @@ func (r *Repository) FinishMessagingDelivery(ctx context.Context, deliveryID uui
 		statusCode = nil
 	}
 	errValue := truncateMessagingError(lastError)
+	finalStatus := "failed"
 	switch {
 	case success:
+		finalStatus = "succeeded"
 		_, err = tx.Exec(ctx, `UPDATE project_messaging_deliveries SET status='succeeded',leased_at=NULL,worker_id=NULL,last_status_code=$2,last_error=NULL,delivered_at=now(),updated_at=now() WHERE id=$1`, deliveryID, statusCode)
 	case retryAt != nil:
+		finalStatus = "pending"
 		_, err = tx.Exec(ctx, `UPDATE project_messaging_deliveries SET status='pending',leased_at=NULL,worker_id=NULL,last_status_code=$2,last_error=$3,next_attempt_at=$4,updated_at=now() WHERE id=$1`, deliveryID, statusCode, errValue, retryAt.UTC())
 	default:
 		_, err = tx.Exec(ctx, `UPDATE project_messaging_deliveries SET status='failed',leased_at=NULL,worker_id=NULL,last_status_code=$2,last_error=$3,updated_at=now() WHERE id=$1`, deliveryID, statusCode, errValue)
@@ -557,6 +563,9 @@ func (r *Repository) FinishMessagingDelivery(ctx context.Context, deliveryID uui
 		return err
 	}
 	if err := refreshMessagingMessageTx(ctx, tx, projectID, messageID); err != nil {
+		return err
+	}
+	if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "messaging.delivery.updated", "messaging_delivery", deliveryID, map[string]any{"message_id": messageID.String(), "status": finalStatus}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

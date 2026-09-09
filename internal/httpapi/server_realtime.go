@@ -11,10 +11,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/nazxf/stealth-api/internal/domain"
 	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
-	realtimePollInterval = 500 * time.Millisecond
+	realtimePollInterval = 5 * time.Second
 	realtimeHeartbeat    = 15 * time.Second
 	realtimeBatchSize    = 100
 )
@@ -56,6 +57,23 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 	if _, _, err := s.repo.ListRealtimeEvents(r.Context(), projectID, databaseActorFrom(r), after, 1); realtimeResourceError(w, err) {
 		return
 	}
+	if s.metrics != nil {
+		s.metrics.RealtimeConnections.Inc()
+		s.metrics.RealtimeActiveConnections.Inc()
+		defer s.metrics.RealtimeActiveConnections.Dec()
+	}
+	var realtimeSubscription *redis.PubSub
+	if s.realtimeBroker != nil {
+		subscription, subscribeErr := s.realtimeBroker.Subscribe(r.Context(), projectID.String())
+		if subscribeErr != nil {
+			// Redis is only the low-latency fanout. The database outbox remains
+			// available as a bounded polling fallback when Redis is degraded.
+			s.logger.Warn("realtime fanout unavailable; using database polling", "error", subscribeErr, "project_id", projectID, "request_id", requestIDFrom(r.Context()))
+		} else {
+			realtimeSubscription = subscription
+			defer realtimeSubscription.Close()
+		}
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -75,6 +93,10 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(realtimeHeartbeat)
 	defer heartbeat.Stop()
 	actor := databaseActorFrom(r)
+	var realtimeMessages <-chan *redis.Message
+	if realtimeSubscription != nil {
+		realtimeMessages = realtimeSubscription.Channel(redis.WithChannelSize(32))
+	}
 	for {
 		items, next, listErr := s.repo.ListRealtimeEvents(r.Context(), projectID, actor, after, realtimeBatchSize)
 		if listErr != nil {
@@ -93,7 +115,13 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if err := writeRealtimeEvent(w, flusher, item); err != nil {
+				if s.metrics != nil {
+					s.metrics.RealtimeSlowDisconnects.Inc()
+				}
 				return
+			}
+			if s.metrics != nil {
+				s.metrics.RealtimeEventsDelivered.Inc()
 			}
 		}
 		if len(items) > 0 {
@@ -103,6 +131,13 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case _, ok := <-realtimeMessages:
+			if !ok {
+				realtimeMessages = nil
+			}
+			// Redis messages are notifications only. The next loop reads the
+			// authorized canonical state from PostgreSQL using the cursor.
+			continue
 		case <-poll.C:
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {

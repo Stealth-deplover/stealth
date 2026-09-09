@@ -643,7 +643,7 @@ func (r *Repository) CreateSiteDeployment(ctx context.Context, id, projectID, si
 			return domain.SiteDeployment{}, err
 		}
 	}
-	auditData := map[string]any{"version": item.Version, "size_bytes": input.SizeBytes, "archive_size_bytes": input.ArchiveSizeBytes, "checksum_sha256": input.ChecksumSHA256, "activated": input.Activate}
+	auditData := map[string]any{"site_id": siteID.String(), "version": item.Version, "size_bytes": input.SizeBytes, "archive_size_bytes": input.ArchiveSizeBytes, "checksum_sha256": input.ChecksumSHA256, "activated": input.Activate}
 	if input.Source == "github" || input.Source == "gitlab" {
 		auditData["git_repository"] = strings.TrimSpace(*input.GitRepository)
 		auditData["git_ref"] = strings.TrimSpace(*input.GitRef)
@@ -652,7 +652,7 @@ func (r *Repository) CreateSiteDeployment(ctx context.Context, id, projectID, si
 		return domain.SiteDeployment{}, err
 	}
 	if input.Activate && !building {
-		if err := r.auditSite(ctx, tx, projectID, actor, "site_deployment.activate", "site_deployment", id, map[string]any{"version": item.Version}); err != nil {
+		if err := r.auditSite(ctx, tx, projectID, actor, "site_deployment.activate", "site_deployment", id, map[string]any{"site_id": siteID.String(), "version": item.Version}); err != nil {
 			return domain.SiteDeployment{}, err
 		}
 	}
@@ -721,7 +721,7 @@ func (r *Repository) ActivateSiteDeployment(ctx context.Context, projectID, site
 	if err != nil {
 		return domain.SiteDeployment{}, domain.Site{}, err
 	}
-	if err := r.auditSite(ctx, tx, projectID, actor, "site_deployment.activate", "site_deployment", deploymentID, map[string]any{"version": item.Version}); err != nil {
+	if err := r.auditSite(ctx, tx, projectID, actor, "site_deployment.activate", "site_deployment", deploymentID, map[string]any{"site_id": siteID.String(), "version": item.Version}); err != nil {
 		return domain.SiteDeployment{}, domain.Site{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -797,6 +797,9 @@ func (r *Repository) ClaimNextSiteDeployment(ctx context.Context, workerID strin
 	if err != nil {
 		return SiteBuildJob{}, err
 	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "site_deployment.updated", "site_deployment", deploymentID, map[string]any{"site_id": siteID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
+		return SiteBuildJob{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SiteBuildJob{}, err
 	}
@@ -864,6 +867,9 @@ func (r *Repository) CompleteSiteDeploymentBuild(ctx context.Context, projectID,
 	if err != nil {
 		return domain.SiteDeployment{}, err
 	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "site_deployment.updated", "site_deployment", deploymentID, map[string]any{"site_id": siteID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
+		return domain.SiteDeployment{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.SiteDeployment{}, err
 	}
@@ -902,6 +908,9 @@ func (r *Repository) FailSiteDeploymentBuild(ctx context.Context, projectID, sit
 	}
 	updated, err := scanSiteDeploymentPublic(tx.QueryRow(ctx, `UPDATE site_deployments SET status='failed',build_status='failed',build_worker_id=NULL,error_message=$4,reserved_bytes=0,finished_at=now(),updated_at=now() WHERE project_id=$1 AND site_id=$2 AND id=$3 RETURNING `+siteDeploymentProjection, projectID, siteID, deploymentID, failure))
 	if err != nil {
+		return domain.SiteDeployment{}, err
+	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "site_deployment.updated", "site_deployment", deploymentID, map[string]any{"site_id": siteID.String(), "status": updated.Status, "build_status": updated.BuildStatus, "has_error": true}); err != nil {
 		return domain.SiteDeployment{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

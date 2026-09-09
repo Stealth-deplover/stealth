@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/nazxf/stealth-api/internal/apikey"
 	"github.com/nazxf/stealth-api/internal/domain"
+	"github.com/nazxf/stealth-api/internal/realtime"
+	"github.com/nazxf/stealth-api/internal/requestcontext"
 )
 
 var (
@@ -555,8 +557,8 @@ func (r *Repository) FinishWebhookDelivery(ctx context.Context, deliveryID uuid.
 	}
 	defer tx.Rollback(ctx)
 	var status, owner string
-	var webhookID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT status,COALESCE(worker_id,''),webhook_id FROM webhook_deliveries WHERE id=$1 FOR UPDATE`, deliveryID).Scan(&status, &owner, &webhookID)
+	var webhookID, projectID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT d.status,COALESCE(d.worker_id,''),d.webhook_id,w.project_id FROM webhook_deliveries d JOIN project_webhooks w ON w.id=d.webhook_id WHERE d.id=$1 FOR UPDATE`, deliveryID).Scan(&status, &owner, &webhookID, &projectID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrWebhookDeliveryNotFound
 	}
@@ -570,12 +572,15 @@ func (r *Repository) FinishWebhookDelivery(ctx context.Context, deliveryID uuid.
 		statusCode = nil
 	}
 	errValue := truncateWebhookError(lastError)
+	finalStatus := "failed"
 	if success {
+		finalStatus = "succeeded"
 		if _, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET status='succeeded',leased_at=NULL,worker_id=NULL,last_status_code=$2,last_error=NULL,delivered_at=now(),updated_at=now() WHERE id=$1`, deliveryID, statusCode); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE project_webhooks SET failure_count=0,last_delivery_at=now(),updated_at=now() WHERE id=$1`, webhookID)
 	} else if retryAt != nil {
+		finalStatus = "pending"
 		if _, err := tx.Exec(ctx, `UPDATE webhook_deliveries SET status='pending',leased_at=NULL,worker_id=NULL,last_status_code=$2,last_error=$3,next_attempt_at=$4,updated_at=now() WHERE id=$1`, deliveryID, statusCode, errValue, retryAt.UTC()); err != nil {
 			return err
 		}
@@ -587,6 +592,9 @@ func (r *Repository) FinishWebhookDelivery(ctx context.Context, deliveryID uuid.
 		_, err = tx.Exec(ctx, `UPDATE project_webhooks SET failure_count=failure_count+1,last_failure_at=now(),updated_at=now() WHERE id=$1`, webhookID)
 	}
 	if err != nil {
+		return err
+	}
+	if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "webhook.delivery.updated", "webhook_delivery", deliveryID, map[string]any{"webhook_id": webhookID.String(), "status": finalStatus}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -631,21 +639,57 @@ func (r *Repository) auditWebhook(ctx context.Context, tx pgx.Tx, projectID uuid
 // stream power Realtime subscribers without making webhook configuration a
 // prerequisite for observing a project mutation.
 func (r *Repository) enqueueWebhookEventTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, eventName, targetType string, target uuid.UUID, metadata map[string]any) error {
+	return r.enqueueEventTx(ctx, tx, projectID, eventName, targetType, target, metadata, true)
+}
+
+// enqueueRealtimeOnlyEventTx records a notification in the durable outbox
+// without recursively sending that internal delivery state to user webhooks.
+func (r *Repository) enqueueRealtimeOnlyEventTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, eventName, targetType string, target uuid.UUID, metadata map[string]any) error {
+	return r.enqueueEventTx(ctx, tx, projectID, eventName, targetType, target, metadata, false)
+}
+
+func (r *Repository) enqueueEventTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, eventName, targetType string, target uuid.UUID, metadata map[string]any, createWebhookDeliveries bool) error {
 	if len(eventName) < 3 || len(eventName) > 160 || len(targetType) < 3 || len(targetType) > 80 {
 		return ErrInvalidWebhook
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
+	organizationID, err := projectOrganizationIDValue(ctx, tx, projectID)
+	if err != nil {
+		return err
+	}
 	eventID := uuid.Must(uuid.NewV7())
+	occurredAt := time.Now().UTC()
 	targetValue := any(nil)
+	resourceID := ""
 	if target != uuid.Nil {
 		targetValue = target
+		resourceID = target.String()
+	}
+	safeMetadata := realtime.SafePayload(metadata)
+	envelope := realtime.Envelope{
+		ID:             eventID.String(),
+		Type:           eventName,
+		Version:        realtime.CurrentVersion,
+		OccurredAt:     occurredAt,
+		OrganizationID: organizationID.String(),
+		ProjectID:      projectID.String(),
+		ResourceID:     resourceID,
+		CorrelationID:  requestcontext.CorrelationID(ctx),
+		Payload:        safeMetadata,
+	}
+	if err := envelope.Validate(); err != nil {
+		return err
 	}
 	payloadValue := map[string]any{
-		"id":         eventID.String(),
-		"event":      eventName,
-		"project_id": projectID.String(),
+		"id":              eventID.String(),
+		"event":           eventName, // legacy webhook consumers
+		"type":            eventName,
+		"version":         realtime.CurrentVersion,
+		"occurred_at":     occurredAt.Format(time.RFC3339Nano),
+		"organization_id": organizationID.String(),
+		"project_id":      projectID.String(),
 		"target": map[string]any{
 			"type": targetType,
 			"id": func() any {
@@ -655,8 +699,21 @@ func (r *Repository) enqueueWebhookEventTx(ctx context.Context, tx pgx.Tx, proje
 				return target.String()
 			}(),
 		},
-		"data":       metadata,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
+		"resource_id": func() any {
+			if resourceID == "" {
+				return nil
+			}
+			return resourceID
+		}(),
+		"correlation_id": func() any {
+			if envelope.CorrelationID == "" {
+				return nil
+			}
+			return envelope.CorrelationID
+		}(),
+		"data":       safeMetadata, // legacy webhook consumers
+		"payload":    safeMetadata,
+		"created_at": occurredAt.Format(time.RFC3339Nano),
 	}
 	payload, err := json.Marshal(payloadValue)
 	if err != nil {
@@ -666,9 +723,16 @@ func (r *Repository) enqueueWebhookEventTx(ctx context.Context, tx pgx.Tx, proje
 		return ErrWebhookPayloadTooLarge
 	}
 	var insertedID uuid.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO webhook_events (id,project_id,event_name,target_type,target_id,payload) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, eventID, projectID, eventName, targetType, targetValue, payload).Scan(&insertedID)
+	correlationValue := any(nil)
+	if envelope.CorrelationID != "" {
+		correlationValue = envelope.CorrelationID
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO webhook_events (id,project_id,organization_id,event_name,target_type,target_id,event_version,occurred_at,correlation_id,payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, eventID, projectID, organizationID, eventName, targetType, targetValue, realtime.CurrentVersion, occurredAt, correlationValue, payload).Scan(&insertedID)
 	if err != nil {
 		return err
+	}
+	if !createWebhookDeliveries {
+		return nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id FROM project_webhooks WHERE project_id=$1 AND enabled AND (events @> ARRAY['*']::text[] OR $2=ANY(events))`, projectID, eventName)
 	if err != nil {

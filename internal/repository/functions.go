@@ -911,12 +911,12 @@ func (r *Repository) CreateFunctionDeployment(ctx context.Context, id, projectID
 			return domain.FunctionDeployment{}, err
 		}
 	}
-	metadata := map[string]any{"version": item.Version, "source": input.Source, "size_bytes": input.SizeBytes, "checksum_sha256": input.ChecksumSHA256, "activated": input.Activate}
+	metadata := map[string]any{"function_id": functionID.String(), "version": item.Version, "source": input.Source, "size_bytes": input.SizeBytes, "checksum_sha256": input.ChecksumSHA256, "activated": input.Activate}
 	if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.create", "function_deployment", id, metadata); err != nil {
 		return domain.FunctionDeployment{}, err
 	}
 	if input.Activate {
-		if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.activate", "function_deployment", id, map[string]any{"version": item.Version}); err != nil {
+		if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.activate", "function_deployment", id, map[string]any{"function_id": functionID.String(), "version": item.Version}); err != nil {
 			return domain.FunctionDeployment{}, err
 		}
 	}
@@ -1123,6 +1123,9 @@ func (r *Repository) ClaimNextFunctionDeployment(ctx context.Context, workerID s
 	if err != nil {
 		return FunctionBuildJob{}, err
 	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_deployment.updated", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "status": deployment.Status, "build_status": deployment.BuildStatus}); err != nil {
+		return FunctionBuildJob{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return FunctionBuildJob{}, err
 	}
@@ -1180,6 +1183,9 @@ func (r *Repository) CompleteFunctionDeploymentBuild(ctx context.Context, projec
 	}
 	updated, err := scanFunctionDeploymentPublic(tx.QueryRow(ctx, `UPDATE function_deployments SET build_path=$4,build_size_bytes=$5,build_checksum_sha256=$6,build_status='succeeded',build_worker_id=NULL,error_message=NULL,built_at=COALESCE(built_at,now()),updated_at=now() WHERE project_id=$1 AND function_id=$2 AND id=$3 RETURNING `+functionDeploymentProjection, projectID, functionID, deploymentID, buildPath, buildSizeBytes, strings.ToLower(buildChecksumSHA256)))
 	if err != nil {
+		return domain.FunctionDeployment{}, err
+	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_deployment.updated", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
 		return domain.FunctionDeployment{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1252,6 +1258,9 @@ func (r *Repository) FailFunctionDeploymentBuild(ctx context.Context, projectID,
 	if err != nil {
 		return domain.FunctionDeployment{}, err
 	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_deployment.updated", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "status": updated.Status, "build_status": updated.BuildStatus, "has_error": true}); err != nil {
+		return domain.FunctionDeployment{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.FunctionDeployment{}, err
 	}
@@ -1312,7 +1321,7 @@ func (r *Repository) ActivateFunctionDeployment(ctx context.Context, projectID, 
 	if err != nil {
 		return domain.FunctionDeployment{}, domain.Function{}, err
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.activate", "function_deployment", deploymentID, map[string]any{"version": item.Version}); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.activate", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "version": item.Version}); err != nil {
 		return domain.FunctionDeployment{}, domain.Function{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1412,6 +1421,9 @@ func (r *Repository) TransitionFunctionDeployment(ctx context.Context, projectID
 		return domain.FunctionDeployment{}, ErrInvalidFunctionTransition
 	}
 	if err != nil {
+		return domain.FunctionDeployment{}, err
+	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_deployment.updated", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
 		return domain.FunctionDeployment{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1596,7 +1608,7 @@ func (r *Repository) CreateFunctionExecutionForActor(ctx context.Context, id, pr
 	if err := incrementUsageTx(ctx, tx, projectID, execution.CreatedAt, UsageDelta{FunctionInvocationCount: 1}); err != nil {
 		return domain.FunctionExecution{}, err
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_execution.accept", "function_execution", id, map[string]any{"trigger": trigger, "deployment_id": deploymentID}); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_execution.accept", "function_execution", id, map[string]any{"function_id": functionID.String(), "trigger": trigger, "deployment_id": deploymentID}); err != nil {
 		return domain.FunctionExecution{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1659,7 +1671,7 @@ func (r *Repository) CreateFunctionExecutionForApplication(ctx context.Context, 
 	if err := incrementUsageTx(ctx, tx, projectID, execution.CreatedAt, UsageDelta{FunctionInvocationCount: 1}); err != nil {
 		return domain.FunctionExecution{}, err
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_execution.accept", "function_execution", id, map[string]any{"trigger": trigger, "deployment_id": deploymentID}); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_execution.accept", "function_execution", id, map[string]any{"function_id": functionID.String(), "trigger": trigger, "deployment_id": deploymentID}); err != nil {
 		return domain.FunctionExecution{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1749,7 +1761,7 @@ func (r *Repository) transitionFunctionExecutionResult(ctx context.Context, proj
 			return domain.FunctionExecution{}, err
 		}
 	}
-	metadata := map[string]any{"status": next}
+	metadata := map[string]any{"function_id": functionID.String(), "status": next}
 	if responseStatus != nil {
 		metadata["response_status"] = *responseStatus
 	}
@@ -1936,6 +1948,9 @@ func (r *Repository) ClaimNextFunctionExecution(ctx context.Context, workerID st
 	}
 	if execution.Status != "running" || deployment.Status != "active" || deployment.BuildStatus != "succeeded" {
 		return FunctionExecutionJob{}, ErrExecutionNotAvailable
+	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_execution.running", "function_execution", executionID, map[string]any{"function_id": functionID.String(), "status": execution.Status}); err != nil {
+		return FunctionExecutionJob{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return FunctionExecutionJob{}, err

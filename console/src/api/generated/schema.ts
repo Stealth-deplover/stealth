@@ -950,7 +950,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Stream short-lived project events as Server-Sent Events. Console members and realtime.read API keys receive the project stream; project application sessions receive only database row events allowed by their read grants. Events are retained for seven days and can be replayed with cursor or Last-Event-ID. */
+        /** @description Stream short-lived project change notifications as Server-Sent Events. The Go API and PostgreSQL remain canonical; Console clients must refetch affected resources after a notification. Console members and realtime.read API keys receive the project stream; project application sessions receive only database row events allowed by their read grants. Events are retained for seven days and can be replayed with cursor or Last-Event-ID when authorized. */
         get: operations["streamProjectRealtime"];
         put?: never;
         post?: never;

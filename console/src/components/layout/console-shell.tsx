@@ -8,6 +8,7 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { ProjectRealtimeListener } from "@/realtime/project-realtime-listener";
 
 function contextFromPath(pathname: string) {
   const parts = pathname.split("/").filter(Boolean);
@@ -73,6 +74,7 @@ export function ConsoleShell({
 
   return (
     <div className="min-h-screen bg-stealth-bg">
+      <ProjectRealtimeListener projectId={context.projectId} />
       <div className="flex min-h-screen">
         <Sidebar
           {...context}

@@ -61,7 +61,7 @@ export function useAgentRuns(agentId: string | undefined, query?: CursorQuery) {
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       (query.state.data?.runs ?? []).some((run) => isAgentRunActive(run.status))
-        ? 1_000
+        ? 5_000
         : false,
   });
 }
@@ -81,7 +81,7 @@ export function useAgentRun(
       ),
     refetchInterval: (query) => {
       const status = query.state.data?.run.status;
-      return status && isAgentRunActive(status) ? 1_000 : false;
+      return status && isAgentRunActive(status) ? 5_000 : false;
     },
   });
 }

@@ -446,14 +446,19 @@ type MessagingDelivery struct {
 // in the transactional outbox and is kept out of ordinary JSON projections so
 // handlers can stream it without re-encoding or changing signatures.
 type RealtimeEvent struct {
-	ID         string
-	ProjectID  string
-	EventName  string
-	TargetType string
-	TargetID   *string
-	Data       map[string]any
-	CreatedAt  time.Time
-	Payload    json.RawMessage
+	ID             string
+	OrganizationID string
+	ProjectID      string
+	EventName      string
+	Version        int
+	TargetType     string
+	TargetID       *string
+	ResourceID     *string
+	CorrelationID  string
+	Data           map[string]any
+	OccurredAt     time.Time
+	CreatedAt      time.Time
+	Payload        json.RawMessage
 }
 
 type ProjectDatabase struct {
