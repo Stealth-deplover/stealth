@@ -3,12 +3,14 @@
 import Link from "next/link";
 import {
   ArrowUpRight,
+  AlertTriangle,
   Box,
   Database,
   FunctionSquare,
   Globe2,
   HardDrive,
   History,
+  RefreshCw,
   Users,
 } from "lucide-react";
 import {
@@ -70,6 +72,38 @@ export function isEmptyProject(
     usage.site_count === 0 &&
     usage.database_count === 0 &&
     storageBucketCount === 0
+  );
+}
+
+export function shouldShowQuickStart(
+  canManage: boolean | undefined,
+  usage: ProjectResourceUsage | undefined,
+  storageBucketCount: number | undefined,
+) {
+  return canManage === true && isEmptyProject(usage, storageBucketCount);
+}
+
+function OverviewSectionError({
+  title,
+  retry,
+}: {
+  title: string;
+  retry?: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-300/20 bg-rose-400/[0.04] p-4"
+      role="alert"
+    >
+      <p className="flex items-center gap-2 text-sm text-rose-200">
+        <AlertTriangle className="size-4 shrink-0" /> {title}
+      </p>
+      {retry ? (
+        <Button variant="outline" size="sm" onClick={retry}>
+          <RefreshCw className="size-3.5" /> Try again
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -166,11 +200,16 @@ export function ProjectOverviewView({
     );
   if (project.isPending) return <LoadingState rows={6} />;
   const current = project.data?.project;
-  const usageData = usage.data?.usage;
+  const usageData = usage.isSuccess ? usage.data?.usage : undefined;
+  const storageData =
+    storageBuckets.isSuccess && !storageBuckets.isPlaceholderData
+      ? storageBuckets.data
+      : undefined;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
-  const showQuickStart = isEmptyProject(
+  const showQuickStart = shouldShowQuickStart(
+    storageData?.can_manage,
     usageData,
-    storageBuckets.data?.buckets.length,
+    storageData?.buckets.length,
   );
   return (
     <>
@@ -188,12 +227,13 @@ export function ProjectOverviewView({
       />
       <div className="mb-7 flex flex-wrap items-center gap-3">
         <Badge variant="success">
-          <span className="size-1.5 rounded-full bg-current" /> API connected
+          <span className="size-1.5 rounded-full bg-current" /> Project loaded
         </Badge>
         <span className="text-xs text-slate-600">
-          Project data is sourced from live endpoints.
+          Project record loaded; usage, activity, and storage summaries load
+          independently.
         </span>
-        {usageData?.captured_at ? (
+        {usage.isSuccess && usageData?.captured_at ? (
           <span className="text-xs text-slate-700">
             Snapshot {formatDate(usageData.captured_at)}
           </span>
@@ -201,91 +241,122 @@ export function ProjectOverviewView({
         <ResourceId id={projectId} label="Project ID" />
       </div>
       {showQuickStart ? <QuickStart base={base} /> : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric
-          label="Functions"
-          value={formatCount(usageData?.function_count)}
-          icon={FunctionSquare}
-          href={`${base}/functions`}
+      {usage.isError ? (
+        <OverviewSectionError
+          title="Could not load project usage"
+          retry={() => usage.refetch()}
         />
-        <Metric
-          label="Sites"
-          value={formatCount(usageData?.site_count)}
-          icon={Globe2}
-          href={`${base}/sites`}
-        />
-        <Metric
-          label="Databases"
-          value={formatCount(usageData?.database_count)}
-          icon={Database}
-          href={`${base}/databases`}
-        />
-        <Metric
-          label="Storage"
-          value={formatBytes(usageData?.storage_bytes)}
-          icon={HardDrive}
-          href={`${base}/storage`}
-        />
-      </div>
-      <div className="mt-6 grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+      ) : usage.isPending ? (
         <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <div>
-              <CardTitle>Resource posture</CardTitle>
-              <p className="mt-1 text-xs text-slate-500">
-                Actual counts and usage from the current snapshot.
-              </p>
-            </div>
-            <History className="size-4 text-slate-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {[
-                [
-                  "Function artifact",
-                  formatBytes(usageData?.function_artifact_bytes),
-                  formatBytes(usageData?.function_quota_bytes),
-                ],
-                [
-                  "Site artifact",
-                  formatBytes(usageData?.site_artifact_bytes),
-                  formatBytes(usageData?.site_quota_bytes),
-                ],
-                [
-                  "Database rows",
-                  formatCount(usageData?.database_row_count),
-                  "rows",
-                ],
-                [
-                  "Application users",
-                  formatCount(usageData?.application_users),
-                  "users",
-                ],
-                [
-                  "API requests (30d)",
-                  formatCount(usageData?.api_request_count_30d),
-                  "requests",
-                ],
-                [
-                  "Function failures (30d)",
-                  formatCount(usageData?.function_failure_count_30d),
-                  "failures",
-                ],
-              ].map(([label, value, note]) => (
-                <div
-                  key={label}
-                  className="rounded-lg border border-stealth-border bg-black/10 p-3.5"
-                >
-                  <p className="text-xs text-slate-500">{label}</p>
-                  <div className="mt-2 flex items-end justify-between gap-2">
-                    <p className="text-lg font-semibold text-white">{value}</p>
-                    <span className="text-[10px] text-slate-600">{note}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <CardContent className="pt-5">
+            <LoadingState rows={2} />
           </CardContent>
         </Card>
+      ) : usageData ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric
+            label="Functions"
+            value={formatCount(usageData.function_count)}
+            icon={FunctionSquare}
+            href={`${base}/functions`}
+          />
+          <Metric
+            label="Sites"
+            value={formatCount(usageData.site_count)}
+            icon={Globe2}
+            href={`${base}/sites`}
+          />
+          <Metric
+            label="Databases"
+            value={formatCount(usageData.database_count)}
+            icon={Database}
+            href={`${base}/databases`}
+          />
+          <Metric
+            label="Storage"
+            value={formatBytes(usageData.storage_bytes)}
+            icon={HardDrive}
+            href={`${base}/storage`}
+          />
+        </div>
+      ) : null}
+      {storageBuckets.isError ? (
+        <div className="mt-3">
+          <OverviewSectionError
+            title="Could not load storage summary"
+            retry={() => storageBuckets.refetch()}
+          />
+        </div>
+      ) : null}
+      <div
+        className={
+          usageData && !usage.isError
+            ? "mt-6 grid gap-5 xl:grid-cols-[1.2fr_.8fr]"
+            : "mt-6"
+        }
+      >
+        {usageData && !usage.isError ? (
+          <Card>
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle>Resource posture</CardTitle>
+                <p className="mt-1 text-xs text-slate-500">
+                  Actual counts and usage from the current snapshot.
+                </p>
+              </div>
+              <History className="size-4 text-slate-600" />
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  [
+                    "Function artifact",
+                    formatBytes(usageData.function_artifact_bytes),
+                    formatBytes(usageData.function_quota_bytes),
+                  ],
+                  [
+                    "Site artifact",
+                    formatBytes(usageData.site_artifact_bytes),
+                    formatBytes(usageData.site_quota_bytes),
+                  ],
+                  [
+                    "Database rows",
+                    formatCount(usageData.database_row_count),
+                    "rows",
+                  ],
+                  [
+                    "Application users",
+                    formatCount(usageData.application_users),
+                    "users",
+                  ],
+                  [
+                    "API requests (30d)",
+                    formatCount(usageData.api_request_count_30d),
+                    "requests",
+                  ],
+                  [
+                    "Function failures (30d)",
+                    formatCount(usageData.function_failure_count_30d),
+                    "failures",
+                  ],
+                ].map(([label, value, note]) => (
+                  <div
+                    key={label}
+                    className="rounded-lg border border-stealth-border bg-black/10 p-3.5"
+                  >
+                    <p className="text-xs text-slate-500">{label}</p>
+                    <div className="mt-2 flex items-end justify-between gap-2">
+                      <p className="text-lg font-semibold text-white">
+                        {value}
+                      </p>
+                      <span className="text-[10px] text-slate-600">{note}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
         <Card>
           <CardHeader>
             <CardTitle>Recent activity</CardTitle>
@@ -296,6 +367,11 @@ export function ProjectOverviewView({
           <CardContent className="space-y-4">
             {audit.isPending ? (
               <LoadingState rows={4} />
+            ) : audit.isError ? (
+              <OverviewSectionError
+                title="Could not load recent activity"
+                retry={() => audit.refetch()}
+              />
             ) : audit.data?.events?.length ? (
               audit.data.events.slice(0, 6).map((event) => (
                 <div key={event.id} className="flex gap-3">
