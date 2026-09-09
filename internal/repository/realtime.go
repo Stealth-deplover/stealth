@@ -91,8 +91,27 @@ func (r *Repository) ListRealtimeEvents(ctx context.Context, projectID uuid.UUID
 // ClaimNextRealtimeEvent leases one pending outbox event. SKIP LOCKED keeps
 // multiple publisher workers safe while the lease makes a crash recoverable.
 func (r *Repository) ClaimNextRealtimeEvent(ctx context.Context, workerID string, leaseAge time.Duration) (RealtimePublishJob, error) {
+	return r.claimNextRealtimeEvent(ctx, workerID, leaseAge, nil)
+}
+
+// ClaimNextRealtimeEventForProject is the same leasing primitive restricted to
+// one project. It is useful for project-scoped operational work and keeps
+// integration assertions deterministic when a shared database contains other
+// pending tenants.
+func (r *Repository) ClaimNextRealtimeEventForProject(ctx context.Context, projectID uuid.UUID, workerID string, leaseAge time.Duration) (RealtimePublishJob, error) {
+	if projectID == uuid.Nil {
+		return RealtimePublishJob{}, ErrInvalidRealtime
+	}
+	return r.claimNextRealtimeEvent(ctx, workerID, leaseAge, &projectID)
+}
+
+func (r *Repository) claimNextRealtimeEvent(ctx context.Context, workerID string, leaseAge time.Duration, projectID *uuid.UUID) (RealtimePublishJob, error) {
 	if !validFunctionWorkerID(workerID) || leaseAge <= 0 {
 		return RealtimePublishJob{}, ErrInvalidRealtime
+	}
+	var projectFilter any
+	if projectID != nil {
+		projectFilter = *projectID
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -104,12 +123,13 @@ func (r *Repository) ClaimNextRealtimeEvent(ctx context.Context, workerID string
 		SELECT id,project_id,event_name,payload,publish_attempts
 		FROM webhook_events
 		WHERE publish_status='pending'
+		  AND ($2::uuid IS NULL OR project_id=$2)
 		  AND (available_at<=now() OR publish_leased_at IS NOT NULL)
 		  AND expires_at>now()
 		  AND (publish_leased_at IS NULL OR publish_leased_at < now() - ($1::double precision * interval '1 second'))
 		ORDER BY available_at,id
 		LIMIT 1
-		FOR UPDATE SKIP LOCKED`, leaseAge.Seconds()).Scan(&job.EventID, &job.ProjectID, &job.EventName, &job.Payload, &job.AttemptCount)
+		FOR UPDATE SKIP LOCKED`, leaseAge.Seconds(), projectFilter).Scan(&job.EventID, &job.ProjectID, &job.EventName, &job.Payload, &job.AttemptCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RealtimePublishJob{}, ErrNoRealtimeEvent
 	}

@@ -89,14 +89,15 @@ func TestProjectRealtimeSSEIntegration(t *testing.T) {
 		t.Fatalf("outbox metadata version=%d organization=%q status=%q", eventVersion, organizationID, publishStatus)
 	}
 	realtimeRepo := repository.New(pool)
-	claimed, err := realtimeRepo.ClaimNextRealtimeEvent(ctx, "integration-publisher-a", time.Minute)
+	targetProjectID := uuid.MustParse(project.Project.ID)
+	claimed, err := realtimeRepo.ClaimNextRealtimeEventForProject(ctx, targetProjectID, "integration-publisher-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if claimed.ProjectID.String() != project.Project.ID || claimed.AttemptCount != 1 {
 		t.Fatalf("claimed realtime event = %#v", claimed)
 	}
-	if _, err := realtimeRepo.ClaimNextRealtimeEvent(ctx, "integration-publisher-b", time.Minute); !errors.Is(err, repository.ErrNoRealtimeEvent) {
+	if _, err := realtimeRepo.ClaimNextRealtimeEventForProject(ctx, targetProjectID, "integration-publisher-b", time.Minute); !errors.Is(err, repository.ErrNoRealtimeEvent) {
 		t.Fatalf("second publisher claim error = %v, want ErrNoRealtimeEvent", err)
 	}
 	retryAt := time.Now().UTC().Add(time.Hour)
