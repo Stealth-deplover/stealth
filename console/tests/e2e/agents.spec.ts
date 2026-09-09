@@ -155,8 +155,9 @@ async function installFixtures(
       agentStore.set(createdAgent.id, createdAgent);
       return respond({ agent: createdAgent }, 201);
     }
-    if (/^\/v1\/agents\/[^/]+$/.test(path) && method === "GET") {
-      const requestedAgentId = path.split("/").at(-1) ?? "";
+    const agentDetailPath = path.replace(/\/+$/, "");
+    if (/^\/v1\/agents\/[^/]+$/.test(agentDetailPath) && method === "GET") {
+      const requestedAgentId = agentDetailPath.split("/").at(-1) ?? "";
       const requestedAgent = agentStore.get(requestedAgentId);
       if (!requestedAgent)
         return respond(
