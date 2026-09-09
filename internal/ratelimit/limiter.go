@@ -106,13 +106,13 @@ func ProjectIPKey(operation, projectID, clientIP string) string {
 }
 
 // ActorKey scopes an operation to a stable authenticated actor and the
-// project/resource scope supplied by the caller. The IP dimension prevents a
-// single leaked session or API key from using every network address to evade
-// the safety limit, while hashes keep identifiers out of Redis key material.
-func ActorKey(operation, scope, actorID, clientIP string) string {
+// project/resource scope supplied by the caller. It deliberately has no IP
+// dimension: an authenticated actor keeps one budget when their network
+// changes. Use ProjectIPKey separately when a public/shared-source budget is
+// also needed.
+func ActorKey(operation, scope, actorID string) string {
 	actorHash := sha256.Sum256([]byte(actorID))
-	ipHash := sha256.Sum256([]byte(clientIP))
-	return "stealth:ratelimit:v1:" + operation + ":scope:" + scope + ":actor:" + hex.EncodeToString(actorHash[:]) + ":ip:" + hex.EncodeToString(ipHash[:])
+	return "stealth:ratelimit:v1:" + operation + ":scope:" + scope + ":actor:" + hex.EncodeToString(actorHash[:])
 }
 
 type NoopLimiter struct{}

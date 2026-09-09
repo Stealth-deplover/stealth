@@ -154,6 +154,23 @@ func (r *Repository) AgentByID(ctx context.Context, accountID, agentID uuid.UUID
 	return item, err
 }
 
+// AgentProjectID returns the project scope for an Agent visible to an
+// account. It is intentionally narrower than AgentByID for middleware that
+// needs tenant scope without loading the full Agent projection.
+func (r *Repository) AgentProjectID(ctx context.Context, accountID, agentID uuid.UUID) (uuid.UUID, error) {
+	var projectID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT a.project_id
+		FROM project_agents a
+		JOIN projects p ON p.id=a.project_id
+		JOIN organization_memberships m ON m.organization_id=p.organization_id
+		WHERE a.id=$1 AND m.account_id=$2`, agentID, accountID).Scan(&projectID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	return projectID, err
+}
+
 func (r *Repository) CreateAgent(ctx context.Context, id, accountID uuid.UUID, input AgentInput) (domain.Agent, error) {
 	normalized, err := normalizeAgentInput(input)
 	if err != nil {

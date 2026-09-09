@@ -28,11 +28,13 @@ claiming the same eligible row concurrently.
   `DATABASE_MAX_CONN_LIFETIME`, and `DATABASE_MAX_CONN_IDLE_TIME` bound the
   PostgreSQL pool in both API and worker processes.
 - `PROJECT_OPERATION_RATE_LIMIT` and `PROJECT_OPERATION_RATE_WINDOW` apply a
-  per-project/per-actor safety budget to function and site deployments,
-  function executions, Agent runs, message sends, storage uploads, database
-  imports/transactions, and backups. A limit returns the normal API error
-  envelope with HTTP 429 and `Retry-After`. This is a platform safety limit,
-  not a billing tier.
+  per-project/per-authenticated-actor safety budget to function and site
+  deployments, function executions, Agent runs, message sends, storage
+  uploads, database imports/transactions, and backups. Authenticated actor
+  buckets do not include client IP, so changing networks cannot reset a
+  tenant/account budget. Anonymous function calls use a separate resolved
+  project/IP bucket. A limit returns the normal API error envelope with HTTP
+  429 and `Retry-After`. This is a platform safety limit, not a billing tier.
 - `/healthz` is liveness only. `/readyz` checks PostgreSQL, required storage,
   function/site stores, and the configured rate limiter. Optional provider
   integrations do not make readiness fail.
@@ -42,9 +44,11 @@ claiming the same eligible row concurrently.
   listener remains the process liveness probe.
 - Every API request gets a validated or generated `X-Request-ID`. The value is
   returned in the response and is present in request, panic, internal-error,
-  and trace-index logs. Arbitrary forwarded client-IP headers are not trusted;
-  the API uses the direct peer address. The ingress must normalize and
-  sanitize `X-Forwarded-Proto` as described in the deployment README.
+  and trace-index logs. Client-IP forwarding is disabled unless the direct
+  peer matches `TRUSTED_PROXY_CIDRS`; then bounded `X-Forwarded-For`,
+  `Forwarded`, or `X-Real-IP` parsing is used with a direct-peer fallback.
+  The ingress must normalize and sanitize forwarded headers as described in
+  the deployment README.
 - SIGTERM/SIGINT cancels worker loops and active provider/build contexts,
   stops new claims, closes the metrics listener, and closes the database pool.
   If a provider ignores cancellation, the database lease recovery path is the

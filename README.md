@@ -172,6 +172,15 @@ for externally HTTPS requests and never pins a plain HTTP development host.
 The CSP assumes same-origin `/v1/*` routing. If the API is deployed on a
 separate origin, add that exact origin to `connect-src` in the proxy config.
 
+For rate-limit client-IP resolution, configure `TRUSTED_PROXY_CIDRS` with the
+IP/CIDR of the direct Nginx peers as seen by the Go API (for example, the
+private network used by the reverse-proxy containers). It is empty by default,
+which trusts no forwarded client-IP headers. The API accepts the current
+Nginx `X-Forwarded-For` chain first, then standards-based `Forwarded`, then
+`X-Real-IP`, and falls back to the direct peer on malformed input. Do not use
+`0.0.0.0/0` or expose the API listener directly while trusting forwarded
+headers.
+
 ## Verification
 
 ```bash

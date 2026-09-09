@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,6 +130,23 @@ func TestLoadDatabasePoolSettings(t *testing.T) {
 	t.Setenv("METRICS_TOKEN", "bad token")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "METRICS_TOKEN") {
 		t.Fatalf("invalid metrics token returned %v", err)
+	}
+}
+
+func TestLoadTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.0.2.10, 2001:db8::/32")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 3 || !cfg.TrustedProxyCIDRs[0].Contains(net.ParseIP("10.1.2.3")) || !cfg.TrustedProxyCIDRs[1].Contains(net.ParseIP("192.0.2.10")) || !cfg.TrustedProxyCIDRs[2].Contains(net.ParseIP("2001:db8::1")) {
+		t.Fatalf("unexpected trusted proxy networks: %+v", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,,192.0.2.10")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+		t.Fatalf("invalid trusted proxy config returned %v", err)
 	}
 }
 
