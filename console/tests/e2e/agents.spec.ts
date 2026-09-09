@@ -167,25 +167,26 @@ async function installFixtures(
       return respond({ agent: requestedAgent });
     }
 
-    if (path === `/v1/agents/${agentId}/runs` && method === "POST") {
+    const agentRunsPath = /^\/v1\/agents\/[^/]+\/runs$/;
+    if (agentRunsPath.test(path) && method === "POST") {
       const body = request.postDataJSON() as { prompt: string };
       run = buildRun("queued", body.prompt);
       runDetailReads = 0;
       cancelled = false;
       return respond({ run }, 202);
     }
-    if (path === `/v1/agents/${agentId}/runs` && method === "GET")
+    if (agentRunsPath.test(path) && method === "GET")
       return respond({ runs: run ? [run] : [], pagination });
 
     if (
-      path === `/v1/agents/${agentId}/runs/${run?.id ?? "run-1"}/cancel` &&
+      /^\/v1\/agents\/[^/]+\/runs\/[^/]+\/cancel$/.test(path) &&
       method === "POST"
     ) {
       cancelled = true;
       run = buildRun("cancelled", run?.prompt);
       return respond({ run });
     }
-    if (path === `/v1/agents/${agentId}/runs/run-1` && method === "GET") {
+    if (/^\/v1\/agents\/[^/]+\/runs\/run-1$/.test(path) && method === "GET") {
       if (!run)
         return respond(
           { error: { code: "not_found", message: "run not found" } },
@@ -209,7 +210,10 @@ async function installFixtures(
       }
       return respond({ run });
     }
-    if (path === `/v1/agents/${agentId}/runs/run-1/logs` && method === "GET") {
+    if (
+      /^\/v1\/agents\/[^/]+\/runs\/run-1\/logs$/.test(path) &&
+      method === "GET"
+    ) {
       const logs =
         run && runDetailReads >= 2
           ? [
