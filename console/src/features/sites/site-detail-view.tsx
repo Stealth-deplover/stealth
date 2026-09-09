@@ -20,7 +20,7 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { LogViewer, type LogLine } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
-import { StatusBadge } from "@/components/ui/badge";
+import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes, formatDate, formatDuration } from "@/lib/format";
@@ -51,6 +51,7 @@ export function SiteDetailView({
   const activate = useActivateSiteDeployment(projectId, siteId);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const site = query.data?.site;
+  const canManage = deployments.data?.can_manage === true;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const openFilePicker = () => fileInputRef.current?.click();
   const handleDeploymentUpload = (file: File) => {
@@ -124,7 +125,8 @@ export function SiteDetailView({
           >
             Inspect
           </Link>
-          {getDeploymentLifecycleStatus(row.original) === "ready" ? (
+          {canManage &&
+          getDeploymentLifecycleStatus(row.original) === "ready" ? (
             <Button
               size="sm"
               variant="outline"
@@ -150,14 +152,18 @@ export function SiteDetailView({
         title={site.name}
         description="Deploy immutable static site archives and inspect their build history."
         actions={
-          <Button
-            type="button"
-            disabled={upload.isPending}
-            onClick={openFilePicker}
-          >
-            <FileUp className="size-4" />
-            {upload.isPending ? "Uploading…" : "Deploy site"}
-          </Button>
+          canManage ? (
+            <Button
+              type="button"
+              disabled={upload.isPending}
+              onClick={openFilePicker}
+            >
+              <FileUp className="size-4" />
+              {upload.isPending ? "Uploading…" : "Deploy site"}
+            </Button>
+          ) : deployments.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <input
@@ -195,14 +201,16 @@ export function SiteDetailView({
                 will be available from the deployment detail.
               </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={upload.isPending}
-              onClick={openFilePicker}
-            >
-              <FileUp className="size-4" /> Deploy site
-            </Button>
+            {canManage ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={upload.isPending}
+                onClick={openFilePicker}
+              >
+                <FileUp className="size-4" /> Deploy site
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}

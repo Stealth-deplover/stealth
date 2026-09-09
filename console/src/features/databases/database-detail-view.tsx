@@ -323,37 +323,40 @@ export function DatabaseDetailView({
         title={database.name}
         description="Manage tables, inspect application data, and capture logical backups."
         actions={
-          <CreateDialog
-            open={createTableOpen}
-            onOpenChange={setCreateTableOpen}
-            triggerLabel="Create table"
-            submitLabel="Create table"
-            pendingLabel="Creating table…"
-            title="Create a table"
-            description="Define a table before adding columns and rows. Application permissions start denied."
-            fields={[
-              {
-                name: "name",
-                label: "Table name",
-                placeholder: "users",
-                help: "Use 2–120 characters.",
-              },
-              {
-                name: "row_security",
-                label: "Row security",
-                type: "select",
-                defaultValue: "true",
-                options: [
-                  { value: "true", label: "Enabled" },
-                  { value: "false", label: "Disabled" },
-                ],
-                help: "When enabled, individual row grants can allow access in addition to table grants.",
-              },
-            ]}
-            onSubmit={handleCreateTable}
-            pending={createTable.isPending}
-            disabled={tables.data?.can_manage === false}
-          />
+          tables.data?.can_manage === true ? (
+            <CreateDialog
+              open={createTableOpen}
+              onOpenChange={setCreateTableOpen}
+              triggerLabel="Create table"
+              submitLabel="Create table"
+              pendingLabel="Creating table…"
+              title="Create a table"
+              description="Define a table before adding columns and rows. Application permissions start denied."
+              fields={[
+                {
+                  name: "name",
+                  label: "Table name",
+                  placeholder: "users",
+                  help: "Use 2–120 characters.",
+                },
+                {
+                  name: "row_security",
+                  label: "Row security",
+                  type: "select",
+                  defaultValue: "true",
+                  options: [
+                    { value: "true", label: "Enabled" },
+                    { value: "false", label: "Disabled" },
+                  ],
+                  help: "When enabled, individual row grants can allow access in addition to table grants.",
+                },
+              ]}
+              onSubmit={handleCreateTable}
+              pending={createTable.isPending}
+            />
+          ) : tables.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <div className="mb-5 flex flex-wrap items-center gap-3 text-xs text-slate-500">
@@ -412,11 +415,15 @@ export function DatabaseDetailView({
                     title="No tables yet"
                     description="Create a table to start storing structured application data."
                     actionLabel={
-                      tables.data?.can_manage === false
-                        ? undefined
-                        : "Create table"
+                      tables.data?.can_manage === true
+                        ? "Create table"
+                        : undefined
                     }
-                    action={() => setCreateTableOpen(true)}
+                    action={
+                      tables.data?.can_manage === true
+                        ? () => setCreateTableOpen(true)
+                        : undefined
+                    }
                   />
                 </div>
               ) : null}
@@ -459,11 +466,15 @@ export function DatabaseDetailView({
                   title="No tables yet"
                   description="Create a table to start storing structured application data."
                   actionLabel={
-                    tables.data?.can_manage === false
-                      ? undefined
-                      : "Create table"
+                    tables.data?.can_manage === true
+                      ? "Create table"
+                      : undefined
                   }
-                  action={() => setCreateTableOpen(true)}
+                  action={
+                    tables.data?.can_manage === true
+                      ? () => setCreateTableOpen(true)
+                      : undefined
+                  }
                 />
               ) : (
                 <DataTable

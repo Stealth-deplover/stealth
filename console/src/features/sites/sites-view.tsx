@@ -36,6 +36,7 @@ export function SitesView({
   const query = useSites(projectId, { cursor: navigation.cursor });
   const create = useCreateSite(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
+  const canManage = query.data?.can_manage === true;
   const handleCreateSite = async (values: Record<string, string>) => {
     const result = await create.mutateAsync({
       name: values.name,
@@ -73,7 +74,7 @@ export function SitesView({
       header: "Deployment",
       cell: ({ row }) =>
         row.original.active_deployment_id ? (
-          <Badge variant="success">active</Badge>
+          <StatusBadge status="active" />
         ) : (
           <span className="text-xs text-slate-600">Not deployed</span>
         ),
@@ -97,20 +98,24 @@ export function SitesView({
         title="Sites"
         description="Deploy static sites from an archive or a public GitHub/GitLab source."
         actions={
-          <CreateDialog
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-            triggerLabel="Create site"
-            submitLabel="Create site"
-            pendingLabel="Creating site…"
-            title="Create a site"
-            description="Create the site boundary first, then add a deployment."
-            fields={[
-              { name: "name", label: "Name", placeholder: "marketing-site" },
-            ]}
-            pending={create.isPending}
-            onSubmit={handleCreateSite}
-          />
+          canManage ? (
+            <CreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              triggerLabel="Create site"
+              submitLabel="Create site"
+              pendingLabel="Creating site…"
+              title="Create a site"
+              description="Create the site boundary first, then add a deployment."
+              fields={[
+                { name: "name", label: "Name", placeholder: "marketing-site" },
+              ]}
+              pending={create.isPending}
+              onSubmit={handleCreateSite}
+            />
+          ) : query.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <ProjectResourceIntro
@@ -119,7 +124,11 @@ export function SitesView({
         description="Site deployments are immutable and asynchronous. Deployment state is read from the actual site endpoints."
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load sites"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.data?.sites.length ? (
         <ResourceTableCard
           data={query.data.sites}
@@ -147,9 +156,13 @@ export function SitesView({
       ) : (
         <EmptyState
           title="No sites yet"
-          description="Sites publish static applications and documentation. Create one to deploy your first archive."
-          actionLabel="Create site"
-          action={() => setCreateOpen(true)}
+          description={
+            canManage
+              ? "Sites publish static applications and documentation. Create one to deploy your first archive."
+              : "No sites are available to manage in this project."
+          }
+          actionLabel={canManage ? "Create site" : undefined}
+          action={canManage ? () => setCreateOpen(true) : undefined}
         />
       )}
     </>

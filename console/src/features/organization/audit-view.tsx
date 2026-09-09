@@ -26,7 +26,11 @@ export function OrganizationAuditView({
         description="Durable activity events emitted by the platform."
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load organization audit events"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : (
         <Card>
           <DataTable

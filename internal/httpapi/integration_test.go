@@ -170,6 +170,13 @@ func TestConsoleIdentityFlowIntegration(t *testing.T) {
 	if !ownerMemberships.CanManage {
 		t.Fatal("organization owner should have can_manage capability")
 	}
+	var ownerProjects struct {
+		CanManage bool `json:"can_manage"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/organizations/"+registration.Organization.ID+"/projects", nil, http.StatusOK, &ownerProjects)
+	if !ownerProjects.CanManage {
+		t.Fatal("organization owner should have project creation capability")
+	}
 
 	var project struct {
 		Project struct {
@@ -272,6 +279,13 @@ func TestConsoleIdentityFlowIntegration(t *testing.T) {
 	requestJSON(t, secondClient, http.MethodGet, server.URL+"/v1/organizations/"+registration.Organization.ID+"/memberships", nil, http.StatusOK, &viewerMemberships)
 	if viewerMemberships.CanManage {
 		t.Fatal("viewer should not have can_manage capability")
+	}
+	var viewerProjects struct {
+		CanManage bool `json:"can_manage"`
+	}
+	requestJSON(t, secondClient, http.MethodGet, server.URL+"/v1/organizations/"+registration.Organization.ID+"/projects", nil, http.StatusOK, &viewerProjects)
+	if viewerProjects.CanManage {
+		t.Fatal("viewer should not have project creation capability")
 	}
 	requestJSON(t, secondClient, http.MethodPost, server.URL+"/v1/organizations/"+registration.Organization.ID+"/projects", map[string]string{"name": "viewer-must-not-write"}, http.StatusForbidden, nil)
 	requestJSON(t, secondClient, http.MethodPatch, server.URL+"/v1/projects/"+project.Project.ID, map[string]string{"name": "viewer-must-not-rename"}, http.StatusForbidden, nil)

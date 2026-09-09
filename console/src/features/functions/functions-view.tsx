@@ -40,6 +40,7 @@ export function FunctionsView({
   const query = useFunctions(projectId, { cursor: navigation.cursor });
   const create = useCreateFunction(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
+  const canManage = query.data?.can_manage === true;
   const handleCreateFunction = async (values: Record<string, string>) => {
     if (!isFunctionRuntime(values.runtime)) {
       toast.error("Runtime is not supported by the current Stealth API.");
@@ -95,7 +96,7 @@ export function FunctionsView({
       header: "Deployment",
       cell: ({ row }) =>
         row.original.active_deployment_id ? (
-          <Badge variant="success">active</Badge>
+          <StatusBadge status="active" />
         ) : (
           <span className="text-xs text-slate-600">Not deployed</span>
         ),
@@ -113,39 +114,43 @@ export function FunctionsView({
         title="Functions"
         description="Run backend code on Stealth-managed infrastructure."
         actions={
-          <CreateDialog
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-            triggerLabel="Create function"
-            submitLabel="Create function"
-            pendingLabel="Creating function…"
-            title="Create a function"
-            description="The function definition is stored by the Go API. Source deployment happens separately through an archive."
-            fields={[
-              { name: "name", label: "Name", placeholder: "api-handler" },
-              {
-                name: "runtime",
-                label: "Runtime",
-                type: "select",
-                defaultValue: FUNCTION_RUNTIME_OPTIONS[0].value,
-                options: FUNCTION_RUNTIME_OPTIONS,
-                help: "Available runtimes are centralized from the current OpenAPI enum.",
-              },
-              {
-                name: "entrypoint",
-                label: "Entrypoint",
-                placeholder: "src/index.main",
-              },
-              {
-                name: "description",
-                label: "Description",
-                type: "textarea",
-                required: false,
-              },
-            ]}
-            pending={create.isPending}
-            onSubmit={handleCreateFunction}
-          />
+          canManage ? (
+            <CreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              triggerLabel="Create function"
+              submitLabel="Create function"
+              pendingLabel="Creating function…"
+              title="Create a function"
+              description="The function definition is stored by the Go API. Source deployment happens separately through an archive."
+              fields={[
+                { name: "name", label: "Name", placeholder: "api-handler" },
+                {
+                  name: "runtime",
+                  label: "Runtime",
+                  type: "select",
+                  defaultValue: FUNCTION_RUNTIME_OPTIONS[0].value,
+                  options: FUNCTION_RUNTIME_OPTIONS,
+                  help: "Available runtimes are centralized from the current OpenAPI enum.",
+                },
+                {
+                  name: "entrypoint",
+                  label: "Entrypoint",
+                  placeholder: "src/index.main",
+                },
+                {
+                  name: "description",
+                  label: "Description",
+                  type: "textarea",
+                  required: false,
+                },
+              ]}
+              pending={create.isPending}
+              onSubmit={handleCreateFunction}
+            />
+          ) : query.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <ProjectResourceIntro
@@ -154,7 +159,11 @@ export function FunctionsView({
         description="Deploy immutable source archives, then inspect builds and executions."
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load functions"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.data?.functions.length ? (
         <ResourceTableCard
           data={query.data.functions}
@@ -184,9 +193,13 @@ export function FunctionsView({
       ) : (
         <EmptyState
           title="No functions yet"
-          description="Functions run backend workloads on demand. Create one to deploy your first workload."
-          actionLabel="Create function"
-          action={() => setCreateOpen(true)}
+          description={
+            canManage
+              ? "Functions run backend workloads on demand. Create one to deploy your first workload."
+              : "No functions are available to manage in this project."
+          }
+          actionLabel={canManage ? "Create function" : undefined}
+          action={canManage ? () => setCreateOpen(true) : undefined}
         />
       )}
     </>

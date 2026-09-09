@@ -150,7 +150,11 @@ export function UsersView({
         }
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load application users"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.isPending ? (
         <Card>
           <DataTable data={[]} columns={columns} loading />

@@ -19,7 +19,11 @@ export function ProjectSettingsView({ projectId }: { projectId: string }) {
         description="Project metadata and backend-owned configuration boundaries."
       />
       {project.error ? (
-        <ErrorState error={project.error} retry={() => project.refetch()} />
+        <ErrorState
+          title="Could not load project settings"
+          error={project.error}
+          retry={() => project.refetch()}
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           <Card>

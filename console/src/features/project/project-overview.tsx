@@ -157,7 +157,13 @@ export function ProjectOverviewView({
   const audit = useProjectAudit(projectId);
   const storageBuckets = useStorageBuckets(projectId);
   if (project.error)
-    return <ErrorState error={project.error} retry={() => project.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load project"
+        error={project.error}
+        retry={() => project.refetch()}
+      />
+    );
   if (project.isPending) return <LoadingState rows={6} />;
   const current = project.data?.project;
   const usageData = usage.data?.usage;

@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -18,7 +19,13 @@ export function AuthSettingsView({ projectId }: { projectId: string }) {
   const update = useUpdateAuthSettings(projectId);
   const [origins, setOrigins] = useState<string | null>(null);
   if (query.error)
-    return <ErrorState error={query.error} retry={() => query.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load Auth settings"
+        error={query.error}
+        retry={() => query.refetch()}
+      />
+    );
   if (query.isLoading) return <LoadingState rows={4} />;
   const settings = query.data?.settings;
   if (!settings)
@@ -29,12 +36,14 @@ export function AuthSettingsView({ projectId }: { projectId: string }) {
       />
     );
   const originValue = origins ?? settings.cors_origins.join("\n");
+  const canManage = query.data?.can_manage === true;
   return (
     <>
       <PageHeader
         eyebrow="Project Auth"
         title="Auth settings"
         description="Configure registration and explicit browser CORS origins for the project application API."
+        actions={canManage ? null : <Badge variant="neutral">Read-only</Badge>}
       />
       <Card>
         <CardHeader>
@@ -50,17 +59,26 @@ export function AuthSettingsView({ projectId }: { projectId: string }) {
                 The project application API enforces this setting.
               </p>
             </div>
-            <Button
-              variant={settings.registration_enabled ? "default" : "outline"}
-              onClick={() =>
-                update.mutate(
-                  { registration_enabled: !settings.registration_enabled },
-                  { onSuccess: () => toast.success("Auth setting updated") },
-                )
-              }
-            >
-              {settings.registration_enabled ? "Enabled" : "Disabled"}
-            </Button>
+            {canManage ? (
+              <Button
+                variant={settings.registration_enabled ? "default" : "outline"}
+                disabled={update.isPending}
+                onClick={() =>
+                  update.mutate(
+                    { registration_enabled: !settings.registration_enabled },
+                    { onSuccess: () => toast.success("Auth setting updated") },
+                  )
+                }
+              >
+                {settings.registration_enabled ? "Enabled" : "Disabled"}
+              </Button>
+            ) : (
+              <Badge
+                variant={settings.registration_enabled ? "success" : "neutral"}
+              >
+                {settings.registration_enabled ? "Enabled" : "Disabled"}
+              </Badge>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -74,26 +92,35 @@ export function AuthSettingsView({ projectId }: { projectId: string }) {
             id="cors"
             className="mt-2"
             value={originValue}
+            disabled={!canManage || update.isPending}
             onChange={(event) => setOrigins(event.target.value)}
             placeholder="https://app.example.com"
           />
-          <Button
-            className="mt-3"
-            disabled={update.isPending}
-            onClick={() =>
-              update.mutate(
-                {
-                  cors_origins: originValue
-                    .split("\n")
-                    .map((origin) => origin.trim())
-                    .filter(Boolean),
-                },
-                { onSuccess: () => toast.success("Origins saved") },
-              )
-            }
-          >
-            <Settings2 className="size-4" /> Save origins
-          </Button>
+          {canManage ? (
+            <Button
+              className="mt-3"
+              disabled={update.isPending}
+              onClick={() =>
+                update.mutate(
+                  {
+                    cors_origins: originValue
+                      .split("\n")
+                      .map((origin) => origin.trim())
+                      .filter(Boolean),
+                  },
+                  { onSuccess: () => toast.success("Origins saved") },
+                )
+              }
+            >
+              <Settings2 className="size-4" /> Save origins
+            </Button>
+          ) : null}
+          {update.error ? (
+            <ErrorState
+              title="Could not update Auth settings"
+              error={update.error}
+            />
+          ) : null}
         </CardContent>
       </Card>
     </>

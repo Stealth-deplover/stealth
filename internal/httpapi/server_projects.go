@@ -20,7 +20,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, next, err := s.repo.ListProjects(r.Context(), orgID, uuid.Must(uuid.Parse(accountFrom(r).ID)), limit, cursor)
+	items, next, canManage, err := s.repo.ListProjects(r.Context(), orgID, uuid.Must(uuid.Parse(accountFrom(r).ID)), limit, cursor)
 	if authzError(w, err) {
 		return
 	}
@@ -28,7 +28,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"projects": items, "pagination": paginationOf(limit, next)})
+	writeJSON(w, http.StatusOK, map[string]any{"projects": items, "pagination": paginationOf(limit, next), "can_manage": canManage})
 }
 
 type projectRequest struct {

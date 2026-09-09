@@ -65,7 +65,11 @@ export function OrganizationsIndexView() {
         }
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load organizations"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.isLoading ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 3 }, (_, index) => (

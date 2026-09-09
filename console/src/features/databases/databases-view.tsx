@@ -14,6 +14,7 @@ import { DataTable } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
@@ -36,6 +37,7 @@ export function DatabasesView({
   const query = useDatabases(projectId, { cursor: navigation.cursor });
   const create = useCreateDatabase(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
+  const canManage = query.data?.can_manage === true;
   const handleCreateDatabase = async (values: Record<string, string>) => {
     const result = await create.mutateAsync({
       name: databaseName.parse(values.name),
@@ -94,18 +96,22 @@ export function DatabasesView({
         title="Databases"
         description="Browse typed schemas, rows, indexes, relationships, and backups."
         actions={
-          <CreateDialog
-            open={createOpen}
-            onOpenChange={setCreateOpen}
-            triggerLabel="Create database"
-            submitLabel="Create database"
-            pendingLabel="Creating database…"
-            title="Create a database"
-            description="A database gives your project a typed schema boundary."
-            fields={[{ name: "name", label: "Name", placeholder: "primary" }]}
-            pending={create.isPending}
-            onSubmit={handleCreateDatabase}
-          />
+          canManage ? (
+            <CreateDialog
+              open={createOpen}
+              onOpenChange={setCreateOpen}
+              triggerLabel="Create database"
+              submitLabel="Create database"
+              pendingLabel="Creating database…"
+              title="Create a database"
+              description="A database gives your project a typed schema boundary."
+              fields={[{ name: "name", label: "Name", placeholder: "primary" }]}
+              pending={create.isPending}
+              onSubmit={handleCreateDatabase}
+            />
+          ) : query.data ? (
+            <Badge variant="neutral">Read-only</Badge>
+          ) : null
         }
       />
       <ProjectResourceIntro
@@ -114,7 +120,11 @@ export function DatabasesView({
         description="Organize structured application data into tables, inspect rows, and manage backups."
       />
       {query.isError ? (
-        <ErrorState error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load databases"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.data?.databases.length ||
         navigation.canFirst ||
         nextCursor(query.data) ? (
@@ -138,9 +148,13 @@ export function DatabasesView({
       ) : (
         <EmptyState
           title="No databases yet"
-          description="Create a database to define tables and browse rows through the platform API."
-          actionLabel="Create database"
-          action={() => setCreateOpen(true)}
+          description={
+            canManage
+              ? "Create a database to define tables and browse rows through the platform API."
+              : "No databases are available to manage in this project."
+          }
+          actionLabel={canManage ? "Create database" : undefined}
+          action={canManage ? () => setCreateOpen(true) : undefined}
         />
       )}
     </>

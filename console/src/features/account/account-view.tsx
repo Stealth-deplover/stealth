@@ -36,7 +36,13 @@ export function AccountView() {
   const current = account.data?.account;
 
   if (account.error)
-    return <ErrorState error={account.error} retry={() => account.refetch()} />;
+    return (
+      <ErrorState
+        title="Could not load account"
+        error={account.error}
+        retry={() => account.refetch()}
+      />
+    );
   if (!current) return null;
 
   const submitPassword = async (event: React.FormEvent<HTMLFormElement>) => {
