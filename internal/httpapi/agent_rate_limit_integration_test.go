@@ -102,7 +102,19 @@ func TestAgentRunRateLimitUsesProjectScopeIntegration(t *testing.T) {
 	agentTwo := createAgent(projectOne, "Agent Two")
 	agentThree := createAgent(projectTwo, "Agent Three")
 
-	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentOne+"/runs", map[string]string{"prompt": "first project run"}, http.StatusAccepted, nil)
+	var firstRun struct {
+		Run struct {
+			ID string `json:"id"`
+		} `json:"run"`
+	}
+	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentOne+"/runs", map[string]string{"prompt": "first project run"}, http.StatusAccepted, &firstRun)
 	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentTwo+"/runs", map[string]string{"prompt": "same project budget"}, http.StatusTooManyRequests, nil)
-	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentThree+"/runs", map[string]string{"prompt": "independent project budget"}, http.StatusAccepted, nil)
+	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentOne+"/runs/"+firstRun.Run.ID+"/cancel", nil, http.StatusOK, nil)
+	var thirdRun struct {
+		Run struct {
+			ID string `json:"id"`
+		} `json:"run"`
+	}
+	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentThree+"/runs", map[string]string{"prompt": "independent project budget"}, http.StatusAccepted, &thirdRun)
+	requestJSON(t, ownerClient, http.MethodPost, server.URL+"/v1/agents/"+agentThree+"/runs/"+thirdRun.Run.ID+"/cancel", nil, http.StatusOK, nil)
 }
