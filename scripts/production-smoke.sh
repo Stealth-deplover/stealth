@@ -31,6 +31,19 @@ wait_for() {
 	return 1
 }
 
+expect_status() {
+	local name="$1"
+	local url="$2"
+	local expected="$3"
+	local actual
+	actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 5 "$url" || true)"
+	if [ "$actual" != "$expected" ]; then
+		printf '%s: expected HTTP %s, got %s (%s)\n' "$name" "$expected" "$actual" "$url" >&2
+		return 1
+	fi
+	printf '%s: %s (HTTP %s)\n' "$name" "$url" "$actual"
+}
+
 wait_for "API liveness" "${api_url%/}/healthz"
 wait_for "API readiness" "${api_url%/}/readyz"
 wait_for "API build metadata" "${api_url%/}/version"
@@ -38,6 +51,7 @@ wait_for "Console" "${console_url%/}/"
 
 if [ -n "$proxy_url" ]; then
 	wait_for "Reverse proxy" "${proxy_url%/}/"
+	expect_status "Reverse proxy API route" "${proxy_url%/}/v1/account" "401"
 fi
 
 printf 'HTTP production smoke checks passed\n'

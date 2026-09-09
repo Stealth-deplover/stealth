@@ -16,9 +16,28 @@ fi
 
 compose=(docker compose --env-file "$env_file" -f "$compose_file")
 cleanup() {
-	"${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+	local exit_code=$?
+	if [ "$exit_code" -ne 0 ]; then
+		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
+		"${compose[@]}" ps >&2 || true
+		"${compose[@]}" logs --tail=80 api worker migrate console proxy >&2 || true
+	fi
+	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
+		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+	else
+		"${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+	fi
+	exit "$exit_code"
 }
 trap cleanup EXIT
+
+case "${SMOKE_REMOVE_VOLUMES:-false}" in
+	true|false) ;;
+	*)
+		printf 'SMOKE_REMOVE_VOLUMES must be true or false\n' >&2
+		exit 2
+		;;
+esac
 
 "${compose[@]}" up -d postgres redis
 "${compose[@]}" up migrate

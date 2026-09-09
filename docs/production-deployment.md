@@ -154,8 +154,9 @@ not guaranteed compatible.
 ## Smoke and troubleshooting
 
 The smoke script uses bounded `curl` polling only. It checks API `/healthz`,
-API `/readyz`, API `/version`, and the Console root; it does not use
-Playwright. For an isolated Compose check:
+API `/readyz`, API `/version`, the Console root, the proxy root, and the
+proxy's `/v1/account` routing (expected unauthenticated `401`); it does not
+use Playwright. For an isolated Compose check:
 
 ```bash
 ENV_FILE=.env.production ./scripts/compose-production-smoke.sh
