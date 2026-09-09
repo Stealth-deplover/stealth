@@ -19,6 +19,7 @@ func (s *Server) routes() http.Handler {
 	r.Use(s.requestID, observability.HTTPMiddlewareWithRecorder(s.recordHTTPTrace), s.requestLog, s.recoverer, s.limitRequestBody, s.cors)
 	r.Get("/healthz", s.health)
 	r.Get("/readyz", s.ready)
+	r.Get("/version", s.version)
 	r.Get("/metrics", s.metricsHandler)
 	r.Route("/v1", func(r chi.Router) {
 		s.registerAccountRoutes(r)

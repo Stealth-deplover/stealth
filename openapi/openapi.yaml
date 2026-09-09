@@ -17,6 +17,12 @@ paths:
       responses:
         '200': { description: Dependencies are ready, content: { application/json: { schema: { $ref: '#/components/schemas/Status' } } } }
         '503': { $ref: '#/components/responses/NotReady' }
+  /version:
+    get:
+      operationId: version
+      description: Safe build metadata for release and operator checks. No configuration or secrets are returned.
+      responses:
+        '200': { description: Build metadata, content: { application/json: { schema: { $ref: '#/components/schemas/BuildInfo' } } } }
   /v1/account/registrations:
     post:
       operationId: registerAccount
@@ -2049,6 +2055,7 @@ components:
     ValidationError: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
   schemas:
     Status: { type: object, required: [status], properties: { status: { type: string, enum: [ok, ready] } } }
+    BuildInfo: { type: object, required: [version, commit, build_time], properties: { version: { type: string }, commit: { type: string }, build_time: { type: string } } }
     RegisterRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }, organization_name: { type: string, minLength: 2, maxLength: 120 } } }
     LoginRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, writeOnly: true } } }
     AuthVerificationRequest: { type: object, additionalProperties: false, description: Empty JSON object by default; an optional trusted url may receive the tokenized link., properties: { url: { type: string, format: uri, maxLength: 2048 } } }

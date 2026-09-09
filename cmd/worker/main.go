@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nazxf/stealth-api/internal/agentrunner"
+	"github.com/nazxf/stealth-api/internal/buildinfo"
 	"github.com/nazxf/stealth-api/internal/config"
 	"github.com/nazxf/stealth-api/internal/functionrunner"
 	"github.com/nazxf/stealth-api/internal/functionsecret"
@@ -43,6 +45,7 @@ func main() {
 		logger.Error("sites configuration error", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("starting worker", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
 	telemetryShutdown, err := observability.Setup(context.Background(), observability.TracerConfig{
 		Endpoint:    cfg.TelemetryOTLPEndpoint,
 		ServiceName: firstNonEmpty(cfg.TelemetryServiceName, "stealth-worker"),
@@ -405,6 +408,11 @@ func workerMetricsHandler(metrics http.Handler, metricsToken string) http.Handle
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(buildinfo.Current())
 	})
 	return mux
 }

@@ -1,0 +1,201 @@
+name: ${COMPOSE_PROJECT_NAME:-stealth}
+
+# This file is deliberately image-first: release images are pinned by the
+# operator through .env.production rather than rebuilt implicitly on a host.
+# The local storage volume is the portable baseline; production installations
+# using S3-compatible storage should set STORAGE_DRIVER=s3 and the STORAGE_S3_*
+# values without adding another bundled service.
+x-backend-environment: &backend-environment
+  DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable"
+  DATABASE_MAX_CONNS: "${DATABASE_MAX_CONNS:-16}"
+  DATABASE_MIN_CONNS: "${DATABASE_MIN_CONNS:-2}"
+  DATABASE_MAX_CONN_LIFETIME: "${DATABASE_MAX_CONN_LIFETIME:-1h}"
+  DATABASE_MAX_CONN_IDLE_TIME: "${DATABASE_MAX_CONN_IDLE_TIME:-30m}"
+  REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0"
+  FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+  PUBLIC_APP_URL: "${PUBLIC_APP_URL:?set PUBLIC_APP_URL}"
+  CONSOLE_CORS_ORIGINS: "${CONSOLE_CORS_ORIGINS:-}"
+  COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+  TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
+  METRICS_TOKEN: "${METRICS_TOKEN:-}"
+  PROJECT_OPERATION_RATE_LIMIT: "${PROJECT_OPERATION_RATE_LIMIT:-120}"
+  PROJECT_OPERATION_RATE_WINDOW: "${PROJECT_OPERATION_RATE_WINDOW:-1m}"
+  AUTH_RATE_LIMIT: "${AUTH_RATE_LIMIT:-10}"
+  AUTH_RATE_WINDOW: "${AUTH_RATE_WINDOW:-1m}"
+  STORAGE_ROOT: /var/lib/stealth/storage
+  STORAGE_DRIVER: "${STORAGE_DRIVER:-local}"
+  STORAGE_MAX_FILE_SIZE: "${STORAGE_MAX_FILE_SIZE:-50MiB}"
+  STORAGE_DEFAULT_QUOTA_BYTES: "${STORAGE_DEFAULT_QUOTA_BYTES:-1GiB}"
+  STORAGE_S3_ENDPOINT: "${STORAGE_S3_ENDPOINT:-}"
+  STORAGE_S3_REGION: "${STORAGE_S3_REGION:-us-east-1}"
+  STORAGE_S3_BUCKET: "${STORAGE_S3_BUCKET:-}"
+  STORAGE_S3_ACCESS_KEY: "${STORAGE_S3_ACCESS_KEY:-}"
+  STORAGE_S3_SECRET_KEY: "${STORAGE_S3_SECRET_KEY:-}"
+  STORAGE_S3_USE_SSL: "${STORAGE_S3_USE_SSL:-true}"
+  STORAGE_S3_PATH_STYLE: "${STORAGE_S3_PATH_STYLE:-true}"
+  STORAGE_S3_PREFIX: "${STORAGE_S3_PREFIX:-}"
+  FUNCTIONS_RUNNER_ENABLED: "${FUNCTIONS_RUNNER_ENABLED:-true}"
+  FUNCTIONS_WORKER_ID: "${FUNCTIONS_WORKER_ID:-stealth-worker}"
+  FUNCTIONS_RUNNER_POLL: "${FUNCTIONS_RUNNER_POLL:-500ms}"
+  FUNCTIONS_RUNNER_LEASE_AGE: "${FUNCTIONS_RUNNER_LEASE_AGE:-20m}"
+  FUNCTIONS_RUNNER_BUILD_TIMEOUT: "${FUNCTIONS_RUNNER_BUILD_TIMEOUT:-15m}"
+  FUNCTIONS_RUNNER_STAGING_ROOT: /var/lib/stealth/runner-staging
+  FUNCTIONS_RUNNER_STAGING_VOLUME: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
+  FUNCTIONS_RUNNER_METRICS_ADDR: 127.0.0.1:9091
+  FUNCTIONS_RUNNER_HELPER_IMAGE: "${FUNCTIONS_RUNNER_HELPER_IMAGE:-alpine:3.22}"
+  FUNCTIONS_RUNNER_NODE_IMAGE: "${FUNCTIONS_RUNNER_NODE_IMAGE:-node:22-alpine}"
+  FUNCTIONS_RUNNER_PYTHON_IMAGE: "${FUNCTIONS_RUNNER_PYTHON_IMAGE:-python:3.13-alpine}"
+  FUNCTIONS_RUNNER_GO_IMAGE: "${FUNCTIONS_RUNNER_GO_IMAGE:-golang:1.24-alpine}"
+  AGENT_RUNNER_ENABLED: "${AGENT_RUNNER_ENABLED:-false}"
+  AGENT_RUNNER_EXECUTION_TIMEOUT: "${AGENT_RUNNER_EXECUTION_TIMEOUT:-15m}"
+  SITES_MAX_ARTIFACT_SIZE: "${SITES_MAX_ARTIFACT_SIZE:-50MiB}"
+  SITES_DEFAULT_QUOTA_BYTES: "${SITES_DEFAULT_QUOTA_BYTES:-1GiB}"
+  SITES_MAX_EXPANDED_BYTES: "${SITES_MAX_EXPANDED_BYTES:-256MiB}"
+  SITES_MAX_FILES: "${SITES_MAX_FILES:-4096}"
+  SITES_GIT_FETCH_CONCURRENCY: "${SITES_GIT_FETCH_CONCURRENCY:-4}"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?set POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER:?set POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [stealth]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD}"
+    command: ["sh", "-ec", "exec redis-server --requirepass \"$${REDIS_PASSWORD}\" --appendonly no"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    networks: [stealth]
+
+  migrate:
+    image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
+    restart: "no"
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable"
+      DATABASE_MAX_CONNS: "${DATABASE_MAX_CONNS:-16}"
+      DATABASE_MIN_CONNS: "${DATABASE_MIN_CONNS:-2}"
+      DATABASE_MAX_CONN_LIFETIME: "${DATABASE_MAX_CONN_LIFETIME:-1h}"
+      DATABASE_MAX_CONN_IDLE_TIME: "${DATABASE_MAX_CONN_IDLE_TIME:-30m}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [stealth]
+
+  api:
+    image: "${STEALTH_API_IMAGE:?set STEALTH_API_IMAGE to a versioned image}"
+    restart: unless-stopped
+    environment: *backend-environment
+    volumes:
+      - stealth_storage:/var/lib/stealth/storage
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-18080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      stealth:
+        aliases: [stealth-api]
+
+  worker:
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment: *backend-environment
+    volumes:
+      - stealth_storage:/var/lib/stealth/storage
+      - function_runner_staging:/var/lib/stealth/runner-staging
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [stealth]
+
+  console:
+    image: "${STEALTH_CONSOLE_IMAGE:?set STEALTH_CONSOLE_IMAGE to a versioned image}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "127.0.0.1:${CONSOLE_HOST_PORT:-13000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      stealth:
+        aliases: [stealth-web]
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      console:
+        condition: service_healthy
+    volumes:
+      - ./console/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${PROXY_HTTP_BIND:-0.0.0.0}:${PROXY_HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [stealth]
+
+volumes:
+  postgres_data:
+    name: "${POSTGRES_VOLUME_NAME:-stealth_postgres_data}"
+  stealth_storage:
+    name: "${STORAGE_VOLUME_NAME:-stealth_storage}"
+  function_runner_staging:
+    name: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
+
+networks:
+  stealth:
+    name: "${STEALTH_NETWORK_NAME:-stealth_network}"
+    ipam:
+      config:
+        - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"

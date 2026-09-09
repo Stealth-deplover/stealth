@@ -15,7 +15,16 @@ RUN mkdir -p public && npm run build
 
 FROM node:24-alpine AS runner
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 WORKDIR /app
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="Stealth Console" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$COMMIT_SHA" \
+      org.opencontainers.image.created="$BUILD_TIME" \
+      org.opencontainers.image.source="https://github.com/Stealth-deplover/stealth"
 RUN addgroup -S nodejs -g 1001 && adduser -S nextjs -u 1001 -G nodejs
 COPY --from=builder --chown=nextjs:nodejs /app/console/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/console/.next/static ./.next/static
