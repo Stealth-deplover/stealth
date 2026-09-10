@@ -41,3 +41,32 @@ Use Conventional Commits, matching history such as `fix(realtime): bound prune b
 ## Security & Configuration
 
 Copy example env files for local work and never commit secrets. Keep private values out of `NEXT_PUBLIC_*`. Treat sessions and API keys as secrets; configure CORS and trusted proxy CIDRs narrowly. Read `docs/production-deployment.md` before production changes.
+
+## Project Agent Skills
+
+The project-local skills under `.agents/skills/` and `.claude/skills/` are committed for Codex and Claude Code. They are advisory workflows, not permission to redesign Stealth.
+
+- `vercel-react-best-practices`: Use when editing `console/`, React components, Next.js routes or layouts, client/server boundaries, rendering, or data fetching. Do not use it for unrelated Go backend work.
+- `web-design-guidelines`: Use when creating or modifying Console UI, reviewing accessibility, visual hierarchy, forms, responsive layouts, navigation, or design-system usage. Preserve the established Stealth design language and do not use it to justify unnecessary visual redesigns.
+- `diagnosing-bugs`: Use for non-trivial defects such as failing CI, installer or worker failures, regressions, concurrency or performance problems, intermittent failures, and difficult Console bugs. Do not invoke the full workflow for trivial typos or obvious one-line fixes. For substantial bugs, establish a reproducible red/green feedback loop first and redact secrets from logs and captured output.
+- `improve-codebase-architecture`: Use only for explicit architecture audits, refactor planning, coupling or testability reviews, module-boundary work, or making the codebase easier for humans and agents to navigate. Propose broad architecture changes before implementing them; do not refactor architecture during ordinary feature work.
+
+Repository instructions and established architectural decisions take precedence over generic skill recommendations. If a skill conflicts with `AGENTS.md`, nested instructions, existing architecture, API compatibility, security boundaries, or ADR/project documentation, follow the repository-specific rule and report the conflict. Keep every change scoped to the task.
+
+Use this hierarchy: the specific task or user request, repository-specific instructions, applicable nested instructions, relevant skill guidance, then generic agent defaults.
+
+### Skill Maintenance and Security
+
+Inspect installed project skills with:
+
+```bash
+npx skills@latest list
+```
+
+Update them with:
+
+```bash
+npx skills@latest update
+```
+
+Review skill updates like dependency updates. Changes to `.agents/skills/`, `.claude/skills/`, or `skills-lock.json` require inspection of `SKILL.md`, `scripts/`, hooks, shell commands, and external network calls before they are committed. Do not commit credentials, tokens, caches, session history, agent logs, or machine-local configuration.
