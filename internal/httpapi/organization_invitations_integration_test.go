@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nazxf/stealth-api/internal/migrate"
 )
 
 func TestOrganizationInvitationIntegration(t *testing.T) {

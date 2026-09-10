@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 func (s *Server) getOrganizationPlan(w http.ResponseWriter, r *http.Request) {

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/apikey"
+	"github.com/Stealth-deplover/stealth/internal/auth"
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/ratelimit"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/apikey"
-	"github.com/nazxf/stealth-api/internal/auth"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/ratelimit"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 func (s *Server) requireProjectManagement(next http.Handler) http.Handler {

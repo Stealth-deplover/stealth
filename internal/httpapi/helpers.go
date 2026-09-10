@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 type apiError struct {

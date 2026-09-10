@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 )
 
 func TestInvitationStatus(t *testing.T) {

@@ -5,6 +5,14 @@ for `stealth-api`, `stealth-worker`, `stealth-migrate`, and `stealth-console`.
 The current deployment does not promise rolling upgrades between incompatible
 API/worker/schema versions.
 
+## Go module identity
+
+The canonical Go module path is now `github.com/Stealth-deplover/stealth`.
+Consumers of the previous `github.com/nazxf/stealth-api` module must update
+their imports and `go.mod` requirements; Go does not automatically treat the
+two paths as the same module. No compatibility `replace` directive or
+forwarding packages are provided.
+
 ## Upgrade procedure
 
 1. Read the GitHub Release notes for the target version, especially migration

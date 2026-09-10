@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/httpapi"
+	"github.com/Stealth-deplover/stealth/internal/migrate"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nazxf/stealth-api/internal/config"
-	"github.com/nazxf/stealth-api/internal/httpapi"
-	"github.com/nazxf/stealth-api/internal/migrate"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 func TestStorageBinaryQuotaPermissionsAndAPIKeyRevocationIntegration(t *testing.T) {

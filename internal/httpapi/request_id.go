@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/requestcontext"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/requestcontext"
 )
 
 const requestIDHeader = "X-Request-ID"

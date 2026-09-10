@@ -236,7 +236,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/amd64 dist/arm64
-          ldflags="-s -w -X github.com/nazxf/stealth-api/internal/buildinfo.Version=${VERSION} -X github.com/nazxf/stealth-api/internal/buildinfo.Commit=${COMMIT_SHA} -X github.com/nazxf/stealth-api/internal/buildinfo.BuildTime=${BUILD_TIME}"
+          ldflags="-s -w -X github.com/Stealth-deplover/stealth/internal/buildinfo.Version=${VERSION} -X github.com/Stealth-deplover/stealth/internal/buildinfo.Commit=${COMMIT_SHA} -X github.com/Stealth-deplover/stealth/internal/buildinfo.BuildTime=${BUILD_TIME}"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldflags" -o dist/amd64/stealth ./cmd/stealth
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$ldflags" -o dist/arm64/stealth ./cmd/stealth
           tar -czf dist/stealth_Linux_x86_64.tar.gz -C dist/amd64 stealth

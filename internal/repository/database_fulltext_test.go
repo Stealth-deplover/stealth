@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	dbcore "github.com/Stealth-deplover/stealth/internal/database"
 	"github.com/google/uuid"
-	dbcore "github.com/nazxf/stealth-api/internal/database"
 )
 
 func TestBuildFullTextIndexDDL(t *testing.T) {

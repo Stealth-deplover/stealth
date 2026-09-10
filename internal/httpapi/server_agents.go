@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/config"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 type agentRequest struct {

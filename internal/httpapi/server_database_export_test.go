@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	dbcore "github.com/nazxf/stealth-api/internal/database"
-	"github.com/nazxf/stealth-api/internal/repository"
+	dbcore "github.com/Stealth-deplover/stealth/internal/database"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 func TestParseDatabaseExportLimit(t *testing.T) {

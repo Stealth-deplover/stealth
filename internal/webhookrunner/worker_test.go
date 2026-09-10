@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/functionsecret"
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 func TestBlockedAddress(t *testing.T) {

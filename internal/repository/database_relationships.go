@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	dbcore "github.com/Stealth-deplover/stealth/internal/database"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	dbcore "github.com/nazxf/stealth-api/internal/database"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 const databaseRelationshipProjection = `id,project_id,database_id,source_table_id,source_column_key,target_table_id,relationship_type,on_delete,created_at,updated_at`

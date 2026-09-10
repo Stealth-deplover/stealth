@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/config"
-	"github.com/nazxf/stealth-api/internal/ratelimit"
 )
 
 func TestDecodeJSONRejectsUnsupportedContentType(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 func TestRegistryNormalizesFixedProviderIdentity(t *testing.T) {

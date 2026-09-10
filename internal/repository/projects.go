@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 func (r *Repository) ListProjects(ctx context.Context, organizationID, accountID uuid.UUID, limit int, cursor string) ([]domain.Project, string, bool, error) {

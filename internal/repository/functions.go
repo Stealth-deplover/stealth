@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/apikey"
+	"github.com/Stealth-deplover/stealth/internal/database"
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/apikey"
-	"github.com/nazxf/stealth-api/internal/database"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/functionsecret"
 )
 
 var (

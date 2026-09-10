@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 func TestDecodeRealtimeEventAndApplicationVisibility(t *testing.T) {

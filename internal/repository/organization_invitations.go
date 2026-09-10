@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 // ErrInvalidOrganizationInvitation is intentionally shared by missing,

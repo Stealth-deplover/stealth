@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/observability"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/observability"
-	"github.com/nazxf/stealth-api/internal/repository"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 )

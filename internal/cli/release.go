@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/nazxf/stealth-api/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 )
 
 var releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)

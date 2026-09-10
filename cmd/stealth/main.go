@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/nazxf/stealth-api/internal/cli"
+	"github.com/Stealth-deplover/stealth/internal/cli"
 )
 
 func main() {

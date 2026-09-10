@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/apikey"
+	dbcore "github.com/Stealth-deplover/stealth/internal/database"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/apikey"
-	dbcore "github.com/nazxf/stealth-api/internal/database"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 const rowProjection = `r.id,r.table_id,r.project_id,r.data,r.read_permissions,r.update_permissions,r.delete_permissions,r.creator_project_user_id,r.created_at,r.updated_at`

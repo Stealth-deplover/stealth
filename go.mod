@@ -1,4 +1,4 @@
-module github.com/nazxf/stealth-api
+module github.com/Stealth-deplover/stealth
 
 go 1.26.0
 

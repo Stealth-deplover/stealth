@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 type siteDomainRequest struct {

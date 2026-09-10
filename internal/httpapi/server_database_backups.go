@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/repository"
-	"github.com/nazxf/stealth-api/internal/storage"
 )
 
 type databaseBackupCreateResponse struct {

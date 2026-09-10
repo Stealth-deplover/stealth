@@ -3,8 +3,8 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/nazxf/stealth-api/internal/buildinfo"
-	"github.com/nazxf/stealth-api/internal/observability"
+	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/observability"
 )
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

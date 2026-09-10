@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 func (r *Repository) CreateSession(ctx context.Context, sessionID, accountID uuid.UUID, tokenHash []byte, expires time.Time) error {

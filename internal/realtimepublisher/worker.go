@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/observability"
-	"github.com/nazxf/stealth-api/internal/realtime"
-	"github.com/nazxf/stealth-api/internal/repository"
-	"github.com/nazxf/stealth-api/internal/retry"
+	"github.com/Stealth-deplover/stealth/internal/observability"
+	"github.com/Stealth-deplover/stealth/internal/realtime"
+	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/retry"
 )
 
 const (

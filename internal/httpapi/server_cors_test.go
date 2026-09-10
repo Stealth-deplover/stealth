@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/config"
 )
 
 func TestProjectIDFromCORSPath(t *testing.T) {

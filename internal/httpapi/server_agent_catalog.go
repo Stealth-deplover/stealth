@@ -3,8 +3,8 @@ package httpapi
 import (
 	"net/http"
 
-	"github.com/nazxf/stealth-api/internal/config"
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 // agentCatalogExecution describes the current control-plane boundary. The

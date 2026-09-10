@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/config"
 )
 
 var ErrDisabled = errors.New("email delivery is disabled")

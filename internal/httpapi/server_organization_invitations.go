@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/auth"
-	"github.com/nazxf/stealth-api/internal/domain"
-	"github.com/nazxf/stealth-api/internal/repository"
-	"github.com/nazxf/stealth-api/internal/validate"
+	"github.com/Stealth-deplover/stealth/internal/auth"
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/validate"
 )
 
 type organizationInvitationRequest struct {

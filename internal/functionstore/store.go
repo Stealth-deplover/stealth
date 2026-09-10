@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/storage"
 )
 
 var (

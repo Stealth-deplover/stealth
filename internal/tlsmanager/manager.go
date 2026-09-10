@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 )

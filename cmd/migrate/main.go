@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nazxf/stealth-api/internal/config"
-	"github.com/nazxf/stealth-api/internal/migrate"
 )
 
 func main() {

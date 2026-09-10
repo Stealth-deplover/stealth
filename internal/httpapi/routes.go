@@ -3,8 +3,8 @@ package httpapi
 import (
 	"net/http"
 
+	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/go-chi/chi/v5"
-	"github.com/nazxf/stealth-api/internal/observability"
 )
 
 // routes assembles the console API handler: telemetry and security

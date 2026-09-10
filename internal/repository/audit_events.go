@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 // ListAuditEvents returns the newest tenant audit events visible to a member.

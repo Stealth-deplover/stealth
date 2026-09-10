@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nazxf/stealth-api/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 )
 
 func TestNormalizeAgentRunPrompt(t *testing.T) {

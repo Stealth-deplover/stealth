@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/functionsecret"
-	"github.com/nazxf/stealth-api/internal/repository"
-	"github.com/nazxf/stealth-api/internal/retry"
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/retry"
 )
 
 const (

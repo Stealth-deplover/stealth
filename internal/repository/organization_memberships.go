@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/nazxf/stealth-api/internal/domain"
 )
 
 // OrganizationMembershipRole reports whether a role may be assigned by the

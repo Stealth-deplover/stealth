@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 type agentRunRequest struct {

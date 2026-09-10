@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 var (

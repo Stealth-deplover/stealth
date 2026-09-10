@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/functionstore"
+	"github.com/Stealth-deplover/stealth/internal/observability"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/functionsecret"
-	"github.com/nazxf/stealth-api/internal/functionstore"
-	"github.com/nazxf/stealth-api/internal/observability"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 const (

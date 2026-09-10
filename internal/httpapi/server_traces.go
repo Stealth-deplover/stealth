@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/nazxf/stealth-api/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
 
 func (s *Server) listOrganizationTraces(w http.ResponseWriter, r *http.Request) {

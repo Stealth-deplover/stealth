@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nazxf/stealth-api/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 )
 
 func TestValidatePublicURL(t *testing.T) {

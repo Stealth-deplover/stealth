@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Stealth-deplover/stealth/internal/auth"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/auth"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 type updateAccountPasswordRequest struct {

@@ -6,7 +6,7 @@ COPY . .
 ARG VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIME=unknown
-ENV BUILD_LDFLAGS="-s -w -X github.com/nazxf/stealth-api/internal/buildinfo.Version=${VERSION} -X github.com/nazxf/stealth-api/internal/buildinfo.Commit=${COMMIT_SHA} -X github.com/nazxf/stealth-api/internal/buildinfo.BuildTime=${BUILD_TIME}"
+ENV BUILD_LDFLAGS="-s -w -X github.com/Stealth-deplover/stealth/internal/buildinfo.Version=${VERSION} -X github.com/Stealth-deplover/stealth/internal/buildinfo.Commit=${COMMIT_SHA} -X github.com/Stealth-deplover/stealth/internal/buildinfo.BuildTime=${BUILD_TIME}"
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-api ./cmd/api
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-worker ./cmd/worker
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-migrate ./cmd/migrate

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
-	"github.com/nazxf/stealth-api/internal/repository"
 )
 
 func (s *Server) listConsoleSessions(w http.ResponseWriter, r *http.Request) {
