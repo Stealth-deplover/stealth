@@ -7,13 +7,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestRealtimeCursorPrefersExplicitQuery(t *testing.T) {
+func TestRealtimeCursorPrefersLastEventID(t *testing.T) {
 	queryID := uuid.Must(uuid.NewV7())
 	headerID := uuid.Must(uuid.NewV7())
 	request := httptest.NewRequest("GET", "/?cursor="+queryID.String(), nil)
 	request.Header.Set("Last-Event-ID", headerID.String())
 	got, err := realtimeCursor(request)
-	if err != nil || got == nil || *got != queryID {
+	if err != nil || got == nil || *got != headerID {
 		t.Fatalf("cursor = %v, err = %v", got, err)
 	}
 	request = httptest.NewRequest("GET", "/", nil)
@@ -21,6 +21,14 @@ func TestRealtimeCursorPrefersExplicitQuery(t *testing.T) {
 	got, err = realtimeCursor(request)
 	if err != nil || got == nil || *got != headerID {
 		t.Fatalf("Last-Event-ID cursor = %v, err = %v", got, err)
+	}
+}
+
+func TestRealtimeCursorRejectsMalformedAuthoritativeHeader(t *testing.T) {
+	request := httptest.NewRequest("GET", "/?cursor="+uuid.Must(uuid.NewV7()).String(), nil)
+	request.Header.Set("Last-Event-ID", "not-a-uuid")
+	if _, err := realtimeCursor(request); err == nil {
+		t.Fatal("malformed Last-Event-ID was accepted")
 	}
 }
 

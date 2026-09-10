@@ -51,10 +51,14 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Authenticate and authorize before committing to a streaming response so
-	// errors remain a normal JSON envelope. The first query also validates that
-	// a project still exists for the supplied actor.
-	if _, _, err := s.repo.ListRealtimeEvents(r.Context(), projectID, databaseActorFrom(r), after, 1); realtimeResourceError(w, err) {
+	// Authenticate and establish the project-scoped boundary before committing
+	// to a streaming response so errors remain a normal JSON envelope. With no
+	// cursor this starts at the current retained tail. A later PostgreSQL poll
+	// reconciles events committed between this lookup and Redis subscription,
+	// so the tail lookup cannot create a lost-event window.
+	actor := databaseActorFrom(r)
+	after, err = s.repo.ResolveRealtimeStartCursor(r.Context(), projectID, actor, after)
+	if realtimeResourceError(w, err) {
 		return
 	}
 	if s.metrics != nil {
@@ -92,7 +96,6 @@ func (s *Server) realtime(w http.ResponseWriter, r *http.Request) {
 	defer poll.Stop()
 	heartbeat := time.NewTicker(realtimeHeartbeat)
 	defer heartbeat.Stop()
-	actor := databaseActorFrom(r)
 	var realtimeMessages <-chan *redis.Message
 	if realtimeSubscription != nil {
 		realtimeMessages = realtimeSubscription.Channel(redis.WithChannelSize(32))
@@ -171,9 +174,12 @@ func writeRealtimeEvent(w http.ResponseWriter, flusher http.Flusher, item domain
 }
 
 func realtimeCursor(r *http.Request) (*uuid.UUID, error) {
-	value := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	// Browsers send Last-Event-ID automatically on native EventSource
+	// reconnects. Treat it as authoritative; the explicit query cursor is the
+	// fallback for clients that cannot set the header.
+	value := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
 	if value == "" {
-		value = strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+		value = strings.TrimSpace(r.URL.Query().Get("cursor"))
 	}
 	if value == "" {
 		return nil, nil

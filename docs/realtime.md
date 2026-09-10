@@ -72,11 +72,22 @@ performed by Go on connection and on every database fallback poll; changing a
 project ID in the URL cannot cross the tenant boundary. Credentials are never
 placed in query parameters.
 
-The endpoint supports `cursor` and `Last-Event-ID`. The database outbox can
-replay retained events, but clients should treat reconnect as a signal to
-refetch canonical state rather than as a guaranteed event log replay. Native
-`EventSource` reconnects automatically. The Console keeps bounded polling for
-active resources as a recovery path when Redis or SSE is unavailable.
+The endpoint supports `Last-Event-ID` and the explicit `cursor` query
+parameter. `Last-Event-ID` takes precedence when both are present; the query
+parameter is for clients that cannot set the header. An initial connection
+with neither cursor starts at the current project event tail and does not
+replay retained history. A reconnect cursor replays retained events strictly
+newer than that cursor, then returns to live delivery. If the cursor has
+expired or is not a retained event in the authorized project, the server
+resets to the current tail; the Console's canonical refetch recovers any
+state changes outside the bounded replay window.
+
+Events are retained for approximately seven days for bounded resume/debugging,
+not as a permanent event archive. The worker periodically prunes expired
+`webhook_events` rows in bounded batches, including rows used only for
+realtime notifications. Native `EventSource` reconnects automatically. The
+Console keeps bounded polling for active resources as a recovery path when
+Redis or SSE is unavailable.
 
 Each connection has a bounded server slot and Redis subscriber buffer. A slow
 client is disconnected rather than allowed to block the publisher or grow an
@@ -85,12 +96,14 @@ long read timeout.
 
 ## Redis and failure behavior
 
-Redis Pub/Sub is not durable. If Redis is unavailable, the PostgreSQL outbox
-is not marked published and the publisher retries with bounded exponential
-backoff and jitter. Existing SSE connections continue using the database
-polling fallback, and the canonical API does not depend on a Redis delivery
-acknowledgement. Duplicate notifications are possible after a publish/worker
-crash boundary; Console invalidation and API reads are idempotent.
+Redis Pub/Sub is only a low-latency notification. It is not durable and a
+missed Redis message is reconciled by the SSE connection's PostgreSQL cursor
+poll. If Redis is unavailable, the PostgreSQL outbox is not marked published
+and the publisher retries with bounded exponential backoff and jitter.
+Existing SSE connections continue using the database polling fallback, and
+the canonical API does not depend on a Redis delivery acknowledgement.
+Duplicate notifications are possible after a publish/worker crash boundary;
+Console invalidation and API reads are idempotent.
 
 In the current API composition Redis is also the existing distributed rate
 limiter dependency, so `/readyz` retains its established Redis readiness

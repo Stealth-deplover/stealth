@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -60,5 +62,14 @@ func TestDecodeRealtimeEventVersionedEnvelope(t *testing.T) {
 	}
 	if event.OrganizationID != organizationID.String() || event.Version != 1 || event.ResourceID == nil || event.Data["status"] != "running" {
 		t.Fatalf("decoded versioned event = %#v", event)
+	}
+}
+
+func TestRealtimePruneBatchRejectsUnboundedSizes(t *testing.T) {
+	for _, batchSize := range []int{0, -1, maxRealtimePruneBatch + 1} {
+		_, err := (&Repository{}).PruneExpiredWebhookEventsBatch(context.Background(), batchSize)
+		if !errors.Is(err, ErrInvalidRealtime) {
+			t.Fatalf("prune batch size %d error = %v, want ErrInvalidRealtime", batchSize, err)
+		}
 	}
 }

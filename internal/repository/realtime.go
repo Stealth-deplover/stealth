@@ -23,6 +23,8 @@ var (
 const (
 	maxRealtimeBatch           = 100
 	maxRealtimePublishAttempts = 12
+	defaultRealtimePruneBatch  = 1000
+	maxRealtimePruneBatch      = 10000
 )
 
 // RealtimePublishJob is the publisher's leased projection of one durable
@@ -86,6 +88,49 @@ func (r *Repository) ListRealtimeEvents(ctx context.Context, projectID uuid.UUID
 		return nil, nil, err
 	}
 	return items, nextCursor, nil
+}
+
+// ResolveRealtimeStartCursor authorizes a project realtime subscription and
+// resolves its starting point. A missing cursor means "from the current
+// retained tail", not "from the oldest retained event". A cursor is usable
+// only while its event is retained; an expired or unknown cursor safely resets
+// to the current tail so reconnects do not unexpectedly replay the retention
+// window. All lookups are scoped to the authorized project.
+func (r *Repository) ResolveRealtimeStartCursor(ctx context.Context, projectID uuid.UUID, actor DatabaseActor, requested *uuid.UUID) (*uuid.UUID, error) {
+	if projectID == uuid.Nil || (requested != nil && *requested == uuid.Nil) {
+		return nil, ErrInvalidRealtime
+	}
+	if err := r.requireRealtimeRead(ctx, projectID, actor); err != nil {
+		return nil, err
+	}
+	if requested != nil {
+		var retainedID uuid.UUID
+		err := r.pool.QueryRow(ctx, `
+			SELECT id
+			FROM webhook_events
+			WHERE project_id=$1 AND id=$2 AND expires_at>now()`, projectID, *requested).Scan(&retainedID)
+		if err == nil {
+			return &retainedID, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+	}
+
+	var tail uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT id
+		FROM webhook_events
+		WHERE project_id=$1 AND expires_at>now()
+		ORDER BY id DESC
+		LIMIT 1`, projectID).Scan(&tail)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &tail, nil
 }
 
 // ClaimNextRealtimeEvent leases one pending outbox event. SKIP LOCKED keeps
@@ -418,11 +463,32 @@ func stringSlice(value any) ([]string, bool) {
 	return result, true
 }
 
-// PruneExpiredWebhookEvents removes both stale realtime events and any
-// delivery rows that cascade from them. It is intentionally separate from
-// delivery claiming so operators can schedule retention independently.
+// PruneExpiredWebhookEvents removes one bounded batch of stale realtime events
+// and any delivery rows that cascade from them. It is intentionally separate
+// from delivery claiming so operators can schedule retention independently.
 func (r *Repository) PruneExpiredWebhookEvents(ctx context.Context) (int64, error) {
-	result, err := r.pool.Exec(ctx, `DELETE FROM webhook_events WHERE expires_at<=now()`)
+	return r.PruneExpiredWebhookEventsBatch(ctx, defaultRealtimePruneBatch)
+}
+
+// PruneExpiredWebhookEventsBatch removes at most batchSize expired outbox
+// rows. The row locks are held only for this short delete statement, allowing
+// multiple maintenance workers to make progress without a giant transaction.
+func (r *Repository) PruneExpiredWebhookEventsBatch(ctx context.Context, batchSize int) (int64, error) {
+	if batchSize < 1 || batchSize > maxRealtimePruneBatch {
+		return 0, fmt.Errorf("%w: prune batch size must be between 1 and %d", ErrInvalidRealtime, maxRealtimePruneBatch)
+	}
+	result, err := r.pool.Exec(ctx, `
+		WITH expired AS (
+			SELECT id
+			FROM webhook_events
+			WHERE expires_at<=now()
+			ORDER BY expires_at,id
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		DELETE FROM webhook_events AS events
+		USING expired
+		WHERE events.id=expired.id`, batchSize)
 	if err != nil {
 		return 0, err
 	}
