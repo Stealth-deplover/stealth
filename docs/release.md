@@ -1,5 +1,8 @@
 # Release engineering
 
+For the end-to-end first-release and repository-settings checklist, see
+[`RELEASING.md`](RELEASING.md).
+
 Releases use tags matching `vMAJOR.MINOR.PATCH`, for example `v1.2.3`.
 Pushing such a tag starts `.github/workflows/release.yml`, which:
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   # Run on every branch so the workflow remains valid when the default branch
-  # moves from the current import branch to main (or another protected branch).
+  # changes to main (or another protected branch).
   push:
   pull_request:
 
