@@ -35,11 +35,15 @@ func ProtectedMetricsHandler(next http.Handler, token string) http.Handler {
 // API. Callers must use a route template (for example
 // /v1/projects/{projectID}), never a raw request path containing tenant IDs.
 type APIMetrics struct {
-	Registry        *prometheus.Registry
-	Requests        *prometheus.CounterVec
-	RequestDuration *prometheus.HistogramVec
-	ResponseBytes   *prometheus.CounterVec
-	InFlight        prometheus.Gauge
+	Registry                  *prometheus.Registry
+	Requests                  *prometheus.CounterVec
+	RequestDuration           *prometheus.HistogramVec
+	ResponseBytes             *prometheus.CounterVec
+	InFlight                  prometheus.Gauge
+	RealtimeConnections       prometheus.Counter
+	RealtimeActiveConnections prometheus.Gauge
+	RealtimeEventsDelivered   prometheus.Counter
+	RealtimeSlowDisconnects   prometheus.Counter
 }
 
 // NewAPIMetrics constructs an isolated registry instead of using the global
@@ -74,8 +78,24 @@ func NewAPIMetrics() *APIMetrics {
 			Name:      "http_requests_in_flight",
 			Help:      "HTTP requests currently being handled by the Stealth API.",
 		}),
+		RealtimeConnections: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "api", Name: "realtime_connections_total",
+			Help: "Project realtime SSE connections accepted by the API.",
+		}),
+		RealtimeActiveConnections: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "api", Name: "realtime_connections_active",
+			Help: "Project realtime SSE connections currently active.",
+		}),
+		RealtimeEventsDelivered: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "api", Name: "realtime_events_delivered_total",
+			Help: "Realtime notification events written to SSE clients.",
+		}),
+		RealtimeSlowDisconnects: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "api", Name: "realtime_slow_disconnects_total",
+			Help: "Realtime SSE connections closed because a client could not keep up.",
+		}),
 	}
-	registry.MustRegister(metrics.Requests, metrics.RequestDuration, metrics.ResponseBytes, metrics.InFlight, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	registry.MustRegister(metrics.Requests, metrics.RequestDuration, metrics.ResponseBytes, metrics.InFlight, metrics.RealtimeConnections, metrics.RealtimeActiveConnections, metrics.RealtimeEventsDelivered, metrics.RealtimeSlowDisconnects, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	return metrics
 }
 
@@ -93,26 +113,32 @@ func (m *APIMetrics) Handler() http.Handler {
 // Labels deliberately contain only a small fixed vocabulary so one tenant or
 // function cannot create unbounded Prometheus time series.
 type WorkerMetrics struct {
-	Registry           *prometheus.Registry
-	Polls              prometheus.Counter
-	JobsClaimed        prometheus.Counter
-	JobsCompleted      *prometheus.CounterVec
-	JobDuration        *prometheus.HistogramVec
-	Requeued           prometheus.Counter
-	Errors             *prometheus.CounterVec
-	InFlight           prometheus.Gauge
-	BuildsClaimed      prometheus.Counter
-	BuildsCompleted    *prometheus.CounterVec
-	BuildDuration      *prometheus.HistogramVec
-	BuildRequeued      prometheus.Counter
-	BuildInFlight      prometheus.Gauge
-	AgentPolls         prometheus.Counter
-	AgentJobsClaimed   prometheus.Counter
-	AgentJobsCompleted *prometheus.CounterVec
-	AgentJobDuration   *prometheus.HistogramVec
-	AgentRequeued      prometheus.Counter
-	AgentErrors        *prometheus.CounterVec
-	AgentInFlight      prometheus.Gauge
+	Registry              *prometheus.Registry
+	Polls                 prometheus.Counter
+	JobsClaimed           prometheus.Counter
+	JobsCompleted         *prometheus.CounterVec
+	JobDuration           *prometheus.HistogramVec
+	Requeued              prometheus.Counter
+	Errors                *prometheus.CounterVec
+	InFlight              prometheus.Gauge
+	BuildsClaimed         prometheus.Counter
+	BuildsCompleted       *prometheus.CounterVec
+	BuildDuration         *prometheus.HistogramVec
+	BuildRequeued         prometheus.Counter
+	BuildInFlight         prometheus.Gauge
+	AgentPolls            prometheus.Counter
+	AgentJobsClaimed      prometheus.Counter
+	AgentJobsCompleted    *prometheus.CounterVec
+	AgentJobDuration      *prometheus.HistogramVec
+	AgentRequeued         prometheus.Counter
+	AgentErrors           *prometheus.CounterVec
+	AgentInFlight         prometheus.Gauge
+	OutboxPublishAttempts prometheus.Counter
+	OutboxPending         prometheus.Gauge
+	OutboxSkipped         prometheus.Counter
+	OutboxPublished       prometheus.Counter
+	OutboxFailed          prometheus.Counter
+	OutboxPublishDuration prometheus.Histogram
 }
 
 // NewWorkerMetrics constructs a separate worker registry. It can be served
@@ -239,8 +265,33 @@ func NewWorkerMetrics() *WorkerMetrics {
 			Name:      "jobs_in_flight",
 			Help:      "Agent runs currently being processed by this worker.",
 		}),
+		OutboxPublishAttempts: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "publish_attempts_total",
+			Help: "Durable realtime outbox publication attempts.",
+		}),
+		OutboxPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "outbox_pending",
+			Help: "Non-expired realtime outbox events awaiting publication.",
+		}),
+		OutboxSkipped: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "skipped_total",
+			Help: "Durable outbox events handled without Redis fanout because no realtime consumer subscribes to them.",
+		}),
+		OutboxPublished: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "published_total",
+			Help: "Durable realtime outbox events published to Redis.",
+		}),
+		OutboxFailed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "failed_total",
+			Help: "Realtime outbox publication attempts that failed.",
+		}),
+		OutboxPublishDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "stealth", Subsystem: "realtime_publisher", Name: "publish_duration_seconds",
+			Help:    "Time spent publishing one realtime outbox event to Redis.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+		}),
 	}
-	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, metrics.OutboxPublishAttempts, metrics.OutboxPending, metrics.OutboxSkipped, metrics.OutboxPublished, metrics.OutboxFailed, metrics.OutboxPublishDuration, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	return metrics
 }
 

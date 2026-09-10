@@ -30,9 +30,16 @@ const (
 	defaultLeaseAge     = 20 * time.Minute
 	defaultTimeout      = 35 * time.Second
 	defaultMaxAttempts  = 12
+	defaultPrunePeriod  = time.Hour
+	defaultPruneBatch   = 1000
+	defaultPruneBatches = 10
 	maxResponseBytes    = 4096
 	maxRetryDelay       = 24 * time.Hour
 )
+
+type expiredEventPruner interface {
+	PruneExpiredWebhookEventsBatch(context.Context, int) (int64, error)
+}
 
 type Worker struct {
 	Repository      *repository.Repository
@@ -43,6 +50,7 @@ type Worker struct {
 	LeaseAge        time.Duration
 	DeliveryTimeout time.Duration
 	MaxAttempts     int
+	PruneInterval   time.Duration
 	Logger          *slog.Logger
 }
 
@@ -65,13 +73,14 @@ func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID st
 		LeaseAge:        defaultLeaseAge,
 		DeliveryTimeout: defaultTimeout,
 		MaxAttempts:     defaultMaxAttempts,
+		PruneInterval:   defaultPrunePeriod,
 		Logger:          logger,
 	}, nil
 }
 
-// Run polls until the process is cancelled. Stale leases and expired events
-// are repaired on every cycle, so a killed worker cannot permanently strand a
-// delivery.
+// Run polls until the process is cancelled. Stale leases are repaired on every
+// cycle, while retained event cleanup runs in bounded maintenance passes so a
+// killed worker cannot permanently strand delivery or realtime rows.
 func (w *Worker) Run(ctx context.Context) error {
 	if w == nil || w.Repository == nil || w.Cipher == nil {
 		return errors.New("webhook worker is not configured")
@@ -86,17 +95,17 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
-	pruneTicker := time.NewTicker(time.Hour)
-	defer pruneTicker.Stop()
-	if _, err := w.Repository.PruneExpiredWebhookEvents(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		w.Logger.Error("prune expired webhook events failed", "error", err)
+	pruneInterval := w.PruneInterval
+	if pruneInterval <= 0 {
+		pruneInterval = defaultPrunePeriod
 	}
+	pruneTicker := time.NewTicker(pruneInterval)
+	defer pruneTicker.Stop()
+	w.pruneExpiredEvents(ctx)
 	for {
 		select {
 		case <-pruneTicker.C:
-			if _, err := w.Repository.PruneExpiredWebhookEvents(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				w.Logger.Error("prune expired webhook events failed", "error", err)
-			}
+			w.pruneExpiredEvents(ctx)
 		default:
 		}
 		if _, err := w.Repository.RequeueStaleWebhookDeliveries(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
@@ -121,6 +130,47 @@ func (w *Worker) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (w *Worker) pruneExpiredEvents(ctx context.Context) {
+	started := time.Now()
+	deleted, batches, err := runRealtimePruneCycle(ctx, w.Repository, defaultPruneBatch, defaultPruneBatches)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		w.Logger.Error("realtime event pruning failed", "component", "realtime_pruner", "deleted_count", deleted, "batches", batches, "duration", time.Since(started), "error", err)
+		return
+	}
+	if deleted > 0 {
+		w.Logger.Info("realtime event pruning completed", "component", "realtime_pruner", "deleted_count", deleted, "batches", batches, "duration", time.Since(started))
+	}
+}
+
+// runRealtimePruneCycle drains expired rows in bounded batches. A full batch
+// means there may be more work, but maxBatches is always a hard upper bound;
+// cancellation and the first partial batch stop the cycle immediately.
+func runRealtimePruneCycle(ctx context.Context, pruner expiredEventPruner, batchSize, maxBatches int) (int64, int, error) {
+	if pruner == nil || batchSize < 1 || maxBatches < 1 {
+		return 0, 0, errors.New("invalid realtime prune cycle")
+	}
+	var totalDeleted int64
+	completedBatches := 0
+	for completedBatches < maxBatches {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, completedBatches, err
+		}
+		deleted, err := pruner.PruneExpiredWebhookEventsBatch(ctx, batchSize)
+		if err != nil {
+			return totalDeleted, completedBatches, err
+		}
+		completedBatches++
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break
+		}
+	}
+	return totalDeleted, completedBatches, nil
 }
 
 // RunOnce claims and processes at most one delivery. It returns false when no

@@ -14,6 +14,7 @@ import (
 	"github.com/nazxf/stealth-api/internal/mailer"
 	"github.com/nazxf/stealth-api/internal/observability"
 	"github.com/nazxf/stealth-api/internal/ratelimit"
+	"github.com/nazxf/stealth-api/internal/realtime"
 	"github.com/nazxf/stealth-api/internal/repository"
 	"github.com/nazxf/stealth-api/internal/sitestore"
 	"github.com/nazxf/stealth-api/internal/storage"
@@ -39,6 +40,7 @@ type Server struct {
 	sitesReady     bool
 	metrics        *observability.APIMetrics
 	realtimeSlots  chan struct{}
+	realtimeBroker *realtime.Broker
 	emailSender    mailer.Sender
 }
 
@@ -52,6 +54,7 @@ type Dependencies struct {
 	AuthLimiter    ratelimit.Limiter
 	SiteGitFetcher gitarchive.SourceFetcher
 	EmailSender    mailer.Sender
+	RealtimeBroker *realtime.Broker
 }
 
 // New builds the console API with production dependencies.
@@ -118,7 +121,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
-	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), emailSender: deps.EmailSender}
+	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender}
 	return s.routes()
 }
 

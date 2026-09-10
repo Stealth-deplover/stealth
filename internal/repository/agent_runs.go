@@ -417,6 +417,9 @@ func (r *Repository) ClaimNextAgentRunForProviders(ctx context.Context, workerID
 	if err != nil {
 		return AgentRunJob{}, err
 	}
+	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "agent.run.running", "agent_run", runID, map[string]any{"agent_id": agentID.String(), "status": run.Status}); err != nil {
+		return AgentRunJob{}, err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE project_agents SET status='running',last_active_at=now(),updated_at=now() WHERE id=$1 AND project_id=$2`, agentID, projectID); err != nil {
 		return AgentRunJob{}, err
 	}

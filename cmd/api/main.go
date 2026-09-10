@@ -21,6 +21,7 @@ import (
 	"github.com/nazxf/stealth-api/internal/migrate"
 	"github.com/nazxf/stealth-api/internal/observability"
 	"github.com/nazxf/stealth-api/internal/ratelimit"
+	"github.com/nazxf/stealth-api/internal/realtime"
 	"github.com/nazxf/stealth-api/internal/repository"
 	"github.com/nazxf/stealth-api/internal/tlsmanager"
 	"github.com/redis/go-redis/v9"
@@ -99,7 +100,7 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: webhookCipher})
-	handler := httpapi.NewWithDependencies(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient)})
+	handler := httpapi.NewWithDependencies(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient), RealtimeBroker: realtime.NewBroker(redisClient)})
 	server := &http.Server{Addr: cfg.HTTPAddress, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	servers := []*http.Server{server}
 	var tlsServer, challengeServer *http.Server

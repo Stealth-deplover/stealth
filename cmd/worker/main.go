@@ -25,9 +25,12 @@ import (
 	"github.com/nazxf/stealth-api/internal/messagingrunner"
 	"github.com/nazxf/stealth-api/internal/migrate"
 	"github.com/nazxf/stealth-api/internal/observability"
+	"github.com/nazxf/stealth-api/internal/realtime"
+	"github.com/nazxf/stealth-api/internal/realtimepublisher"
 	"github.com/nazxf/stealth-api/internal/repository"
 	"github.com/nazxf/stealth-api/internal/sitestore"
 	"github.com/nazxf/stealth-api/internal/webhookrunner"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -104,6 +107,20 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher})
+	redisOptions, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		logger.Error("redis configuration error", "error", err)
+		os.Exit(1)
+	}
+	redisClient := redis.NewClient(redisOptions)
+	defer redisClient.Close()
+	realtimePublisher, err := realtimepublisher.New(repo, realtime.NewBroker(redisClient), cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("realtime publisher configuration error", "error", err)
+		os.Exit(1)
+	}
+	realtimePublisher.PollInterval = cfg.FunctionsRunnerPoll
+	realtimePublisher.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	webhookWorker, err := webhookrunner.New(repo, cipher, cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("webhook worker configuration error", "error", err)
@@ -137,6 +154,17 @@ func main() {
 		logger.Info("functions runner is disabled; webhook and messaging runners remain active")
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		publisherDone := make(chan struct{})
+		go func() {
+			if publisherErr := realtimePublisher.Run(workerContext); publisherErr != nil && !errors.Is(publisherErr, context.Canceled) {
+				logger.Error("realtime publisher stopped", "error", publisherErr)
+			}
+			close(publisherDone)
+		}()
+		defer func() {
+			stop()
+			<-publisherDone
+		}()
 		webhookWorkerErr := make(chan error, 1)
 		go func() { webhookWorkerErr <- webhookWorker.Run(workerContext) }()
 		messagingWorkerErr := make(chan error, 1)
@@ -219,8 +247,10 @@ func main() {
 	if agentWorker != nil {
 		agentWorker.Metrics = worker.Metrics
 	}
+	realtimePublisher.Metrics = worker.Metrics
 	workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	publisherDone := make(chan struct{})
 	metricsServer := &http.Server{
 		Addr:              cfg.FunctionsRunnerMetricsAddress,
 		Handler:           workerMetricsHandler(worker.MetricsHandler(), cfg.MetricsToken),
@@ -238,6 +268,16 @@ func main() {
 	go func() { workerErr <- worker.Run(workerContext) }()
 	siteWorkerErr := make(chan error, 1)
 	go func() { siteWorkerErr <- siteWorker.Run(workerContext) }()
+	go func() {
+		if publisherErr := realtimePublisher.Run(workerContext); publisherErr != nil && !errors.Is(publisherErr, context.Canceled) {
+			logger.Error("realtime publisher stopped", "error", publisherErr)
+		}
+		close(publisherDone)
+	}()
+	defer func() {
+		stop()
+		<-publisherDone
+	}()
 	webhookWorkerErr := make(chan error, 1)
 	go func() { webhookWorkerErr <- webhookWorker.Run(workerContext) }()
 	messagingWorkerErr := make(chan error, 1)
