@@ -22,12 +22,13 @@ worker process with a Next.js console and versioned Docker Compose deployments.
 
 ## Quick Start
 
-The CLI installer is the intended first-release path. The bootstrap script is
+The CLI installer is the supported release path. The bootstrap script is
 read through GitHub Raw's `HEAD` reference, so it follows the repository's
 current default branch when that branch is renamed to `main`.
 
-> **First-release note:** no GitHub Release is published yet, so this command
-> cannot complete until the first versioned CLI artifacts exist.
+The latest stable release is `v0.1.0`. Read the [release notes](https://github.com/Stealth-deplover/stealth/releases/tag/v0.1.0)
+before installing, and use [Upgrade and rollback](docs/upgrade.md) for
+operational changes and recovery boundaries.
 
 Supported host: Linux amd64 or arm64 with Docker Engine, Docker Compose v2,
 access to `/var/run/docker.sock`, and a writable installation directory.
@@ -130,7 +131,7 @@ managed-service availability.
 | Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |
 | Webhooks                         | Beta         | Signed delivery, transactional outbox, retries, SSRF protections                                               |
 | Observability                    | Beta         | Health/readiness, metrics, traces, realtime events, audit records                                              |
-| Self-host installer              | Experimental | Interactive CLI and release pipeline exist; no public release yet; upgrade/uninstall commands are not shipped  |
+| Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade/uninstall commands are not shipped |
 | Agents                           | Experimental | Configuration, catalog, durable runs, logs, and cancellation; provider execution remains queue-only by default |
 | Production hardening             | Beta         | Leases, bounded retries, rate limits, proxy trust, smoke checks; HA and exactly-once execution are not claimed |
 
@@ -139,12 +140,10 @@ managed-service availability.
 Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
 coordinated GHCR images for API, worker, migration, and Console plus Linux
 amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
-No release is published yet. The recommended first tag is `v0.1.0` after the
-stable bootstrap path and first release smoke run are finalized. If an alpha
-tag such as `v0.1.0-alpha.1` is preferred, the release and bootstrap version
-validators must first be updated to accept prereleases. See [Release
-engineering](docs/release.md), the [first-release checklist](docs/RELEASING.md),
-and [Upgrade and rollback](docs/upgrade.md).
+The latest stable release is `v0.1.0`; see the [release notes](https://github.com/Stealth-deplover/stealth/releases/latest),
+[Release engineering](docs/release.md), the [release checklist](docs/RELEASING.md),
+and [Upgrade and rollback](docs/upgrade.md). The installer still requires a
+clean-host validation pass, and upgrade/uninstall commands are not shipped.
 
 ## Screenshots
 

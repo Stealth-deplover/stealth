@@ -147,7 +147,7 @@ case ":${PATH:-}:" in
 	*) printf 'Add %s to PATH to call `stealth` directly.\n' "$bin_dir" ;;
 esac
 
-if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+if [ -r /dev/tty ] && [ -w /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
 	cleanup
 	temporary_dir=""
 	exec "${bin_dir}/stealth" install < /dev/tty

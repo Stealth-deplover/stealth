@@ -52,7 +52,7 @@ Release contains the versioned CLI archive and `checksums.txt`.
    verification.
 
 The installer requires Docker and Docker Compose. It does not silently run a
-third-party Docker installation script. The first release uses bundled
+third-party Docker installation script. The `v0.1.0` release uses bundled
 infrastructure and the existing local storage volume. External S3-compatible
 storage remains an operator configuration documented by the production
 deployment guide.

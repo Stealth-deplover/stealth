@@ -41,7 +41,7 @@ The API contract is the detailed reference for each product surface. Operational
 ## Production Operations
 
 - [Release engineering](release.md)
-- [First-release and maintainer checklist](RELEASING.md)
+- [Release and maintainer checklist](RELEASING.md)
 - [Upgrade and rollback](upgrade.md)
 - [Backup and restore](backup-restore.md)
 - [Production smoke checks](production-deployment.md#smoke-and-troubleshooting)

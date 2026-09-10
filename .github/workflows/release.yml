@@ -417,3 +417,49 @@ jobs:
             dist/stealth_Linux_x86_64.tar.gz \
             dist/stealth_Linux_arm64.tar.gz \
             dist/checksums.txt
+
+  installer-smoke:
+    name: Release installer smoke
+    needs: github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download bootstrap entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/HEAD/scripts/bootstrap.sh" \
+            -o "$RUNNER_TEMP/bootstrap.sh"
+          chmod 0755 "$RUNNER_TEMP/bootstrap.sh"
+
+      - name: Bootstrap and verify published CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/stealth-bin"
+          mkdir -p "$install_dir"
+          status=0
+          STEALTH_BIN_DIR="$install_dir" sh "$RUNNER_TEMP/bootstrap.sh" >"$RUNNER_TEMP/bootstrap.log" 2>&1 || status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -Eq '([Ii]nteractive setup requires a TTY)' "$RUNNER_TEMP/bootstrap.log" || {
+              cat "$RUNNER_TEMP/bootstrap.log"
+              exit "$status"
+            }
+          fi
+          test -x "$install_dir/stealth"
+          version_json="$($install_dir/stealth version --json)"
+          printf '%s\n' "$version_json"
+          printf '%s\n' "$version_json" | grep -Fq "\"version\":\"$RELEASE_VERSION\""
+
+      - name: Validate release Compose configuration
+        run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
