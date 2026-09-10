@@ -7,8 +7,8 @@ reverse proxy.
 
 ## Quick install
 
-The current bootstrap entrypoint is hosted on GitHub Raw while the installer
-stabilizes:
+The current bootstrap entrypoint is hosted on GitHub Raw from the development
+branch while the installer stabilizes:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
@@ -34,9 +34,11 @@ STEALTH_VERSION=v0.1.0 \
   sh bootstrap.sh
 ```
 
-GitHub Raw is a temporary distribution URL. A future `get.stealth.dev` entry
-point may serve the same verified bootstrap without changing the CLI release
-format.
+This is a temporary distribution URL, not a stable product endpoint. The
+stable bootstrap branch or versioned URL has not been finalized. Update this
+guide and the root README before the first public release so the command points
+to the supported stable source. The script will not complete until a matching
+GitHub Release contains the versioned CLI archive and `checksums.txt`.
 
 ## Installer flow
 

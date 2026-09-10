@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest a focused improvement to Stealth
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user or operator problem first. Requests should fit the self-hosted platform and existing API/Console boundaries.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - API or backend
+        - Console
+        - Functions or Sites
+        - Database or Storage
+        - Messaging or Webhooks
+        - Agents
+        - CLI or self-hosting
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Who needs this and what is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain the desired behavior and any API, configuration, or operational impact.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and the roadmap for duplicates.
+          required: true
+        - label: I understand this request may require design or maintainer review.
+          required: true
