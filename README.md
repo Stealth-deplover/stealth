@@ -22,13 +22,12 @@ worker process with a Next.js console and versioned Docker Compose deployments.
 
 ## Quick Start
 
-The CLI installer is the intended first-release path. It currently downloads
-from the development branch because no stable bootstrap branch or release URL
-has been finalized yet.
+The CLI installer is the intended first-release path. The bootstrap script is
+read through GitHub Raw's `HEAD` reference, so it follows the repository's
+current default branch when that branch is renamed to `main`.
 
 > **First-release note:** no GitHub Release is published yet, so this command
-> cannot complete until the first versioned CLI artifacts exist. Replace the
-> branch in this URL with the stable release branch before public promotion.
+> cannot complete until the first versioned CLI artifacts exist.
 
 Supported host: Linux amd64 or arm64 with Docker Engine, Docker Compose v2,
 access to `/var/run/docker.sock`, and a writable installation directory.
@@ -36,7 +35,7 @@ Public deployments also need DNS and TLS termination in front of the bundled
 proxy.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scripts/bootstrap.sh | sh
 ```
 
 The bootstrap verifies the downloaded archive and SHA-256 checksum, then
@@ -141,17 +140,20 @@ Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
 coordinated GHCR images for API, worker, migration, and Console plus Linux
 amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
 No release is published yet. The recommended first tag is `v0.1.0` after the
-license, stable bootstrap URL, and first release smoke run are completed. If
-an alpha tag such as `v0.1.0-alpha.1` is preferred, the release and bootstrap
-version validators must first be updated to accept prereleases. See
-[Release engineering](docs/release.md) and [Upgrade and rollback](docs/upgrade.md).
+stable bootstrap path and first release smoke run are finalized. If an alpha
+tag such as `v0.1.0-alpha.1` is preferred, the release and bootstrap version
+validators must first be updated to accept prereleases. See [Release
+engineering](docs/release.md), the [first-release checklist](docs/RELEASING.md),
+and [Upgrade and rollback](docs/upgrade.md).
 
 ## Screenshots
 
 No product screenshots are committed yet. The most useful first captures would
 be a project dashboard, Function deployment, Database tables, an Agent run
 showing its queue-only state, and Observability/traces. Add redacted captures
-only when they reflect the current product.
+only when they reflect the current product; see the [maintainer release
+checklist](docs/RELEASING.md#screenshots-and-social-preview) for naming and
+privacy guidance.
 
 ## Contributing
 

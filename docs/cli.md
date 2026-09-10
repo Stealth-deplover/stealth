@@ -7,11 +7,11 @@ reverse proxy.
 
 ## Quick install
 
-The current bootstrap entrypoint is hosted on GitHub Raw from the development
-branch while the installer stabilizes:
+The bootstrap entrypoint is hosted on GitHub Raw through the repository's
+`HEAD` reference, so it follows the current default branch:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scripts/bootstrap.sh | sh
 ```
 
 The bootstrap detects Linux amd64/arm64, resolves the latest stable SemVer
@@ -22,7 +22,7 @@ not install Docker or run a large deployment script.
 For an inspect-first install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh -o bootstrap.sh
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scripts/bootstrap.sh -o bootstrap.sh
 less bootstrap.sh
 sh bootstrap.sh
 ```
@@ -34,11 +34,10 @@ STEALTH_VERSION=v0.1.0 \
   sh bootstrap.sh
 ```
 
-This is a temporary distribution URL, not a stable product endpoint. The
-stable bootstrap branch or versioned URL has not been finalized. Update this
-guide and the root README before the first public release so the command points
-to the supported stable source. The script will not complete until a matching
-GitHub Release contains the versioned CLI archive and `checksums.txt`.
+This is a repository distribution URL, not a separate product endpoint. It
+will continue to follow a future default-branch rename without a branch name
+in documentation. The script will not complete until a matching GitHub
+Release contains the versioned CLI archive and `checksums.txt`.
 
 ## Installer flow
 
