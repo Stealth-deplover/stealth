@@ -20,10 +20,7 @@ type SystemCheck struct {
 }
 
 func (a *App) systemChecks(ctx context.Context, installRoot string) []SystemCheck {
-	checks := []SystemCheck{
-		{Name: "OS", Detail: runtime.GOOS, OK: runtime.GOOS != "windows", Required: true},
-		{Name: "Architecture", Detail: runtime.GOARCH, OK: runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64", Required: true},
-	}
+	checks := installerPlatformChecks(runtime.GOOS, runtime.GOARCH)
 	if output, err := a.runner.Output(ctx, "", "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
 		checks = append(checks, SystemCheck{Name: "Docker", Detail: "not available", Required: true})
 	} else {
@@ -65,6 +62,23 @@ func (a *App) systemChecks(ctx context.Context, installRoot string) []SystemChec
 	return checks
 }
 
+func installerPlatformChecks(goos, goarch string) []SystemCheck {
+	osCheck := SystemCheck{Name: "OS", Detail: goos, OK: goos == "linux", Required: true}
+	if !osCheck.OK {
+		osCheck.Detail = fmt.Sprintf("%s (unsupported; Linux is supported)", goos)
+	}
+	architectureCheck := SystemCheck{
+		Name:     "Architecture",
+		Detail:   goarch,
+		OK:       goarch == "amd64" || goarch == "arm64",
+		Required: true,
+	}
+	if !architectureCheck.OK {
+		architectureCheck.Detail = fmt.Sprintf("%s (unsupported; use amd64 or arm64)", goarch)
+	}
+	return []SystemCheck{osCheck, architectureCheck}
+}
+
 func checksPass(checks []SystemCheck) bool {
 	for _, check := range checks {
 		if check.Required && !check.OK {
@@ -72,6 +86,16 @@ func checksPass(checks []SystemCheck) bool {
 		}
 	}
 	return true
+}
+
+func failedCheckSummary(checks []SystemCheck) string {
+	var failed []string
+	for _, check := range checks {
+		if check.Required && !check.OK {
+			failed = append(failed, check.Name+": "+check.Detail)
+		}
+	}
+	return strings.Join(failed, "; ")
 }
 
 func renderCheck(check SystemCheck) string {

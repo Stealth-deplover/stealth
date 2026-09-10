@@ -264,15 +264,20 @@ func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("existing PUBLIC_APP_URL is invalid: %w", err)
 	}
-	version := readVersion(layout)
-	if version == "" || version == "dev" {
+	version, hasVersionFile, err := readInstalledVersion(layout)
+	if err != nil {
+		return nil, fmt.Errorf("read existing VERSION: %w", err)
+	}
+	versionSource := "VERSION"
+	if !hasVersionFile {
+		versionSource = "STEALTH_API_IMAGE"
 		version, err = imageVersion(values["STEALTH_API_IMAGE"])
 		if err != nil {
-			return nil, fmt.Errorf("existing release version is unavailable: %w", err)
+			return nil, fmt.Errorf("existing STEALTH_API_IMAGE is invalid: %w", err)
 		}
 	}
 	if err := validateReleaseVersion(version); err != nil {
-		return nil, fmt.Errorf("existing release version is invalid: %w", err)
+		return nil, fmt.Errorf("existing release version from %s is invalid: %w", versionSource, err)
 	}
 	gid, err := strconv.ParseUint(values["DOCKER_GID"], 10, 32)
 	if err != nil {
@@ -282,10 +287,22 @@ func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
 }
 
 func imageVersion(image string) (string, error) {
-	_, version, ok := strings.Cut(strings.TrimSpace(image), ":")
-	if !ok || version == "" {
+	image = strings.TrimSpace(image)
+	if image == "" {
 		return "", fmt.Errorf("image tag is missing")
 	}
+	if strings.Contains(image, "@") {
+		return "", fmt.Errorf("digest-pinned images do not contain a release tag")
+	}
+	lastSlash := strings.LastIndexByte(image, '/')
+	lastColon := strings.LastIndexByte(image, ':')
+	if lastColon <= lastSlash || lastColon == len(image)-1 {
+		return "", fmt.Errorf("image tag is missing")
+	}
+	if lastColon == 0 {
+		return "", fmt.Errorf("image repository is missing")
+	}
+	version := image[lastColon+1:]
 	return version, nil
 }
 

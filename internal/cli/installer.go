@@ -156,7 +156,7 @@ func (m installerModel) advance() (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case installerWelcome:
 		if !checksPass(m.checks) {
-			m.err = fmt.Errorf("one or more required system checks failed")
+			m.err = fmt.Errorf("preflight checks failed: %s", failedCheckSummary(m.checks))
 			m.screen = installerFailed
 			return m, nil
 		}

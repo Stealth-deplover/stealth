@@ -1,12 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/nazxf/stealth-api/internal/buildinfo"
 )
 
 type InstallLayout struct {
@@ -62,9 +61,20 @@ func fileIsPrivate(path string) bool {
 }
 
 func readVersion(layout InstallLayout) string {
-	contents, err := os.ReadFile(layout.VersionFile)
+	version, _, err := readInstalledVersion(layout)
 	if err != nil {
-		return buildinfo.Version
+		return ""
 	}
-	return strings.TrimSpace(string(contents))
+	return version
+}
+
+func readInstalledVersion(layout InstallLayout) (string, bool, error) {
+	contents, err := os.ReadFile(layout.VersionFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", true, err
+	}
+	return strings.TrimSpace(string(contents)), true, nil
 }

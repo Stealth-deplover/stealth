@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nazxf/stealth-api/internal/buildinfo"
 )
 
 func TestValidatePublicURL(t *testing.T) {
@@ -97,6 +99,102 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	if string(current) != string(original) {
 		t.Fatal("repair preparation replaced the existing config")
 	}
+}
+
+func TestLoadExistingPlanUsesVersionFile(t *testing.T) {
+	layout := writeExistingConfig(t, "v1.0.0")
+	if err := os.WriteFile(layout.VersionFile, []byte("v1.0.0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
+	plan, err := app.loadExistingPlan(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Version != "v1.0.0" || !plan.Existing {
+		t.Fatalf("existing plan = %#v", plan)
+	}
+}
+
+func TestLoadExistingPlanInfersVersionFromConfiguredImage(t *testing.T) {
+	layout := writeExistingConfig(t, "v1.0.0")
+
+	originalVersion := buildinfo.Version
+	buildinfo.Version = "v1.1.0"
+	t.Cleanup(func() { buildinfo.Version = originalVersion })
+
+	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
+	plan, err := app.loadExistingPlan(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Version != "v1.0.0" {
+		t.Fatalf("repair inferred version = %q, want v1.0.0", plan.Version)
+	}
+}
+
+func TestLoadExistingPlanRejectsMalformedVersionState(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		apiImage   string
+		wantDetail string
+	}{
+		{name: "malformed version file", version: "v1.0", apiImage: imageName("stealth-api", "v1.0.0"), wantDetail: "VERSION"},
+		{name: "missing image tag", apiImage: "ghcr.io/stealth-deplover/stealth-api", wantDetail: "STEALTH_API_IMAGE"},
+		{name: "invalid image tag", apiImage: imageName("stealth-api", "latest"), wantDetail: "STEALTH_API_IMAGE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			layout := writeExistingConfig(t, "v1.0.0")
+			values, err := readEnvFile(layout.EnvFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			values["STEALTH_API_IMAGE"] = test.apiImage
+			if err := writePrivateFile(layout.EnvFile, formatEnvFile(values)); err != nil {
+				t.Fatal(err)
+			}
+			if test.version != "" {
+				if err := os.WriteFile(layout.VersionFile, []byte(test.version+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
+			if _, err := app.loadExistingPlan(layout); err == nil || !strings.Contains(err.Error(), test.wantDetail) {
+				t.Fatalf("loadExistingPlan error = %v, want detail containing %q", err, test.wantDetail)
+			}
+		})
+	}
+}
+
+func TestFreshInstallConfigKeepsRequestedVersion(t *testing.T) {
+	config, err := generateConfig(InstallPlan{Version: "v1.1.0", PublicURL: "https://console.example.test", DockerGID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := parseEnvContents(t, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["STEALTH_API_IMAGE"] != imageName("stealth-api", "v1.1.0") {
+		t.Fatalf("fresh install API image = %q", values["STEALTH_API_IMAGE"])
+	}
+}
+
+func writeExistingConfig(t *testing.T, version string) InstallLayout {
+	t.Helper()
+	layout := newInstallLayout(filepath.Join(t.TempDir(), ".stealth"))
+	config, err := generateConfig(InstallPlan{Version: version, PublicURL: "https://console.example.test", DockerGID: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(layout.EnvFile, config); err != nil {
+		t.Fatal(err)
+	}
+	return layout
 }
 
 func parseEnvContents(t *testing.T, contents string) (map[string]string, error) {
