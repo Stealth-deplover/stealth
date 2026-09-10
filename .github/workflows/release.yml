@@ -74,7 +74,10 @@ jobs:
         run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
 
       - name: Validate smoke scripts
-        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh
+        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh
+
+      - name: Test bootstrap failure handling
+        run: ./scripts/bootstrap_test.sh
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -204,9 +207,51 @@ jobs:
           SMOKE_REMOVE_VOLUMES: "true"
         run: ./scripts/compose-production-smoke.sh
 
+  cli-artifacts:
+    name: Build CLI release artifacts
+    needs: [metadata, validate, production-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      COMMIT_SHA: ${{ needs.metadata.outputs.commit_sha }}
+      BUILD_TIME: ${{ needs.metadata.outputs.build_time }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      - name: Build Linux CLI archives and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/amd64 dist/arm64
+          ldflags="-s -w -X github.com/nazxf/stealth-api/internal/buildinfo.Version=${VERSION} -X github.com/nazxf/stealth-api/internal/buildinfo.Commit=${COMMIT_SHA} -X github.com/nazxf/stealth-api/internal/buildinfo.BuildTime=${BUILD_TIME}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldflags" -o dist/amd64/stealth ./cmd/stealth
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$ldflags" -o dist/arm64/stealth ./cmd/stealth
+          tar -czf dist/stealth_Linux_x86_64.tar.gz -C dist/amd64 stealth
+          tar -czf dist/stealth_Linux_arm64.tar.gz -C dist/arm64 stealth
+          (cd dist && sha256sum stealth_Linux_x86_64.tar.gz stealth_Linux_arm64.tar.gz > checksums.txt)
+          rm -rf dist/amd64 dist/arm64
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stealth-cli-${{ needs.metadata.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
   images:
     name: Build and publish release images
-    needs: [metadata, validate, production-smoke]
+    needs: [metadata, validate, production-smoke, cli-artifacts]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -314,13 +359,19 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [metadata, images]
+    needs: [metadata, images, cli-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: stealth-cli-${{ needs.metadata.outputs.version }}
+          path: dist
 
       - name: Create release notes and release
         env:
@@ -334,6 +385,7 @@ jobs:
 
           - Published coordinated API, worker, migration, and standalone Console images for $GITHUB_REF_NAME.
           - Image tags: \`$GITHUB_REF_NAME\` and \`sha-$SHORT_SHA\`.
+          - Attached verified Linux amd64 and arm64 Stealth CLI archives.
 
           ## Breaking changes
 
@@ -350,6 +402,7 @@ jobs:
           ## Upgrade notes
 
           - Follow \`docs/upgrade.md\` and verify health, readiness, version metadata, and HTTP smoke checks.
+          - The CLI installer keeps its configuration and persistent volumes when a deployment step fails.
 
           ## Known limitations
 
@@ -357,4 +410,7 @@ jobs:
           EOF
           gh release create "$GITHUB_REF_NAME" \
             --title "Stealth $GITHUB_REF_NAME" \
-            --notes-file "$notes_file"
+            --notes-file "$notes_file" \
+            dist/stealth_Linux_x86_64.tar.gz \
+            dist/stealth_Linux_arm64.tar.gz \
+            dist/checksums.txt

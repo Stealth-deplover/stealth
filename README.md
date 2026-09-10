@@ -29,7 +29,7 @@ an HttpOnly cookie.
 
 ```text
 stealth/
-├── cmd/          Go API and worker entrypoints
+├── cmd/          Go API, worker, migration, and CLI entrypoints
 ├── internal/     backend implementation, repositories, workers, auth
 ├── openapi/      versioned REST API contract
 ├── console/      Next.js developer console
@@ -101,6 +101,27 @@ The repeatable self-hosting path is documented in
 [`docs/production-deployment.md`](docs/production-deployment.md), with
 upgrade/rollback guidance in [`docs/upgrade.md`](docs/upgrade.md) and the
 backup runbook in [`docs/backup-restore.md`](docs/backup-restore.md).
+The Go CLI and interactive installer are documented in
+[`docs/cli.md`](docs/cli.md).
+
+## Quick install
+
+On a Linux amd64 or arm64 host with Docker and Docker Compose already
+installed, start the interactive installer with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
+```
+
+The bootstrap downloads a versioned `stealth` CLI from GitHub Releases,
+verifies its SHA-256 checksum, and lets the CLI run the existing production
+Compose deployment. Inspect the script first when preferred:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh -o bootstrap.sh
+less bootstrap.sh
+sh bootstrap.sh
+```
 
 ## API contract
 
@@ -195,6 +216,9 @@ follow [`docs/production-deployment.md`](docs/production-deployment.md).
 ```bash
 go vet ./...
 go test ./... -count=1
+go build ./cmd/stealth
+GOOS=linux GOARCH=amd64 go build ./cmd/stealth
+GOOS=linux GOARCH=arm64 go build ./cmd/stealth
 
 cd console
 npm run api:generate

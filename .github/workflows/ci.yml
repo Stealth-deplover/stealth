@@ -72,6 +72,38 @@ jobs:
       - name: Docker image build
         run: docker build --target api -t stealth-api .
 
+  installer:
+    name: Installer and release checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      - name: Validate bootstrap scripts
+        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh
+
+      - name: Test bootstrap failure handling
+        run: ./scripts/bootstrap_test.sh
+
+      - name: Build CLI
+        run: go build ./cmd/stealth
+
+      - name: Build Linux amd64 CLI
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/stealth
+
+      - name: Build Linux arm64 CLI
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/stealth
+
+      - name: Validate production Compose file
+        run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
+
   console:
     name: Console checks
     runs-on: ubuntu-latest
