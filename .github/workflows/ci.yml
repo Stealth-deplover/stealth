@@ -117,7 +117,10 @@ jobs:
         with:
           node-version: 24.x
           cache: npm
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: |
+            console/package-lock.json
+            console/tools/openapi-codegen/package-lock.json
+            console/tools/eslint/package-lock.json
 
       - name: Install console dependencies
         working-directory: console

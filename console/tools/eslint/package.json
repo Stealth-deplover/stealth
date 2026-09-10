@@ -1,0 +1,11 @@
+{
+  "name": "stealth-console-eslint",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.4",
+    "typescript": "6.0.2"
+  }
+}

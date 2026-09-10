@@ -36,6 +36,13 @@ npm run test:e2e
 
 Use `npm run format:check` for formatting. When `openapi/openapi.yaml` changes, regenerate the client and include the resulting `console/src/api/generated/` diff. Generated files are not edited manually. Read [`console/AGENTS.md`](console/AGENTS.md) before frontend work.
 
+The Console application uses TypeScript 7. OpenAPI generation and Next ESLint
+run from their isolated, locked toolchains under `console/tools/` because their
+current upstream TypeScript API requirements differ from the application
+compiler. `npm run api:generate` and `npm run lint` install those toolchains on
+demand when their local dependencies are absent. Review their package manifests
+and lockfiles like any other dependency change.
+
 ## Pull requests
 
 Describe the behavior change and scope, list validation commands, and call out migrations, API contract changes, environment variables, or security implications. Include screenshots for Console UI changes and update relevant docs. Do not include credentials, tokens, or real customer data.

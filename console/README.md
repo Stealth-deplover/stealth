@@ -19,6 +19,18 @@ For same-origin production routing, leave `NEXT_PUBLIC_API_BASE_URL` empty. The 
 
 `npm run api:generate` reads the backend contract from `../openapi/openapi.yaml` and regenerates `src/api/generated/schema.ts`. Feature hooks call the typed `openapi-fetch` client directly. There are no Next.js API routes, proxy handlers, Server Actions, or duplicated backend business rules.
 
+The Console compiler uses TypeScript 7. The latest stable `openapi-typescript`
+release currently declares a TypeScript 5 peer, so the generator is isolated in
+[`tools/openapi-codegen/`](tools/openapi-codegen/) with its own lockfile and
+TypeScript 5.9.3. `npm run api:generate` installs that locked tool only when
+needed before generating the checked-in client; it never adds the generator to
+the application dependency tree.
+
+The Next ESLint preset currently requires the TypeScript 6 API. `npm run lint`
+therefore uses the isolated [`tools/eslint/`](tools/eslint/) toolchain with its
+own lockfile and TypeScript 6.0.2. This compatibility toolchain does not change
+the TypeScript compiler used by the Console.
+
 The layout follows the backend hierarchy: account → organizations → projects → project resources. Resource pages only use operations present in the generated contract. Known backend boundaries are recorded in [`docs/backend-gaps.md`](docs/backend-gaps.md).
 
 ## Verification

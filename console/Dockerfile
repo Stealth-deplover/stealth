@@ -4,6 +4,10 @@ FROM node:26-alpine AS dependencies
 WORKDIR /app/console
 COPY console/package.json console/package-lock.json ./
 RUN npm ci
+COPY console/tools/openapi-codegen/package.json console/tools/openapi-codegen/package-lock.json ./tools/openapi-codegen/
+RUN npm --prefix tools/openapi-codegen ci --ignore-scripts
+COPY console/tools/eslint/package.json console/tools/eslint/package-lock.json ./tools/eslint/
+RUN npm --prefix tools/eslint ci --ignore-scripts
 
 FROM dependencies AS builder
 WORKDIR /app/console
