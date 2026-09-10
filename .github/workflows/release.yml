@@ -129,7 +129,6 @@ jobs:
       COMMIT_SHA: ${{ needs.metadata.outputs.commit_sha }}
       SHORT_SHA: ${{ needs.metadata.outputs.short_sha }}
       BUILD_TIME: ${{ needs.metadata.outputs.build_time }}
-      SMOKE_ENV: ${{ runner.temp }}/stealth-production-smoke.env
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -161,6 +160,8 @@ jobs:
             -t "stealth-console:smoke-$SHORT_SHA" .
 
       - name: Generate ephemeral smoke configuration
+        env:
+          SMOKE_ENV: ${{ runner.temp }}/stealth-production-smoke.env
         shell: bash
         run: |
           set -euo pipefail
@@ -199,6 +200,8 @@ jobs:
           chmod 600 "$SMOKE_ENV"
 
       - name: Validate rendered smoke Compose
+        env:
+          SMOKE_ENV: ${{ runner.temp }}/stealth-production-smoke.env
         run: docker compose --env-file "$SMOKE_ENV" -f compose.production.yaml config --quiet
 
       - name: Run production Compose HTTP smoke
