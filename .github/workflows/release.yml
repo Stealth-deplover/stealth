@@ -245,7 +245,7 @@ jobs:
           rm -rf dist/amd64 dist/arm64
 
       - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stealth-cli-${{ needs.metadata.outputs.version }}
           path: dist/
