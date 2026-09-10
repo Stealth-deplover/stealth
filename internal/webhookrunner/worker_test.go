@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -92,5 +93,68 @@ func TestSafeDialContextRejectsPrivateDestinations(t *testing.T) {
 		if connection, err := safeDialContext(context.Background(), "tcp", address); err == nil || connection != nil {
 			t.Fatalf("safeDialContext(%q) = connection=%v, error=%v", address, connection, err)
 		}
+	}
+}
+
+type pruneBatchResult struct {
+	deleted int64
+	err     error
+}
+
+type fakeExpiredEventPruner struct {
+	results []pruneBatchResult
+	calls   int
+	cancel  context.CancelFunc
+}
+
+func (f *fakeExpiredEventPruner) PruneExpiredWebhookEventsBatch(ctx context.Context, batchSize int) (int64, error) {
+	f.calls++
+	if f.cancel != nil && f.calls == 1 {
+		f.cancel()
+	}
+	if f.calls > len(f.results) {
+		return 0, errors.New("unexpected extra prune call")
+	}
+	return f.results[f.calls-1].deleted, f.results[f.calls-1].err
+}
+
+func TestRunRealtimePruneCycleStopsAfterPartialBatch(t *testing.T) {
+	pruner := &fakeExpiredEventPruner{results: []pruneBatchResult{{deleted: 300}}}
+	deleted, batches, err := runRealtimePruneCycle(context.Background(), pruner, 1000, 10)
+	if err != nil || deleted != 300 || batches != 1 || pruner.calls != 1 {
+		t.Fatalf("partial prune cycle deleted=%d batches=%d calls=%d err=%v", deleted, batches, pruner.calls, err)
+	}
+}
+
+func TestRunRealtimePruneCycleContinuesThroughFullBatches(t *testing.T) {
+	pruner := &fakeExpiredEventPruner{results: []pruneBatchResult{{deleted: 1000}, {deleted: 1000}, {deleted: 200}}}
+	deleted, batches, err := runRealtimePruneCycle(context.Background(), pruner, 1000, 3)
+	if err != nil || deleted != 2200 || batches != 3 || pruner.calls != 3 {
+		t.Fatalf("multi-batch prune cycle deleted=%d batches=%d calls=%d err=%v", deleted, batches, pruner.calls, err)
+	}
+}
+
+func TestRunRealtimePruneCycleHonorsHardBatchLimit(t *testing.T) {
+	pruner := &fakeExpiredEventPruner{results: []pruneBatchResult{{deleted: 1000}, {deleted: 1000}, {deleted: 1000}, {deleted: 1000}}}
+	deleted, batches, err := runRealtimePruneCycle(context.Background(), pruner, 1000, 3)
+	if err != nil || deleted != 3000 || batches != 3 || pruner.calls != 3 {
+		t.Fatalf("bounded prune cycle deleted=%d batches=%d calls=%d err=%v", deleted, batches, pruner.calls, err)
+	}
+}
+
+func TestRunRealtimePruneCycleStopsOnBatchError(t *testing.T) {
+	pruner := &fakeExpiredEventPruner{results: []pruneBatchResult{{deleted: 1000}, {err: errors.New("database unavailable")}, {deleted: 1000}}}
+	deleted, batches, err := runRealtimePruneCycle(context.Background(), pruner, 1000, 10)
+	if err == nil || deleted != 1000 || batches != 1 || pruner.calls != 2 {
+		t.Fatalf("failed prune cycle deleted=%d batches=%d calls=%d err=%v", deleted, batches, pruner.calls, err)
+	}
+}
+
+func TestRunRealtimePruneCycleStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pruner := &fakeExpiredEventPruner{results: []pruneBatchResult{{deleted: 1000}, {deleted: 1000}}, cancel: cancel}
+	deleted, batches, err := runRealtimePruneCycle(ctx, pruner, 1000, 10)
+	if !errors.Is(err, context.Canceled) || deleted != 1000 || batches != 1 || pruner.calls != 1 {
+		t.Fatalf("cancelled prune cycle deleted=%d batches=%d calls=%d err=%v", deleted, batches, pruner.calls, err)
 	}
 }

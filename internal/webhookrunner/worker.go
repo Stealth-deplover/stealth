@@ -31,9 +31,15 @@ const (
 	defaultTimeout      = 35 * time.Second
 	defaultMaxAttempts  = 12
 	defaultPrunePeriod  = time.Hour
+	defaultPruneBatch   = 1000
+	defaultPruneBatches = 10
 	maxResponseBytes    = 4096
 	maxRetryDelay       = 24 * time.Hour
 )
+
+type expiredEventPruner interface {
+	PruneExpiredWebhookEventsBatch(context.Context, int) (int64, error)
+}
 
 type Worker struct {
 	Repository      *repository.Repository
@@ -127,21 +133,44 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) pruneExpiredEvents(ctx context.Context) {
-	if ctx.Err() != nil {
-		return
-	}
 	started := time.Now()
-	deleted, err := w.Repository.PruneExpiredWebhookEvents(ctx)
+	deleted, batches, err := runRealtimePruneCycle(ctx, w.Repository, defaultPruneBatch, defaultPruneBatches)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
-		w.Logger.Error("realtime event pruning failed", "component", "realtime_pruner", "deleted_count", 0, "duration", time.Since(started), "error", err)
+		w.Logger.Error("realtime event pruning failed", "component", "realtime_pruner", "deleted_count", deleted, "batches", batches, "duration", time.Since(started), "error", err)
 		return
 	}
 	if deleted > 0 {
-		w.Logger.Info("realtime event pruning completed", "component", "realtime_pruner", "deleted_count", deleted, "duration", time.Since(started))
+		w.Logger.Info("realtime event pruning completed", "component", "realtime_pruner", "deleted_count", deleted, "batches", batches, "duration", time.Since(started))
 	}
+}
+
+// runRealtimePruneCycle drains expired rows in bounded batches. A full batch
+// means there may be more work, but maxBatches is always a hard upper bound;
+// cancellation and the first partial batch stop the cycle immediately.
+func runRealtimePruneCycle(ctx context.Context, pruner expiredEventPruner, batchSize, maxBatches int) (int64, int, error) {
+	if pruner == nil || batchSize < 1 || maxBatches < 1 {
+		return 0, 0, errors.New("invalid realtime prune cycle")
+	}
+	var totalDeleted int64
+	completedBatches := 0
+	for completedBatches < maxBatches {
+		if err := ctx.Err(); err != nil {
+			return totalDeleted, completedBatches, err
+		}
+		deleted, err := pruner.PruneExpiredWebhookEventsBatch(ctx, batchSize)
+		if err != nil {
+			return totalDeleted, completedBatches, err
+		}
+		completedBatches++
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break
+		}
+	}
+	return totalDeleted, completedBatches, nil
 }
 
 // RunOnce claims and processes at most one delivery. It returns false when no
