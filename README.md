@@ -1,241 +1,170 @@
 # Stealth
 
-Stealth is a developer cloud control plane. The repository is a monorepo:
-the Go API and workers remain the application layer, while `console/` is a
-self-hostable Next.js presentation layer for that API.
+[![CI](https://github.com/Stealth-deplover/stealth/actions/workflows/ci.yml/badge.svg)](https://github.com/Stealth-deplover/stealth/actions/workflows/ci.yml)
+[![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## Architecture
+## The open-source developer cloud
 
-```text
-Browser
-  │
-  ▼
-console/ (Next.js, React, TypeScript)
-  │  HTTP + generated OpenAPI client
-  ▼
-Go API (/v1/*)
-  ├── PostgreSQL
-  ├── Redis
-  ├── workers
-  └── local/S3-compatible object storage
+Stealth is a self-hostable developer platform for deploying applications,
+Functions, Sites, databases, object storage, messaging, webhooks, and agent
+workflows on infrastructure you control. It combines a Go control plane and
+worker process with a Next.js console and versioned Docker Compose deployments.
+
+> **Current status:** early public preview. Agent configuration and durable run
+> lifecycle are implemented, but execution is queue-only until a trusted
+> provider adapter is installed. Stealth is licensed under Apache-2.0; see
+> [License](#license).
+
+**Navigate:** [Quick Start](#quick-start) · [Documentation](docs/README.md) ·
+[Architecture](#architecture) · [Self Hosting](#self-hosting) ·
+[Roadmap](#roadmap) · [Contributing](CONTRIBUTING.md)
+
+## Quick Start
+
+The CLI installer is the intended first-release path. It currently downloads
+from the development branch because no stable bootstrap branch or release URL
+has been finalized yet.
+
+> **First-release note:** no GitHub Release is published yet, so this command
+> cannot complete until the first versioned CLI artifacts exist. Replace the
+> branch in this URL with the stable release branch before public promotion.
+
+Supported host: Linux amd64 or arm64 with Docker Engine, Docker Compose v2,
+access to `/var/run/docker.sock`, and a writable installation directory.
+Public deployments also need DNS and TLS termination in front of the bundled
+proxy.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
 ```
 
-The API is the platform and the console is an interface to it. The console
-does not add Next.js API routes, proxy handlers, Server Actions, or a second
-business-logic backend. Session authentication is owned by the Go API through
-an HttpOnly cookie.
+The bootstrap verifies the downloaded archive and SHA-256 checksum, then
+starts the interactive `stealth install` flow. To invoke the installed CLI
+directly, run `stealth install`. It generates private configuration and
+secrets, pulls matching API/worker/migration/Console images, applies
+migrations, starts the stack, and checks health and readiness. Open the public
+instance URL entered in the installer afterward. The default local proxy,
+Console, and API ports are `8080`, `13000`, and `18080` respectively.
 
-## Repository layout
-
-```text
-stealth/
-├── cmd/          Go API, worker, migration, and CLI entrypoints
-├── internal/     backend implementation, repositories, workers, auth
-├── openapi/      versioned REST API contract
-├── console/      Next.js developer console
-├── migrations/   embedded database migrations
-└── ...
-```
-
-### Backend
-
-- Go 1.26, Chi, pgx/v5, sqlc, and Redis
-- PostgreSQL-backed organizations, projects, resources, sessions, and audit data
-- Dedicated workers for Functions, Sites, Agents, webhooks, and messaging
-- `/metrics`, health/readiness endpoints, and optional OpenTelemetry tracing
-
-### Console
-
-`console/` uses Next.js App Router, strict TypeScript, Tailwind, Radix-style
-primitives, TanStack Query/Table, React Hook Form, Zod, React Flow,
-`openapi-fetch`, Vitest, and Playwright. It talks directly to the Go API:
-
-```text
-openapi/openapi.yaml
-        ↓ npm run api:generate
-console/src/api/generated/
-        ↓ openapi-fetch
-TanStack Query hooks
-        ↓
-Stealth Console UI
-```
-
-Generated files are never edited manually. Run the generator after changing
-the contract and commit the resulting files.
+See [Production deployment](docs/production-deployment.md) and the
+[CLI guide](docs/cli.md) for the supported self-hosting path.
 
 ## Development
 
-### Backend
+The backend uses Go 1.26, PostgreSQL, and Redis:
 
 ```bash
 cp .env.example .env
-go run ./cmd/api       # API: http://localhost:8080
-go run ./cmd/worker    # background workers
+go run ./cmd/api       # API on http://localhost:8080
+go run ./cmd/worker
+go vet ./...
+go test ./... -count=1
 ```
 
-PostgreSQL and Redis must be available at the URLs in `.env`. Migrations are
-applied by the API on startup.
-
-### Console
+The console uses Node 24 and talks directly to the Go API:
 
 ```bash
 cd console
 cp .env.example .env.local
 npm ci
 npm run api:generate
-npm run dev             # Console: http://localhost:3000
+npm run dev             # Console on http://localhost:3000
 ```
 
-For a separate API origin, set `NEXT_PUBLIC_API_BASE_URL` in
-`console/.env.local` and add the console origin to the API's
-`CONSOLE_CORS_ORIGINS`. For the preferred same-origin deployment, leave the
-value empty and route `/v1/*` to the Go API.
+Run `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, and
+`npm run test:e2e` before submitting console changes. The OpenAPI client is
+generated from [`openapi/openapi.yaml`](openapi/openapi.yaml); never edit
+`console/src/api/generated/` by hand.
 
-The API's `PUBLIC_APP_URL` should point to the console origin so verification
-and recovery links return to the console.
+## Architecture
 
-Backend execution-path mapping, recovery semantics, rate-limit scopes, health
-checks, metrics access, proxy trust, and remaining operational gaps are
-documented in [`docs/backend-production-readiness.md`](docs/backend-production-readiness.md).
-The repeatable self-hosting path is documented in
-[`docs/production-deployment.md`](docs/production-deployment.md), with
-upgrade/rollback guidance in [`docs/upgrade.md`](docs/upgrade.md) and the
-backup runbook in [`docs/backup-restore.md`](docs/backup-restore.md).
-The Go CLI and interactive installer are documented in
-[`docs/cli.md`](docs/cli.md).
-
-## Quick install
-
-On a Linux amd64 or arm64 host with Docker and Docker Compose already
-installed, start the interactive installer with:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh | sh
+```mermaid
+flowchart TD
+    Browser[Browser] --> Console[Next.js Console]
+    Console -->|HTTP + generated OpenAPI client| API[Go API]
+    API --> DB[(PostgreSQL)]
+    API --> Redis[(Redis: rate limits and realtime)]
+    API --> Storage[(Local or S3-compatible storage)]
+    API --> Queue[(Durable work queues)]
+    Queue --> Worker[Go worker process]
+    Worker --> Storage
+    Worker --> Runner[Docker-backed Function/Site runner]
+    Worker --> Delivery[Webhook and messaging adapters]
+    Worker --> Agents[Agent queue and trusted provider adapters]
 ```
 
-The bootstrap downloads a versioned `stealth` CLI from GitHub Releases,
-verifies its SHA-256 checksum, and lets the CLI run the existing production
-Compose deployment. Inspect the script first when preferred:
+The API owns authentication, tenant boundaries, and the REST contract. The
+Console has no second business-logic backend. The worker owns asynchronous
+builds, execution, delivery, realtime publication, and optional Agent runs.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/init/backend-import/scripts/bootstrap.sh -o bootstrap.sh
-less bootstrap.sh
-sh bootstrap.sh
-```
+## Documentation
 
-## API contract
+Use the [documentation index](docs/README.md) for setup, architecture,
+configuration, operations, upgrades, backups, and known Console/backend
+boundaries. The [OpenAPI contract](openapi/openapi.yaml) is the source of
+truth for Console requests.
 
-`openapi/openapi.yaml` is the source of truth for every console request. The
-TypeScript client is generated into `console/src/api/generated/`:
+## Self Hosting
 
-```bash
-cd console
-npm run api:generate
-git diff --exit-code -- src/api/generated
-```
+The portable baseline is Docker Compose: a reverse proxy serves the standalone
+Next.js Console and sends `/v1/*` to the Go API. PostgreSQL stores durable
+control-plane data; Redis supports rate limits and realtime delivery; the
+worker runs queued builds and integrations. The bundled local storage mode is
+single-host; use an S3-compatible store for a more durable production setup.
+Read [Production deployment](docs/production-deployment.md) before exposing
+an instance publicly.
 
-The generated-client check is also part of GitHub Actions.
+## Roadmap
 
-## Environment variables
+The statuses below describe the current implementation, not a promise of
+managed-service availability.
 
-Backend variables are documented in `.env.example` and validated by
-`internal/config`. The most important values are:
+| Area                             | Status       | Current scope                                                                                                  |
+| -------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------- |
+| Authentication and organizations | Beta         | Account sessions, recovery, memberships, invitations, audit data                                               |
+| Projects                         | Beta         | Project lifecycle, users, API keys, service layout, scoped access                                              |
+| Functions                        | Beta         | Source archives, Docker-backed builds/execution, variables, logs, quotas                                       |
+| Sites                            | Beta         | Static deployments, Git source, domains, publication, build logs                                               |
+| Database                         | Beta         | Tables, rows, indexes, relationships, exports, backups, restore                                                |
+| Storage                          | Beta         | Buckets/files, quotas, local or S3-compatible drivers                                                          |
+| Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |
+| Webhooks                         | Beta         | Signed delivery, transactional outbox, retries, SSRF protections                                               |
+| Observability                    | Beta         | Health/readiness, metrics, traces, realtime events, audit records                                              |
+| Self-host installer              | Experimental | Interactive CLI and release pipeline exist; no public release yet; upgrade/uninstall commands are not shipped  |
+| Agents                           | Experimental | Configuration, catalog, durable runs, logs, and cancellation; provider execution remains queue-only by default |
+| Production hardening             | Beta         | Leases, bounded retries, rate limits, proxy trust, smoke checks; HA and exactly-once execution are not claimed |
 
-- `DATABASE_URL` and `REDIS_URL`
-- `DATABASE_MAX_CONNS`, `DATABASE_MIN_CONNS`, `DATABASE_MAX_CONN_LIFETIME`,
-  and `DATABASE_MAX_CONN_IDLE_TIME` for bounded PostgreSQL pools
-- `FUNCTIONS_SECRET_KEY`
-- `PROJECT_OPERATION_RATE_LIMIT` and `PROJECT_OPERATION_RATE_WINDOW` for
-  per-project/per-actor safety limits on expensive operations
-- `HTTP_ADDR`
-- `METRICS_TOKEN` to explicitly enable protected Prometheus output
-- `PUBLIC_APP_URL`
-- `CONSOLE_CORS_ORIGINS` when the console is served from another origin
-- `STORAGE_*`, `SMTP_*`, and `AUTH_*` for optional storage and email flows
+## Releases
 
-Console variables are documented in [`console/.env.example`](console/.env.example):
+Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
+coordinated GHCR images for API, worker, migration, and Console plus Linux
+amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
+No release is published yet. The recommended first tag is `v0.1.0` after the
+license, stable bootstrap URL, and first release smoke run are completed. If
+an alpha tag such as `v0.1.0-alpha.1` is preferred, the release and bootstrap
+version validators must first be updated to accept prereleases. See
+[Release engineering](docs/release.md) and [Upgrade and rollback](docs/upgrade.md).
 
-- `NEXT_PUBLIC_API_BASE_URL` — optional API origin; empty means same-origin `/v1`
-- `NEXT_PUBLIC_APP_NAME` — optional console label
+## Screenshots
 
-Never put session secrets, API key secrets, or other private backend values in
-`NEXT_PUBLIC_*` variables.
+No product screenshots are committed yet. The most useful first captures would
+be a project dashboard, Function deployment, Database tables, an Agent run
+showing its queue-only state, and Observability/traces. Add redacted captures
+only when they reflect the current product.
 
-## Docker deployment
+## Contributing
 
-Build the backend images from the repository root:
+Read [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md),
+the root [Repository Guidelines](AGENTS.md), and [`console/AGENTS.md`](console/AGENTS.md)
+for development and review rules.
 
-```bash
-docker build --target api -t stealth-api .
-docker build --target worker -t stealth-worker .
-docker build --target migrate -t stealth-migrate .
-```
+## Security
 
-Build the self-hosted console image:
+See [SECURITY.md](SECURITY.md) for responsible disclosure guidance. Never
+commit `.env` files, session secrets, API keys, provider credentials, or private
+values in `NEXT_PUBLIC_*` variables.
 
-```bash
-docker build -f console/Dockerfile -t stealth-console .
-docker run --rm -p 3000:3000 stealth-console
-```
+## License
 
-The console uses Next.js `output: "standalone"`, a multi-stage image, and a
-non-root runtime user. It has no dependency on Vercel Functions, KV, Blob,
-Postgres, Edge, or other Vercel-only infrastructure.
-
-Put a reverse proxy in front of the two services:
-
-```text
-/      → stealth-console:3000
-/v1/*  → stealth-api:8080
-```
-
-An Nginx example is available at [`console/deploy/nginx.conf`](console/deploy/nginx.conf).
-It includes baseline browser security headers. The example normalizes
-`X-Forwarded-Proto` from a trusted TLS terminator before forwarding it to both
-the console and Go API; the ingress must sanitize that header before traffic
-reaches Nginx. HSTS uses the same normalized protocol, so it is emitted only
-for externally HTTPS requests and never pins a plain HTTP development host.
-The CSP assumes same-origin `/v1/*` routing. If the API is deployed on a
-separate origin, add that exact origin to `connect-src` in the proxy config.
-
-For rate-limit client-IP resolution, configure `TRUSTED_PROXY_CIDRS` with the
-IP/CIDR of the direct Nginx peers as seen by the Go API (for example, the
-private network used by the reverse-proxy containers). It is empty by default,
-which trusts no forwarded client-IP headers. The API accepts the current
-Nginx `X-Forwarded-For` chain first, then standards-based `Forwarded`, then
-`X-Real-IP`, and falls back to the direct peer on malformed input. Do not use
-`0.0.0.0/0` or expose the API listener directly while trusting forwarded
-headers.
-
-For a versioned production deployment, copy
-[`.env.production.example`](.env.production.example) to `.env.production` and
-follow [`docs/production-deployment.md`](docs/production-deployment.md).
-
-## Verification
-
-```bash
-go vet ./...
-go test ./... -count=1
-go build ./cmd/stealth
-GOOS=linux GOARCH=amd64 go build ./cmd/stealth
-GOOS=linux GOARCH=arm64 go build ./cmd/stealth
-
-cd console
-npm run api:generate
-npm run typecheck
-npm run lint
-npm run test
-npm run build
-npm run test:e2e
-```
-
-GitHub Actions runs backend vet/tests/integration/Docker checks and the full
-console generation, typecheck, lint, unit, production build, Playwright, and
-Docker checks on every push and pull request, independent of the default branch
-name.
-
-## Backend boundaries
-
-The console intentionally does not invent capabilities that are absent from
-the API contract. Current boundaries and recommendations are tracked in
-[`console/docs/backend-gaps.md`](console/docs/backend-gaps.md).
+Stealth is licensed under the [Apache License 2.0](LICENSE).
