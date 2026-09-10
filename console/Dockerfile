@@ -1,6 +1,6 @@
 # Build from the repository root:
 # docker build -f console/Dockerfile -t stealth-console .
-FROM node:24-alpine AS dependencies
+FROM node:26-alpine AS dependencies
 WORKDIR /app/console
 COPY console/package.json console/package-lock.json ./
 RUN npm ci
@@ -13,7 +13,7 @@ ARG NEXT_PUBLIC_API_BASE_URL=
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 RUN mkdir -p public && npm run build
 
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 WORKDIR /app
