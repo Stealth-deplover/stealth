@@ -65,7 +65,24 @@ if [ -z "$version" ]; then
 	latest_url="$(curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
 		--output /dev/null --write-out '%{url_effective}' \
 		"https://github.com/${repository}/releases/latest")" || fail "could not resolve the latest stable release"
-	version=${latest_url##*/}
+	while [ "$latest_url" != "${latest_url%/}" ]; do
+		latest_url=${latest_url%/}
+	done
+	case "$latest_url" in
+		"https://github.com/${repository}/releases/tag/"*)
+			tag=${latest_url##*/releases/tag/}
+			case "$tag" in
+				''|*/*|*\?*|*#*) fail "failed to determine latest release" ;;
+			esac
+			version=$tag
+			;;
+		"https://github.com/${repository}/releases"|"https://github.com/${repository}/releases/latest")
+			fail "no stable GitHub release is available yet"
+			;;
+		*)
+			fail "failed to determine latest release"
+			;;
+	esac
 fi
 
 version_parts=${version#v}
