@@ -97,6 +97,10 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	if err := validHeaderValue(s.From, "sender"); err != nil {
 		return err
 	}
+	normalizedBody, err := normalizeTextBody(message.TextBody)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(message.To) == "" {
 		return fmt.Errorf("recipient is required")
 	}
@@ -156,7 +160,7 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
 		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		strings.ReplaceAll(strings.ReplaceAll(message.TextBody, "\r\n", "\n"), "\n", "\r\n") + "\r\n"
+		normalizedBody + "\r\n"
 	if _, err := writer.Write([]byte(body)); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write smtp message: %w", err)
@@ -178,6 +182,17 @@ func validHeaderValue(value, field string) error {
 		return fmt.Errorf("smtp %s contains a control character", field)
 	}
 	return nil
+}
+
+func normalizeTextBody(value string) (string, error) {
+	if strings.IndexFunc(value, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\r' && r != '\n' && r != '\t'
+	}) >= 0 {
+		return "", fmt.Errorf("smtp body contains an unexpected control character")
+	}
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	return strings.ReplaceAll(value, "\n", "\r\n"), nil
 }
 
 func isLocalHost(host string) bool {

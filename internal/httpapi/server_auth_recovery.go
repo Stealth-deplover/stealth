@@ -1,12 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Stealth-deplover/stealth/internal/auth"
 	"github.com/Stealth-deplover/stealth/internal/domain"
@@ -47,7 +48,7 @@ func (s *Server) issueAccountVerification(r *http.Request, accountID uuid.UUID, 
 		s.logger.Error("account verification token persistence failed", "account_id", accountID, "error", err)
 		return
 	}
-	if err := s.sendAuthEmail(r, email, "Verify your Stealth email", s.authLink("verify-email", nil, token), "email verification"); err != nil {
+	if err := s.sendAuthEmail(r.Context(), email, mailer.AuthEmailAccountVerification, s.authLink("verify-email", nil, token)); err != nil {
 		s.logger.Warn("account verification email was not delivered", "account_id", accountID, "error", err)
 	}
 }
@@ -62,7 +63,7 @@ func (s *Server) issueProjectUserVerification(r *http.Request, projectID, userID
 		s.logger.Error("project verification token persistence failed", "project_id", projectID, "user_id", userID, "error", err)
 		return
 	}
-	if err := s.sendAuthEmail(r, email, "Verify your email", s.authLink("verify-email", &projectID, token), "project user email verification"); err != nil {
+	if err := s.sendAuthEmail(r.Context(), email, mailer.AuthEmailProjectUserVerification, s.authLink("verify-email", &projectID, token)); err != nil {
 		s.logger.Warn("project verification email was not delivered", "project_id", projectID, "user_id", userID, "error", err)
 	}
 }
@@ -105,7 +106,7 @@ func (s *Server) sendAccountVerification(w http.ResponseWriter, r *http.Request)
 		internalError(s, w, err)
 		return
 	}
-	if err := s.sendAuthEmail(r, account.Email, "Verify your Stealth email", link, "email verification"); err != nil {
+	if err := s.sendAuthEmail(r.Context(), account.Email, mailer.AuthEmailAccountVerification, link); err != nil {
 		s.logger.Error("account verification email delivery failed", "account_id", account.ID, "error", err)
 		writeError(w, http.StatusServiceUnavailable, "email_delivery_unavailable", "verification email could not be delivered")
 		return
@@ -168,7 +169,7 @@ func (s *Server) createAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if found {
-		if sendErr := s.sendAuthEmail(r, account.Email, "Reset your Stealth password", link, "password recovery"); sendErr != nil {
+		if sendErr := s.sendAuthEmail(r.Context(), account.Email, mailer.AuthEmailAccountPasswordReset, link); sendErr != nil {
 			s.logger.Error("account recovery email delivery failed", "account_id", account.ID, "error", sendErr)
 		}
 	}
@@ -241,7 +242,7 @@ func (s *Server) sendProjectUserVerification(w http.ResponseWriter, r *http.Requ
 		internalError(s, w, err)
 		return
 	}
-	if err := s.sendAuthEmail(r, user.Email, "Verify your email", link, "project user email verification"); err != nil {
+	if err := s.sendAuthEmail(r.Context(), user.Email, mailer.AuthEmailProjectUserVerification, link); err != nil {
 		s.logger.Error("project user verification email delivery failed", "project_id", projectID, "user_id", user.ID, "error", err)
 		writeError(w, http.StatusServiceUnavailable, "email_delivery_unavailable", "verification email could not be delivered")
 		return
@@ -310,7 +311,7 @@ func (s *Server) createProjectUserRecovery(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if found {
-		if sendErr := s.sendAuthEmail(r, user.Email, "Reset your password", link, "project user password recovery"); sendErr != nil {
+		if sendErr := s.sendAuthEmail(r.Context(), user.Email, mailer.AuthEmailProjectUserPasswordReset, link); sendErr != nil {
 			s.logger.Error("project user recovery email delivery failed", "project_id", projectID, "user_id", user.ID, "error", sendErr)
 		}
 	}
@@ -370,14 +371,27 @@ func validateEmail(raw string) (string, error) {
 }
 
 func (s *Server) authLink(path string, projectID *uuid.UUID, token string) string {
-	base := strings.TrimRight(strings.TrimSpace(s.config.PublicAppURL), "/")
+	return authLinkFromBase(s.configuredAuthBase(), path, projectID, token)
+}
+
+func (s *Server) configuredAuthBase() *url.URL {
+	base := strings.TrimSpace(s.config.PublicAppURL)
 	if base == "" {
 		base = "http://localhost:4173"
 	}
-	parsed, err := url.Parse(base + "/" + strings.TrimLeft(path, "/"))
-	if err != nil {
-		return base + "/" + strings.TrimLeft(path, "/") + "?token=" + url.QueryEscape(token)
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.IndexFunc(base, unicode.IsControl) >= 0 {
+		parsed = &url.URL{Scheme: "http", Host: "localhost:4173"}
 	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return parsed
+}
+
+func authLinkFromBase(base *url.URL, path string, projectID *uuid.UUID, token string) string {
+	parsed := *base
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + strings.TrimLeft(path, "/")
+	parsed.RawPath = ""
 	query := parsed.Query()
 	query.Set("token", token)
 	if projectID != nil {
@@ -387,67 +401,88 @@ func (s *Server) authLink(path string, projectID *uuid.UUID, token string) strin
 	return parsed.String()
 }
 
-// authLinkFor supports Appwrite-style caller-provided redirect URLs while
-// keeping links on an origin the deployment has explicitly trusted. Console
-// links may use PUBLIC_APP_URL; project links may additionally use one of the
-// project's exact CORS origins. Paths and existing harmless query parameters
-// are preserved, while fragments and credentials are rejected.
+// authLinkFor accepts a caller URL only as an independently validated choice
+// of an already trusted auth route. The emailed link is rebuilt from the
+// configured base (or an exact project CORS origin), the fixed route, and the
+// server-generated token. No caller path, query, Host header, Origin header,
+// or forwarded-host value is copied into the email.
 func (s *Server) authLinkFor(r *http.Request, path string, projectID *uuid.UUID, token, redirect string) (string, error) {
-	redirect = strings.TrimSpace(redirect)
 	if redirect == "" {
 		return s.authLink(path, projectID, token), nil
 	}
-	if len(redirect) > 2048 || strings.ContainsAny(redirect, "\x00\r\n \t") {
-		return "", errors.New("url must be an absolute HTTP(S) URL without credentials, whitespace, or a fragment")
+	if len(redirect) > 2048 || redirect != strings.TrimSpace(redirect) || strings.IndexFunc(redirect, unicode.IsControl) >= 0 {
+		return "", errors.New("url must be a trusted HTTP(S) auth route without whitespace or control characters")
 	}
 	parsed, err := url.Parse(redirect)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
-		return "", errors.New("url must be an absolute HTTP(S) URL without credentials, whitespace, or a fragment")
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.RawFragment != "" || parsed.RawQuery != "" || parsed.ForceQuery {
+		return "", errors.New("url must be a trusted auth route without credentials, queries, or fragments")
 	}
-	origin, err := repository.NormalizeCORSOrigin(parsed.Scheme + "://" + parsed.Host)
-	if err != nil {
-		return "", errors.New("url must use a valid HTTP(S) origin")
-	}
-	trusted := false
-	base, baseErr := url.Parse(strings.TrimRight(strings.TrimSpace(s.config.PublicAppURL), "/"))
-	if baseErr == nil && base.Host != "" {
-		baseOrigin, normalizeErr := repository.NormalizeCORSOrigin(base.Scheme + "://" + base.Host)
-		trusted = normalizeErr == nil && baseOrigin == origin
-	}
-	if !trusted && projectID != nil {
-		origins, lookupErr := s.repo.ProjectCORSOrigins(r.Context(), *projectID)
-		if lookupErr != nil && !errors.Is(lookupErr, repository.ErrNotFound) {
-			return "", errors.New("unable to validate redirect origin")
+
+	base := s.configuredAuthBase()
+	if parsed.Scheme == "" && parsed.Host == "" {
+		if !strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "//") {
+			return "", errors.New("url must be an absolute HTTP(S) URL or a relative auth route")
 		}
-		trusted = containsCORSOrigin(origins, origin)
+	} else {
+		if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" {
+			return "", errors.New("url must be a trusted HTTP(S) auth route")
+		}
+		origin, normalizeErr := repository.NormalizeCORSOrigin(parsed.Scheme + "://" + parsed.Host)
+		if normalizeErr != nil {
+			return "", errors.New("url must use a valid HTTP(S) origin")
+		}
+		baseOrigin, baseErr := repository.NormalizeCORSOrigin(base.Scheme + "://" + base.Host)
+		if baseErr == nil && baseOrigin == origin {
+			// Keep the configured PUBLIC_APP_URL path, if it has one.
+		} else {
+			if projectID == nil {
+				return "", errors.New("url origin is not trusted for this project")
+			}
+			origins, lookupErr := s.repo.ProjectCORSOrigins(r.Context(), *projectID)
+			if lookupErr != nil && !errors.Is(lookupErr, repository.ErrNotFound) {
+				return "", errors.New("unable to validate redirect origin")
+			}
+			if !containsCORSOrigin(origins, origin) {
+				return "", errors.New("url origin is not trusted for this project")
+			}
+			base, err = url.Parse(origin)
+			if err != nil {
+				return "", errors.New("url must use a valid HTTP(S) origin")
+			}
+		}
 	}
-	if !trusted {
-		return "", errors.New("url origin is not trusted for this project")
+
+	pathValue := parsed.Path
+	if unescaped, unescapeErr := url.PathUnescape(parsed.EscapedPath()); unescapeErr != nil || strings.IndexFunc(unescaped, unicode.IsControl) >= 0 {
+		return "", errors.New("url path contains invalid control characters")
 	}
-	query := parsed.Query()
-	query.Set("token", token)
-	if projectID != nil {
-		query.Set("project_id", projectID.String())
+	expectedPath := strings.TrimRight(base.Path, "/") + "/" + strings.TrimLeft(path, "/")
+	if pathValue != expectedPath {
+		return "", errors.New("url path must match the requested auth route")
 	}
-	parsed.RawQuery = query.Encode()
-	return parsed.String(), nil
+	return authLinkFromBase(base, path, projectID, token), nil
 }
 
-func (s *Server) sendAuthEmail(r *http.Request, recipient, subject, link, purpose string) error {
+func (s *Server) sendAuthEmail(ctx context.Context, recipient string, kind mailer.AuthEmailKind, link string) error {
 	if s.emailSender == nil {
 		return mailer.ErrDisabled
 	}
-	message := mailer.Message{
-		To:       recipient,
-		Subject:  subject,
-		TextBody: fmt.Sprintf("Use the following one-time link to complete %s:\n\n%s\n\nThis link expires in %s and can only be used once. If you did not request this, you can ignore this email.", purpose, link, authLinkTTL(s, purpose)),
+	authLink, err := mailer.NewAuthLink(link)
+	if err != nil {
+		return err
 	}
-	return s.emailSender.Send(r.Context(), message)
+	message, err := mailer.NewAuthMessage(recipient, kind, authLink, authEmailTTL(s, kind))
+	if err != nil {
+		return err
+	}
+	return s.emailSender.Send(ctx, message)
 }
 
-func authLinkTTL(s *Server, purpose string) string {
-	if strings.Contains(purpose, "verification") || strings.Contains(purpose, "invitation") {
-		return s.config.AuthVerificationTTL.String()
+func authEmailTTL(s *Server, kind mailer.AuthEmailKind) time.Duration {
+	switch kind {
+	case mailer.AuthEmailAccountVerification, mailer.AuthEmailProjectUserVerification, mailer.AuthEmailOrganizationInvitation:
+		return s.config.AuthVerificationTTL
+	default:
+		return s.config.AuthPasswordResetTTL
 	}
-	return s.config.AuthPasswordResetTTL.String()
 }

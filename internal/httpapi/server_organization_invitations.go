@@ -8,6 +8,7 @@ import (
 
 	"github.com/Stealth-deplover/stealth/internal/auth"
 	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/validate"
 )
@@ -85,7 +86,7 @@ func (s *Server) createOrganizationInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	delivery := "sent"
-	if sendErr := s.sendAuthEmail(r, email, "You are invited to a Stealth organization", s.authLink("accept-invitation", nil, token), "organization invitation"); sendErr != nil {
+	if sendErr := s.sendAuthEmail(r.Context(), email, mailer.AuthEmailOrganizationInvitation, s.authLink("accept-invitation", nil, token)); sendErr != nil {
 		delivery = "failed"
 		s.logger.Error("organization invitation email delivery failed", "organization_id", organizationID, "invitation_id", item.ID, "error", sendErr)
 	}
