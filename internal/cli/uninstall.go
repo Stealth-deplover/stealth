@@ -850,18 +850,18 @@ type uninstallStepMessage struct {
 }
 
 type uninstallModel struct {
-	app            *App
-	ctx            context.Context
-	cancel         context.CancelFunc
-	plan           uninstallPlan
-	screen         uninstallScreen
-	option         int
-	step           int
-	spinner        spinner.Model
-	confirmInput   textinput.Model
-	err            error
-	width          int
-	options        uninstallOptions
+	app          *App
+	ctx          context.Context
+	cancel       context.CancelFunc
+	plan         uninstallPlan
+	screen       uninstallScreen
+	option       int
+	step         int
+	spinner      spinner.Model
+	confirmInput textinput.Model
+	err          error
+	width        int
+	options      uninstallOptions
 }
 
 func (a *App) runUninstallTUI(ctx context.Context, plan uninstallPlan, options uninstallOptions) int {
