@@ -2,6 +2,7 @@ package sitestore
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,7 +45,7 @@ func TestStorePublishesAndServesImmutableDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	data, err := os.ReadFile(file.Name())
+	data, err := io.ReadAll(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +118,89 @@ func TestStoreRejectsSymlinkedArtifactParents(t *testing.T) {
 	}
 	if _, _, err := store.OpenFile(relative, "index.html"); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("OpenFile through symlinked project parent error = %v, want ErrInvalidPath", err)
+	}
+}
+
+func TestStoreRejectsUnsafeRequestedPaths(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, siteID, deploymentID := testUUID(t), testUUID(t), testUUID(t)
+	staging, relative, err := store.BeginStaging(projectID, siteID, deploymentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitDirectory(staging, relative); err != nil {
+		t.Fatal(err)
+	}
+	for _, requested := range []string{"../escape", "nested/../../escape", `..\escape`, "C:/Windows/System32/config/SAM"} {
+		if _, _, err := store.OpenFile(relative, requested); !errors.Is(err, ErrInvalidFile) {
+			t.Errorf("OpenFile(%q) error = %v, want ErrInvalidFile", requested, err)
+		}
+	}
+	for _, artifact := range []string{"../escape/site/deployment", "/tmp/escape", "not-a-uuid/site/deployment"} {
+		if _, _, err := store.OpenFile(artifact, "index.html"); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("OpenFile artifact %q error = %v, want ErrInvalidPath", artifact, err)
+		}
+	}
+}
+
+func TestStoreProjectRemovalDoesNotFollowSymlink(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := testUUID(t)
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "must-remain.txt")
+	if err := os.WriteFile(sentinel, []byte("protected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectPath := filepath.Join(store.Root(), projectID.String())
+	if err := os.Symlink(outside, projectPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveProject(projectID); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("RemoveProject() error = %v, want ErrInvalidPath", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("RemoveProject followed symlink and removed outside data: %v", err)
+	}
+}
+
+func TestStoreRejectsSymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	root := filepath.Join(base, "sites")
+	if err := os.Symlink(outside, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(root); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("New(symlink root) error = %v, want ErrInvalidPath", err)
+	}
+}
+
+func TestStoreRejectsSymlinkedStagingNamespace(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, siteID, deploymentID := testUUID(t), testUUID(t), testUUID(t)
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(store.Root(), projectID.String())); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.BeginStaging(projectID, siteID, deploymentID); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("BeginStaging() error = %v, want ErrInvalidPath", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("BeginStaging created files through a symlinked namespace: %d entries", len(entries))
 	}
 }
 

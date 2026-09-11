@@ -151,6 +151,36 @@ func TestLoadDatabasePoolSettings(t *testing.T) {
 	}
 }
 
+func TestBoundedInt32RejectsValuesOutsideConfiguredRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int32
+		wantErr bool
+	}{
+		{name: "minimum", value: "0", want: 0},
+		{name: "maximum", value: "256", want: 256},
+		{name: "below minimum", value: "-1", wantErr: true},
+		{name: "above maximum", value: "257", wantErr: true},
+		{name: "too large for int32", value: "999999999999999999999999", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TEST_BOUNDED_INT32", test.value)
+			got, err := boundedInt32("TEST_BOUNDED_INT32", "1", 0, 256)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("boundedInt32(%q) returned %d, want an error", test.value, got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("boundedInt32(%q) = %d, %v; want %d", test.value, got, err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadTrustedProxyCIDRs(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.0.2.10, 2001:db8::/32")

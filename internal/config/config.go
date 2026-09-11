@@ -121,13 +121,13 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	databaseMaxConns, err := strconv.Atoi(value("DATABASE_MAX_CONNS", "16"))
-	if err != nil || databaseMaxConns < 1 || databaseMaxConns > 256 {
-		return Config{}, fmt.Errorf("DATABASE_MAX_CONNS must be an integer between 1 and 256")
+	databaseMaxConns, err := boundedInt32("DATABASE_MAX_CONNS", "16", 1, 256)
+	if err != nil {
+		return Config{}, err
 	}
-	databaseMinConns, err := strconv.Atoi(value("DATABASE_MIN_CONNS", "2"))
-	if err != nil || databaseMinConns < 0 || databaseMinConns > databaseMaxConns {
-		return Config{}, fmt.Errorf("DATABASE_MIN_CONNS must be an integer between 0 and DATABASE_MAX_CONNS")
+	databaseMinConns, err := boundedInt32("DATABASE_MIN_CONNS", "2", 0, databaseMaxConns)
+	if err != nil {
+		return Config{}, err
 	}
 	databaseMaxConnLifetime, err := time.ParseDuration(value("DATABASE_MAX_CONN_LIFETIME", "1h"))
 	if err != nil || databaseMaxConnLifetime <= 0 || databaseMaxConnLifetime > 7*24*time.Hour {
@@ -473,6 +473,20 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	return config, nil
+}
+
+// boundedInt32 parses an operator configuration value with the exact width
+// used by the downstream database driver. Parsing at 32 bits and checking the
+// bounds before returning makes the narrowing conversion explicit and safe.
+func boundedInt32(name, fallback string, minimum, maximum int32) (int32, error) {
+	if minimum > maximum {
+		return 0, fmt.Errorf("%s has invalid bounds", name)
+	}
+	parsed, err := strconv.ParseInt(value(name, fallback), 10, 32)
+	if err != nil || parsed < int64(minimum) || parsed > int64(maximum) {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", name, minimum, maximum)
+	}
+	return int32(parsed), nil
 }
 
 func decodeSecretKey(raw, name string) ([]byte, error) {

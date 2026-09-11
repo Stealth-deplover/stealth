@@ -14,6 +14,7 @@ import (
 	"net/smtp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Stealth-deplover/stealth/internal/config"
 )
@@ -53,9 +54,11 @@ type DisabledSender struct{}
 
 func (DisabledSender) Send(context.Context, Message) error { return ErrDisabled }
 
-// LogSender deliberately includes the link so a developer can exercise the
-// flow without an SMTP server. Select it explicitly with EMAIL_DELIVERY_MODE
-// and keep it disabled in production.
+// LogSender deliberately logs only delivery metadata so a developer can
+// exercise the flow without an SMTP server. Message bodies can contain reset
+// links, verification tokens, or other confidential content and are never
+// written to logs. Select this mode explicitly with EMAIL_DELIVERY_MODE and
+// keep it disabled in production.
 type LogSender struct{ Logger *slog.Logger }
 
 func (s LogSender) Send(_ context.Context, message Message) error {
@@ -63,7 +66,7 @@ func (s LogSender) Send(_ context.Context, message Message) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Warn("auth email delivery in log mode", "to", message.To, "subject", message.Subject, "body", message.TextBody)
+	logger.Warn("auth email delivery in log mode", "recipient_count", 1)
 	return nil
 }
 
@@ -170,6 +173,9 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 func validHeaderValue(value, field string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("smtp %s contains a newline", field)
+	}
+	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return fmt.Errorf("smtp %s contains a control character", field)
 	}
 	return nil
 }

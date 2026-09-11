@@ -22,7 +22,10 @@ var (
 	ErrInvalidFile = errors.New("invalid site file path")
 )
 
-type Store struct{ root string }
+type Store struct {
+	root    string
+	rootDir *os.Root
+}
 
 func New(root string) (*Store, error) {
 	root = strings.TrimSpace(root)
@@ -36,7 +39,19 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(abs, 0o700); err != nil {
 		return nil, fmt.Errorf("create site storage root: %w", err)
 	}
-	return &Store{root: filepath.Clean(abs)}, nil
+	abs = filepath.Clean(abs)
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("inspect site storage root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, ErrInvalidPath
+	}
+	rootDir, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, fmt.Errorf("open site storage root: %w", err)
+	}
+	return &Store{root: abs, rootDir: rootDir}, nil
 }
 
 func (s *Store) Root() string {
@@ -56,25 +71,35 @@ func ArtifactRelativePath(projectID, siteID, deploymentID uuid.UUID) (string, er
 // BeginStaging creates an unpublished directory under the site root. The
 // caller must either CommitDirectory or CleanupStaging it.
 func (s *Store) BeginStaging(projectID, siteID, deploymentID uuid.UUID) (string, string, error) {
-	if s == nil || s.root == "" {
+	if s == nil || s.root == "" || s.rootDir == nil {
 		return "", "", ErrInvalidPath
 	}
 	relative, err := ArtifactRelativePath(projectID, siteID, deploymentID)
 	if err != nil {
 		return "", "", err
 	}
-	parent := filepath.Join(s.root, projectID.String(), siteID.String())
-	if err := os.MkdirAll(parent, 0o700); err != nil {
+	parentRelative := filepath.Join(projectID.String(), siteID.String())
+	if err := ensureDirectoryTree(s.rootDir, parentRelative, 0o700); err != nil {
 		return "", "", fmt.Errorf("create site staging parent: %w", err)
 	}
-	staging, err := os.MkdirTemp(parent, ".site-upload-*")
-	if err != nil {
-		return "", "", fmt.Errorf("create site staging directory: %w", err)
+	var stagingRelative string
+	for attempt := 0; attempt < 3; attempt++ {
+		stagingID, err := uuid.NewV7()
+		if err != nil {
+			return "", "", fmt.Errorf("create site staging identifier: %w", err)
+		}
+		stagingRelative = filepath.Join(parentRelative, ".site-upload-"+stagingID.String())
+		if err := s.rootDir.Mkdir(stagingRelative, 0o700); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrExist) {
+			return "", "", fmt.Errorf("create site staging directory: %w", err)
+		}
+		stagingRelative = ""
 	}
-	if err := os.Chmod(staging, 0o700); err != nil {
-		_ = os.RemoveAll(staging)
-		return "", "", fmt.Errorf("protect site staging directory: %w", err)
+	if stagingRelative == "" {
+		return "", "", fmt.Errorf("create site staging directory: temporary name collision")
 	}
+	staging := filepath.Join(s.root, stagingRelative)
 	return staging, relative, nil
 }
 
@@ -82,26 +107,39 @@ func (s *Store) CleanupStaging(staging string) {
 	if s == nil || staging == "" {
 		return
 	}
-	if s.insideRoot(staging) {
-		_ = os.RemoveAll(staging)
+	relative, err := s.relativePath(staging)
+	if err != nil || s.rootDir == nil {
+		return
 	}
+	_ = s.rootDir.RemoveAll(filepath.FromSlash(relative))
 }
 
 // CommitDirectory atomically publishes an extracted directory. The final
 // path must not already exist; this makes deployment IDs immutable.
 func (s *Store) CommitDirectory(staging, relative string) error {
-	if s == nil || !s.insideRoot(staging) {
+	if s == nil || s.rootDir == nil || !s.insideRoot(staging) {
 		return ErrInvalidPath
 	}
 	destination, err := s.resolveArtifact(relative)
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(staging)
+	stagingRelative, err := s.relativePath(staging)
+	if err != nil || !strings.HasPrefix(filepath.Base(stagingRelative), ".site-upload-") {
+		return ErrInvalidPath
+	}
+	if err := validateDirectoryTree(s.rootDir, stagingRelative); err != nil {
+		return err
+	}
+	destinationRelative, err := s.relativePath(destination)
+	if err != nil {
+		return ErrInvalidPath
+	}
+	info, err := s.rootDir.Lstat(filepath.FromSlash(stagingRelative))
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return ErrInvalidPath
 	}
 	// Site workers run with the Docker daemon's credentials while the API
@@ -111,24 +149,25 @@ func (s *Store) CommitDirectory(staging, relative string) error {
 	// are therefore deliberately read-only after publication. Symlinks are
 	// left untouched and remain rejected by OpenFile/checkedArtifact.
 	ownerUID, ownerGID := s.publicOwner()
-	if err := makePublicReadable(staging, ownerUID, ownerGID); err != nil {
+	if err := makePublicReadable(s.rootDir, stagingRelative, ownerUID, ownerGID); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(destination); err == nil {
+	if _, err := s.rootDir.Lstat(filepath.FromSlash(destinationRelative)); err == nil {
 		return fmt.Errorf("site deployment destination already exists: %w", os.ErrExist)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+	destinationParent := filepath.Dir(filepath.FromSlash(destinationRelative))
+	if err := ensureDirectoryTree(s.rootDir, destinationParent, 0o755); err != nil {
 		return fmt.Errorf("create site deployment parent: %w", err)
 	}
-	if err := makePublicParents(s.root, filepath.Dir(destination), ownerUID, ownerGID); err != nil {
+	if err := makePublicParents(s.rootDir, destinationParent, ownerUID, ownerGID); err != nil {
 		return err
 	}
-	if err := os.Rename(staging, destination); err != nil {
+	if err := s.rootDir.Rename(filepath.FromSlash(stagingRelative), filepath.FromSlash(destinationRelative)); err != nil {
 		return fmt.Errorf("publish site deployment: %w", err)
 	}
-	if directory, err := os.Open(filepath.Dir(destination)); err == nil {
+	if directory, err := s.rootDir.Open(destinationParent); err == nil {
 		_ = directory.Sync()
 		_ = directory.Close()
 	}
@@ -150,8 +189,11 @@ func (s *Store) publicOwner() (int, int) {
 	return int(stat.Uid), int(stat.Gid)
 }
 
-func makePublicReadable(root string, ownerUID, ownerGID int) error {
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+func makePublicReadable(root *os.Root, relative string, ownerUID, ownerGID int) error {
+	if root == nil || relative == "" {
+		return ErrInvalidPath
+	}
+	return fs.WalkDir(root.FS(), filepath.ToSlash(relative), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -161,57 +203,140 @@ func makePublicReadable(root string, ownerUID, ownerGID int) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
+		mode := entry.Type()
+		if !entry.IsDir() && !mode.IsRegular() {
+			return nil
+		}
+		file, err := root.Open(filepath.FromSlash(path))
+		if err != nil {
+			return err
+		}
 		if ownerUID >= 0 {
-			if err := os.Chown(path, ownerUID, ownerGID); err != nil {
+			if err := file.Chown(ownerUID, ownerGID); err != nil {
+				_ = file.Close()
 				return fmt.Errorf("set site artifact ownership: %w", err)
 			}
 		}
-		mode := entry.Type()
 		switch {
 		case entry.IsDir():
-			if err := os.Chmod(path, 0o755); err != nil {
+			if err := file.Chmod(0o755); err != nil {
+				_ = file.Close()
 				return fmt.Errorf("make site directory readable: %w", err)
 			}
 		case mode.IsRegular():
-			if err := os.Chmod(path, 0o644); err != nil {
+			if err := file.Chmod(0o644); err != nil {
+				_ = file.Close()
 				return fmt.Errorf("make site file readable: %w", err)
 			}
 		}
-		return nil
+		return file.Close()
 	})
 }
 
-func makePublicParents(root, destination string, ownerUID, ownerGID int) error {
-	root = filepath.Clean(root)
-	destination = filepath.Clean(destination)
-	rel, err := filepath.Rel(root, destination)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+func makePublicParents(root *os.Root, destination string, ownerUID, ownerGID int) error {
+	if root == nil || destination == "" || destination == "." {
 		return ErrInvalidPath
 	}
-	current := root
-	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+	if err := validateDirectoryTree(root, destination); err != nil {
+		return err
+	}
+	current := ""
+	for _, segment := range strings.Split(filepath.ToSlash(destination), "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return ErrInvalidPath
+		}
 		current = filepath.Join(current, segment)
-		if err := os.Chmod(current, 0o755); err != nil {
+		info, err := root.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ErrInvalidPath
+		}
+		file, err := root.Open(current)
+		if err != nil {
+			return err
+		}
+		if err := file.Chmod(0o755); err != nil {
+			_ = file.Close()
 			return fmt.Errorf("make site parent readable: %w", err)
 		}
 		if ownerUID >= 0 {
-			if err := os.Chown(current, ownerUID, ownerGID); err != nil {
+			if err := file.Chown(ownerUID, ownerGID); err != nil {
+				_ = file.Close()
 				return fmt.Errorf("set site parent ownership: %w", err)
 			}
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureDirectoryTree creates each component independently through the open
+// root. MkdirAll may follow a pre-existing symlink to another directory in
+// the root, which would break the project/site namespace even when the link
+// cannot escape the storage root.
+func ensureDirectoryTree(root *os.Root, relative string, perm os.FileMode) error {
+	if root == nil || relative == "" || relative == "." {
+		return ErrInvalidPath
+	}
+	current := ""
+	for _, segment := range strings.Split(filepath.ToSlash(relative), "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return ErrInvalidPath
+		}
+		current = filepath.Join(current, segment)
+		info, err := root.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := root.Mkdir(current, perm); err == nil {
+				continue
+			} else if !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			info, err = root.Lstat(current)
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ErrInvalidPath
+		}
+	}
+	return nil
+}
+
+func validateDirectoryTree(root *os.Root, relative string) error {
+	if root == nil || relative == "" || relative == "." {
+		return ErrInvalidPath
+	}
+	current := ""
+	for _, segment := range strings.Split(filepath.ToSlash(relative), "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return ErrInvalidPath
+		}
+		current = filepath.Join(current, segment)
+		info, err := root.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ErrInvalidPath
 		}
 	}
 	return nil
 }
 
 func (s *Store) RemoveRelative(relative string) error {
-	destination, err := s.resolveArtifact(relative)
+	canonical, err := artifactRelativePath(relative)
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(destination); err != nil {
-		return err
+	if s == nil || s.rootDir == nil {
+		return ErrInvalidPath
 	}
-	return nil
+	return s.rootDir.RemoveAll(filepath.FromSlash(canonical))
 }
 
 // RemoveProject removes every published site and staged source artifact under
@@ -219,15 +344,11 @@ func (s *Store) RemoveRelative(relative string) error {
 // with Lstat before recursive removal so custom-domain serving paths cannot be
 // used to escape the store root.
 func (s *Store) RemoveProject(projectID uuid.UUID) error {
-	if s == nil || s.root == "" || projectID == uuid.Nil || projectID.Version() != uuid.Version(7) {
+	if s == nil || s.rootDir == nil || projectID == uuid.Nil || projectID.Version() != uuid.Version(7) {
 		return ErrInvalidPath
 	}
-	destination := filepath.Join(s.root, projectID.String())
-	relative, err := filepath.Rel(s.root, destination)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return ErrInvalidPath
-	}
-	info, err := os.Lstat(destination)
+	relative := projectID.String()
+	info, err := s.rootDir.Lstat(filepath.FromSlash(relative))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -237,14 +358,15 @@ func (s *Store) RemoveProject(projectID uuid.UUID) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return ErrInvalidPath
 	}
-	return os.RemoveAll(destination)
+	return s.rootDir.RemoveAll(filepath.FromSlash(relative))
 }
 
 // OpenFile validates every path component with Lstat before opening. The
-// untrusted archive extractor rejects links, and this second check prevents a
-// manually introduced link from turning a public request into a file read.
+// untrusted archive extractor rejects links, and the rooted file handle keeps
+// the final open inside the immutable artifact even if a local process races
+// the validation with a rename.
 func (s *Store) OpenFile(relative, requested string) (*os.File, fs.FileInfo, error) {
-	artifact, err := s.checkedArtifact(relative)
+	artifact, canonical, err := s.checkedArtifact(relative)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,27 +374,33 @@ func (s *Store) OpenFile(relative, requested string) (*os.File, fs.FileInfo, err
 	if err != nil {
 		return nil, nil, err
 	}
-	_ = clean
-	current := artifact
-	for _, segment := range segments[:len(segments)-1] {
-		current = filepath.Join(current, segment)
-		info, statErr := os.Lstat(current)
-		if statErr != nil {
-			return nil, nil, statErr
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, nil, ErrInvalidPath
-		}
+	target, err := safePathWithin(artifact, clean)
+	if err != nil {
+		return nil, nil, ErrInvalidFile
 	}
-	target := filepath.Join(append([]string{artifact}, segments...)...)
-	info, err := os.Lstat(target)
+	targetRelative, err := filepath.Rel(artifact, target)
+	if err != nil || targetRelative == "." || targetRelative == ".." || strings.HasPrefix(targetRelative, ".."+string(filepath.Separator)) || filepath.IsAbs(targetRelative) || filepath.ToSlash(targetRelative) != clean {
+		return nil, nil, ErrInvalidFile
+	}
+	artifactRoot, err := s.rootDir.OpenRoot(filepath.FromSlash(canonical))
 	if err != nil {
 		return nil, nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, nil, ErrInvalidPath
+	defer artifactRoot.Close()
+	for index := range segments {
+		segmentPath := filepath.Join(segments[:index+1]...)
+		info, statErr := artifactRoot.Lstat(segmentPath)
+		if statErr != nil {
+			return nil, nil, statErr
+		}
+		if (!info.Mode().IsRegular() && !info.IsDir()) || info.Mode()&os.ModeSymlink != 0 {
+			return nil, nil, ErrInvalidPath
+		}
+		if index < len(segments)-1 && !info.IsDir() {
+			return nil, nil, ErrInvalidPath
+		}
 	}
-	file, err := os.Open(target)
+	file, err := artifactRoot.Open(filepath.FromSlash(clean))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -289,33 +417,33 @@ func (s *Store) OpenFile(relative, requested string) (*os.File, fs.FileInfo, err
 }
 
 // checkedArtifact verifies the UUID namespace itself before a requested file
-// is opened. The archive extractor rejects links, but checking the project,
-// Site, and deployment directories as well prevents a host-level symlink from
-// turning a valid-looking artifact path into an escape.
-func (s *Store) checkedArtifact(relative string) (string, error) {
-	artifact, err := s.resolveArtifact(relative)
+// is opened. The root handle checks each component without following a
+// symlink, preventing a host-level link from turning a valid-looking artifact
+// path into an escape.
+func (s *Store) checkedArtifact(relative string) (string, string, error) {
+	canonical, err := artifactRelativePath(relative)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	current := s.root
-	rootInfo, err := os.Lstat(current)
-	if err != nil {
-		return "", err
+	if s == nil || s.rootDir == nil {
+		return "", "", ErrInvalidPath
 	}
-	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		return "", ErrInvalidPath
-	}
-	for _, segment := range strings.Split(relative, "/") {
-		current = filepath.Join(current, segment)
-		info, statErr := os.Lstat(current)
+	current := ""
+	for _, segment := range strings.Split(canonical, "/") {
+		current = path.Join(current, segment)
+		info, statErr := s.rootDir.Lstat(filepath.FromSlash(current))
 		if statErr != nil {
-			return "", statErr
+			return "", "", statErr
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", ErrInvalidPath
+			return "", "", ErrInvalidPath
 		}
 	}
-	return artifact, nil
+	artifact, err := s.resolveArtifact(canonical)
+	if err != nil {
+		return "", "", err
+	}
+	return artifact, canonical, nil
 }
 
 func ValidateEntrypoint(staging, entrypoint string) error {
@@ -323,7 +451,11 @@ func ValidateEntrypoint(staging, entrypoint string) error {
 	if err != nil || clean != "index.html" || len(segments) != 1 {
 		return ErrInvalidFile
 	}
-	info, err := os.Lstat(filepath.Join(staging, segments[0]))
+	target, err := safePathWithin(staging, clean)
+	if err != nil {
+		return ErrInvalidFile
+	}
+	info, err := os.Lstat(target)
 	if err != nil {
 		return err
 	}
@@ -334,37 +466,78 @@ func ValidateEntrypoint(staging, entrypoint string) error {
 }
 
 func (s *Store) resolveArtifact(relative string) (string, error) {
+	canonical, err := artifactRelativePath(relative)
+	if err != nil {
+		return "", ErrInvalidPath
+	}
 	if s == nil || s.root == "" {
 		return "", ErrInvalidPath
 	}
-	parts := strings.Split(relative, "/")
-	if len(parts) != 3 {
-		return "", ErrInvalidPath
-	}
-	for _, part := range parts {
-		id, err := uuid.Parse(part)
-		if err != nil || id == uuid.Nil || id.Version() != uuid.Version(7) {
-			return "", ErrInvalidPath
-		}
-	}
-	full := filepath.Join(s.root, filepath.FromSlash(relative))
-	rel, err := filepath.Rel(s.root, full)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	full, err := safePathWithin(s.root, canonical)
+	if err != nil {
 		return "", ErrInvalidPath
 	}
 	return full, nil
 }
 
 func (s *Store) insideRoot(value string) bool {
-	if s == nil || s.root == "" {
-		return false
+	_, err := s.relativePath(value)
+	return err == nil
+}
+
+func (s *Store) relativePath(value string) (string, error) {
+	if s == nil || s.root == "" || strings.TrimSpace(value) == "" {
+		return "", ErrInvalidPath
 	}
 	abs, err := filepath.Abs(value)
 	if err != nil {
-		return false
+		return "", ErrInvalidPath
 	}
-	rel, err := filepath.Rel(s.root, abs)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	rel, err := filepath.Rel(filepath.Clean(s.root), filepath.Clean(abs))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", ErrInvalidPath
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+func safePathWithin(root, relative string) (string, error) {
+	base, err := filepath.Abs(root)
+	if err != nil || strings.TrimSpace(base) == "" {
+		return "", ErrInvalidPath
+	}
+	nativeRelative := filepath.FromSlash(relative)
+	if relative == "" || filepath.IsAbs(nativeRelative) || hasWindowsDrivePrefix(relative) {
+		return "", ErrInvalidPath
+	}
+	candidate, err := filepath.Abs(filepath.Join(base, nativeRelative))
+	if err != nil {
+		return "", ErrInvalidPath
+	}
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(candidate))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) || filepath.ToSlash(rel) != relative {
+		return "", ErrInvalidPath
+	}
+	return candidate, nil
+}
+
+func artifactRelativePath(relative string) (string, error) {
+	parts := strings.Split(relative, "/")
+	if len(parts) != 3 {
+		return "", ErrInvalidPath
+	}
+	canonical := make([]string, len(parts))
+	for index, part := range parts {
+		id, err := uuid.Parse(part)
+		if err != nil || id == uuid.Nil || id.Version() != uuid.Version(7) {
+			return "", ErrInvalidPath
+		}
+		canonical[index] = id.String()
+	}
+	return strings.Join(canonical, "/"), nil
+}
+
+func hasWindowsDrivePrefix(value string) bool {
+	return len(value) >= 2 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':'
 }
 
 func cleanRequestedPath(value string) (string, []string, error) {
@@ -372,7 +545,7 @@ func cleanRequestedPath(value string) (string, []string, error) {
 	if value == "" {
 		value = "index.html"
 	}
-	if strings.ContainsRune(value, '\x00') || strings.Contains(value, "\\") || strings.HasPrefix(value, "/") {
+	if strings.ContainsRune(value, '\x00') || strings.Contains(value, "\\") || strings.HasPrefix(value, "/") || hasWindowsDrivePrefix(value) || filepath.IsAbs(filepath.FromSlash(value)) {
 		return "", nil, ErrInvalidFile
 	}
 	parts := strings.Split(value, "/")
