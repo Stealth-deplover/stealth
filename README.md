@@ -131,7 +131,7 @@ managed-service availability.
 | Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |
 | Webhooks                         | Beta         | Signed delivery, transactional outbox, retries, SSRF protections                                               |
 | Observability                    | Beta         | Health/readiness, metrics, traces, realtime events, audit records                                              |
-| Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade/uninstall commands are not shipped |
+| Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade remains a documented operator runbook |
 | Agents                           | Experimental | Configuration, catalog, durable runs, logs, and cancellation; provider execution remains queue-only by default |
 | Production hardening             | Beta         | Leases, bounded retries, rate limits, proxy trust, smoke checks; HA and exactly-once execution are not claimed |
 
@@ -143,7 +143,7 @@ amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
 The latest stable release is `v0.1.0`; see the [release notes](https://github.com/Stealth-deplover/stealth/releases/latest),
 [Release engineering](docs/release.md), the [release checklist](docs/RELEASING.md),
 and [Upgrade and rollback](docs/upgrade.md). The installer still requires a
-clean-host validation pass, and upgrade/uninstall commands are not shipped.
+clean-host validation pass, and upgrades remain an operator-runbook workflow.
 
 ## Screenshots
 

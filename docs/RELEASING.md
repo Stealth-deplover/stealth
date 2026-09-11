@@ -90,7 +90,8 @@ non-interactive TTY handoff and does not run a full production stack.
 
 ## Known limitations
 
-- [ ] Record that CLI upgrade and uninstall commands are not shipped.
+- [ ] Record that a CLI upgrade command is not shipped; the guided uninstall
+  flow is covered by its safe-mode and purge tests.
 - [ ] Record that the bundled single-host deployment does not claim HA or
   exactly-once external side effects.
 - [ ] Record that Agent provider execution remains queue-only by default.

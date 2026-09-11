@@ -91,6 +91,8 @@ func (a *App) run(args []string) int {
 		return a.runVersion(args[1:])
 	case "install":
 		return a.runInstall(args[1:])
+	case "uninstall":
+		return a.runUninstall(args[1:])
 	case "status":
 		return a.runStatus(args[1:])
 	case "doctor":
@@ -109,6 +111,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")
+	fmt.Fprintln(w, "  stealth uninstall [--keep-data|--purge] [--yes] [--dry-run]")
 	fmt.Fprintln(w, "  stealth status")
 	fmt.Fprintln(w, "  stealth doctor")
 	fmt.Fprintln(w, "  stealth logs [api|worker|console|proxy|postgres|redis]")
