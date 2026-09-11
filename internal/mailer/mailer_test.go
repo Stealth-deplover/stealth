@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDisabledSenderFailsClosed(t *testing.T) {
@@ -77,5 +78,44 @@ func TestSMTPSenderRejectsControlCharactersInAllHeadersBeforeDial(t *testing.T) 
 				t.Fatalf("header validation error = %v", err)
 			}
 		})
+	}
+}
+
+func TestSMTPSenderRejectsUnexpectedBodyControlCharactersBeforeDial(t *testing.T) {
+	sender := &SMTP{Host: "127.0.0.1", Port: 1, From: "no-reply@example.test"}
+	if err := sender.Send(context.Background(), Message{To: "user@example.test", TextBody: "body\x00"}); err == nil || !strings.Contains(err.Error(), "smtp body contains an unexpected control character") {
+		t.Fatalf("body control validation error = %v", err)
+	}
+}
+
+func TestNewAuthMessageUsesFixedPlainTextTemplate(t *testing.T) {
+	link, err := NewAuthLink("https://console.example.test/reset-password?token=server-generated-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := NewAuthMessage("user@example.test", AuthEmailAccountPasswordReset, link, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Subject != "Reset your Stealth password" {
+		t.Fatalf("subject = %q", message.Subject)
+	}
+	want := "Use the following one-time link to complete password recovery:\n\nhttps://console.example.test/reset-password?token=server-generated-token\n\nThis link expires in 15m0s and can only be used once. If you did not request this, you can ignore this email."
+	if message.TextBody != want {
+		t.Fatalf("body = %q, want %q", message.TextBody, want)
+	}
+}
+
+func TestNewAuthLinkRejectsUnsafeValues(t *testing.T) {
+	for _, raw := range []string{
+		"javascript:alert(1)",
+		"data:text/html,alert(1)",
+		"https://console.example.test/reset\r\nBcc:attacker@example.test",
+		"https://user:password@console.example.test/reset",
+		"https://console.example.test/reset#fragment",
+	} {
+		if _, err := NewAuthLink(raw); err == nil {
+			t.Fatalf("NewAuthLink(%q) accepted unsafe URL", raw)
+		}
 	}
 }

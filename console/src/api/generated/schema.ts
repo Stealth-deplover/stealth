@@ -2173,7 +2173,7 @@ export interface components {
             email: string;
             password: string;
         };
-        /** @description Empty JSON object by default; an optional trusted url may receive the tokenized link. */
+        /** @description Empty JSON object by default; url is optional and must be the exact configured auth route (relative or on an allowlisted origin) without a query or fragment. The emailed link is rebuilt from trusted server configuration. */
         AuthVerificationRequest: {
             /** Format: uri */
             url?: string;
@@ -2187,6 +2187,7 @@ export interface components {
              */
             user_id?: string;
         } | unknown | unknown;
+        /** @description The optional url must be the exact configured auth route (relative or on an allowlisted origin) without a query or fragment. The emailed link is rebuilt from trusted server configuration. */
         PasswordRecoveryRequest: {
             /** Format: email */
             email: string;
