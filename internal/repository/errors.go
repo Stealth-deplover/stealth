@@ -13,4 +13,7 @@ var (
 	ErrForbidden            = errors.New("forbidden")
 	ErrConfirmationRequired = errors.New("confirmation required")
 	ErrRegistrationDisabled = errors.New("registration disabled")
+	ErrBootstrapRequired    = errors.New("bootstrap is required")
+	ErrBootstrapSealed      = errors.New("bootstrap is sealed")
+	ErrInvalidBootstrapCode = errors.New("invalid bootstrap code")
 )

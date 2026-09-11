@@ -50,6 +50,14 @@ func installationExists(layout InstallLayout) bool {
 	return regularFile(layout.EnvFile) || regularFile(layout.VersionFile)
 }
 
+func partialInstallationExists(layout InstallLayout) bool {
+	if regularFile(layout.ComposeFile) || regularFile(layout.ProxyFile) {
+		return true
+	}
+	info, err := os.Stat(layout.StateDir)
+	return err == nil && info.IsDir()
+}
+
 func regularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()

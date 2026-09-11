@@ -53,6 +53,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bootstrap/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return whether first-run Instance Owner setup is still required. No setup secret is returned. */
+        get: operations["getBootstrapStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Mint a single-use, 15-minute setup code for the installed CLI. The request requires a derived proof from the private installation key; the plaintext code is returned once and is never persisted. */
+        post: operations["createBootstrapSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Consume the current one-time setup code and create the first instance-level owner plus a normal HttpOnly Console session. The setup code must be sent in the JSON body, never in a URL. */
+        post: operations["createInstanceOwner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/account/registrations": {
         parameters: {
             query?: never;
@@ -1972,6 +2023,22 @@ export interface components {
             commit: string;
             build_time: string;
         };
+        BootstrapStatusResponse: {
+            /** @description Whether the first Instance Owner still needs to be created. */
+            setup_required: boolean;
+        };
+        BootstrapSessionResponse: {
+            /** @description One-time code shown only to the CLI operator. */
+            setup_code: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        CreateInstanceOwnerRequest: {
+            setup_code: string;
+            /** Format: email */
+            email: string;
+            password: string;
+        };
         RegisterRequest: {
             /** Format: email */
             email: string;
@@ -2081,6 +2148,11 @@ export interface components {
             /** Format: email */
             email: string;
             email_verified: boolean;
+            /**
+             * @description Instance-level role; this does not imply organization membership.
+             * @enum {string|null}
+             */
+            instance_role?: "instance_owner" | "instance_admin" | null;
             /** Format: date-time */
             created_at: string;
         };
@@ -2316,6 +2388,9 @@ export interface components {
             };
         };
         AccountResponse: {
+            account: components["schemas"]["Account"];
+        };
+        InstanceOwnerResponse: {
             account: components["schemas"]["Account"];
         };
         AccountSessionsResponse: {
@@ -4028,6 +4103,15 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /** @description First-run Instance Owner setup is permanently sealed */
+        BootstrapComplete: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description Request body exceeds the endpoint's configured limit (JSON requests are bounded separately from multipart uploads) */
         PayloadTooLarge: {
             headers: {
@@ -4087,6 +4171,7 @@ export interface components {
         VariableID: string;
         DeploymentID: string;
         ExecutionID: string;
+        BootstrapCLIProof: string;
         /** @description Opaque cursor returned by a previous row page; use it unchanged */
         RowCursor: string;
         /** @description JSON object of equality filters, for example {"status":"active"}. Each filtered column must have a real key index. */
@@ -4164,6 +4249,92 @@ export interface operations {
                     "application/json": components["schemas"]["BuildInfo"];
                 };
             };
+        };
+    };
+    getBootstrapStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bootstrap state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapStatusResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createBootstrapSession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One-time bootstrap session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            410: components["responses"]["BootstrapComplete"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createInstanceOwner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInstanceOwnerRequest"];
+            };
+        };
+        responses: {
+            /** @description First Instance Owner and authenticated session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceOwnerResponse"];
+                };
+            };
+            /** @description Setup code is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["Conflict"];
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     registerAccount: {

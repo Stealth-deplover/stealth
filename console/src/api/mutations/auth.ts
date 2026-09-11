@@ -32,6 +32,22 @@ export function useRegister() {
   });
 }
 
+export function useCreateInstanceOwner() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["CreateInstanceOwnerRequest"],
+    ) => unwrap(await api.POST("/v1/bootstrap/owner", { body })),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bootstrapStatus }),
+      ]);
+    },
+  });
+}
+
 export function useRecoveryRequest() {
   return useMutation({
     mutationFn: async (

@@ -97,6 +97,10 @@ func generateConfig(plan InstallPlan) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	bootstrapCLIKey, err := generateBase64Secret(32)
+	if err != nil {
+		return "", err
+	}
 	metricsToken, err := generateHexSecret(32)
 	if err != nil {
 		return "", err
@@ -117,6 +121,7 @@ func generateConfig(plan InstallPlan) (string, error) {
 		"POSTGRES_PASSWORD":               postgresPassword,
 		"REDIS_PASSWORD":                  redisPassword,
 		"FUNCTIONS_SECRET_KEY":            functionsKey,
+		"BOOTSTRAP_CLI_KEY":               bootstrapCLIKey,
 		"PUBLIC_APP_URL":                  publicURL,
 		"COOKIE_SECURE":                   cookieSecure,
 		"TRUSTED_PROXY_CIDRS":             "172.30.0.0/24",

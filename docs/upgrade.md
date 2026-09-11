@@ -39,6 +39,12 @@ docker compose --env-file .env.production -f compose.production.yaml up -d --for
 The migration runner is deterministic and protected by a PostgreSQL advisory
 lock. It fails loudly; it does not perform destructive automatic rollback.
 
+When upgrading an installation that already has accounts, migration assigns
+the earliest account by `created_at` (UUID tie-breaker) the explicit
+`instance_owner` role and seals first-run bootstrap. This deterministic rule
+prevents an existing deployment from unexpectedly exposing `/setup`; stop or
+coordinate the old application processes before applying migrations.
+
 ## Rollback boundary
 
 Changing an image back is safe only when the database schema remains backward

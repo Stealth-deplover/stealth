@@ -23,6 +23,41 @@ paths:
       description: Safe build metadata for release and operator checks. No configuration or secrets are returned.
       responses:
         '200': { description: Build metadata, content: { application/json: { schema: { $ref: '#/components/schemas/BuildInfo' } } } }
+  /v1/bootstrap/status:
+    get:
+      operationId: getBootstrapStatus
+      description: Return whether first-run Instance Owner setup is still required. No setup secret is returned.
+      security: [{}]
+      responses:
+        '200': { description: Bootstrap state, content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapStatusResponse' } } } }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/bootstrap/sessions:
+    post:
+      operationId: createBootstrapSession
+      description: Mint a single-use, 15-minute setup code for the installed CLI. The request requires a derived proof from the private installation key; the plaintext code is returned once and is never persisted.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      responses:
+        '201': { description: One-time bootstrap session, content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapSessionResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '410': { $ref: '#/components/responses/BootstrapComplete' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/bootstrap/owner:
+    post:
+      operationId: createInstanceOwner
+      description: Consume the current one-time setup code and create the first instance-level owner plus a normal HttpOnly Console session. The setup code must be sent in the JSON body, never in a URL.
+      security: [{}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInstanceOwnerRequest' } } } }
+      responses:
+        '201': { description: First Instance Owner and authenticated session created, content: { application/json: { schema: { $ref: '#/components/schemas/InstanceOwnerResponse' } } } }
+        '401': { description: Setup code is invalid, expired, or already used, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/BootstrapComplete' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/account/registrations:
     post:
       operationId: registerAccount
@@ -2000,6 +2035,7 @@ paths:
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: stealth_session }
+    bootstrapCLIProof: { type: apiKey, in: header, name: X-Stealth-Bootstrap-Proof, description: Derived proof sent only by the local CLI to mint a temporary first-owner setup session. Never send the installation key itself. }
     projectAppCookie: { type: apiKey, in: cookie, name: stealth_app_<project-id-without-hyphens>, description: Project-specific opaque HttpOnly cookie. The actual name is derived from the path projectID; it is never the Console stealth_session cookie. }
     projectApiKey: { type: apiKey, in: header, name: X-Stealth-Key, description: Project-bound server-to-server secret. Supported scopes include users, databases, storage, functions, sites, webhooks, realtime.read, and messaging read/write pairs; never send this header through the Console browser bridge. }
   parameters:
@@ -2033,6 +2069,7 @@ components:
     VariableID: { name: variableID, in: path, required: true, schema: { type: string, format: uuid } }
     DeploymentID: { name: deploymentID, in: path, required: true, schema: { type: string, format: uuid } }
     ExecutionID: { name: executionID, in: path, required: true, schema: { type: string, format: uuid } }
+    BootstrapCLIProof: { name: X-Stealth-Bootstrap-Proof, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$' } }
     RowCursor: { name: cursor, in: query, description: Opaque cursor returned by a previous row page; use it unchanged, schema: { type: string, minLength: 1, maxLength: 512 } }
     FilterJSON: { name: filter, in: query, description: 'JSON object of equality filters, for example {"status":"active"}. Each filtered column must have a real key index.', schema: { type: string, maxLength: 4096 } }
     OrderBy: { name: order_by, in: query, description: Declared required column key or id. Non-system columns must have a real key index., schema: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,119}$' } }
@@ -2050,12 +2087,16 @@ components:
     InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     RateLimited: { description: Operation rate limit exceeded, headers: { Retry-After: { description: Seconds until another attempt may be made, schema: { type: integer, minimum: 1 } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     ServiceUnavailable: { description: Public Auth protection or a required dependency is unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    BootstrapComplete: { description: First-run Instance Owner setup is permanently sealed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     PayloadTooLarge: { description: Request body exceeds the endpoint's configured limit (JSON requests are bounded separately from multipart uploads), content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     UnsupportedMediaType: { description: Content-Type must be application/json except for file upload multipart/form-data endpoints, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     ValidationError: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
   schemas:
     Status: { type: object, required: [status], properties: { status: { type: string, enum: [ok, ready] } } }
     BuildInfo: { type: object, required: [version, commit, build_time], properties: { version: { type: string }, commit: { type: string }, build_time: { type: string } } }
+    BootstrapStatusResponse: { type: object, additionalProperties: false, required: [setup_required], properties: { setup_required: { type: boolean, description: Whether the first Instance Owner still needs to be created. } } }
+    BootstrapSessionResponse: { type: object, additionalProperties: false, required: [setup_code, expires_at], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', description: One-time code shown only to the CLI operator. }, expires_at: { type: string, format: date-time } } }
+    CreateInstanceOwnerRequest: { type: object, additionalProperties: false, required: [setup_code, email, password], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', writeOnly: true }, email: { type: string, format: email, maxLength: 320 }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true } } }
     RegisterRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }, organization_name: { type: string, minLength: 2, maxLength: 120 } } }
     LoginRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, writeOnly: true } } }
     AuthVerificationRequest: { type: object, additionalProperties: false, description: Empty JSON object by default; an optional trusted url may receive the tokenized link., properties: { url: { type: string, format: uri, maxLength: 2048 } } }
@@ -2076,7 +2117,7 @@ components:
     CreateProjectAPIKeyRequest: { type: object, additionalProperties: false, required: [name, scopes], properties: { name: { type: string, minLength: 2, maxLength: 120 }, scopes: { type: array, minItems: 1, maxItems: 15, uniqueItems: true, items: { type: string, enum: [users.read, users.write, databases.read, databases.write, storage.read, storage.write, functions.read, functions.write, sites.read, sites.write, webhooks.read, webhooks.write, realtime.read, messaging.read, messaging.write] } }, expires_at: { type: [string, 'null'], format: date-time, description: Optional future expiry, at most 365 days from creation. } } }
     UpdateProjectAuthSettingsRequest: { type: object, additionalProperties: false, minProperties: 1, properties: { registration_enabled: { type: boolean }, cors_origins: { type: array, maxItems: 32, uniqueItems: true, items: { type: string, minLength: 8, maxLength: 2048, pattern: '^(http|https)://[^*/\\s/?#]+(:[0-9]+)?$' } } } }
     Slug: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$' }
-    Account: { type: object, required: [id, email, email_verified, created_at], properties: { id: { type: string, format: uuid }, email: { type: string, format: email }, email_verified: { type: boolean }, created_at: { type: string, format: date-time } } }
+    Account: { type: object, required: [id, email, email_verified, created_at], properties: { id: { type: string, format: uuid }, email: { type: string, format: email }, email_verified: { type: boolean }, instance_role: { type: [string, 'null'], enum: [instance_owner, instance_admin, null], description: Instance-level role; this does not imply organization membership. }, created_at: { type: string, format: date-time } } }
     ConsoleSession: { type: object, additionalProperties: false, required: [id, is_current, expires_at, created_at], properties: { id: { type: string, format: uuid }, is_current: { type: boolean }, expires_at: { type: string, format: date-time }, created_at: { type: string, format: date-time } } }
     UpdateAccountPasswordRequest: { type: object, additionalProperties: false, required: [current_password, password], properties: { current_password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true } } }
     Organization: { type: object, required: [id, name, slug, created_at], properties: { id: { type: string, format: uuid }, name: { type: string }, slug: { $ref: '#/components/schemas/Slug' }, created_at: { type: string, format: date-time } } }
@@ -2102,6 +2143,7 @@ components:
     Pagination: { type: object, required: [limit, next_cursor], properties: { limit: { type: integer }, next_cursor: { type: [string, 'null'], format: uuid } } }
     ErrorEnvelope: { type: object, additionalProperties: false, required: [error], properties: { error: { type: object, additionalProperties: false, required: [code, message], properties: { code: { type: string }, message: { type: string } } } } }
     AccountResponse: { type: object, required: [account], properties: { account: { $ref: '#/components/schemas/Account' } } }
+    InstanceOwnerResponse: { type: object, additionalProperties: false, required: [account], properties: { account: { $ref: '#/components/schemas/Account' } } }
     AccountSessionsResponse: { type: object, additionalProperties: false, required: [sessions], properties: { sessions: { type: array, items: { $ref: '#/components/schemas/ConsoleSession' } } } }
     RevokedSessionsResponse: { type: object, additionalProperties: false, required: [revoked], properties: { revoked: { type: integer, minimum: 0 } } }
     PasswordUpdateResponse: { type: object, additionalProperties: false, required: [sessions_revoked], properties: { sessions_revoked: { type: integer, minimum: 0 } } }

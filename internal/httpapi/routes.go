@@ -22,6 +22,7 @@ func (s *Server) routes() http.Handler {
 	r.Get("/version", s.version)
 	r.Get("/metrics", s.metricsHandler)
 	r.Route("/v1", func(r chi.Router) {
+		s.registerBootstrapRoutes(r)
 		s.registerAccountRoutes(r)
 		s.registerOrganizationRoutes(r)
 		s.registerProjectRoutes(r)

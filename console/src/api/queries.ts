@@ -1,4 +1,5 @@
 export * from "./queries/account";
+export * from "./queries/bootstrap";
 export * from "./queries/organizations";
 export * from "./queries/projects";
 export * from "./queries/functions";

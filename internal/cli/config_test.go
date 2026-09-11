@@ -59,6 +59,10 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 	if err != nil || len(key) != 32 {
 		t.Fatalf("FUNCTIONS_SECRET_KEY is not a 32-byte base64 secret: %v", err)
 	}
+	bootstrapKey, err := base64.StdEncoding.DecodeString(values["BOOTSTRAP_CLI_KEY"])
+	if err != nil || len(bootstrapKey) != 32 {
+		t.Fatalf("BOOTSTRAP_CLI_KEY is not a 32-byte base64 secret: %v", err)
+	}
 	if strings.Contains(first, "CHANGE_ME") || strings.Contains(first, "admin@example") {
 		t.Fatal("generated config contains placeholder or owner data")
 	}
@@ -181,6 +185,22 @@ func TestFreshInstallConfigKeepsRequestedVersion(t *testing.T) {
 	}
 	if values["STEALTH_API_IMAGE"] != imageName("stealth-api", "v1.1.0") {
 		t.Fatalf("fresh install API image = %q", values["STEALTH_API_IMAGE"])
+	}
+}
+
+func TestPartialInstallationDetectionRequiresRecoveryPath(t *testing.T) {
+	layout := newInstallLayout(filepath.Join(t.TempDir(), ".stealth"))
+	if partialInstallationExists(layout) {
+		t.Fatal("empty installation directory was treated as partial")
+	}
+	if err := os.MkdirAll(filepath.Dir(layout.ComposeFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.ComposeFile, []byte("services:\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !partialInstallationExists(layout) {
+		t.Fatal("Compose-only installation was not detected as partial")
 	}
 }
 

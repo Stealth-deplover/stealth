@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestInstallerPlatformChecks(t *testing.T) {
 	tests := []struct {
@@ -27,5 +31,41 @@ func TestInstallerPlatformChecks(t *testing.T) {
 				t.Fatalf("unsupported OS %s was accepted: %#v", test.goos, checks[0])
 			}
 		})
+	}
+}
+
+func TestHasInteractiveTerminalRequiresBothStreamsAndRejectsDumbTerminals(t *testing.T) {
+	input, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile("/dev/null", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+
+	app := NewApp(input, output, &strings.Builder{})
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	if !app.hasInteractiveTerminal() {
+		t.Fatal("character-device stdin/stdout should be considered interactive")
+	}
+
+	t.Setenv("TERM", " dumb ")
+	if app.hasInteractiveTerminal() {
+		t.Fatal("TERM=dumb must disable interactive TUI")
+	}
+
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "1")
+	if !app.hasInteractiveTerminal() {
+		t.Fatal("NO_COLOR should not disable TTY interactivity")
+	}
+
+	app.out = &strings.Builder{}
+	if app.hasInteractiveTerminal() {
+		t.Fatal("non-character stdout must disable interactive TUI")
 	}
 }

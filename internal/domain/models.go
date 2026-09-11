@@ -6,10 +6,13 @@ import (
 )
 
 type Account struct {
-	ID            string    `json:"id"`
-	Email         string    `json:"email"`
-	EmailVerified bool      `json:"email_verified"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	// InstanceRole is intentionally separate from organization membership. An
+	// instance owner is not implicitly a member of every organization.
+	InstanceRole string    `json:"instance_role,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // ConsoleSession is the safe, non-secret projection of a Console session.

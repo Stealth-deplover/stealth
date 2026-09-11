@@ -49,7 +49,8 @@ Release contains the versioned CLI archive and `checksums.txt`.
 4. local/existing reverse proxy review;
 5. configuration review;
 6. secret generation, image pull, migration, startup, and bounded HTTP health
-   verification.
+   verification;
+7. first-run Instance Owner onboarding.
 
 The installer requires Docker and Docker Compose. It does not silently run a
 third-party Docker installation script. The `v0.1.0` release uses bundled
@@ -57,8 +58,10 @@ infrastructure and the existing local storage volume. External S3-compatible
 storage remains an operator configuration documented by the production
 deployment guide.
 
-The instance owner email/bootstrap claim is not a platform-admin feature yet;
-the installer does not pretend that an email address grants global access.
+After a fresh installation is healthy, the CLI starts first-run Instance Owner
+onboarding. The owner is an instance-level role, separate from organization
+membership and organization ownership; it does not implicitly grant access to
+every organization or project.
 
 The default installation directory is `~/.stealth`. Set
 `STEALTH_INSTALL_DIR` to an absolute writable directory when a different
@@ -72,6 +75,10 @@ location is required. The CLI writes:
 ├── VERSION
 └── state/
 ```
+
+`config.env` also contains `BOOTSTRAP_CLI_KEY`, a private 32-byte key used to
+authenticate the local CLI when it requests a temporary setup session. Keep it
+with the rest of `config.env`; it is never printed or sent in the setup URL.
 
 The Compose and proxy files are downloaded from the same versioned Git tag as
 the CLI. The config pins API, worker, migration, and Console images to the
@@ -99,6 +106,50 @@ stealth logs console
 service health, API health/readiness/version endpoints, Console/proxy HTTP
 reachability, and available disk space. `logs` delegates to
 `docker compose logs`; it does not build a log storage subsystem.
+
+## First-run Instance Owner setup
+
+On a new installation, `stealth install` waits for PostgreSQL, Redis,
+migrations, API, worker, Console, and the proxy to become healthy before it
+creates a setup session. The CLI then displays a one-time code in the terminal
+and, when the Docker network is available, starts a pinned
+`cloudflare/cloudflared:2026.9.0` Quick Tunnel to the local proxy:
+
+```text
+https://random-name.trycloudflare.com/setup
+STEALTH-XXXX-XXXX-XXXX
+```
+
+The code has 60 bits of cryptographic entropy, expires after 15 minutes, is
+rate-limited, is stored by the API only as a SHA-256 hash, and is invalidated
+after the first successful owner creation. It is entered in the Console setup
+form and is never placed in a URL, browser storage, or logs. If a Quick Tunnel
+cannot be started, the CLI leaves the installation intact and shows the local
+setup URL instead.
+
+The cloudflared image pin is defined in `internal/cli/setup.go` so it can be
+reviewed and updated as one change. The Quick Tunnel command uses the existing
+Compose network and targets only the bundled `proxy` service.
+
+To resume onboarding after cancellation or expiration, use:
+
+```bash
+stealth setup
+```
+
+The command creates a fresh setup session only while no Instance Owner exists.
+After the owner is created, the backend permanently seals bootstrap, including
+across API restarts. The temporary tunnel is closed and removed immediately
+after completion. A Quick Tunnel is an onboarding transport only: it is
+temporary, has no production SLA, and must not be treated as permanent
+ingress. Configure a reverse proxy or production Cloudflare Tunnel separately.
+
+Existing installations are not reopened during upgrade. Migration assigns the
+explicit, deterministic legacy rule of the earliest account by
+`created_at` (UUID tie-breaker) as the Instance Owner and permanently seals
+bootstrap. This preserves the pre-bootstrap convention that the first account
+was the installation administrator without granting a later account a new
+public takeover path.
 
 Upgrade and uninstall commands are intentionally not shipped in this
 milestone. Do not delete Docker volumes as a repair action. Use the documented

@@ -57,6 +57,9 @@ func (c Config) WithDefaults() Config {
 	if c.AuthPasswordResetTTL <= 0 {
 		c.AuthPasswordResetTTL = time.Hour
 	}
+	if len(c.BootstrapCLIKey) == 0 && len(c.FunctionsSecretKey) > 0 {
+		c.BootstrapCLIKey = append([]byte(nil), c.FunctionsSecretKey...)
+	}
 	if strings.TrimSpace(c.PublicAppURL) == "" {
 		c.PublicAppURL = "http://localhost:4173"
 	}

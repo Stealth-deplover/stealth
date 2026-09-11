@@ -1,4 +1,5 @@
 export const queryKeys = {
+  bootstrapStatus: ["bootstrap-status"] as const,
   account: ["account"] as const,
   accountSessions: ["account-sessions"] as const,
   organizations: ["organizations"] as const,

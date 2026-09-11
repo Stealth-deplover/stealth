@@ -69,6 +69,10 @@ Required production values:
   `STEALTH_CONSOLE_IMAGE`, all on the same immutable release tag.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
+- `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
+  private local-CLI proof key for first-run Instance Owner onboarding. Older
+  installations may omit it because the API has a compatibility fallback to
+  `FUNCTIONS_SECRET_KEY`.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
   Docker-backed function runner is enabled.
@@ -137,6 +141,28 @@ availability.
 For serious production installations, managed PostgreSQL and an
 S3-compatible object store are recommended. Stealth does not claim HA for the
 bundled single PostgreSQL, Redis, or local storage services.
+
+## First-run onboarding
+
+`stealth install` starts first-run onboarding only after the local stack passes
+its health and readiness checks. The CLI requests a single-use setup session,
+displays a 15-minute setup code, and starts a temporary
+`cloudflare/cloudflared:2026.9.0` Quick Tunnel to the bundled proxy when
+possible. The Console setup page is `/setup` on that temporary URL. The
+plaintext code is returned only to the CLI, stored by the API as a SHA-256
+hash, and invalidated after the first Instance Owner is created.
+
+Quick Tunnels are for temporary onboarding only. They are not production
+ingress, have no production SLA, and are stopped and removed as soon as owner
+creation completes. If the tunnel cannot be started, use the local setup URL
+shown by the CLI. Canceling the CLI preserves the installation and allows
+`stealth setup` to resume while bootstrap remains unsealed.
+
+The first Instance Owner is an instance-level role and is not automatically a
+member of every organization. On upgrade, migration does not expose `/setup`
+for an existing database: the earliest legacy account (`created_at`, then UUID)
+is assigned the Instance Owner role and bootstrap is sealed. This deterministic
+compatibility rule avoids selecting a later account or reopening public setup.
 
 ## Release and upgrade
 

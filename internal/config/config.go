@@ -71,9 +71,13 @@ type Config struct {
 	StorageS3StagingRoot       string
 	// Functions source archives use a separate child store under StorageRoot.
 	// The global storage values are used as fallbacks for older deployments.
-	FunctionsMaxArtifactSize      int64
-	FunctionsDefaultQuotaBytes    int64
-	FunctionsSecretKey            []byte
+	FunctionsMaxArtifactSize   int64
+	FunctionsDefaultQuotaBytes int64
+	FunctionsSecretKey         []byte
+	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
+	// a first-run setup session. Older installations may omit it; in that case
+	// the API deliberately falls back to FunctionsSecretKey for compatibility.
+	BootstrapCLIKey               []byte
 	FunctionsRunnerEnabled        bool
 	FunctionsWorkerID             string
 	FunctionsRunnerPoll           time.Duration
@@ -300,13 +304,16 @@ func Load() (Config, error) {
 	}
 	var functionsSecretKey []byte
 	if raw := strings.TrimSpace(os.Getenv("FUNCTIONS_SECRET_KEY")); raw != "" {
-		functionsSecretKey, err = base64.StdEncoding.DecodeString(raw)
+		functionsSecretKey, err = decodeSecretKey(raw, "FUNCTIONS_SECRET_KEY")
 		if err != nil {
-			// Raw URL encoding is convenient for env files that avoid '='.
-			functionsSecretKey, err = base64.RawURLEncoding.DecodeString(raw)
+			return Config{}, err
 		}
-		if err != nil || len(functionsSecretKey) != 32 {
-			return Config{}, fmt.Errorf("FUNCTIONS_SECRET_KEY must be base64-encoded 32 bytes")
+	}
+	bootstrapCLIKey := append([]byte(nil), functionsSecretKey...)
+	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_CLI_KEY")); raw != "" {
+		bootstrapCLIKey, err = decodeSecretKey(raw, "BOOTSTRAP_CLI_KEY")
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	storageRoot := value("STORAGE_ROOT", "/var/lib/stealth/storage")
@@ -431,6 +438,7 @@ func Load() (Config, error) {
 		FunctionsMaxArtifactSize:      functionsMaxArtifactSize,
 		FunctionsDefaultQuotaBytes:    functionsDefaultQuota,
 		FunctionsSecretKey:            functionsSecretKey,
+		BootstrapCLIKey:               bootstrapCLIKey,
 		FunctionsRunnerEnabled:        runnerEnabled,
 		FunctionsWorkerID:             workerID,
 		FunctionsRunnerPoll:           runnerPoll,
@@ -463,6 +471,18 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	return config, nil
+}
+
+func decodeSecretKey(raw, name string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		// Raw URL encoding is convenient for env files that avoid '='.
+		key, err = base64.RawURLEncoding.DecodeString(raw)
+	}
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("%s must be base64-encoded 32 bytes", name)
+	}
+	return key, nil
 }
 
 // ValidateFunctions enforces the production credential gate. Load keeps the
