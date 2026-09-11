@@ -100,9 +100,54 @@ service health, API health/readiness/version endpoints, Console/proxy HTTP
 reachability, and available disk space. `logs` delegates to
 `docker compose logs`; it does not build a log storage subsystem.
 
-Upgrade and uninstall commands are intentionally not shipped in this
-milestone. Do not delete Docker volumes as a repair action. Use the documented
-backup and upgrade runbooks for production changes.
+## Uninstall
+
+`stealth uninstall` is one guided command with three removal levels. In a
+terminal it opens the same Bubble Tea/Lip Gloss style used by the installer and
+shows a removal plan before making changes.
+
+```bash
+# Interactive guided flow
+stealth uninstall
+
+# Stop and remove services while preserving data and configuration
+stealth uninstall --keep-data --yes
+
+# Preview the destructive scope without changing anything
+stealth uninstall --purge --dry-run
+
+# Permanently remove the instance-owned data after explicit automation consent
+stealth uninstall --purge --yes
+```
+
+The safest mode runs the equivalent of `docker compose down
+--remove-orphans`; it never passes `--volumes`. PostgreSQL data,
+`stealth_storage`, function-runner staging, `config.env`, the Compose/proxy
+assets, `VERSION`, and CLI recovery files remain available for reinstall or
+recovery. The middle interactive mode also removes the generated Compose,
+proxy, `VERSION`, and `state/` runtime files, but deliberately keeps
+`config.env`: it contains `FUNCTIONS_SECRET_KEY` and database credentials
+needed to recover preserved encrypted data.
+
+Purge first validates that the local Compose file declares exactly the
+installation's configured named volumes and that any existing volumes carry
+the matching Compose project labels. It then removes the services and those
+project-owned volumes with `docker compose down --volumes --remove-orphans`,
+verifies the resources are gone, and only then removes the local configuration
+and secrets. It never runs `docker system prune` or `docker volume prune`.
+External S3 object storage is not deleted because the CLI cannot safely prove
+ownership of a bucket or prefix; remove it separately with provider tooling
+after verifying the scope. Redis has no persistent volume in the bundled
+Compose baseline. Short-lived function/site build and execution volumes are
+normally removed by the worker; uninstall does not sweep ambiguous leftover
+volumes that lack this instance's Compose ownership label.
+
+Interactive purge requires typing the exact word `stealth`. In non-TTY mode,
+an explicit mode and `--yes` are required; `--yes` by itself always selects
+the non-destructive service-removal mode and never implies purge. A missing or
+partial installation is reported clearly, and purge stops without deleting
+data until the complete layout can be validated. The CLI binary is never
+removed automatically.
 
 ## Secret and terminal safety
 

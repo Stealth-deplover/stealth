@@ -47,12 +47,21 @@ func (a *App) layout() (InstallLayout, error) {
 }
 
 func installationExists(layout InstallLayout) bool {
-	return regularFile(layout.EnvFile) || regularFile(layout.VersionFile)
+	return regularFile(layout.EnvFile) ||
+		regularFile(layout.ComposeFile) ||
+		regularFile(layout.ProxyFile) ||
+		regularFile(layout.VersionFile) ||
+		directoryExists(layout.StateDir)
 }
 
 func regularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func fileIsPrivate(path string) bool {
