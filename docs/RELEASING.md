@@ -90,6 +90,8 @@ non-interactive TTY handoff and does not run a full production stack.
 
 ## Known limitations
 
+- [ ] Verify the guided `stealth setup` flow on a temporary installation; do
+      not use a production instance during release validation.
 - [ ] Record that a CLI upgrade command is not shipped; the guided uninstall
   flow is covered by its safe-mode and purge tests.
 - [ ] Record that the bundled single-host deployment does not claim HA or

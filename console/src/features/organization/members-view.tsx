@@ -32,6 +32,14 @@ const roleOptions = Object.values(UpdateOrganizationMembershipRequestRole).map(
   }),
 );
 
+function membershipIdentity(member: Membership) {
+  if (member.email) return member.email;
+  if (member.provider === "github" && member.provider_login) {
+    return `GitHub @${member.provider_login}`;
+  }
+  return "Provider identity";
+}
+
 export function OrganizationMembersView({
   organizationId,
 }: {
@@ -50,7 +58,9 @@ export function OrganizationMembersView({
       header: "Identity",
       cell: ({ row }) => (
         <div>
-          <p className="font-medium text-white">{row.original.email}</p>
+          <p className="font-medium text-white">
+            {membershipIdentity(row.original)}
+          </p>
           <p className="font-mono text-[10px] text-slate-600">
             {row.original.account_id}
           </p>
@@ -117,7 +127,7 @@ export function OrganizationMembersView({
               title="Remove member?"
               description={
                 "This removes " +
-                row.original.email +
+                membershipIdentity(row.original) +
                 " from the organization. Their project access is revoked."
               }
               confirmLabel="Remove member"

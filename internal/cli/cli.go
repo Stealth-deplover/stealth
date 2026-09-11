@@ -91,6 +91,8 @@ func (a *App) run(args []string) int {
 		return a.runVersion(args[1:])
 	case "install":
 		return a.runInstall(args[1:])
+	case "setup":
+		return a.runSetup(args[1:])
 	case "uninstall":
 		return a.runUninstall(args[1:])
 	case "status":
@@ -111,6 +113,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")
+	fmt.Fprintln(w, "  stealth setup [--adopt-owner]")
 	fmt.Fprintln(w, "  stealth uninstall [--keep-data|--purge] [--yes] [--dry-run]")
 	fmt.Fprintln(w, "  stealth status")
 	fmt.Fprintln(w, "  stealth doctor")
@@ -190,7 +193,10 @@ func (a *App) runInstall(args []string) int {
 		fmt.Fprintf(a.errOut, "cannot determine release version: %v\n", err)
 		return 1
 	}
-	return a.runInstallerTUI(ctx, checks, &InstallPlan{Layout: layout, Version: version}, false)
+	if result := a.runInstallerTUI(ctx, checks, &InstallPlan{Layout: layout, Version: version}, false); result != 0 {
+		return result
+	}
+	return a.runSetupWithContext(ctx)
 }
 
 func (a *App) runStatus(args []string) int {

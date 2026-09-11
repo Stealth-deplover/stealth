@@ -69,6 +69,15 @@ Required production values:
   `STEALTH_CONSOLE_IMAGE`, all on the same immutable release tag.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
+- `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
+  dedicated local-CLI proof key for first-run Instance Owner onboarding and
+  encryption of short-lived GitHub Device Flow state. It is never reused as a
+  Functions secret, and `FUNCTIONS_SECRET_KEY` is never accepted as a fallback.
+- `GITHUB_APP_CLIENT_ID`, from a GitHub App configured with **Enable Device
+  Flow**. The App needs only the minimum identity permissions required by the
+  selected GitHub account; do not grant repository write or organization-admin
+  access. A client secret and a TryCloudflare callback URL are not required for
+  this Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
   Docker-backed function runner is enabled.
@@ -137,6 +146,41 @@ availability.
 For serious production installations, managed PostgreSQL and an
 S3-compatible object store are recommended. Stealth does not claim HA for the
 bundled single PostgreSQL, Redis, or local storage services.
+
+## First-run onboarding
+
+`stealth install` starts first-run onboarding only after the local stack passes
+its health and readiness checks. The CLI requests a single-use setup session,
+displays a 15-minute setup code, and starts a temporary,
+digest-pinned `cloudflare/cloudflared:2026.9.0` Quick Tunnel to the bundled
+proxy when possible. The Console setup page is `/setup` on that temporary URL.
+The operator enters the Stealth setup code first; the page then starts the
+server-owned GitHub App Device Flow. The API stores only a hash of the Stealth
+code and encrypts the short-lived GitHub `device_code` with the dedicated
+bootstrap key. GitHub access tokens are used only for the server-side `/user`
+lookup and are discarded, never returned to the browser or persisted.
+
+The GitHub Device Flow is used specifically because the random
+`*.trycloudflare.com` hostname is not a Stealth-controlled OAuth callback
+domain. The browser opens GitHub's fixed device verification URL instead.
+The current image reference uses the multi-architecture manifest digest
+`sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9`;
+maintainers should update the version and digest together after verifying the
+official Cloudflare image manifest.
+
+Quick Tunnels are for temporary onboarding only. They are not production
+ingress, have no production SLA, and are stopped and removed as soon as owner
+creation completes. If the tunnel cannot be started, use the local setup URL
+shown by the CLI. Canceling the CLI preserves the installation and allows
+`stealth setup` to resume while bootstrap remains unsealed.
+
+The first Instance Owner is an instance-level role and is not automatically a
+member of every organization. On upgrade, migration does not expose `/setup`
+for an existing database and does not automatically choose an account. It
+marks the installation as `legacy_installation`; the local operator can run
+`stealth setup --adopt-owner`, review the account list, and type the exact
+`ADOPT <account-id>` confirmation. Adoption is audited and does not alter
+organization membership.
 
 ## Release and upgrade
 

@@ -71,9 +71,14 @@ type Config struct {
 	StorageS3StagingRoot       string
 	// Functions source archives use a separate child store under StorageRoot.
 	// The global storage values are used as fallbacks for older deployments.
-	FunctionsMaxArtifactSize      int64
-	FunctionsDefaultQuotaBytes    int64
-	FunctionsSecretKey            []byte
+	FunctionsMaxArtifactSize   int64
+	FunctionsDefaultQuotaBytes int64
+	FunctionsSecretKey         []byte
+	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
+	// a first-run setup session and encrypts short-lived GitHub device state.
+	// It is a separate security domain from FunctionsSecretKey.
+	BootstrapCLIKey               []byte
+	GitHubAppClientID             string
 	FunctionsRunnerEnabled        bool
 	FunctionsWorkerID             string
 	FunctionsRunnerPoll           time.Duration
@@ -300,13 +305,16 @@ func Load() (Config, error) {
 	}
 	var functionsSecretKey []byte
 	if raw := strings.TrimSpace(os.Getenv("FUNCTIONS_SECRET_KEY")); raw != "" {
-		functionsSecretKey, err = base64.StdEncoding.DecodeString(raw)
+		functionsSecretKey, err = decodeSecretKey(raw, "FUNCTIONS_SECRET_KEY")
 		if err != nil {
-			// Raw URL encoding is convenient for env files that avoid '='.
-			functionsSecretKey, err = base64.RawURLEncoding.DecodeString(raw)
+			return Config{}, err
 		}
-		if err != nil || len(functionsSecretKey) != 32 {
-			return Config{}, fmt.Errorf("FUNCTIONS_SECRET_KEY must be base64-encoded 32 bytes")
+	}
+	var bootstrapCLIKey []byte
+	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_CLI_KEY")); raw != "" {
+		bootstrapCLIKey, err = decodeSecretKey(raw, "BOOTSTRAP_CLI_KEY")
+		if err != nil {
+			return Config{}, err
 		}
 	}
 	storageRoot := value("STORAGE_ROOT", "/var/lib/stealth/storage")
@@ -431,6 +439,8 @@ func Load() (Config, error) {
 		FunctionsMaxArtifactSize:      functionsMaxArtifactSize,
 		FunctionsDefaultQuotaBytes:    functionsDefaultQuota,
 		FunctionsSecretKey:            functionsSecretKey,
+		BootstrapCLIKey:               bootstrapCLIKey,
+		GitHubAppClientID:             strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
 		FunctionsRunnerEnabled:        runnerEnabled,
 		FunctionsWorkerID:             workerID,
 		FunctionsRunnerPoll:           runnerPoll,
@@ -465,6 +475,18 @@ func Load() (Config, error) {
 	return config, nil
 }
 
+func decodeSecretKey(raw, name string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		// Raw URL encoding is convenient for env files that avoid '='.
+		key, err = base64.RawURLEncoding.DecodeString(raw)
+	}
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("%s must be base64-encoded 32 bytes", name)
+	}
+	return key, nil
+}
+
 // ValidateFunctions enforces the production credential gate. Load keeps the
 // key optional for tests and older hand-built Config values; the production
 // entrypoint calls this method before serving traffic. In all cases the HTTP
@@ -477,6 +499,34 @@ func (c Config) ValidateFunctions() error {
 		return fmt.Errorf("function artifact size and quota settings are invalid")
 	}
 	return nil
+}
+
+// ValidateBootstrap enforces the production credential gate for the
+// first-owner flow. Tests and embedded handlers may construct a Config with
+// zero values, but the API composition root must not serve a GitHub bootstrap
+// without both dedicated pieces of configuration.
+func (c Config) ValidateBootstrap() error {
+	if len(c.BootstrapCLIKey) != 32 {
+		return fmt.Errorf("BOOTSTRAP_CLI_KEY must be configured as base64-encoded 32 bytes")
+	}
+	if !validGitHubAppClientID(c.GitHubAppClientID) {
+		return fmt.Errorf("GITHUB_APP_CLIENT_ID must be configured")
+	}
+	return nil
+}
+
+func validGitHubAppClientID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 160 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '.' || character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (c Config) ValidateStorage() error {

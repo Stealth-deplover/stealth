@@ -43,9 +43,13 @@ The bootstrap verifies the downloaded archive and SHA-256 checksum, then
 starts the interactive `stealth install` flow. To invoke the installed CLI
 directly, run `stealth install`. It generates private configuration and
 secrets, pulls matching API/worker/migration/Console images, applies
-migrations, starts the stack, and checks health and readiness. Open the public
-instance URL entered in the installer afterward. The default local proxy,
-Console, and API ports are `8080`, `13000`, and `18080` respectively.
+migrations, starts the stack, and checks health and readiness. On a fresh
+instance it then starts the first-run Instance Owner flow: the CLI displays a
+15-minute setup code and a temporary onboarding URL. The browser verifies the
+code, authenticates through the configured GitHub App Device Flow, and creates
+the first owner without a local password form. The Quick Tunnel is closed after
+onboarding and is not production ingress. The default local proxy, Console, and API ports are
+`8080`, `13000`, and `18080` respectively.
 
 See [Production deployment](docs/production-deployment.md) and the
 [CLI guide](docs/cli.md) for the supported self-hosting path.

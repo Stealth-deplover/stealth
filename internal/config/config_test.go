@@ -37,6 +37,24 @@ func TestValidateFunctionsFailsClosedWithoutSecretKey(t *testing.T) {
 	}
 }
 
+func TestValidateBootstrapRequiresDedicatedKeyAndGitHubClientID(t *testing.T) {
+	cfg := Config{FunctionsSecretKey: []byte(strings.Repeat("f", 32))}
+	if err := cfg.ValidateBootstrap(); err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_CLI_KEY") {
+		t.Fatalf("missing dedicated bootstrap key returned %v", err)
+	}
+	cfg.BootstrapCLIKey = []byte(strings.Repeat("b", 32))
+	if err := cfg.ValidateBootstrap(); err == nil || !strings.Contains(err.Error(), "GITHUB_APP_CLIENT_ID") {
+		t.Fatalf("missing GitHub client ID returned %v", err)
+	}
+	cfg.GitHubAppClientID = "Iv1.test-client-id"
+	if err := cfg.ValidateBootstrap(); err != nil {
+		t.Fatalf("valid bootstrap configuration returned %v", err)
+	}
+	if cfg.WithDefaults().BootstrapCLIKey == nil {
+		t.Fatal("WithDefaults dropped dedicated bootstrap key")
+	}
+}
+
 func TestLoadAppSessionTTLIsSeparateAndBounded(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
 	t.Setenv("APP_SESSION_TTL", "30m")

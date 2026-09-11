@@ -105,6 +105,19 @@ func ProjectIPKey(operation, projectID, clientIP string) string {
 	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":ip:" + hex.EncodeToString(ipHash[:])
 }
 
+// InstanceIPKey keeps instance bootstrap attempts in their own namespace.
+// The literal scope prevents a setup attack from sharing buckets with tenant
+// project or Console account authentication.
+func InstanceIPKey(operation, clientIP string) string {
+	return ProjectIPKey(operation, "instance", clientIP)
+}
+
+// InstanceKey scopes a bootstrap email/IP bucket to the installation rather
+// than exposing the raw email address in Redis.
+func InstanceKey(operation, normalizedEmail, clientIP string) string {
+	return Key(operation, "instance", normalizedEmail, clientIP)
+}
+
 // ActorKey scopes an operation to a stable authenticated actor and the
 // project/resource scope supplied by the caller. It deliberately has no IP
 // dimension: an authenticated actor keeps one budget when their network

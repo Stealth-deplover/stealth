@@ -14,11 +14,12 @@ import (
 )
 
 type InstallPlan struct {
-	Layout    InstallLayout
-	Version   string
-	PublicURL string
-	DockerGID uint32
-	Existing  bool
+	Layout            InstallLayout
+	Version           string
+	PublicURL         string
+	GitHubAppClientID string
+	DockerGID         uint32
+	Existing          bool
 }
 
 type localPorts struct {
@@ -85,6 +86,10 @@ func generateConfig(plan InstallPlan) (string, error) {
 	if err := validateReleaseVersion(plan.Version); err != nil {
 		return "", err
 	}
+	githubAppClientID, err := validateGitHubAppClientID(plan.GitHubAppClientID)
+	if err != nil {
+		return "", err
+	}
 	postgresPassword, err := generateHexSecret(24)
 	if err != nil {
 		return "", err
@@ -94,6 +99,10 @@ func generateConfig(plan InstallPlan) (string, error) {
 		return "", err
 	}
 	functionsKey, err := generateBase64Secret(32)
+	if err != nil {
+		return "", err
+	}
+	bootstrapCLIKey, err := generateBase64Secret(32)
 	if err != nil {
 		return "", err
 	}
@@ -117,6 +126,8 @@ func generateConfig(plan InstallPlan) (string, error) {
 		"POSTGRES_PASSWORD":               postgresPassword,
 		"REDIS_PASSWORD":                  redisPassword,
 		"FUNCTIONS_SECRET_KEY":            functionsKey,
+		"BOOTSTRAP_CLI_KEY":               bootstrapCLIKey,
+		"GITHUB_APP_CLIENT_ID":            githubAppClientID,
 		"PUBLIC_APP_URL":                  publicURL,
 		"COOKIE_SECURE":                   cookieSecure,
 		"TRUSTED_PROXY_CIDRS":             "172.30.0.0/24",
@@ -139,6 +150,20 @@ func generateConfig(plan InstallPlan) (string, error) {
 		"CONSOLE_HOST_PORT":               "13000",
 	}
 	return formatEnvFile(values), nil
+}
+
+func validateGitHubAppClientID(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > 160 {
+		return "", fmt.Errorf("GitHub App Client ID is required")
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '.' || character == '-' || character == '_' {
+			continue
+		}
+		return "", fmt.Errorf("GitHub App Client ID contains unsupported characters")
+	}
+	return value, nil
 }
 
 func imageName(name, version string) string {
@@ -213,6 +238,8 @@ func hasRequiredConfig(values map[string]string) bool {
 		"POSTGRES_PASSWORD",
 		"REDIS_PASSWORD",
 		"FUNCTIONS_SECRET_KEY",
+		"BOOTSTRAP_CLI_KEY",
+		"GITHUB_APP_CLIENT_ID",
 		"PUBLIC_APP_URL",
 		"DOCKER_GID",
 	} {
@@ -279,11 +306,15 @@ func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
 	if err := validateReleaseVersion(version); err != nil {
 		return nil, fmt.Errorf("existing release version from %s is invalid: %w", versionSource, err)
 	}
+	githubAppClientID, err := validateGitHubAppClientID(values["GITHUB_APP_CLIENT_ID"])
+	if err != nil {
+		return nil, fmt.Errorf("existing GITHUB_APP_CLIENT_ID is invalid: %w", err)
+	}
 	gid, err := strconv.ParseUint(values["DOCKER_GID"], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("existing DOCKER_GID is invalid")
 	}
-	return &InstallPlan{Layout: layout, Version: version, PublicURL: publicURL, DockerGID: uint32(gid), Existing: true}, nil
+	return &InstallPlan{Layout: layout, Version: version, PublicURL: publicURL, GitHubAppClientID: githubAppClientID, DockerGID: uint32(gid), Existing: true}, nil
 }
 
 func imageVersion(image string) (string, error) {

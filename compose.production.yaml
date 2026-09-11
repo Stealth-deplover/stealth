@@ -103,7 +103,10 @@ services:
   api:
     image: "${STEALTH_API_IMAGE:?set STEALTH_API_IMAGE to a versioned image}"
     restart: unless-stopped
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      BOOTSTRAP_CLI_KEY: "${BOOTSTRAP_CLI_KEY:?set BOOTSTRAP_CLI_KEY}"
+      GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:?set GITHUB_APP_CLIENT_ID}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
     ports:

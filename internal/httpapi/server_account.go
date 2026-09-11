@@ -35,6 +35,16 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !s.allowAccountAuth(w, r, "registration", email) {
 		return
 	}
+	bootstrapStatus, err := s.repo.BootstrapStatus(r.Context())
+	if err != nil {
+		s.logger.Error("bootstrap status lookup failed", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "instance setup state is temporarily unavailable")
+		return
+	}
+	if bootstrapStatus.SetupRequired {
+		writeError(w, http.StatusConflict, "bootstrap_required", "complete first-run instance setup before creating regular accounts")
+		return
+	}
 	if err := auth.ValidatePassword(req.Password); err != nil {
 		writeError(w, 422, "validation_error", err.Error())
 		return
@@ -64,6 +74,10 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	orgSlug := "personal-" + strings.ReplaceAll(orgID.String(), "-", "")[:16]
 	account, org, err := s.repo.Signup(r.Context(), repository.SignupInput{AccountID: accountID, OrganizationID: orgID, SessionID: sessionID, Email: email, PasswordHash: passwordHash, OrganizationName: name, OrganizationSlug: orgSlug, TokenHash: tokenHash, SessionExpiresAt: time.Now().UTC().Add(s.config.SessionTTL)})
 	if err != nil {
+		if errors.Is(err, repository.ErrBootstrapRequired) {
+			writeError(w, http.StatusConflict, "bootstrap_required", "complete first-run instance setup before creating regular accounts")
+			return
+		}
 		if errors.Is(err, repository.ErrConflict) {
 			writeError(w, 409, "conflict", "an account with this email already exists")
 			return

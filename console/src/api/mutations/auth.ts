@@ -32,6 +32,39 @@ export function useRegister() {
   });
 }
 
+export function useVerifyBootstrapCode() {
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["VerifyBootstrapCodeRequest"],
+    ) => unwrap(await api.POST("/v1/bootstrap/verify", { body })),
+  });
+}
+
+export function useStartGitHubDeviceFlow() {
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["StartGitHubDeviceRequest"],
+    ) => unwrap(await api.POST("/v1/bootstrap/github/device", { body })),
+  });
+}
+
+export function usePollGitHubDeviceFlow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["PollGitHubDeviceRequest"],
+    ) => unwrap(await api.POST("/v1/bootstrap/github/poll", { body })),
+    onSuccess: async (result) => {
+      if (result?.status !== "complete") return;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bootstrapStatus }),
+      ]);
+    },
+  });
+}
+
 export function useRecoveryRequest() {
   return useMutation({
     mutationFn: async (

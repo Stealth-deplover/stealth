@@ -13,6 +13,8 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 )
 
+const testGitHubAppClientID = "Iv1.test-client-id"
+
 func TestValidatePublicURL(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -36,7 +38,7 @@ func TestValidatePublicURL(t *testing.T) {
 }
 
 func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
-	plan := InstallPlan{Version: "v1.2.3", PublicURL: "https://console.example.test", DockerGID: 123}
+	plan := InstallPlan{Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: testGitHubAppClientID, DockerGID: 123}
 	first, err := generateConfig(plan)
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +57,16 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 	if values["COOKIE_SECURE"] != "true" || values["DOCKER_GID"] != "123" {
 		t.Fatalf("unexpected derived config: %#v", values)
 	}
+	if values["GITHUB_APP_CLIENT_ID"] != testGitHubAppClientID {
+		t.Fatalf("GITHUB_APP_CLIENT_ID = %q, want installer value", values["GITHUB_APP_CLIENT_ID"])
+	}
 	key, err := base64.StdEncoding.DecodeString(values["FUNCTIONS_SECRET_KEY"])
 	if err != nil || len(key) != 32 {
 		t.Fatalf("FUNCTIONS_SECRET_KEY is not a 32-byte base64 secret: %v", err)
+	}
+	bootstrapKey, err := base64.StdEncoding.DecodeString(values["BOOTSTRAP_CLI_KEY"])
+	if err != nil || len(bootstrapKey) != 32 {
+		t.Fatalf("BOOTSTRAP_CLI_KEY is not a 32-byte base64 secret: %v", err)
 	}
 	if strings.Contains(first, "CHANGE_ME") || strings.Contains(first, "admin@example") {
 		t.Fatal("generated config contains placeholder or owner data")
@@ -77,7 +86,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	layout := newInstallLayout(filepath.Join(root, ".stealth"))
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
-	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", DockerGID: 42}
+	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +180,7 @@ func TestLoadExistingPlanRejectsMalformedVersionState(t *testing.T) {
 }
 
 func TestFreshInstallConfigKeepsRequestedVersion(t *testing.T) {
-	config, err := generateConfig(InstallPlan{Version: "v1.1.0", PublicURL: "https://console.example.test", DockerGID: 42})
+	config, err := generateConfig(InstallPlan{Version: "v1.1.0", PublicURL: "https://console.example.test", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,10 +193,26 @@ func TestFreshInstallConfigKeepsRequestedVersion(t *testing.T) {
 	}
 }
 
+func TestPartialInstallationDetectionRequiresRecoveryPath(t *testing.T) {
+	layout := newInstallLayout(filepath.Join(t.TempDir(), ".stealth"))
+	if partialInstallationExists(layout) {
+		t.Fatal("empty installation directory was treated as partial")
+	}
+	if err := os.MkdirAll(filepath.Dir(layout.ComposeFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.ComposeFile, []byte("services:\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !partialInstallationExists(layout) {
+		t.Fatal("Compose-only installation was not detected as partial")
+	}
+}
+
 func writeExistingConfig(t *testing.T, version string) InstallLayout {
 	t.Helper()
 	layout := newInstallLayout(filepath.Join(t.TempDir(), ".stealth"))
-	config, err := generateConfig(InstallPlan{Version: version, PublicURL: "https://console.example.test", DockerGID: 42})
+	config, err := generateConfig(InstallPlan{Version: version, PublicURL: "https://console.example.test", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42})
 	if err != nil {
 		t.Fatal(err)
 	}

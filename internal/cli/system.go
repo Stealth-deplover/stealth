@@ -150,14 +150,17 @@ func formatBytes(value uint64) string {
 }
 
 func (a *App) hasInteractiveTerminal() bool {
-	input, inputOK := a.in.(*os.File)
-	output, outputOK := a.out.(*os.File)
-	if !inputOK || input == nil || !outputOK || output == nil {
+	if dumbTerminal() {
 		return false
 	}
-	inputInfo, inputErr := input.Stat()
-	outputInfo, outputErr := output.Stat()
-	return inputErr == nil && outputErr == nil &&
-		inputInfo.Mode()&os.ModeCharDevice != 0 &&
-		outputInfo.Mode()&os.ModeCharDevice != 0
+	return isCharacterDevice(a.in) && isCharacterDevice(a.out)
+}
+
+func isCharacterDevice(value any) bool {
+	file, ok := value.(*os.File)
+	if !ok || file == nil {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

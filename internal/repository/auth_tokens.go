@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -40,16 +41,18 @@ func (r *Repository) IssueAccountAuthToken(ctx context.Context, id uuid.UUID, ki
 	}
 	defer tx.Rollback(ctx)
 	var account domain.Account
+	var email sql.NullString
 	err = tx.QueryRow(ctx, `
 		SELECT id,email,email_verified,created_at
 		FROM accounts WHERE id=$1 FOR UPDATE`, id).
-		Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt)
+		Scan(&account.ID, &email, &account.EmailVerified, &account.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Account{}, ErrNotFound
 	}
 	if err != nil {
 		return domain.Account{}, err
 	}
+	account.Email = email.String
 	if err := pruneAccountAuthTokensTx(ctx, tx, id); err != nil {
 		return domain.Account{}, err
 	}
@@ -120,14 +123,16 @@ func (r *Repository) CreateAccountPasswordResetToken(ctx context.Context, email 
 	}
 	defer tx.Rollback(ctx)
 	var account domain.Account
+	var accountEmail sql.NullString
 	err = tx.QueryRow(ctx, `SELECT id,email,email_verified,created_at FROM accounts WHERE email=$1 FOR UPDATE`, email).
-		Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt)
+		Scan(&account.ID, &accountEmail, &account.EmailVerified, &account.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Account{}, false, nil
 	}
 	if err != nil {
 		return domain.Account{}, false, err
 	}
+	account.Email = accountEmail.String
 	accountID := uuid.MustParse(account.ID)
 	if err := pruneAccountAuthTokensTx(ctx, tx, accountID); err != nil {
 		return domain.Account{}, false, err
@@ -206,28 +211,31 @@ func (r *Repository) VerifyAccountEmail(ctx context.Context, tokenHash []byte) (
 	}
 	defer tx.Rollback(ctx)
 	var account domain.Account
+	var email sql.NullString
 	var tokenID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		SELECT a.id,a.email,a.email_verified,a.created_at,t.id
 		FROM account_auth_tokens t JOIN accounts a ON a.id=t.account_id
 		WHERE t.kind=$1 AND t.token_hash=$2 AND t.consumed_at IS NULL AND t.expires_at>now()
 		FOR UPDATE OF t,a`, AuthTokenEmailVerification, tokenHash).
-		Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt, &tokenID)
+		Scan(&account.ID, &email, &account.EmailVerified, &account.CreatedAt, &tokenID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Account{}, ErrInvalidAuthToken
 	}
 	if err != nil {
 		return domain.Account{}, err
 	}
+	account.Email = email.String
 	if _, err := tx.Exec(ctx, `UPDATE account_auth_tokens SET consumed_at=now() WHERE id=$1`, tokenID); err != nil {
 		return domain.Account{}, err
 	}
 	if !account.EmailVerified {
 		err = tx.QueryRow(ctx, `UPDATE accounts SET email_verified=true,updated_at=now() WHERE id=$1 RETURNING id,email,email_verified,created_at`, uuid.MustParse(account.ID)).
-			Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt)
+			Scan(&account.ID, &email, &account.EmailVerified, &account.CreatedAt)
 		if err != nil {
 			return domain.Account{}, err
 		}
+		account.Email = email.String
 	}
 	if err := writeAudit(ctx, tx, uuid.Nil, uuid.MustParse(account.ID), "account.email_verify", "account", uuid.MustParse(account.ID)); err != nil {
 		return domain.Account{}, err
@@ -298,28 +306,31 @@ func (r *Repository) ResetAccountPassword(ctx context.Context, tokenHash []byte,
 	}
 	defer tx.Rollback(ctx)
 	var account domain.Account
+	var email sql.NullString
 	var tokenID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		SELECT a.id,a.email,a.email_verified,a.created_at,t.id
 		FROM account_auth_tokens t JOIN accounts a ON a.id=t.account_id
 		WHERE t.kind=$1 AND t.token_hash=$2 AND t.consumed_at IS NULL AND t.expires_at>now()
 		FOR UPDATE OF t,a`, AuthTokenPasswordReset, tokenHash).
-		Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt, &tokenID)
+		Scan(&account.ID, &email, &account.EmailVerified, &account.CreatedAt, &tokenID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Account{}, ErrInvalidAuthToken
 	}
 	if err != nil {
 		return domain.Account{}, err
 	}
+	account.Email = email.String
 	accountID := uuid.MustParse(account.ID)
 	if _, err := tx.Exec(ctx, `UPDATE account_auth_tokens SET consumed_at=now() WHERE id=$1`, tokenID); err != nil {
 		return domain.Account{}, err
 	}
 	err = tx.QueryRow(ctx, `UPDATE accounts SET password_hash=$2,updated_at=now() WHERE id=$1 RETURNING id,email,email_verified,created_at`, accountID, passwordHash).
-		Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt)
+		Scan(&account.ID, &email, &account.EmailVerified, &account.CreatedAt)
 	if err != nil {
 		return domain.Account{}, err
 	}
+	account.Email = email.String
 	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE account_id=$1`, accountID); err != nil {
 		return domain.Account{}, err
 	}
