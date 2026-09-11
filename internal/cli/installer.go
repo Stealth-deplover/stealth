@@ -16,6 +16,7 @@ const (
 	installerInstance
 	installerInfrastructure
 	installerNetwork
+	installerGitHub
 	installerReview
 	installerInstalling
 	installerComplete
@@ -27,19 +28,21 @@ type installStepMessage struct {
 }
 
 type installerModel struct {
-	app       *App
-	ctx       context.Context
-	cancel    context.CancelFunc
-	checks    []SystemCheck
-	plan      *InstallPlan
-	repair    bool
-	screen    installerScreen
-	urlInput  textinput.Model
-	publicURL string
-	version   string
-	step      int
-	err       error
-	width     int
+	app               *App
+	ctx               context.Context
+	cancel            context.CancelFunc
+	checks            []SystemCheck
+	plan              *InstallPlan
+	repair            bool
+	screen            installerScreen
+	urlInput          textinput.Model
+	githubInput       textinput.Model
+	publicURL         string
+	githubAppClientID string
+	version           string
+	step              int
+	err               error
+	width             int
 }
 
 func (a *App) runInstallerTUI(ctx context.Context, checks []SystemCheck, plan *InstallPlan, repair bool) int {
@@ -80,19 +83,26 @@ func newInstallerModel(app *App, ctx context.Context, cancel context.CancelFunc,
 	input.Placeholder = "https://stealth.example.com"
 	input.CharLimit = 2048
 	input.Width = 64
+	githubInput := textinput.New()
+	githubInput.Prompt = "GitHub App Client ID  "
+	githubInput.Placeholder = "Iv1.xxxxxxxxxxxxxxxx"
+	githubInput.CharLimit = 160
+	githubInput.Width = 64
 	model := installerModel{
-		app:      app,
-		ctx:      ctx,
-		cancel:   cancel,
-		checks:   checks,
-		plan:     plan,
-		repair:   repair,
-		screen:   installerWelcome,
-		urlInput: input,
-		version:  plan.Version,
+		app:         app,
+		ctx:         ctx,
+		cancel:      cancel,
+		checks:      checks,
+		plan:        plan,
+		repair:      repair,
+		screen:      installerWelcome,
+		urlInput:    input,
+		githubInput: githubInput,
+		version:     plan.Version,
 	}
 	if repair {
 		model.publicURL = plan.PublicURL
+		model.githubAppClientID = plan.GitHubAppClientID
 		model.screen = installerReview
 	}
 	return model
@@ -101,6 +111,9 @@ func newInstallerModel(app *App, ctx context.Context, cancel context.CancelFunc,
 func (m installerModel) Init() tea.Cmd {
 	if m.screen == installerInstance {
 		return m.urlInput.Focus()
+	}
+	if m.screen == installerGitHub {
+		return m.githubInput.Focus()
 	}
 	return nil
 }
@@ -134,9 +147,13 @@ func (m installerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == installerInstalling {
 			return m, nil
 		}
-		if m.screen == installerInstance && message.Type != tea.KeyEnter && message.Type != tea.KeyEscape {
+		if (m.screen == installerInstance || m.screen == installerGitHub) && message.Type != tea.KeyEnter && message.Type != tea.KeyEscape {
 			var command tea.Cmd
-			m.urlInput, command = m.urlInput.Update(message)
+			if m.screen == installerInstance {
+				m.urlInput, command = m.urlInput.Update(message)
+			} else {
+				m.githubInput, command = m.githubInput.Update(message)
+			}
 			return m, command
 		}
 		switch message.Type {
@@ -176,6 +193,16 @@ func (m installerModel) advance() (tea.Model, tea.Cmd) {
 		m.screen = installerNetwork
 		return m, nil
 	case installerNetwork:
+		m.screen = installerGitHub
+		return m, m.githubInput.Focus()
+	case installerGitHub:
+		githubAppClientID, err := validateGitHubAppClientID(m.githubInput.Value())
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.githubAppClientID = githubAppClientID
+		m.err = nil
 		m.screen = installerReview
 		return m, nil
 	case installerReview:
@@ -186,7 +213,9 @@ func (m installerModel) advance() (tea.Model, tea.Cmd) {
 				m.screen = installerFailed
 				return m, nil
 			}
-			m.plan = ptr(newInstallPlan(m.appMustLayout(), m.version, m.publicURL, gid))
+			plan := newInstallPlan(m.appMustLayout(), m.version, m.publicURL, gid)
+			plan.GitHubAppClientID = m.githubAppClientID
+			m.plan = ptr(plan)
 		}
 		m.step = 0
 		m.screen = installerInstalling
@@ -208,9 +237,12 @@ func (m installerModel) goBack() (tea.Model, tea.Cmd) {
 		return m, m.urlInput.Focus()
 	case installerNetwork:
 		m.screen = installerInfrastructure
+	case installerGitHub:
+		m.screen = installerNetwork
 	case installerReview:
 		if !m.repair {
-			m.screen = installerNetwork
+			m.screen = installerGitHub
+			return m, m.githubInput.Focus()
 		}
 	case installerComplete, installerFailed:
 		return m, tea.Quit
@@ -281,10 +313,22 @@ func renderInstallerView(m installerModel) string {
 		builder.WriteString("Put TLS termination or an existing reverse proxy in front of it.\n")
 		builder.WriteString("Cloudflare Tunnel is not required by this installer.\n\n")
 		builder.WriteString("Enter to continue · Esc to go back")
+	case installerGitHub:
+		builder.WriteString("GitHub authentication\n\n")
+		builder.WriteString("Stealth uses a GitHub App Device Flow to verify the first Instance Owner.\n")
+		builder.WriteString("Enable Device Flow in the App settings; no TryCloudflare callback URL is needed.\n\n")
+		builder.WriteString(m.githubInput.View())
+		builder.WriteString("\n")
+		if m.err != nil {
+			builder.WriteString(renderError(m.err.Error()))
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("\nEnter to continue · Esc to go back")
 	case installerReview:
 		builder.WriteString("Review installation\n\n")
 		builder.WriteString(fmt.Sprintf("Version           %s\n", m.version))
 		builder.WriteString(fmt.Sprintf("URL               %s\n", valueOr(m.publicURL, "not set")))
+		builder.WriteString(fmt.Sprintf("GitHub App ID     %s\n", valueOr(m.githubAppClientID, "not set")))
 		builder.WriteString("PostgreSQL        Bundled\nRedis             Bundled\nObject Storage    Local volume\n")
 		builder.WriteString(fmt.Sprintf("Install directory %s\n\n", m.appMustLayout().Root))
 		builder.WriteString("Secrets will be generated and kept in config.env (mode 0600).\n")

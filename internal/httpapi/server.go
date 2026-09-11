@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/gitarchive"
+	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
@@ -42,6 +44,8 @@ type Server struct {
 	realtimeSlots  chan struct{}
 	realtimeBroker *realtime.Broker
 	emailSender    mailer.Sender
+	githubClient   githubauth.Client
+	githubFlowMu   sync.Mutex
 }
 
 // Dependencies carries the collaborators the console API accepts from the
@@ -55,6 +59,7 @@ type Dependencies struct {
 	SiteGitFetcher gitarchive.SourceFetcher
 	EmailSender    mailer.Sender
 	RealtimeBroker *realtime.Broker
+	GitHubClient   githubauth.Client
 }
 
 // New builds the console API with production dependencies.
@@ -79,6 +84,9 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	cfg = cfg.WithDefaults()
 	if deps.EmailSender == nil {
 		deps.EmailSender = mailer.NewFromConfig(cfg, logger)
+	}
+	if deps.GitHubClient == nil {
+		deps.GitHubClient = githubauth.NewClient(nil)
 	}
 	var storageStore storage.BlobStore
 	var storageErr error
@@ -121,7 +129,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
-	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender}
+	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender, githubClient: deps.GitHubClient}
 	return s.routes()
 }
 

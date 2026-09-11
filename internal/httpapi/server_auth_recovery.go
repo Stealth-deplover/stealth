@@ -80,6 +80,10 @@ func (s *Server) sendAccountVerification(w http.ResponseWriter, r *http.Request)
 		internalError(s, w, err)
 		return
 	}
+	if strings.TrimSpace(account.Email) == "" {
+		writeError(w, http.StatusConflict, "email_auth_unavailable", "this provider account does not have a local email address")
+		return
+	}
 	if !s.allowAccountAuth(w, r, "verification_send", account.Email) {
 		return
 	}

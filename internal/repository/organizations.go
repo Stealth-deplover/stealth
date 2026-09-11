@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
@@ -108,7 +109,7 @@ func (r *Repository) ListMemberships(ctx context.Context, organizationID, accoun
 	if err := r.pool.QueryRow(ctx, `SELECT role FROM organization_memberships WHERE organization_id=$1 AND account_id=$2`, organizationID, accountID).Scan(&role); err != nil {
 		return nil, "", false, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT m.organization_id,m.account_id,a.email,m.role,m.created_at FROM organization_memberships m JOIN accounts a ON a.id=m.account_id WHERE m.organization_id=$1 AND ($2='' OR m.account_id::text>$2) ORDER BY m.account_id LIMIT $3`, organizationID, cursor, limit+1)
+	rows, err := r.pool.Query(ctx, `SELECT m.organization_id,m.account_id,a.email,ai.provider,ai.provider_login,m.role,m.created_at FROM organization_memberships m JOIN accounts a ON a.id=m.account_id LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github' WHERE m.organization_id=$1 AND ($2='' OR m.account_id::text>$2) ORDER BY m.account_id LIMIT $3`, organizationID, cursor, limit+1)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -116,8 +117,16 @@ func (r *Repository) ListMemberships(ctx context.Context, organizationID, accoun
 	items := make([]domain.Membership, 0, limit)
 	for rows.Next() {
 		var item domain.Membership
-		if err := rows.Scan(&item.OrganizationID, &item.AccountID, &item.Email, &item.Role, &item.CreatedAt); err != nil {
+		var email, provider, providerLogin sql.NullString
+		if err := rows.Scan(&item.OrganizationID, &item.AccountID, &email, &provider, &providerLogin, &item.Role, &item.CreatedAt); err != nil {
 			return nil, "", false, err
+		}
+		item.Email = nullableStringPointer(email)
+		if provider.Valid {
+			item.Provider = provider.String
+		}
+		if providerLogin.Valid {
+			item.ProviderLogin = providerLogin.String
 		}
 		items = append(items, item)
 	}

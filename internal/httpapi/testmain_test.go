@@ -48,29 +48,29 @@ func prepareExistingHTTPIntegrationDatabase(databaseURL string) error {
 		return err
 	}
 	repo := repository.New(pool)
+	sessionID := uuid.Must(uuid.NewV7())
 	if err := repo.CreateBootstrapSession(ctx, repository.BootstrapSessionInput{
-		ID:        uuid.Must(uuid.NewV7()),
+		ID:        sessionID,
 		CodeHash:  bootstrap.HashCode(code),
 		ExpiresAt: time.Now().UTC().Add(bootstrap.CodeLifetime),
 	}); err != nil {
-		return err
-	}
-	passwordHash, err := auth.HashPassword("integration-owner-password")
-	if err != nil {
 		return err
 	}
 	_, tokenHash, err := auth.NewSessionToken()
 	if err != nil {
 		return err
 	}
-	_, err = repo.CreateInstanceOwner(ctx, repository.InstanceOwnerInput{
-		AccountID:         uuid.Must(uuid.NewV7()),
-		SessionID:         uuid.Must(uuid.NewV7()),
-		Email:             "integration-owner@example.test",
-		PasswordHash:      passwordHash,
-		TokenHash:         tokenHash,
-		SessionExpiresAt:  time.Now().UTC().Add(time.Hour),
-		BootstrapCodeHash: bootstrap.HashCode(code),
+	_, err = repo.CreateGitHubInstanceOwner(ctx, repository.GitHubOwnerInput{
+		BootstrapSessionID: sessionID,
+		BootstrapCodeHash:  bootstrap.HashCode(code),
+		AccountID:          uuid.Must(uuid.NewV7()),
+		SessionID:          uuid.Must(uuid.NewV7()),
+		TokenHash:          tokenHash,
+		SessionExpiresAt:   time.Now().UTC().Add(time.Hour),
+		ProviderUserID:     "integration-owner",
+		ProviderLogin:      "integration-owner",
+		ProviderEmail:      "integration-owner@example.test",
+		DisplayName:        "Integration Owner",
 	})
 	return err
 }

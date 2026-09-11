@@ -47,10 +47,11 @@ Release contains the versioned CLI archive and `checksums.txt`.
 2. instance URL;
 3. bundled PostgreSQL, Redis, and local object storage review;
 4. local/existing reverse proxy review;
-5. configuration review;
-6. secret generation, image pull, migration, startup, and bounded HTTP health
+5. GitHub App Client ID for first-owner Device Flow;
+6. configuration review;
+7. secret generation, image pull, migration, startup, and bounded HTTP health
    verification;
-7. first-run Instance Owner onboarding.
+8. first-run Instance Owner onboarding.
 
 The installer requires Docker and Docker Compose. It does not silently run a
 third-party Docker installation script. The `v0.1.0` release uses bundled
@@ -76,9 +77,16 @@ location is required. The CLI writes:
 └── state/
 ```
 
-`config.env` also contains `BOOTSTRAP_CLI_KEY`, a private 32-byte key used to
-authenticate the local CLI when it requests a temporary setup session. Keep it
-with the rest of `config.env`; it is never printed or sent in the setup URL.
+`config.env` contains two first-owner settings:
+
+- `BOOTSTRAP_CLI_KEY`, a private 32-byte key used only to authenticate the
+  local CLI and encrypt short-lived GitHub Device Flow state;
+- `GITHUB_APP_CLIENT_ID`, the Client ID of a GitHub App with Device Flow
+  enabled.
+
+Keep both values with the rest of `config.env`. The bootstrap key is never
+printed or sent in the setup URL. `FUNCTIONS_SECRET_KEY` is a separate security
+domain and is never used as a bootstrap-key fallback.
 
 The Compose and proxy files are downloaded from the same versioned Git tag as
 the CLI. The config pins API, worker, migration, and Console images to the
@@ -112,7 +120,7 @@ reachability, and available disk space. `logs` delegates to
 On a new installation, `stealth install` waits for PostgreSQL, Redis,
 migrations, API, worker, Console, and the proxy to become healthy before it
 creates a setup session. The CLI then displays a one-time code in the terminal
-and, when the Docker network is available, starts a pinned
+and, when the Docker network is available, starts an immutable-digest-pinned
 `cloudflare/cloudflared:2026.9.0` Quick Tunnel to the local proxy:
 
 ```text
@@ -122,14 +130,22 @@ STEALTH-XXXX-XXXX-XXXX
 
 The code has 60 bits of cryptographic entropy, expires after 15 minutes, is
 rate-limited, is stored by the API only as a SHA-256 hash, and is invalidated
-after the first successful owner creation. It is entered in the Console setup
-form and is never placed in a URL, browser storage, or logs. If a Quick Tunnel
-cannot be started, the CLI leaves the installation intact and shows the local
-setup URL instead.
+after the first successful owner creation. On `/setup`, enter the code first;
+only then does the page enable **Continue with GitHub**. GitHub's Device Flow
+user code is shown in the browser and the GitHub verification page opens at
+`https://github.com/login/device`. The random TryCloudflare hostname is never
+used as a GitHub OAuth callback. Neither the setup code nor GitHub's
+`device_code` or access token is placed in a URL, browser storage, or logs.
+If a Quick Tunnel cannot be started, the CLI leaves the installation intact
+and shows the local setup URL instead.
 
 The cloudflared image pin is defined in `internal/cli/setup.go` so it can be
-reviewed and updated as one change. The Quick Tunnel command uses the existing
-Compose network and targets only the bundled `proxy` service.
+reviewed and updated as one change. It currently pins the multi-architecture
+`2026.9.0` manifest to
+`sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9`.
+Maintainers should update the version and digest together after verifying the
+official image manifest. The Quick Tunnel command uses the existing Compose
+network and targets only the bundled `proxy` service.
 
 To resume onboarding after cancellation or expiration, use:
 
@@ -144,16 +160,20 @@ after completion. A Quick Tunnel is an onboarding transport only: it is
 temporary, has no production SLA, and must not be treated as permanent
 ingress. Configure a reverse proxy or production Cloudflare Tunnel separately.
 
-Existing installations are not reopened during upgrade. Migration assigns the
-explicit, deterministic legacy rule of the earliest account by
-`created_at` (UUID tie-breaker) as the Instance Owner and permanently seals
-bootstrap. This preserves the pre-bootstrap convention that the first account
-was the installation administrator without granting a later account a new
-public takeover path.
+Existing installations are not reopened during upgrade and no account is
+automatically promoted. Migration seals public bootstrap as a
+`legacy_installation`. A local operator can explicitly select an existing
+account with a strong confirmation:
 
-Upgrade and uninstall commands are intentionally not shipped in this
-milestone. Do not delete Docker volumes as a repair action. Use the documented
-backup and upgrade runbooks for production changes.
+```bash
+stealth setup --adopt-owner
+```
+
+This path uses only the dedicated local CLI proof, records an audit event, and
+does not change organization membership. It is not available from `/setup`.
+
+For instance removal, use the documented backup and upgrade runbooks. Do not
+delete Docker volumes as a repair action.
 
 ## Secret and terminal safety
 

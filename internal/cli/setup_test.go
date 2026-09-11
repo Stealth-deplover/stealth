@@ -263,7 +263,7 @@ func TestPrepareSetupReusesExistingTunnelWhenRefreshingExpiredCode(t *testing.T)
 	}
 }
 
-func TestBootstrapCLIKeyUsesDedicatedKeyAndLegacyFallback(t *testing.T) {
+func TestBootstrapCLIKeyUsesDedicatedKeyWithoutFunctionsFallback(t *testing.T) {
 	dedicated := bytes.Repeat([]byte{0x11}, 32)
 	legacy := bytes.Repeat([]byte{0x22}, 32)
 	values := map[string]string{
@@ -276,8 +276,8 @@ func TestBootstrapCLIKeyUsesDedicatedKeyAndLegacyFallback(t *testing.T) {
 	}
 	delete(values, "BOOTSTRAP_CLI_KEY")
 	key, err = bootstrapCLIKey(values)
-	if err != nil || !bytes.Equal(key, legacy) {
-		t.Fatalf("legacy bootstrap key = %x, %v", key, err)
+	if err == nil || key != nil || !strings.Contains(err.Error(), "dedicated bootstrap CLI key") {
+		t.Fatalf("missing dedicated bootstrap key = %x, %v", key, err)
 	}
 }
 

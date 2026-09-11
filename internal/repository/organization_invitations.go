@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -254,11 +255,17 @@ func (r *Repository) AcceptOrganizationInvitation(ctx context.Context, tokenHash
 		return domain.Membership{}, err
 	}
 	defer tx.Rollback(ctx)
-	var accountEmail string
+	var accountEmail sql.NullString
 	if err := tx.QueryRow(ctx, `SELECT email FROM accounts WHERE id=$1`, accountID).Scan(&accountEmail); errors.Is(err, pgx.ErrNoRows) {
 		return domain.Membership{}, ErrInvalidOrganizationInvitation
 	} else if err != nil {
 		return domain.Membership{}, err
+	}
+	// Organization invitations are deliberately email-bound. A GitHub-only
+	// account without an email cannot prove it is the invited recipient, so
+	// keep the same generic invalid-invitation response used for stale tokens.
+	if !accountEmail.Valid || strings.TrimSpace(accountEmail.String) == "" {
+		return domain.Membership{}, ErrInvalidOrganizationInvitation
 	}
 	var invitationID, organizationID uuid.UUID
 	var email, role string
@@ -269,14 +276,14 @@ func (r *Repository) AcceptOrganizationInvitation(ctx context.Context, tokenHash
 	} else if err != nil {
 		return domain.Membership{}, err
 	}
-	if acceptedAt != nil || revokedAt != nil || !expiresAt.After(time.Now().UTC()) || !strings.EqualFold(email, accountEmail) {
-		if !strings.EqualFold(email, accountEmail) && acceptedAt == nil && revokedAt == nil && expiresAt.After(time.Now().UTC()) {
+	if acceptedAt != nil || revokedAt != nil || !expiresAt.After(time.Now().UTC()) || !strings.EqualFold(email, accountEmail.String) {
+		if !strings.EqualFold(email, accountEmail.String) && acceptedAt == nil && revokedAt == nil && expiresAt.After(time.Now().UTC()) {
 			return domain.Membership{}, ErrForbidden
 		}
 		return domain.Membership{}, ErrInvalidOrganizationInvitation
 	}
-	var item domain.Membership
-	if err := tx.QueryRow(ctx, `SELECT m.organization_id,m.account_id,a.email,m.role,m.created_at FROM organization_memberships m JOIN accounts a ON a.id=m.account_id WHERE m.organization_id=$1 AND m.account_id=$2 FOR UPDATE`, organizationID, accountID).Scan(&item.OrganizationID, &item.AccountID, &item.Email, &item.Role, &item.CreatedAt); errors.Is(err, pgx.ErrNoRows) {
+	item, err := membershipFromRow(tx.QueryRow(ctx, `SELECT m.organization_id,m.account_id,a.email,ai.provider,ai.provider_login,m.role,m.created_at FROM organization_memberships m JOIN accounts a ON a.id=m.account_id LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github' WHERE m.organization_id=$1 AND m.account_id=$2 FOR UPDATE OF m,a`, organizationID, accountID))
+	if errors.Is(err, pgx.ErrNoRows) {
 		if err := r.enforceOrganizationLimitTx(ctx, tx, organizationID, "members"); err != nil {
 			return domain.Membership{}, err
 		}
@@ -285,7 +292,7 @@ func (r *Repository) AcceptOrganizationInvitation(ctx context.Context, tokenHash
 		}
 		item.OrganizationID = organizationID.String()
 		item.AccountID = accountID.String()
-		item.Email = accountEmail
+		item.Email = nullableStringPointer(accountEmail)
 		item.Role = role
 	} else if err != nil {
 		return domain.Membership{}, err
@@ -293,7 +300,7 @@ func (r *Repository) AcceptOrganizationInvitation(ctx context.Context, tokenHash
 	if _, err := tx.Exec(ctx, `UPDATE organization_invitations SET accepted_at=now() WHERE id=$1`, invitationID); err != nil {
 		return domain.Membership{}, err
 	}
-	if err := writeAuditMetadata(ctx, tx, organizationID, accountID, "organization.invitation.accept", "organization_invitation", invitationID, map[string]any{"account_id": accountID.String(), "email": accountEmail, "role": item.Role}); err != nil {
+	if err := writeAuditMetadata(ctx, tx, organizationID, accountID, "organization.invitation.accept", "organization_invitation", invitationID, map[string]any{"account_id": accountID.String(), "email": accountEmail.String, "role": item.Role}); err != nil {
 		return domain.Membership{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -10,7 +10,19 @@ const mocks = vi.hoisted(() => ({
     isPending: false,
     refetch: vi.fn(),
   },
-  mutation: {
+  verify: {
+    error: null as unknown,
+    isPending: false,
+    mutateAsync: vi.fn(),
+    reset: vi.fn(),
+  },
+  start: {
+    error: null as unknown,
+    isPending: false,
+    mutateAsync: vi.fn(),
+    reset: vi.fn(),
+  },
+  poll: {
     error: null as unknown,
     isPending: false,
     mutateAsync: vi.fn(),
@@ -27,32 +39,57 @@ vi.mock("@/api/queries", () => ({
 }));
 
 vi.mock("@/api/mutations", () => ({
-  useCreateInstanceOwner: () => mocks.mutation,
+  useVerifyBootstrapCode: () => mocks.verify,
+  useStartGitHubDeviceFlow: () => mocks.start,
+  usePollGitHubDeviceFlow: () => mocks.poll,
 }));
 
-describe("first-run setup view", () => {
+const setupCode = "STEALTH-ABCD-2345-EFGH";
+
+describe("first-run GitHub setup view", () => {
   beforeEach(() => {
     mocks.status.data = { setup_required: true };
     mocks.status.error = null;
     mocks.status.isPending = false;
     mocks.status.refetch.mockReset();
-    mocks.mutation.error = null;
-    mocks.mutation.isPending = false;
-    mocks.mutation.mutateAsync.mockReset().mockResolvedValue({
-      account: { instance_role: "instance_owner" },
+    mocks.verify.error = null;
+    mocks.verify.isPending = false;
+    mocks.verify.mutateAsync.mockReset().mockResolvedValue({
+      authorization_session_id: "019c0000-0000-7000-8000-000000000001",
+      expires_at: new Date(Date.now() + 900_000).toISOString(),
+    });
+    mocks.verify.reset.mockReset();
+    mocks.start.error = null;
+    mocks.start.isPending = false;
+    mocks.start.mutateAsync.mockReset().mockResolvedValue({
+      authorization_session_id: "019c0000-0000-7000-8000-000000000001",
+      user_code: "WDJB-MJHT",
+      verification_uri: "https://github.com/login/device",
+      expires_at: new Date(Date.now() + 900_000).toISOString(),
+      interval_seconds: 5,
+    });
+    mocks.start.reset.mockReset();
+    mocks.poll.error = null;
+    mocks.poll.isPending = false;
+    mocks.poll.mutateAsync.mockReset().mockResolvedValue({
+      status: "pending",
+      retry_after_seconds: 5,
     });
     mocks.replace.mockReset();
   });
 
-  it("shows the owner form only while bootstrap is required", () => {
+  it("shows only the setup-code gate before GitHub verification", () => {
     render(<SetupView />);
 
     expect(screen.getByRole("textbox", { name: "Setup code" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "Email" })).toBeVisible();
-    expect(screen.getByLabelText("Password")).toHaveAttribute(
-      "autocomplete",
-      "new-password",
-    );
+    expect(
+      screen.getByRole("button", { name: "Verify setup code" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Email" })).toBeNull();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Continue with GitHub" }),
+    ).toBeNull();
   });
 
   it("refuses onboarding after the backend seals bootstrap", () => {
@@ -63,57 +100,66 @@ describe("first-run setup view", () => {
     expect(screen.queryByRole("textbox", { name: "Setup code" })).toBeNull();
   });
 
-  it("validates code and password before calling the API", async () => {
+  it("validates the setup code before calling the API", async () => {
     render(<SetupView />);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Setup code" }), {
       target: { value: "wrong" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "Email" }), {
-      target: { value: "owner@example.test" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "short" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create Instance Owner" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Verify setup code" }));
 
     await waitFor(() =>
       expect(screen.getByText(/Enter the setup code shown/i)).toBeVisible(),
     );
-    expect(screen.getByText("Use at least 12 characters.")).toBeVisible();
-    expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
+    expect(mocks.verify.mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("submits the code in the request body and enters the Console", async () => {
+  it("verifies the local code before enabling Continue with GitHub", async () => {
     render(<SetupView />);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Setup code" }), {
-      target: { value: "stealth-abcd-2345-efgh" },
+      target: { value: setupCode.toLowerCase() },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "Email" }), {
-      target: { value: "owner@example.test" },
-    });
-    fireEvent.change(screen.getByLabelText("Password"), {
-      target: { value: "correct-horse-battery-staple" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create Instance Owner" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Verify setup code" }));
 
     await waitFor(() =>
-      expect(mocks.mutation.mutateAsync).toHaveBeenCalledWith({
-        setup_code: "stealth-abcd-2345-efgh",
-        email: "owner@example.test",
-        password: "correct-horse-battery-staple",
+      expect(mocks.verify.mutateAsync).toHaveBeenCalledWith({
+        setup_code: setupCode,
       }),
     );
-    expect(mocks.replace).toHaveBeenCalledWith("/organizations");
+    expect(
+      screen.getByRole("button", { name: "Continue with GitHub" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Email" })).toBeNull();
   });
 
-  it("keeps bootstrap errors generic and accessible", () => {
-    mocks.mutation.error = new ApiError(
+  it("starts server-owned Device Flow and renders a copyable GitHub code", async () => {
+    render(<SetupView />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Setup code" }), {
+      target: { value: setupCode },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Verify setup code" }));
+    await screen.findByRole("button", { name: "Continue with GitHub" });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue with GitHub" }),
+    );
+    await waitFor(() =>
+      expect(mocks.start.mutateAsync).toHaveBeenCalledWith({
+        authorization_session_id: "019c0000-0000-7000-8000-000000000001",
+        setup_code: setupCode,
+      }),
+    );
+    expect(screen.getByText("WDJB-MJHT")).toBeVisible();
+    expect(screen.getByRole("link", { name: /Open GitHub/i })).toHaveAttribute(
+      "href",
+      "https://github.com/login/device",
+    );
+    expect(screen.queryByText("device-code-test-value")).toBeNull();
+  });
+
+  it("keeps provider errors generic and accessible", () => {
+    mocks.verify.error = new ApiError(
       "invalid setup code",
       401,
       "invalid_bootstrap_code",

@@ -75,9 +75,10 @@ type Config struct {
 	FunctionsDefaultQuotaBytes int64
 	FunctionsSecretKey         []byte
 	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
-	// a first-run setup session. Older installations may omit it; in that case
-	// the API deliberately falls back to FunctionsSecretKey for compatibility.
+	// a first-run setup session and encrypts short-lived GitHub device state.
+	// It is a separate security domain from FunctionsSecretKey.
 	BootstrapCLIKey               []byte
+	GitHubAppClientID             string
 	FunctionsRunnerEnabled        bool
 	FunctionsWorkerID             string
 	FunctionsRunnerPoll           time.Duration
@@ -309,7 +310,7 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 	}
-	bootstrapCLIKey := append([]byte(nil), functionsSecretKey...)
+	var bootstrapCLIKey []byte
 	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_CLI_KEY")); raw != "" {
 		bootstrapCLIKey, err = decodeSecretKey(raw, "BOOTSTRAP_CLI_KEY")
 		if err != nil {
@@ -439,6 +440,7 @@ func Load() (Config, error) {
 		FunctionsDefaultQuotaBytes:    functionsDefaultQuota,
 		FunctionsSecretKey:            functionsSecretKey,
 		BootstrapCLIKey:               bootstrapCLIKey,
+		GitHubAppClientID:             strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
 		FunctionsRunnerEnabled:        runnerEnabled,
 		FunctionsWorkerID:             workerID,
 		FunctionsRunnerPoll:           runnerPoll,
@@ -497,6 +499,34 @@ func (c Config) ValidateFunctions() error {
 		return fmt.Errorf("function artifact size and quota settings are invalid")
 	}
 	return nil
+}
+
+// ValidateBootstrap enforces the production credential gate for the
+// first-owner flow. Tests and embedded handlers may construct a Config with
+// zero values, but the API composition root must not serve a GitHub bootstrap
+// without both dedicated pieces of configuration.
+func (c Config) ValidateBootstrap() error {
+	if len(c.BootstrapCLIKey) != 32 {
+		return fmt.Errorf("BOOTSTRAP_CLI_KEY must be configured as base64-encoded 32 bytes")
+	}
+	if !validGitHubAppClientID(c.GitHubAppClientID) {
+		return fmt.Errorf("GITHUB_APP_CLIENT_ID must be configured")
+	}
+	return nil
+}
+
+func validGitHubAppClientID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 160 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '.' || character == '-' || character == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (c Config) ValidateStorage() error {

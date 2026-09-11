@@ -42,22 +42,73 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '410': { $ref: '#/components/responses/BootstrapComplete' }
         '500': { $ref: '#/components/responses/InternalError' }
-  /v1/bootstrap/owner:
+  /v1/bootstrap/verify:
     post:
-      operationId: createInstanceOwner
-      description: Consume the current one-time setup code and create the first instance-level owner plus a normal HttpOnly Console session. The setup code must be sent in the JSON body, never in a URL.
+      operationId: verifyBootstrapCode
+      description: Verify the one-time code from the local Stealth CLI and issue an opaque authorization-session identifier. This does not create an owner.
       security: [{}]
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInstanceOwnerRequest' } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/VerifyBootstrapCodeRequest' } } } }
       responses:
-        '201': { description: First Instance Owner and authenticated session created, content: { application/json: { schema: { $ref: '#/components/schemas/InstanceOwnerResponse' } } } }
+        '200': { description: Setup code accepted for the next bootstrap step, content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapVerificationResponse' } } } }
         '401': { description: Setup code is invalid, expired, or already used, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '410': { $ref: '#/components/responses/BootstrapComplete' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /v1/bootstrap/github/device:
+    post:
+      operationId: startBootstrapGitHubDeviceFlow
+      description: Start the GitHub App Device Flow after the local Stealth setup code has been verified. The GitHub device_code remains server-side and is never returned.
+      security: [{}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/StartGitHubDeviceRequest' } } } }
+      responses:
+        '201': { description: GitHub user code for browser authorization, content: { application/json: { schema: { $ref: '#/components/schemas/GitHubDeviceResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '410': { $ref: '#/components/responses/BootstrapComplete' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/bootstrap/github/poll:
+    post:
+      operationId: pollBootstrapGitHubDeviceFlow
+      description: Poll the server-owned GitHub Device Flow. The API respects GitHub's polling interval and creates a normal Stealth session only after verifying the GitHub identity.
+      security: [{}]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PollGitHubDeviceRequest' } } } }
+      responses:
+        '200': { description: Authorization is still pending, content: { application/json: { schema: { $ref: '#/components/schemas/GitHubPollResponse' } } } }
+        '201': { description: First Instance Owner and authenticated session created, content: { application/json: { schema: { $ref: '#/components/schemas/GitHubPollResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '410': { $ref: '#/components/responses/BootstrapComplete' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '415': { $ref: '#/components/responses/UnsupportedMediaType' }
-        '422': { $ref: '#/components/responses/ValidationError' }
         '429': { $ref: '#/components/responses/RateLimited' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/bootstrap/adoption/accounts:
+    get:
+      operationId: listBootstrapAdoptionAccounts
+      description: List existing accounts eligible for explicit local operator adoption. This endpoint is authenticated only by the dedicated local CLI proof and is never used by the public setup page.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      responses:
+        '200': { description: Existing accounts, content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapAdoptionAccountsResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/bootstrap/adoption/owner:
+    post:
+      operationId: adoptBootstrapOwner
+      description: Assign the instance_owner role to a specifically selected existing account. This is a local operator migration path for upgraded installations, not public first-run setup.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AdoptInstanceOwnerRequest' } } } }
+      responses:
+        '200': { description: Existing account adopted as Instance Owner, content: { application/json: { schema: { $ref: '#/components/schemas/AdoptInstanceOwnerResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /v1/account/registrations:
     post:
       operationId: registerAccount
@@ -78,6 +129,7 @@ paths:
       responses:
         '204': { description: Verification message accepted }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
     put:
@@ -143,7 +195,7 @@ paths:
       description: Replace the authenticated Console account password after verifying the current password. All other Console sessions are revoked; the current session remains valid.
       security: [{ sessionCookie: [] }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateAccountPasswordRequest' } } } }
-      responses: { '200': { description: Password updated, content: { application/json: { schema: { $ref: '#/components/schemas/PasswordUpdateResponse' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '413': { $ref: '#/components/responses/PayloadTooLarge' }, '415': { $ref: '#/components/responses/UnsupportedMediaType' }, '422': { $ref: '#/components/responses/ValidationError' }, '500': { $ref: '#/components/responses/InternalError' } }
+      responses: { '200': { description: Password updated, content: { application/json: { schema: { $ref: '#/components/schemas/PasswordUpdateResponse' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '409': { $ref: '#/components/responses/Conflict' }, '413': { $ref: '#/components/responses/PayloadTooLarge' }, '415': { $ref: '#/components/responses/UnsupportedMediaType' }, '422': { $ref: '#/components/responses/ValidationError' }, '500': { $ref: '#/components/responses/InternalError' } }
   /v1/sessions/email-password:
     post:
       operationId: createEmailPasswordSession
@@ -2084,6 +2136,7 @@ components:
     Conflict: { description: Resource conflict, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     NotReady: { description: Dependency unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+    BadGateway: { description: GitHub or another upstream authorization provider is unavailable or returned an invalid response, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     InternalError: { description: Internal server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     RateLimited: { description: Operation rate limit exceeded, headers: { Retry-After: { description: Seconds until another attempt may be made, schema: { type: integer, minimum: 1 } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
     ServiceUnavailable: { description: Public Auth protection or a required dependency is unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
@@ -2096,7 +2149,16 @@ components:
     BuildInfo: { type: object, required: [version, commit, build_time], properties: { version: { type: string }, commit: { type: string }, build_time: { type: string } } }
     BootstrapStatusResponse: { type: object, additionalProperties: false, required: [setup_required], properties: { setup_required: { type: boolean, description: Whether the first Instance Owner still needs to be created. } } }
     BootstrapSessionResponse: { type: object, additionalProperties: false, required: [setup_code, expires_at], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', description: One-time code shown only to the CLI operator. }, expires_at: { type: string, format: date-time } } }
-    CreateInstanceOwnerRequest: { type: object, additionalProperties: false, required: [setup_code, email, password], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', writeOnly: true }, email: { type: string, format: email, maxLength: 320 }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true } } }
+    VerifyBootstrapCodeRequest: { type: object, additionalProperties: false, required: [setup_code], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', writeOnly: true } } }
+    BootstrapVerificationResponse: { type: object, additionalProperties: false, required: [authorization_session_id, expires_at], properties: { authorization_session_id: { type: string, format: uuid }, expires_at: { type: string, format: date-time } } }
+    StartGitHubDeviceRequest: { type: object, additionalProperties: false, required: [authorization_session_id, setup_code], properties: { authorization_session_id: { type: string, format: uuid, writeOnly: true }, setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', writeOnly: true } } }
+    GitHubDeviceResponse: { type: object, additionalProperties: false, required: [authorization_session_id, user_code, verification_uri, expires_at, interval_seconds], properties: { authorization_session_id: { type: string, format: uuid }, user_code: { type: string, minLength: 1, maxLength: 64 }, verification_uri: { type: string, format: uri, const: 'https://github.com/login/device' }, expires_at: { type: string, format: date-time }, interval_seconds: { type: integer, minimum: 1, maximum: 300 } } }
+    PollGitHubDeviceRequest: { type: object, additionalProperties: false, required: [authorization_session_id], properties: { authorization_session_id: { type: string, format: uuid, writeOnly: true } } }
+    GitHubPollResponse: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [pending, complete] }, retry_after_seconds: { type: integer, minimum: 1, maximum: 300 }, account: { $ref: '#/components/schemas/Account' } } }
+    BootstrapAdoptionAccount: { type: object, additionalProperties: false, required: [id, created_at], properties: { id: { type: string, format: uuid }, email: { type: [string, 'null'], format: email }, provider: { type: [string, 'null'], enum: [github, null] }, provider_login: { type: [string, 'null'] }, created_at: { type: string, format: date-time } } }
+    BootstrapAdoptionAccountsResponse: { type: object, additionalProperties: false, required: [accounts], properties: { accounts: { type: array, items: { $ref: '#/components/schemas/BootstrapAdoptionAccount' } } } }
+    AdoptInstanceOwnerRequest: { type: object, additionalProperties: false, required: [account_id], properties: { account_id: { type: string, format: uuid } } }
+    AdoptInstanceOwnerResponse: { type: object, additionalProperties: false, required: [status, account_id], properties: { status: { type: string, const: adopted }, account_id: { type: string, format: uuid } } }
     RegisterRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }, organization_name: { type: string, minLength: 2, maxLength: 120 } } }
     LoginRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, writeOnly: true } } }
     AuthVerificationRequest: { type: object, additionalProperties: false, description: Empty JSON object by default; an optional trusted url may receive the tokenized link., properties: { url: { type: string, format: uri, maxLength: 2048 } } }
@@ -2117,14 +2179,14 @@ components:
     CreateProjectAPIKeyRequest: { type: object, additionalProperties: false, required: [name, scopes], properties: { name: { type: string, minLength: 2, maxLength: 120 }, scopes: { type: array, minItems: 1, maxItems: 15, uniqueItems: true, items: { type: string, enum: [users.read, users.write, databases.read, databases.write, storage.read, storage.write, functions.read, functions.write, sites.read, sites.write, webhooks.read, webhooks.write, realtime.read, messaging.read, messaging.write] } }, expires_at: { type: [string, 'null'], format: date-time, description: Optional future expiry, at most 365 days from creation. } } }
     UpdateProjectAuthSettingsRequest: { type: object, additionalProperties: false, minProperties: 1, properties: { registration_enabled: { type: boolean }, cors_origins: { type: array, maxItems: 32, uniqueItems: true, items: { type: string, minLength: 8, maxLength: 2048, pattern: '^(http|https)://[^*/\\s/?#]+(:[0-9]+)?$' } } } }
     Slug: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,62}$' }
-    Account: { type: object, required: [id, email, email_verified, created_at], properties: { id: { type: string, format: uuid }, email: { type: string, format: email }, email_verified: { type: boolean }, instance_role: { type: [string, 'null'], enum: [instance_owner, instance_admin, null], description: Instance-level role; this does not imply organization membership. }, created_at: { type: string, format: date-time } } }
+    Account: { type: object, required: [id, email_verified, created_at], properties: { id: { type: string, format: uuid }, email: { type: [string, 'null'], format: email }, email_verified: { type: boolean }, instance_role: { type: [string, 'null'], enum: [instance_owner, instance_admin, null], description: Instance-level role; this does not imply organization membership. }, provider: { type: [string, 'null'], enum: [github, null] }, provider_user_id: { type: [string, 'null'] }, provider_login: { type: [string, 'null'] }, display_name: { type: [string, 'null'] }, avatar_url: { type: [string, 'null'], format: uri }, created_at: { type: string, format: date-time } } }
     ConsoleSession: { type: object, additionalProperties: false, required: [id, is_current, expires_at, created_at], properties: { id: { type: string, format: uuid }, is_current: { type: boolean }, expires_at: { type: string, format: date-time }, created_at: { type: string, format: date-time } } }
     UpdateAccountPasswordRequest: { type: object, additionalProperties: false, required: [current_password, password], properties: { current_password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true } } }
     Organization: { type: object, required: [id, name, slug, created_at], properties: { id: { type: string, format: uuid }, name: { type: string }, slug: { $ref: '#/components/schemas/Slug' }, created_at: { type: string, format: date-time } } }
     OrganizationPlanLimits: { type: object, additionalProperties: false, required: [projects, members, databases, storage_buckets, functions, sites], properties: { projects: { type: integer, format: int64, minimum: -1 }, members: { type: integer, format: int64, minimum: -1 }, databases: { type: integer, format: int64, minimum: -1 }, storage_buckets: { type: integer, format: int64, minimum: -1 }, functions: { type: integer, format: int64, minimum: -1 }, sites: { type: integer, format: int64, minimum: -1 } }, description: A value of -1 means unlimited. }
     OrganizationPlanUsage: { type: object, additionalProperties: false, required: [projects, members, databases, storage_buckets, functions, sites], properties: { projects: { type: integer, format: int64, minimum: 0 }, members: { type: integer, format: int64, minimum: 0 }, databases: { type: integer, format: int64, minimum: 0 }, storage_buckets: { type: integer, format: int64, minimum: 0 }, functions: { type: integer, format: int64, minimum: 0 }, sites: { type: integer, format: int64, minimum: 0 } } }
     OrganizationPlan: { type: object, additionalProperties: false, required: [organization_id, plan_key, status, current_period_start, current_period_end, limits, usage], properties: { organization_id: { type: string, format: uuid }, plan_key: { type: string, enum: [free, pro, enterprise] }, status: { type: string, enum: [active, past_due, canceled] }, current_period_start: { type: string, format: date }, current_period_end: { type: string, format: date }, limits: { $ref: '#/components/schemas/OrganizationPlanLimits' }, usage: { $ref: '#/components/schemas/OrganizationPlanUsage' } } }
-    Membership: { type: object, required: [organization_id, account_id, email, role, created_at], properties: { organization_id: { type: string, format: uuid }, account_id: { type: string, format: uuid }, email: { type: string, format: email }, role: { type: string, enum: [owner, admin, developer, viewer, billing] }, created_at: { type: string, format: date-time } } }
+    Membership: { type: object, required: [organization_id, account_id, role, created_at], properties: { organization_id: { type: string, format: uuid }, account_id: { type: string, format: uuid }, email: { type: [string, 'null'], format: email, description: Null for provider-only identities without a verified email }, provider: { type: [string, 'null'], enum: [github, null] }, provider_login: { type: [string, 'null'] }, role: { type: string, enum: [owner, admin, developer, viewer, billing] }, created_at: { type: string, format: date-time } } }
     AuditEvent: { type: object, additionalProperties: false, required: [id, organization_id, action, target_type, metadata, created_at], properties: { id: { type: string, format: uuid }, organization_id: { type: string, format: uuid }, actor_account_id: { type: [string, 'null'], format: uuid }, actor_email: { type: [string, 'null'], format: email }, action: { type: string, minLength: 3, maxLength: 120 }, target_type: { type: string, minLength: 3, maxLength: 80 }, target_id: { type: [string, 'null'], format: uuid }, metadata: { type: object, additionalProperties: true }, created_at: { type: string, format: date-time } } }
     Project: { type: object, required: [id, organization_id, name, created_at], properties: { id: { type: string, format: uuid }, organization_id: { type: string, format: uuid }, name: { $ref: '#/components/schemas/Slug' }, created_at: { type: string, format: date-time } } }
     ProjectServiceLayout: { type: object, additionalProperties: false, required: [project_id, resource_type, resource_id, x, y, updated_at], properties: { project_id: { type: string, format: uuid }, resource_type: { type: string, enum: [function, site, database, storage] }, resource_id: { type: string, format: uuid }, x: { type: integer, minimum: -100000, maximum: 100000 }, y: { type: integer, minimum: -100000, maximum: 100000 }, updated_at: { type: string, format: date-time } } }
@@ -2143,7 +2205,6 @@ components:
     Pagination: { type: object, required: [limit, next_cursor], properties: { limit: { type: integer }, next_cursor: { type: [string, 'null'], format: uuid } } }
     ErrorEnvelope: { type: object, additionalProperties: false, required: [error], properties: { error: { type: object, additionalProperties: false, required: [code, message], properties: { code: { type: string }, message: { type: string } } } } }
     AccountResponse: { type: object, required: [account], properties: { account: { $ref: '#/components/schemas/Account' } } }
-    InstanceOwnerResponse: { type: object, additionalProperties: false, required: [account], properties: { account: { $ref: '#/components/schemas/Account' } } }
     AccountSessionsResponse: { type: object, additionalProperties: false, required: [sessions], properties: { sessions: { type: array, items: { $ref: '#/components/schemas/ConsoleSession' } } } }
     RevokedSessionsResponse: { type: object, additionalProperties: false, required: [revoked], properties: { revoked: { type: integer, minimum: 0 } } }
     PasswordUpdateResponse: { type: object, additionalProperties: false, required: [sessions_revoked], properties: { sessions_revoked: { type: integer, minimum: 0 } } }

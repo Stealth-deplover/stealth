@@ -111,7 +111,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")
-	fmt.Fprintln(w, "  stealth setup")
+	fmt.Fprintln(w, "  stealth setup [--adopt-owner]")
 	fmt.Fprintln(w, "  stealth status")
 	fmt.Fprintln(w, "  stealth doctor")
 	fmt.Fprintln(w, "  stealth logs [api|worker|console|proxy|postgres|redis]")

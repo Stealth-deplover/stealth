@@ -15,22 +15,10 @@ CREATE TABLE instance_bootstrap (
   CONSTRAINT instance_bootstrap_sealed_reason CHECK (sealed_at IS NOT NULL OR sealed_reason IS NULL)
 );
 
--- Existing installations are sealed during the migration and their first
--- account becomes the legacy Instance Owner. The ordering is explicit and
--- deterministic: the earliest account creation wins, with the UUID as a
--- stable tie-breaker. This preserves the pre-bootstrap convention that the
--- first account was the installation's control-plane administrator without
--- exposing a new public setup path during upgrade.
-INSERT INTO instance_roles (account_id, role)
-SELECT id, 'instance_owner'
-FROM accounts
-ORDER BY created_at ASC, id ASC
-LIMIT 1;
-
 INSERT INTO instance_bootstrap (id, sealed_at, sealed_reason)
 SELECT TRUE,
        CASE WHEN EXISTS (SELECT 1 FROM accounts) THEN now() ELSE NULL END,
-       CASE WHEN EXISTS (SELECT 1 FROM accounts) THEN 'legacy_first_account' ELSE NULL END;
+       CASE WHEN EXISTS (SELECT 1 FROM accounts) THEN 'legacy_installation' ELSE NULL END;
 
 CREATE TABLE bootstrap_sessions (
   id UUID PRIMARY KEY,

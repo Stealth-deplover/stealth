@@ -105,9 +105,8 @@ services:
     restart: unless-stopped
     environment:
       <<: *backend-environment
-      # Optional for upgraded installations; the API falls back to the
-      # function key when this dedicated local-CLI proof key is absent.
-      BOOTSTRAP_CLI_KEY: "${BOOTSTRAP_CLI_KEY:-}"
+      BOOTSTRAP_CLI_KEY: "${BOOTSTRAP_CLI_KEY:?set BOOTSTRAP_CLI_KEY}"
+      GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:?set GITHUB_APP_CLIENT_ID}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
     ports:

@@ -35,6 +35,13 @@ export function AccountView() {
   });
   const current = account.data?.account;
 
+  const isGitHubIdentity = current?.provider === "github";
+  const identityLabel = current?.email
+    ? current.email
+    : current?.provider_login
+      ? `GitHub @${current.provider_login}`
+      : "Email not provided";
+
   if (account.error)
     return (
       <ErrorState
@@ -69,7 +76,7 @@ export function AccountView() {
             <dl className="space-y-4 text-sm">
               <div>
                 <dt className="text-xs text-slate-600">Email</dt>
-                <dd className="mt-1 text-white">{current.email}</dd>
+                <dd className="mt-1 text-white">{identityLabel}</dd>
               </div>
               <div>
                 <dt className="text-xs text-slate-600">Account ID</dt>
@@ -86,33 +93,43 @@ export function AccountView() {
               <div>
                 <dt className="text-xs text-slate-600">Email verification</dt>
                 <dd className="mt-1 flex flex-wrap items-center gap-2">
-                  <StatusBadge
-                    status={current.email_verified ? "verified" : "warning"}
-                  />
-                  {!current.email_verified ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={sendVerification.isPending}
-                      onClick={() =>
-                        sendVerification.mutate(
-                          {},
-                          {
-                            onSuccess: () =>
-                              toast.success("Verification email sent"),
-                            onError: (error) =>
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Unable to send verification email",
-                              ),
-                          },
-                        )
-                      }
-                    >
-                      {sendVerification.isPending ? "Sending…" : "Send again"}
-                    </Button>
-                  ) : null}
+                  {isGitHubIdentity && !current.email ? (
+                    <span className="text-sm text-slate-400">
+                      Managed by GitHub
+                    </span>
+                  ) : (
+                    <>
+                      <StatusBadge
+                        status={current.email_verified ? "verified" : "warning"}
+                      />
+                      {!current.email_verified ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={sendVerification.isPending}
+                          onClick={() =>
+                            sendVerification.mutate(
+                              {},
+                              {
+                                onSuccess: () =>
+                                  toast.success("Verification email sent"),
+                                onError: (error) =>
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Unable to send verification email",
+                                  ),
+                              },
+                            )
+                          }
+                        >
+                          {sendVerification.isPending
+                            ? "Sending…"
+                            : "Send again"}
+                        </Button>
+                      ) : null}
+                    </>
+                  )}
                 </dd>
               </div>
             </dl>
@@ -132,50 +149,62 @@ export function AccountView() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Change password</CardTitle>
+            <CardTitle>
+              {isGitHubIdentity ? "GitHub sign-in" : "Change password"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={submitPassword} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="current-password">Current password</Label>
-                <Input
-                  id="current-password"
-                  type="password"
-                  required
-                  value={passwords.current_password}
-                  onChange={(event) =>
-                    setPasswords((value) => ({
-                      ...value,
-                      current_password: event.target.value,
-                    }))
-                  }
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="new-password">New password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  minLength={12}
-                  required
-                  value={passwords.password}
-                  onChange={(event) =>
-                    setPasswords((value) => ({
-                      ...value,
-                      password: event.target.value,
-                    }))
-                  }
-                />
-                <p className="text-xs text-slate-600">Minimum 12 characters.</p>
-              </div>
-              <p className="text-xs leading-5 text-slate-500">
-                The Go API keeps the current session and revokes all other
-                Console sessions after a successful change.
+            {isGitHubIdentity ? (
+              <p className="text-sm leading-6 text-slate-400">
+                This account was created through GitHub Device Flow and does not
+                have a local password. Keep the GitHub identity available for
+                future sign-in and recovery work.
               </p>
-              <Button type="submit" disabled={updatePassword.isPending}>
-                {updatePassword.isPending ? "Updating…" : "Update password"}
-              </Button>
-            </form>
+            ) : (
+              <form onSubmit={submitPassword} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="current-password">Current password</Label>
+                  <Input
+                    id="current-password"
+                    type="password"
+                    required
+                    value={passwords.current_password}
+                    onChange={(event) =>
+                      setPasswords((value) => ({
+                        ...value,
+                        current_password: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">New password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    minLength={12}
+                    required
+                    value={passwords.password}
+                    onChange={(event) =>
+                      setPasswords((value) => ({
+                        ...value,
+                        password: event.target.value,
+                      }))
+                    }
+                  />
+                  <p className="text-xs text-slate-600">
+                    Minimum 12 characters.
+                  </p>
+                </div>
+                <p className="text-xs leading-5 text-slate-500">
+                  The Go API keeps the current session and revokes all other
+                  Console sessions after a successful change.
+                </p>
+                <Button type="submit" disabled={updatePassword.isPending}>
+                  {updatePassword.isPending ? "Updating…" : "Update password"}
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -90,7 +90,8 @@ non-interactive TTY handoff and does not run a full production stack.
 
 ## Known limitations
 
-- [ ] Record that CLI upgrade and uninstall commands are not shipped.
+- [ ] Verify the guided `stealth setup` flow on a temporary installation; do
+      not use a production instance during release validation.
 - [ ] Record that the bundled single-host deployment does not claim HA or
   exactly-once external side effects.
 - [ ] Record that Agent provider execution remains queue-only by default.

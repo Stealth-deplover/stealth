@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
@@ -57,19 +57,27 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
+	githubClient := &fakeGitHubClient{device: githubauth.DeviceAuthorization{
+		DeviceCode:      "device-code-test-value",
+		UserCode:        "WDJB-MJHT",
+		VerificationURI: "https://github.com/login/device",
+		ExpiresIn:       15 * time.Minute,
+		PollingInterval: time.Second,
+	}, user: githubauth.User{ID: 424242, Login: "stealth-owner", Email: "owner@example.test", Name: "Stealth Owner", AvatarURL: "https://avatars.githubusercontent.com/u/424242"}}
 	server := httptest.NewServer(httpapi.NewWithDependencies(
 		config.Config{
 			SessionCookieName:        "stealth_session",
 			SessionTTL:               time.Hour,
 			FunctionsSecretKey:       key,
 			BootstrapCLIKey:          key,
+			GitHubAppClientID:        "Iv1.test-client-id",
 			StorageRoot:              t.TempDir(),
 			StorageMaxFileSize:       1 << 20,
 			StorageDefaultQuotaBytes: 2 << 20,
 		},
 		repository.New(pool),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		httpapi.Dependencies{AuthLimiter: ratelimit.NoopLimiter{}},
+		httpapi.Dependencies{AuthLimiter: ratelimit.NoopLimiter{}, GitHubClient: githubClient},
 	))
 	defer server.Close()
 
@@ -86,11 +94,7 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/owner", map[string]string{
-		"setup_code": invalidCode,
-		"email":      "invalid-code@example.test",
-		"password":   "correct-horse-battery-staple",
-	}, nil)
+	invalid := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/verify", map[string]string{"setup_code": invalidCode}, nil)
 	if invalid.StatusCode != http.StatusUnauthorized || !strings.Contains(string(invalid.Body), "invalid_bootstrap_code") {
 		t.Fatalf("invalid code response = %d %q", invalid.StatusCode, invalid.Body)
 	}
@@ -102,11 +106,7 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO bootstrap_sessions (id,code_hash,expires_at) VALUES ($1,$2,$3)`, uuid.Must(uuid.NewV7()), bootstrap.HashCode(expiredCode), time.Now().UTC().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	expired := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/owner", map[string]string{
-		"setup_code": expiredCode,
-		"email":      "expired-code@example.test",
-		"password":   "correct-horse-battery-staple",
-	}, nil)
+	expired := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/verify", map[string]string{"setup_code": expiredCode}, nil)
 	if expired.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expired code status = %d, want 401", expired.StatusCode)
 	}
@@ -114,17 +114,52 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE bootstrap_sessions SET used_at=now() WHERE code_hash=$1`, bootstrap.HashCode(firstSession.SetupCode)); err != nil {
 		t.Fatal(err)
 	}
-	used := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/owner", map[string]string{
-		"setup_code": firstSession.SetupCode,
-		"email":      "used-code@example.test",
-		"password":   "correct-horse-battery-staple",
-	}, nil)
+	used := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/verify", map[string]string{"setup_code": firstSession.SetupCode}, nil)
 	if used.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("used code status = %d, want 401", used.StatusCode)
 	}
 
 	secondSession := createBootstrapSessionForTest(t, client, server.URL, key)
 	assertSetupCodeNotStored(t, pool, secondSession.SetupCode)
+	var verification struct {
+		AuthorizationSessionID string    `json:"authorization_session_id"`
+		ExpiresAt              time.Time `json:"expires_at"`
+	}
+	verified := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/verify", map[string]string{"setup_code": secondSession.SetupCode}, nil)
+	if verified.StatusCode != http.StatusOK {
+		t.Fatalf("verify setup code status = %d %q", verified.StatusCode, verified.Body)
+	}
+	if err := json.Unmarshal(verified.Body, &verification); err != nil {
+		t.Fatal(err)
+	}
+	device := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/github/device", map[string]string{
+		"authorization_session_id": verification.AuthorizationSessionID,
+		"setup_code":               secondSession.SetupCode,
+	}, nil)
+	if device.StatusCode != http.StatusCreated || strings.Contains(string(device.Body), "device-code-test-value") {
+		t.Fatalf("device flow response = %d %q", device.StatusCode, device.Body)
+	}
+	var deviceResponse struct {
+		AuthorizationSessionID string `json:"authorization_session_id"`
+		UserCode               string `json:"user_code"`
+		VerificationURI        string `json:"verification_uri"`
+	}
+	if err := json.Unmarshal(device.Body, &deviceResponse); err != nil {
+		t.Fatal(err)
+	}
+	if deviceResponse.AuthorizationSessionID != verification.AuthorizationSessionID || deviceResponse.UserCode != "WDJB-MJHT" || deviceResponse.VerificationURI != "https://github.com/login/device" {
+		t.Fatalf("unexpected device response = %#v", deviceResponse)
+	}
+	var sealedDeviceCode []byte
+	if err := pool.QueryRow(ctx, `SELECT github_device_code_ciphertext FROM bootstrap_sessions WHERE id=$1`, uuid.MustParse(verification.AuthorizationSessionID)).Scan(&sealedDeviceCode); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sealedDeviceCode, []byte("device-code-test-value")) {
+		t.Fatal("GitHub device code was stored in plaintext")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE bootstrap_sessions SET github_next_poll_at=now() WHERE id=$1`, uuid.MustParse(verification.AuthorizationSessionID)); err != nil {
+		t.Fatal(err)
+	}
 	clients := []*http.Client{newBootstrapClient(t), newBootstrapClient(t)}
 	results := make(chan bootstrapResult, len(clients))
 	start := make(chan struct{})
@@ -134,10 +169,8 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 		go func(index int, ownerClient *http.Client) {
 			defer wait.Done()
 			<-start
-			response, err := bootstrapRequestRaw(ownerClient, http.MethodPost, server.URL+"/v1/bootstrap/owner", map[string]string{
-				"setup_code": secondSession.SetupCode,
-				"email":      fmt.Sprintf("owner-%d@example.test", index),
-				"password":   "correct-horse-battery-staple",
+			response, err := bootstrapRequestRaw(ownerClient, http.MethodPost, server.URL+"/v1/bootstrap/github/poll", map[string]string{
+				"authorization_session_id": verification.AuthorizationSessionID,
 			}, nil)
 			results <- bootstrapResult{client: ownerClient, response: response, err: err}
 		}(index, ownerClient)
@@ -169,11 +202,7 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if status.StatusCode != http.StatusOK || !strings.Contains(string(status.Body), `"setup_required":false`) {
 		t.Fatalf("sealed bootstrap status = %d %q", status.StatusCode, status.Body)
 	}
-	replay := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/owner", map[string]string{
-		"setup_code": secondSession.SetupCode,
-		"email":      "replay@example.test",
-		"password":   "correct-horse-battery-staple",
-	}, nil)
+	replay := bootstrapRequest(t, client, http.MethodPost, server.URL+"/v1/bootstrap/verify", map[string]string{"setup_code": secondSession.SetupCode}, nil)
 	if replay.StatusCode != http.StatusGone {
 		t.Fatalf("replayed code after seal status = %d, want 410", replay.StatusCode)
 	}
@@ -196,9 +225,16 @@ func TestInstanceBootstrapIntegration(t *testing.T) {
 	if sealedReason != "instance_owner_created" {
 		t.Fatalf("bootstrap sealed reason = %q", sealedReason)
 	}
+	var passwordIsNull, emailIsNull bool
+	if err := pool.QueryRow(ctx, `SELECT password_hash IS NULL,email IS NULL FROM accounts WHERE id=(SELECT account_id FROM instance_roles WHERE role='instance_owner')`).Scan(&passwordIsNull, &emailIsNull); err != nil {
+		t.Fatal(err)
+	}
+	if !passwordIsNull || !emailIsNull {
+		t.Fatalf("GitHub owner retained local credentials: password_null=%v email_null=%v", passwordIsNull, emailIsNull)
+	}
 }
 
-func TestLegacyMigrationAssignsDeterministicOwner(t *testing.T) {
+func TestExistingMigrationSealsWithoutAssigningOwner(t *testing.T) {
 	databaseURL := os.Getenv("TEST_BOOTSTRAP_LEGACY_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("set TEST_BOOTSTRAP_LEGACY_DATABASE_URL to run the upgrade migration test")
@@ -248,10 +284,11 @@ func TestLegacyMigrationAssignsDeterministicOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE account_identities`,
 		`DROP TABLE bootstrap_sessions`,
 		`DROP TABLE instance_bootstrap`,
 		`DROP TABLE instance_roles`,
-		`DELETE FROM schema_migrations WHERE name='000039_instance_bootstrap.up.sql'`,
+		`DELETE FROM schema_migrations WHERE name IN ('000039_instance_bootstrap.up.sql','000040_github_instance_bootstrap.up.sql')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -261,12 +298,12 @@ func TestLegacyMigrationAssignsDeterministicOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var ownerID uuid.UUID
-	if err := pool.QueryRow(ctx, `SELECT account_id FROM instance_roles WHERE role='instance_owner'`).Scan(&ownerID); err != nil {
+	var ownerCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM instance_roles WHERE role='instance_owner'`).Scan(&ownerCount); err != nil {
 		t.Fatal(err)
 	}
-	if ownerID != firstID {
-		t.Fatalf("legacy owner = %s, want earliest account %s", ownerID, firstID)
+	if ownerCount != 0 {
+		t.Fatalf("legacy migration assigned %d owner(s); existing installations must require explicit adoption", ownerCount)
 	}
 	var setupRequired bool
 	if err := pool.QueryRow(ctx, `SELECT sealed_at IS NULL FROM instance_bootstrap WHERE id=TRUE`).Scan(&setupRequired); err != nil {
@@ -279,7 +316,7 @@ func TestLegacyMigrationAssignsDeterministicOwner(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT sealed_reason FROM instance_bootstrap WHERE id=TRUE`).Scan(&sealedReason); err != nil {
 		t.Fatal(err)
 	}
-	if sealedReason != "legacy_first_account" {
+	if sealedReason != "legacy_installation" {
 		t.Fatalf("legacy bootstrap reason = %q", sealedReason)
 	}
 	var membershipCount int

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -27,7 +28,7 @@ import (
 const (
 	// Keep this image pinned. Quick Tunnels are a temporary onboarding
 	// transport, not part of the production Compose stack.
-	quickTunnelCloudflaredImage = "cloudflare/cloudflared:2026.9.0"
+	quickTunnelCloudflaredImage = "cloudflare/cloudflared:2026.9.0@sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9"
 	quickTunnelNetwork          = "stealth_network"
 	quickTunnelContainerPrefix  = "stealth-onboarding-"
 	setupPollInterval           = 2 * time.Second
@@ -45,6 +46,18 @@ func (e *bootstrapHTTPError) Error() string {
 
 type bootstrapStatusPayload struct {
 	SetupRequired bool `json:"setup_required"`
+}
+
+type bootstrapAdoptionAccountPayload struct {
+	ID            string    `json:"id"`
+	Email         string    `json:"email"`
+	Provider      string    `json:"provider"`
+	ProviderLogin string    `json:"provider_login"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type bootstrapAdoptionAccountsPayload struct {
+	Accounts []bootstrapAdoptionAccountPayload `json:"accounts"`
 }
 
 type bootstrapSessionPayload struct {
@@ -134,11 +147,13 @@ type setupModel struct {
 func (a *App) runSetup(args []string) int {
 	fs := flag.NewFlagSet("stealth setup", flag.ContinueOnError)
 	fs.SetOutput(a.errOut)
+	adoptOwner := fs.Bool("adopt-owner", false, "assign an existing account as Instance Owner on a legacy installation")
 	fs.Usage = func() {
-		fmt.Fprintln(a.errOut, "Usage: stealth setup")
+		fmt.Fprintln(a.errOut, "Usage: stealth setup [--adopt-owner]")
 		fmt.Fprintln(a.errOut)
 		fmt.Fprintln(a.errOut, "Resume first-run Instance Owner setup for an installed Stealth instance.")
 		fmt.Fprintln(a.errOut, "The setup code expires after 15 minutes and the temporary onboarding tunnel is closed after use.")
+		fmt.Fprintln(a.errOut, "Use --adopt-owner only from the local operator terminal to migrate an existing account.")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -157,7 +172,85 @@ func (a *App) runSetup(args []string) int {
 	}
 	ctx, stop := signalContext()
 	defer stop()
+	if *adoptOwner {
+		return a.runAdoptOwnerWithContext(ctx)
+	}
 	return a.runSetupWithContext(ctx)
+}
+
+func (a *App) runAdoptOwnerWithContext(ctx context.Context) int {
+	layout, err := a.layout()
+	if err != nil {
+		fmt.Fprintf(a.errOut, "cannot determine installation directory: %v\n", err)
+		return 1
+	}
+	if !installationExists(layout) {
+		fmt.Fprintln(a.errOut, "No complete Stealth installation was found. The installation was left unchanged.")
+		return 1
+	}
+	values, err := readEnvFile(layout.EnvFile)
+	if err != nil {
+		fmt.Fprintf(a.errOut, "could not read installation configuration: %v\n", err)
+		return 1
+	}
+	key, err := bootstrapCLIKey(values)
+	if err != nil {
+		fmt.Fprintln(a.errOut, err)
+		return 1
+	}
+	ports := portsFromConfig(values)
+	accounts, err := a.bootstrapAdoptionAccounts(ctx, "http://127.0.0.1:"+ports.API+"/v1/bootstrap/adoption/accounts", key)
+	if err != nil {
+		fmt.Fprintf(a.errOut, "could not list accounts eligible for adoption: %v\n", err)
+		fmt.Fprintln(a.errOut, "The installation and data were left unchanged.")
+		return 1
+	}
+	if len(accounts) == 0 {
+		fmt.Fprintln(a.out, "No existing account is available for Instance Owner adoption.")
+		return 1
+	}
+	fmt.Fprintln(a.out, "Existing installation: choose the account to become the Instance Owner")
+	fmt.Fprintln(a.out)
+	for index, account := range accounts {
+		identity := account.Email
+		if identity == "" && account.ProviderLogin != "" {
+			identity = "GitHub @" + account.ProviderLogin
+		}
+		if identity == "" {
+			identity = "account without email"
+		}
+		fmt.Fprintf(a.out, "  %d. %s  (%s)\n", index+1, identity, account.ID)
+	}
+	fmt.Fprintln(a.out)
+	fmt.Fprintln(a.out, "This assigns a privileged instance-level role; it does not change organization membership.")
+	fmt.Fprintln(a.out, "Type the exact confirmation below to continue. Anything else cancels safely.")
+
+	reader := bufio.NewReader(a.in)
+	fmt.Fprint(a.out, "Confirm with: ADOPT <account-id>\n> ")
+	line, readErr := reader.ReadString('\n')
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		fmt.Fprintf(a.errOut, "could not read confirmation: %v\n", readErr)
+		return 1
+	}
+	confirmation := strings.TrimSpace(line)
+	selectedID := ""
+	for _, account := range accounts {
+		if confirmation == "ADOPT "+account.ID {
+			selectedID = account.ID
+			break
+		}
+	}
+	if selectedID == "" {
+		fmt.Fprintln(a.out, "Adoption cancelled. The installation and data were left unchanged.")
+		return 1
+	}
+	if err := a.adoptBootstrapOwner(ctx, "http://127.0.0.1:"+ports.API+"/v1/bootstrap/adoption/owner", key, selectedID); err != nil {
+		fmt.Fprintf(a.errOut, "Instance Owner adoption failed: %v\n", err)
+		fmt.Fprintln(a.errOut, "The installation and data were left unchanged.")
+		return 1
+	}
+	fmt.Fprintf(a.out, "Instance Owner assigned to account %s.\n", selectedID)
+	return 0
 }
 
 func (a *App) runSetupWithContext(ctx context.Context) int {
@@ -194,6 +287,12 @@ func (a *App) runSetupWithContext(ctx context.Context) int {
 	}
 	if !a.hasInteractiveTerminal() {
 		fmt.Fprintln(a.errOut, "First-run owner setup requires an interactive TTY.")
+		return 1
+	}
+	if err := a.waitForInstallation(ctx, InstallPlan{Layout: layout}); err != nil {
+		fmt.Fprintf(a.errOut, "the local Stealth services are not healthy: %v\n", err)
+		fmt.Fprintln(a.errOut, "No temporary onboarding tunnel was started and the installation was left unchanged.")
+		fmt.Fprintln(a.errOut, "Run `stealth doctor` and retry `stealth setup` after the stack is healthy.")
 		return 1
 	}
 	return a.runSetupTUI(ctx, layout, values, apiURL, "http://127.0.0.1:"+ports.Proxy+"/setup")
@@ -234,8 +333,17 @@ func (a *App) runSetupTUI(ctx context.Context, layout InstallLayout, values map[
 	// The container name is generated locally and is never reused for an
 	// unrelated resource. A final best-effort rm -f closes the race where Ctrl+C
 	// arrives while docker is still creating the temporary container.
-	if final.tunnelStarted && final.containerName != "" && (!final.tunnelClosed || final.cleanupErr != nil) {
-		if cleanupErr := a.closeQuickTunnel(cleanupContext, layout, final.containerName); cleanupErr != nil && final.cleanupErr == nil {
+	containerName := final.containerName
+	tunnelStarted := final.tunnelStarted
+	if startedContainer := model.tunnelState.startedContainer(); startedContainer != "" {
+		// Ctrl+C can arrive while asynchronous preparation is still in flight.
+		// Shared state lets the caller clean up a container that was started but
+		// whose prepared message was not rendered yet.
+		containerName = startedContainer
+		tunnelStarted = true
+	}
+	if tunnelStarted && containerName != "" && (!final.tunnelClosed || final.cleanupErr != nil) {
+		if cleanupErr := a.closeQuickTunnel(cleanupContext, layout, containerName); cleanupErr != nil && final.cleanupErr == nil {
 			final.cleanupErr = cleanupErr
 		}
 	}
@@ -417,7 +525,7 @@ func (m setupModel) View() string {
 		builder.WriteString("Preparing secure onboarding\n\n")
 		builder.WriteString(m.spinner.View() + " Creating a temporary setup session\n")
 		builder.WriteString("○ Temporary onboarding tunnel\n")
-		builder.WriteString("○ Waiting for Instance Owner\n\n")
+		builder.WriteString("○ Waiting for GitHub authorization\n\n")
 		builder.WriteString("The local installation remains unchanged while setup starts.")
 	case setupWaiting:
 		builder.WriteString("Create your Stealth owner\n\n")
@@ -437,8 +545,8 @@ func (m setupModel) View() string {
 		if m.pollError != nil {
 			builder.WriteString("\n" + warningStyle.Render("! Waiting for the API; retrying automatically") + "\n")
 		}
-		builder.WriteString("\nEnter the code on the setup page to create the first Instance Owner.\n")
-		builder.WriteString(m.spinner.View() + " Waiting for Instance Owner…\n\n")
+		builder.WriteString("\nEnter the setup code on the page, then continue with GitHub to create the first Instance Owner.\n")
+		builder.WriteString(m.spinner.View() + " Waiting for GitHub authorization…\n\n")
 		builder.WriteString(renderSubtitle("Ctrl+C cancels safely; data and configuration are preserved."))
 	case setupExpired:
 		builder.WriteString(warningStyle.Render("Setup code expired") + "\n\n")
@@ -515,6 +623,12 @@ func (a *App) prepareSetup(ctx context.Context, layout InstallLayout, values map
 		message.containerName = ""
 		return message
 	}
+	// Record the generated name before Docker is invoked. If Ctrl+C arrives
+	// while docker run or log discovery is still in flight, the caller can
+	// still find and remove this exact temporary container.
+	if tunnelState != nil {
+		tunnelState.markStarted(containerName)
+	}
 	tunnelName, tunnelErr := a.startQuickTunnel(ctx, layout, network, containerName)
 	if tunnelErr != nil {
 		if tunnelName != "" {
@@ -528,9 +642,6 @@ func (a *App) prepareSetup(ctx context.Context, layout InstallLayout, values map
 		message.warning = "the temporary tunnel was unavailable; continue with the local setup URL"
 		message.containerName = ""
 		return message
-	}
-	if tunnelState != nil {
-		tunnelState.markStarted(containerName)
 	}
 	message.tunnelURL = tunnelName
 	return message
@@ -554,6 +665,49 @@ func (a *App) bootstrapStatus(ctx context.Context, endpoint string) (bootstrapSt
 		return bootstrapStatusPayload{}, fmt.Errorf("decode bootstrap status: %w", err)
 	}
 	return payload, nil
+}
+
+func (a *App) bootstrapAdoptionAccounts(ctx context.Context, endpoint string, key []byte) ([]bootstrapAdoptionAccountPayload, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(key))
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, &bootstrapHTTPError{status: response.StatusCode}
+	}
+	var payload bootstrapAdoptionAccountsPayload
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode adoption accounts: %w", err)
+	}
+	return payload.Accounts, nil
+}
+
+func (a *App) adoptBootstrapOwner(ctx context.Context, endpoint string, key []byte, accountID string) error {
+	body, err := json.Marshal(map[string]string{"account_id": accountID})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(key))
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &bootstrapHTTPError{status: response.StatusCode}
+	}
+	return nil
 }
 
 func (a *App) createBootstrapSession(ctx context.Context, endpoint string, key []byte) (bootstrapSessionPayload, error) {
@@ -583,10 +737,7 @@ func (a *App) createBootstrapSession(ctx context.Context, endpoint string, key [
 func bootstrapCLIKey(values map[string]string) ([]byte, error) {
 	raw := strings.TrimSpace(values["BOOTSTRAP_CLI_KEY"])
 	if raw == "" {
-		raw = strings.TrimSpace(values["FUNCTIONS_SECRET_KEY"])
-	}
-	if raw == "" {
-		return nil, fmt.Errorf("installation config has no bootstrap CLI key; preserve config.env and upgrade the installation before retrying")
+		return nil, fmt.Errorf("installation config has no dedicated bootstrap CLI key; add BOOTSTRAP_CLI_KEY before retrying (FUNCTIONS_SECRET_KEY cannot be reused)")
 	}
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {

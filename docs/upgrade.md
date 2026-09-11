@@ -39,11 +39,22 @@ docker compose --env-file .env.production -f compose.production.yaml up -d --for
 The migration runner is deterministic and protected by a PostgreSQL advisory
 lock. It fails loudly; it does not perform destructive automatic rollback.
 
-When upgrading an installation that already has accounts, migration assigns
-the earliest account by `created_at` (UUID tie-breaker) the explicit
-`instance_owner` role and seals first-run bootstrap. This deterministic rule
-prevents an existing deployment from unexpectedly exposing `/setup`; stop or
-coordinate the old application processes before applying migrations.
+When upgrading an installation that already has accounts, migration seals
+public first-owner bootstrap as `legacy_installation` without assigning an
+arbitrary account the privileged `instance_owner` role. This prevents an
+existing deployment from unexpectedly exposing `/setup`. After the API is
+healthy, a local operator may review and explicitly adopt an account:
+
+```bash
+stealth setup --adopt-owner
+```
+
+The command requires the dedicated `BOOTSTRAP_CLI_KEY`, lists existing account
+identities locally, and requires the exact `ADOPT <account-id>` confirmation.
+The assignment is audited and does not grant organization membership. Add the
+dedicated `BOOTSTRAP_CLI_KEY` and `GITHUB_APP_CLIENT_ID` to `config.env` before
+starting an upgraded API; neither falls back to `FUNCTIONS_SECRET_KEY`.
+Stop or coordinate the old application processes before applying migrations.
 
 ## Rollback boundary
 

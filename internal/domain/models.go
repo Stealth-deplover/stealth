@@ -7,12 +7,17 @@ import (
 
 type Account struct {
 	ID            string `json:"id"`
-	Email         string `json:"email"`
+	Email         string `json:"email,omitempty"`
 	EmailVerified bool   `json:"email_verified"`
 	// InstanceRole is intentionally separate from organization membership. An
 	// instance owner is not implicitly a member of every organization.
-	InstanceRole string    `json:"instance_role,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	InstanceRole   string    `json:"instance_role,omitempty"`
+	Provider       string    `json:"provider,omitempty"`
+	ProviderUserID string    `json:"provider_user_id,omitempty"`
+	ProviderLogin  string    `json:"provider_login,omitempty"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	AvatarURL      string    `json:"avatar_url,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // ConsoleSession is the safe, non-secret projection of a Console session.
@@ -66,7 +71,9 @@ type OrganizationPlanUsage struct {
 type Membership struct {
 	OrganizationID string    `json:"organization_id"`
 	AccountID      string    `json:"account_id"`
-	Email          string    `json:"email"`
+	Email          *string   `json:"email,omitempty"`
+	Provider       string    `json:"provider,omitempty"`
+	ProviderLogin  string    `json:"provider_login,omitempty"`
 	Role           string    `json:"role"`
 	CreatedAt      time.Time `json:"created_at"`
 }

@@ -87,7 +87,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/bootstrap/owner": {
+    "/v1/bootstrap/verify": {
         parameters: {
             query?: never;
             header?: never;
@@ -96,8 +96,76 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Consume the current one-time setup code and create the first instance-level owner plus a normal HttpOnly Console session. The setup code must be sent in the JSON body, never in a URL. */
-        post: operations["createInstanceOwner"];
+        /** @description Verify the one-time code from the local Stealth CLI and issue an opaque authorization-session identifier. This does not create an owner. */
+        post: operations["verifyBootstrapCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/github/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start the GitHub App Device Flow after the local Stealth setup code has been verified. The GitHub device_code remains server-side and is never returned. */
+        post: operations["startBootstrapGitHubDeviceFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/github/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Poll the server-owned GitHub Device Flow. The API respects GitHub's polling interval and creates a normal Stealth session only after verifying the GitHub identity. */
+        post: operations["pollBootstrapGitHubDeviceFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/adoption/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List existing accounts eligible for explicit local operator adoption. This endpoint is authenticated only by the dedicated local CLI proof and is never used by the public setup page. */
+        get: operations["listBootstrapAdoptionAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/adoption/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Assign the instance_owner role to a specifically selected existing account. This is a local operator migration path for upgraded installations, not public first-run setup. */
+        post: operations["adoptBootstrapOwner"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2033,11 +2101,66 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
         };
-        CreateInstanceOwnerRequest: {
+        VerifyBootstrapCodeRequest: {
             setup_code: string;
+        };
+        BootstrapVerificationResponse: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        StartGitHubDeviceRequest: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            setup_code: string;
+        };
+        GitHubDeviceResponse: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            user_code: string;
+            /**
+             * Format: uri
+             * @constant
+             */
+            verification_uri: "https://github.com/login/device";
+            /** Format: date-time */
+            expires_at: string;
+            interval_seconds: number;
+        };
+        PollGitHubDeviceRequest: {
+            /** Format: uuid */
+            authorization_session_id: string;
+        };
+        GitHubPollResponse: {
+            /** @enum {string} */
+            status: GitHubPollResponseStatus;
+            retry_after_seconds?: number;
+            account?: components["schemas"]["Account"];
+        };
+        BootstrapAdoptionAccount: {
+            /** Format: uuid */
+            id: string;
             /** Format: email */
-            email: string;
-            password: string;
+            email?: string | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_login?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        BootstrapAdoptionAccountsResponse: {
+            accounts: components["schemas"]["BootstrapAdoptionAccount"][];
+        };
+        AdoptInstanceOwnerRequest: {
+            /** Format: uuid */
+            account_id: string;
+        };
+        AdoptInstanceOwnerResponse: {
+            /** @constant */
+            status: "adopted";
+            /** Format: uuid */
+            account_id: string;
         };
         RegisterRequest: {
             /** Format: email */
@@ -2146,13 +2269,20 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** Format: email */
-            email: string;
+            email?: string | null;
             email_verified: boolean;
             /**
              * @description Instance-level role; this does not imply organization membership.
              * @enum {string|null}
              */
             instance_role?: "instance_owner" | "instance_admin" | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_user_id?: string | null;
+            provider_login?: string | null;
+            display_name?: string | null;
+            /** Format: uri */
+            avatar_url?: string | null;
             /** Format: date-time */
             created_at: string;
         };
@@ -2225,8 +2355,14 @@ export interface components {
             organization_id: string;
             /** Format: uuid */
             account_id: string;
-            /** Format: email */
-            email: string;
+            /**
+             * Format: email
+             * @description Null for provider-only identities without a verified email
+             */
+            email?: string | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_login?: string | null;
             /** @enum {string} */
             role: MembershipRole;
             /** Format: date-time */
@@ -2388,9 +2524,6 @@ export interface components {
             };
         };
         AccountResponse: {
-            account: components["schemas"]["Account"];
-        };
-        InstanceOwnerResponse: {
             account: components["schemas"]["Account"];
         };
         AccountSessionsResponse: {
@@ -4074,6 +4207,15 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /** @description GitHub or another upstream authorization provider is unavailable or returned an invalid response */
+        BadGateway: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description Internal server error */
         InternalError: {
             headers: {
@@ -4297,7 +4439,7 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    createInstanceOwner: {
+    verifyBootstrapCode: {
         parameters: {
             query?: never;
             header?: never;
@@ -4306,17 +4448,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateInstanceOwnerRequest"];
+                "application/json": components["schemas"]["VerifyBootstrapCodeRequest"];
             };
         };
         responses: {
-            /** @description First Instance Owner and authenticated session created */
-            201: {
+            /** @description Setup code accepted for the next bootstrap step */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["InstanceOwnerResponse"];
+                    "application/json": components["schemas"]["BootstrapVerificationResponse"];
                 };
             };
             /** @description Setup code is invalid */
@@ -4328,13 +4470,135 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    startBootstrapGitHubDeviceFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartGitHubDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description GitHub user code for browser authorization */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubDeviceResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    pollBootstrapGitHubDeviceFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollGitHubDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description Authorization is still pending */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubPollResponse"];
+                };
+            };
+            /** @description First Instance Owner and authenticated session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubPollResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             410: components["responses"]["BootstrapComplete"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            422: components["responses"]["ValidationError"];
             429: components["responses"]["RateLimited"];
-            503: components["responses"]["ServiceUnavailable"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    listBootstrapAdoptionAccounts: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Existing accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapAdoptionAccountsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adoptBootstrapOwner: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptInstanceOwnerRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing account adopted as Instance Owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptInstanceOwnerResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     registerAccount: {
@@ -4416,6 +4680,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -4587,6 +4852,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
@@ -9968,6 +10234,10 @@ export enum PathsV1ProjectsProjectIDDatabasesDatabaseIDTablesTableIDExportGetPar
 export enum StatusStatus {
     ok = "ok",
     ready = "ready"
+}
+export enum GitHubPollResponseStatus {
+    pending = "pending",
+    complete = "complete"
 }
 export enum CreateOrganizationMembershipRequestRole {
     admin = "admin",
