@@ -145,15 +145,15 @@ func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if !s.allowBootstrapAttempt(w, r, strings.TrimSpace(req.AuthorizationSessionID)) {
+	sessionID, sessionErr := uuid.Parse(strings.TrimSpace(req.AuthorizationSessionID))
+	if !s.allowBootstrapAttempt(w, r, bootstrapSessionRateLimitDimension(req.AuthorizationSessionID)) {
 		return
 	}
 	if !s.bootstrapConfigured() {
 		writeBootstrapError(w, http.StatusServiceUnavailable, "github_not_configured", "GitHub first-owner authentication is not configured")
 		return
 	}
-	sessionID, err := uuid.Parse(strings.TrimSpace(req.AuthorizationSessionID))
-	if err != nil || !bootstrap.ValidCode(req.SetupCode) {
+	if sessionErr != nil || !bootstrap.ValidCode(req.SetupCode) {
 		writeBootstrapError(w, http.StatusUnauthorized, "invalid_bootstrap_code", "invalid, expired, or already used setup code")
 		return
 	}
@@ -486,6 +486,14 @@ func (s *Server) bootstrapConfigured() bool {
 
 func (s *Server) bootstrapCLIKey() []byte {
 	return s.config.BootstrapCLIKey
+}
+
+func bootstrapSessionRateLimitDimension(raw string) string {
+	sessionID, err := uuid.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return sessionID.String()
 }
 
 func (s *Server) allowBootstrapAttempt(w http.ResponseWriter, r *http.Request, dimension string) bool {

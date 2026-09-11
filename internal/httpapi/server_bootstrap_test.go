@@ -13,6 +13,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/google/uuid"
 )
 
 func TestBootstrapRateLimitUsesIPAndSessionBuckets(t *testing.T) {
@@ -62,6 +63,16 @@ func TestBootstrapUsesDedicatedKeyWithoutFunctionsFallback(t *testing.T) {
 	server.config.BootstrapCLIKey = nil
 	if got := server.bootstrapCLIKey(); len(got) != 0 {
 		t.Fatalf("missing dedicated key returned %q; FunctionsSecretKey must not be reused", got)
+	}
+}
+
+func TestBootstrapSessionRateLimitDimensionCanonicalizesUUID(t *testing.T) {
+	id := uuid.MustParse("019c0000-0000-7000-8000-000000000001")
+	if got := bootstrapSessionRateLimitDimension("  " + strings.ToUpper(id.String()) + "  "); got != id.String() {
+		t.Fatalf("canonical session dimension = %q, want %q", got, id.String())
+	}
+	if got := bootstrapSessionRateLimitDimension(strings.Repeat("x", 1<<20)); got != "" {
+		t.Fatalf("invalid session dimension = %q, want empty", got)
 	}
 }
 
