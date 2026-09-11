@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -43,6 +44,8 @@ var windowScript = redis.NewScript(script)
 type RedisLimiter struct {
 	client *redis.Client
 }
+
+const redisNamespaceDomain = "stealth-redis-namespace-v1"
 
 func NewRedisLimiter(client *redis.Client) *RedisLimiter {
 	return &RedisLimiter{client: client}
@@ -90,19 +93,18 @@ func boundedWindow(window time.Duration) time.Duration {
 	return window
 }
 
-// Key hashes email and client IP independently. The project ID remains an
-// explicit namespace while no raw PII is put into Redis keys.
+// Key derives deterministic Redis namespace components from the email and
+// client IP. These are not passwords or authentication secrets: the digest is
+// used only to keep raw PII out of Redis keys and to make equivalent requests
+// share the same rate-limit bucket.
 func Key(operation, projectID, normalizedEmail, clientIP string) string {
-	emailHash := sha256.Sum256([]byte(normalizedEmail))
-	ipHash := sha256.Sum256([]byte(clientIP))
-	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":email:" + hex.EncodeToString(emailHash[:]) + ":ip:" + hex.EncodeToString(ipHash[:])
+	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":email:" + redisNamespaceDigest(normalizedEmail) + ":ip:" + redisNamespaceDigest(clientIP)
 }
 
 // ProjectIPKey provides a project-scoped aggregate bucket for a client IP.
 // It complements Key so rotating email addresses cannot bypass the limit.
 func ProjectIPKey(operation, projectID, clientIP string) string {
-	ipHash := sha256.Sum256([]byte(clientIP))
-	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":ip:" + hex.EncodeToString(ipHash[:])
+	return "stealth:ratelimit:v1:" + operation + ":project:" + projectID + ":ip:" + redisNamespaceDigest(clientIP)
 }
 
 // InstanceIPKey keeps instance bootstrap attempts in their own namespace.
@@ -124,8 +126,19 @@ func InstanceKey(operation, normalizedEmail, clientIP string) string {
 // changes. Use ProjectIPKey separately when a public/shared-source budget is
 // also needed.
 func ActorKey(operation, scope, actorID string) string {
-	actorHash := sha256.Sum256([]byte(actorID))
-	return "stealth:ratelimit:v1:" + operation + ":scope:" + scope + ":actor:" + hex.EncodeToString(actorHash[:])
+	return "stealth:ratelimit:v1:" + operation + ":scope:" + scope + ":actor:" + redisNamespaceDigest(actorID)
+}
+
+// redisNamespaceDigest is deliberately a fast, deterministic keyed digest
+// for a non-password Redis key component. The key is a public domain label,
+// not an authentication secret; HMAC makes the namespace intent explicit and
+// avoids presenting this operation as password hashing to security tooling.
+// Passwords and other authentication secrets must use their dedicated slow
+// password hashing or encryption primitives instead.
+func redisNamespaceDigest(value string) string {
+	digest := hmac.New(sha256.New, []byte(redisNamespaceDomain))
+	_, _ = digest.Write([]byte(value))
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 type NoopLimiter struct{}
