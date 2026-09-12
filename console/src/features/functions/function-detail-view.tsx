@@ -23,7 +23,6 @@ import type {
   FunctionExecution,
   FunctionVariable,
 } from "@/api/types";
-import type { CreateFunctionVariableRequestKind } from "@/api/generated/schema";
 import { DataTable } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -45,6 +44,11 @@ import {
 } from "@/lib/deployment-state";
 import { pageControls } from "@/lib/pagination";
 import { BackLink } from "@/features/resources/detail-shared";
+import {
+  functionVariableFields,
+  functionVariablePayload,
+  type FunctionVariableFormValues,
+} from "@/features/functions/function-variable-form";
 
 function FunctionVariablesPanel({
   projectId,
@@ -60,21 +64,8 @@ function FunctionVariablesPanel({
   const create = useCreateFunctionVariable(projectId, functionId);
   const remove = useDeleteFunctionVariable(projectId, functionId);
   const canManage = query.data?.can_manage === true;
-  const handleCreateVariable = async (values: Record<string, string>) => {
-    const kind =
-      values.kind === "secret"
-        ? "secret"
-        : values.kind === "variable"
-          ? "variable"
-          : null;
-    if (!kind) throw new Error("Kind must be variable or secret.");
-    await create.mutateAsync({
-      key: values.key,
-      value: values.value,
-      kind: kind as CreateFunctionVariableRequestKind,
-      is_secret: kind === "secret",
-      description: values.description || undefined,
-    });
+  const handleCreateVariable = async (values: FunctionVariableFormValues) => {
+    await create.mutateAsync(functionVariablePayload(values));
     toast.success("Environment variable added");
   };
   const columns: ColumnDef<FunctionVariable, unknown>[] = [
@@ -144,23 +135,13 @@ function FunctionVariablesPanel({
           </p>
         </div>
         {canManage ? (
-          <CreateDialog
+          <CreateDialog<FunctionVariableFormValues>
             triggerLabel="Add variable"
             submitLabel="Add variable"
             pendingLabel="Adding variable…"
             title="Add environment variable"
             description="The value is encrypted by the Go API and cannot be recovered after submission."
-            fields={[
-              { name: "key", label: "Key", placeholder: "DATABASE_URL" },
-              { name: "value", label: "Value", type: "password" },
-              {
-                name: "kind",
-                label: "Kind",
-                defaultValue: "variable",
-                help: "Use variable or secret. Secret values are marked as sensitive.",
-              },
-              { name: "description", label: "Description", required: false },
-            ]}
+            fields={functionVariableFields}
             pending={create.isPending}
             onSubmit={handleCreateVariable}
           />

@@ -22,7 +22,11 @@ import { Card } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-import { parseCommaSeparatedValues } from "@/features/integrations/integration-values";
+import {
+  webhookFields,
+  webhookPayload,
+  type WebhookFormValues,
+} from "@/features/webhooks/webhook-form";
 
 export function WebhooksView({
   organizationId,
@@ -42,13 +46,8 @@ export function WebhooksView({
   const webhooks = query.data?.webhooks ?? [];
   const canManage = query.data?.can_manage === true;
 
-  const handleCreateWebhook = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: values.name.trim(),
-      url: values.url.trim(),
-      events: parseCommaSeparatedValues(values.events),
-      enabled: values.enabled !== "false",
-    });
+  const handleCreateWebhook = async (values: WebhookFormValues) => {
+    const result = await create.mutateAsync(webhookPayload(values));
     const secretResult = result as
       components["schemas"]["WebhookSecretResponse"] | undefined;
     if (secretResult?.secret) {
@@ -138,7 +137,7 @@ export function WebhooksView({
         description="Deliver platform events to HTTPS endpoints and inspect delivery metadata."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<WebhookFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create webhook"
@@ -146,36 +145,7 @@ export function WebhooksView({
               pendingLabel="Creating webhook…"
               title="Create a webhook"
               description="Copy the signing secret before closing this dialog. Stealth will not show it again."
-              fields={[
-                {
-                  name: "name",
-                  label: "Name",
-                  placeholder: "production-events",
-                },
-                {
-                  name: "url",
-                  label: "HTTPS URL",
-                  type: "url",
-                  placeholder: "https://example.com/hooks",
-                },
-                {
-                  name: "events",
-                  label: "Events",
-                  required: false,
-                  defaultValue: "*",
-                  help: "Comma-separated event names, or * for all. The Go API validates event names.",
-                },
-                {
-                  name: "enabled",
-                  label: "State",
-                  type: "select",
-                  defaultValue: "true",
-                  options: [
-                    { value: "true", label: "Enabled" },
-                    { value: "false", label: "Disabled" },
-                  ],
-                },
-              ]}
+              fields={webhookFields()}
               pending={create.isPending}
               onSubmit={handleCreateWebhook}
             />

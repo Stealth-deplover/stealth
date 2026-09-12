@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { type ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
-import { CreateProjectAPIKeyRequestScopes } from "@/api/generated/schema";
 import { useCreateAPIKey, useRevokeAPIKey } from "@/api/mutations";
 import { nextCursor } from "@/api/pagination";
 import { useProjectAPIKeys } from "@/api/queries";
@@ -24,18 +23,15 @@ import { Card } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import {
   formatAPIKeyScope,
-  parseCommaSeparatedValues,
 } from "@/features/integrations/integration-values";
 import { getApiKeyStatus } from "@/features/api-keys/api-key-status";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-
-const scopeOptions = Object.values(CreateProjectAPIKeyRequestScopes).map(
-  (scope) => ({
-    value: scope,
-    label: formatAPIKeyScope(scope),
-  }),
-);
+import {
+  apiKeyFields,
+  apiKeyPayload,
+  type APIKeyFormValues,
+} from "@/features/api-keys/api-key-form";
 
 function APIKeyRevokeAction({
   projectId,
@@ -82,21 +78,8 @@ export function APIKeysView({
   const keys = query.data?.keys ?? [];
   const canManage = query.data?.can_manage === true;
 
-  const handleCreateAPIKey = async (values: Record<string, string>) => {
-    const scopes = parseCommaSeparatedValues(
-      values.scopes,
-    ) as components["schemas"]["CreateProjectAPIKeyRequest"]["scopes"];
-    if (!scopes.length) throw new Error("Select at least one permission.");
-    const expiresAt = values.expires_at
-      ? new Date(values.expires_at)
-      : undefined;
-    if (expiresAt && Number.isNaN(expiresAt.valueOf()))
-      throw new Error("Enter a valid expiry date.");
-    const result = await create.mutateAsync({
-      name: values.name.trim(),
-      scopes,
-      expires_at: expiresAt?.toISOString() ?? null,
-    });
+  const handleCreateAPIKey = async (values: APIKeyFormValues) => {
+    const result = await create.mutateAsync(apiKeyPayload(values));
     const keyResult = result as
       components["schemas"]["CreateProjectAPIKeyResponse"] | undefined;
     if (keyResult?.secret) {
@@ -183,7 +166,7 @@ export function APIKeysView({
         description="Project-bound keys authenticate integrations. Secrets are shown once by the Go API and never persisted by this UI."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<APIKeyFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create API key"
@@ -191,23 +174,7 @@ export function APIKeysView({
               pendingLabel="Creating API key…"
               title="Create an API key"
               description="Copy the secret before closing this dialog. Stealth will not show it again."
-              fields={[
-                { name: "name", label: "Name", placeholder: "CI deploy key" },
-                {
-                  name: "scopes",
-                  label: "Permissions",
-                  type: "multiselect",
-                  options: scopeOptions,
-                  help: "Select the exact API scopes this integration needs. Read and write access are separate permissions.",
-                },
-                {
-                  name: "expires_at",
-                  label: "Expires at",
-                  type: "datetime-local",
-                  required: false,
-                  help: "Optional. The Go API accepts future expiries within its configured limit.",
-                },
-              ]}
+              fields={apiKeyFields()}
               pending={create.isPending}
               onSubmit={handleCreateAPIKey}
             />
