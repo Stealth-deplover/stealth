@@ -15,3 +15,8 @@ composition roots. Domain-specific loaders own their environment parsing and
 constraints, then apply a complete validated slice to that snapshot. The
 execution loader owns function and agent runner settings; it must preserve the
 existing defaults and production credential gates.
+
+The database loader owns the required `DATABASE_URL`, pool bounds, and
+connection lifetime settings. Other configuration domains should follow the
+same loader-and-apply boundary instead of adding parsing branches to
+`config.Load`.

@@ -117,25 +117,13 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	databaseSettings, err := loadDatabaseSettings()
+	if err != nil {
+		return Config{}, err
+	}
 	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
 	if err != nil {
 		return Config{}, err
-	}
-	databaseMaxConns, err := boundedInt32("DATABASE_MAX_CONNS", "16", 1, 256)
-	if err != nil {
-		return Config{}, err
-	}
-	databaseMinConns, err := boundedInt32("DATABASE_MIN_CONNS", "2", 0, databaseMaxConns)
-	if err != nil {
-		return Config{}, err
-	}
-	databaseMaxConnLifetime, err := time.ParseDuration(value("DATABASE_MAX_CONN_LIFETIME", "1h"))
-	if err != nil || databaseMaxConnLifetime <= 0 || databaseMaxConnLifetime > 7*24*time.Hour {
-		return Config{}, fmt.Errorf("DATABASE_MAX_CONN_LIFETIME must be a positive duration no longer than 168h")
-	}
-	databaseMaxConnIdleTime, err := time.ParseDuration(value("DATABASE_MAX_CONN_IDLE_TIME", "30m"))
-	if err != nil || databaseMaxConnIdleTime <= 0 || databaseMaxConnIdleTime > 7*24*time.Hour {
-		return Config{}, fmt.Errorf("DATABASE_MAX_CONN_IDLE_TIME must be a positive duration no longer than 168h")
 	}
 	metricsToken := strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
 	if len(metricsToken) > 256 || strings.IndexFunc(metricsToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
@@ -333,11 +321,6 @@ func Load() (Config, error) {
 		}
 	}
 	config := Config{
-		DatabaseURL:                strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DatabaseMaxConns:           int32(databaseMaxConns),
-		DatabaseMinConns:           int32(databaseMinConns),
-		DatabaseMaxConnLifetime:    databaseMaxConnLifetime,
-		DatabaseMaxConnIdleTime:    databaseMaxConnIdleTime,
 		RedisURL:                   value("REDIS_URL", "redis://127.0.0.1:6379/0"),
 		HTTPAddress:                value("HTTP_ADDR", ":8080"),
 		MetricsToken:               metricsToken,
@@ -392,13 +375,11 @@ func Load() (Config, error) {
 		TelemetrySampleRatio:       telemetrySampleRatio,
 		AgentProviderCatalog:       agentProviderCatalog,
 	}
+	databaseSettings.apply(&config)
 	executionSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
-	}
-	if config.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 	return config, nil
 }

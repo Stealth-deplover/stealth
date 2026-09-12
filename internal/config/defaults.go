@@ -12,24 +12,7 @@ import (
 // tests and embedded API setups. Derived limits are applied in dependency
 // order, so the storage defaults feed the Functions/Sites limits.
 func (c Config) WithDefaults() Config {
-	if c.DatabaseMaxConns <= 0 {
-		c.DatabaseMaxConns = 16
-	}
-	if c.DatabaseMaxConns > 256 {
-		c.DatabaseMaxConns = 256
-	}
-	if c.DatabaseMinConns < 0 {
-		c.DatabaseMinConns = 0
-	}
-	if c.DatabaseMinConns > c.DatabaseMaxConns {
-		c.DatabaseMinConns = c.DatabaseMaxConns
-	}
-	if c.DatabaseMaxConnLifetime <= 0 {
-		c.DatabaseMaxConnLifetime = time.Hour
-	}
-	if c.DatabaseMaxConnIdleTime <= 0 {
-		c.DatabaseMaxConnIdleTime = 30 * time.Minute
-	}
+	c.applyDatabaseDefaults()
 	if c.SessionTTL <= 0 {
 		c.SessionTTL = 720 * time.Hour
 	}
