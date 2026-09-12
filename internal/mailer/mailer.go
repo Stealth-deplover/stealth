@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/smtp"
 	"strings"
@@ -156,9 +157,13 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	if err != nil {
 		return fmt.Errorf("open smtp message: %w", err)
 	}
+	// The SMTP envelope above already carries the recipient. Do not copy the
+	// request-derived address into the message headers. The subject is encoded
+	// as a MIME encoded-word after validation so it cannot become a header
+	// continuation or a second header.
+	encodedSubject := mime.QEncoding.Encode("UTF-8", message.Subject)
 	headers := "From: " + s.From + "\r\n" +
-		"To: " + message.To + "\r\n" +
-		"Subject: " + message.Subject + "\r\n" +
+		"Subject: " + encodedSubject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
 		"Content-Transfer-Encoding: base64\r\n\r\n"

@@ -194,6 +194,9 @@ func TestSMTPSenderQuotesDynamicPlainTextBody(t *testing.T) {
 	if !strings.Contains(headerAndBody[0], "Content-Transfer-Encoding: base64") {
 		t.Fatalf("SMTP headers did not select base64 encoding: %q", headerAndBody[0])
 	}
+	if strings.Contains(headerAndBody[0], "To:") || strings.Contains(headerAndBody[0], "Bcc:") {
+		t.Fatalf("SMTP headers copied the recipient into message headers: %q", headerAndBody[0])
+	}
 	decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, strings.NewReader(headerAndBody[1])))
 	if err != nil {
 		t.Fatal(err)
