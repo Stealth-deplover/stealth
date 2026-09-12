@@ -95,11 +95,21 @@ func verifySHA256(contents []byte, expected string) error {
 }
 
 func checksumForAsset(checksums, asset string) (string, error) {
+	var found string
 	for _, line := range strings.Split(checksums, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == asset {
-			return fields[0], nil
+			if len(fields) != 2 {
+				return "", fmt.Errorf("checksum entry for %s is malformed", asset)
+			}
+			if found != "" {
+				return "", fmt.Errorf("checksum for %s is duplicated", asset)
+			}
+			found = fields[0]
 		}
+	}
+	if found != "" {
+		return found, nil
 	}
 	return "", fmt.Errorf("checksum for %s was not found", asset)
 }
