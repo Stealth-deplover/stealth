@@ -206,14 +206,6 @@ func Load() (Config, error) {
 	if err != nil || storageDefaultQuota < 1 {
 		return Config{}, fmt.Errorf("STORAGE_DEFAULT_QUOTA_BYTES must be a positive byte quantity")
 	}
-	functionsMaxArtifactSize, err := parseBytes(value("FUNCTIONS_MAX_ARTIFACT_SIZE", "50MiB"))
-	if err != nil || functionsMaxArtifactSize < 1 {
-		return Config{}, fmt.Errorf("FUNCTIONS_MAX_ARTIFACT_SIZE must be a positive byte quantity")
-	}
-	functionsDefaultQuota, err := parseBytes(value("FUNCTIONS_DEFAULT_QUOTA_BYTES", "1GiB"))
-	if err != nil || functionsDefaultQuota < 1 {
-		return Config{}, fmt.Errorf("FUNCTIONS_DEFAULT_QUOTA_BYTES must be a positive byte quantity")
-	}
 	sitesMaxArtifactSize, err := parseBytes(value("SITES_MAX_ARTIFACT_SIZE", "50MiB"))
 	if err != nil || sitesMaxArtifactSize < 1 {
 		return Config{}, fmt.Errorf("SITES_MAX_ARTIFACT_SIZE must be a positive byte quantity")
@@ -234,47 +226,9 @@ func Load() (Config, error) {
 	if err != nil || sitesGitFetchConcurrency < 1 || sitesGitFetchConcurrency > 32 {
 		return Config{}, fmt.Errorf("SITES_GIT_FETCH_CONCURRENCY must be an integer between 1 and 32")
 	}
-	runnerEnabled, err := strconv.ParseBool(value("FUNCTIONS_RUNNER_ENABLED", "true"))
+	executionSettings, err := loadExecutionSettings()
 	if err != nil {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_ENABLED must be true or false")
-	}
-	runnerPoll, err := time.ParseDuration(value("FUNCTIONS_RUNNER_POLL", "500ms"))
-	if err != nil || runnerPoll <= 0 || runnerPoll > time.Minute {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_POLL must be a positive duration no longer than 1m")
-	}
-	runnerLeaseAge, err := time.ParseDuration(value("FUNCTIONS_RUNNER_LEASE_AGE", "20m"))
-	if err != nil || runnerLeaseAge < time.Minute || runnerLeaseAge > 24*time.Hour {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_LEASE_AGE must be between 1m and 24h")
-	}
-	runnerBuildTimeout, err := time.ParseDuration(value("FUNCTIONS_RUNNER_BUILD_TIMEOUT", "15m"))
-	if err != nil || runnerBuildTimeout < time.Minute || runnerBuildTimeout > 24*time.Hour {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_BUILD_TIMEOUT must be between 1m and 24h")
-	}
-	agentRunnerEnabled, err := strconv.ParseBool(value("AGENT_RUNNER_ENABLED", "false"))
-	if err != nil {
-		return Config{}, fmt.Errorf("AGENT_RUNNER_ENABLED must be true or false")
-	}
-	agentRunnerExecutionTimeout, err := time.ParseDuration(value("AGENT_RUNNER_EXECUTION_TIMEOUT", "15m"))
-	if err != nil || agentRunnerExecutionTimeout < time.Minute || agentRunnerExecutionTimeout > 24*time.Hour {
-		return Config{}, fmt.Errorf("AGENT_RUNNER_EXECUTION_TIMEOUT must be between 1m and 24h")
-	}
-	workerID := value("FUNCTIONS_WORKER_ID", "")
-	if workerID == "" {
-		workerID, _ = os.Hostname()
-	}
-	if workerID == "" {
-		workerID = "stealth-worker"
-	}
-	if len(workerID) > 128 || !isWorkerID(workerID) {
-		return Config{}, fmt.Errorf("FUNCTIONS_WORKER_ID must contain only letters, numbers, dots, underscores, or hyphens")
-	}
-	stagingVolume := value("FUNCTIONS_RUNNER_STAGING_VOLUME", "stealth-function-runner-staging")
-	if len(stagingVolume) > 255 || !isDockerName(stagingVolume) {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_VOLUME must be a valid Docker volume name")
-	}
-	workerMetricsAddress := value("FUNCTIONS_RUNNER_METRICS_ADDR", "127.0.0.1:9091")
-	if !isListenAddress(workerMetricsAddress) {
-		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_METRICS_ADDR must be a TCP host:port with a port between 1 and 65535")
+		return Config{}, err
 	}
 	telemetryEndpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if telemetryEndpoint != "" {
@@ -291,17 +245,6 @@ func Load() (Config, error) {
 	agentProviderCatalog, err := parseAgentProviderCatalog(os.Getenv("AGENT_PROVIDER_CATALOG"))
 	if err != nil {
 		return Config{}, err
-	}
-	runnerImages := map[string]string{
-		"FUNCTIONS_RUNNER_HELPER_IMAGE": value("FUNCTIONS_RUNNER_HELPER_IMAGE", "alpine:3.22"),
-		"FUNCTIONS_RUNNER_NODE_IMAGE":   value("FUNCTIONS_RUNNER_NODE_IMAGE", "node:22-alpine"),
-		"FUNCTIONS_RUNNER_PYTHON_IMAGE": value("FUNCTIONS_RUNNER_PYTHON_IMAGE", "python:3.13-alpine"),
-		"FUNCTIONS_RUNNER_GO_IMAGE":     value("FUNCTIONS_RUNNER_GO_IMAGE", "golang:1.24-alpine"),
-	}
-	for name, image := range runnerImages {
-		if !isImageReference(image) {
-			return Config{}, fmt.Errorf("%s must be a valid Docker image reference", name)
-		}
 	}
 	var functionsSecretKey []byte
 	if raw := strings.TrimSpace(os.Getenv("FUNCTIONS_SECRET_KEY")); raw != "" {
@@ -390,81 +333,66 @@ func Load() (Config, error) {
 		}
 	}
 	config := Config{
-		DatabaseURL:                   strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DatabaseMaxConns:              int32(databaseMaxConns),
-		DatabaseMinConns:              int32(databaseMinConns),
-		DatabaseMaxConnLifetime:       databaseMaxConnLifetime,
-		DatabaseMaxConnIdleTime:       databaseMaxConnIdleTime,
-		RedisURL:                      value("REDIS_URL", "redis://127.0.0.1:6379/0"),
-		HTTPAddress:                   value("HTTP_ADDR", ":8080"),
-		MetricsToken:                  metricsToken,
-		TrustedProxyCIDRs:             trustedProxyCIDRs,
-		ACMEEnabled:                   acmeEnabled,
-		ACMEEmail:                     acmeEmail,
-		ACMEDirectoryURL:              acmeDirectoryURL,
-		ACMETLSAddress:                acmeTLSAddress,
-		ACMEHTTPChallengeAddress:      acmeHTTPChallengeAddress,
-		ACMECertCacheDir:              filepath.Clean(acmeCertCacheDir),
-		SessionCookieName:             value("SESSION_COOKIE_NAME", "stealth_session"),
-		SessionTTL:                    ttl,
-		AppSessionTTL:                 appSessionTTL,
-		AuthVerificationTTL:           verificationTTL,
-		AuthPasswordResetTTL:          passwordResetTTL,
-		PublicAppURL:                  strings.TrimRight(publicAppURL, "/"),
-		ConsoleCORSOrigins:            consoleCORSOrigins,
-		EmailDeliveryMode:             emailDeliveryMode,
-		SMTPHost:                      smtpHost,
-		SMTPPort:                      smtpPort,
-		SMTPUsername:                  strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-		SMTPPassword:                  os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:                      smtpFrom,
-		CookieSecure:                  secure,
-		AuthRateLimit:                 rateLimit,
-		AuthRateWindow:                rateWindow,
-		ProjectOperationRateLimit:     projectOperationRateLimit,
-		ProjectOperationRateWindow:    projectOperationRateWindow,
-		StorageRoot:                   filepath.Clean(storageRoot),
-		StorageMaxFileSize:            storageMaxFileSize,
-		StorageDefaultQuotaBytes:      storageDefaultQuota,
-		StorageDriver:                 storageDriver,
-		StorageS3Endpoint:             storageS3Endpoint,
-		StorageS3Region:               storageS3Region,
-		StorageS3Bucket:               storageS3Bucket,
-		StorageS3AccessKey:            storageS3AccessKey,
-		StorageS3SecretKey:            storageS3SecretKey,
-		StorageS3UseSSL:               storageS3UseSSL,
-		StorageS3PathStyle:            storageS3PathStyle,
-		StorageS3Prefix:               storageS3Prefix,
-		StorageS3StagingRoot:          filepath.Clean(storageS3StagingRoot),
-		FunctionsMaxArtifactSize:      functionsMaxArtifactSize,
-		FunctionsDefaultQuotaBytes:    functionsDefaultQuota,
-		FunctionsSecretKey:            functionsSecretKey,
-		BootstrapCLIKey:               bootstrapCLIKey,
-		GitHubAppClientID:             strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		FunctionsRunnerEnabled:        runnerEnabled,
-		FunctionsWorkerID:             workerID,
-		FunctionsRunnerPoll:           runnerPoll,
-		FunctionsRunnerLeaseAge:       runnerLeaseAge,
-		FunctionsRunnerBuildTimeout:   runnerBuildTimeout,
-		FunctionsRunnerStagingRoot:    filepath.Clean(value("FUNCTIONS_RUNNER_STAGING_ROOT", "/var/lib/stealth/runner-staging")),
-		FunctionsRunnerStagingVolume:  stagingVolume,
-		FunctionsRunnerMetricsAddress: workerMetricsAddress,
-		FunctionsRunnerHelperImage:    runnerImages["FUNCTIONS_RUNNER_HELPER_IMAGE"],
-		FunctionsRunnerNodeImage:      runnerImages["FUNCTIONS_RUNNER_NODE_IMAGE"],
-		FunctionsRunnerPythonImage:    runnerImages["FUNCTIONS_RUNNER_PYTHON_IMAGE"],
-		FunctionsRunnerGoImage:        runnerImages["FUNCTIONS_RUNNER_GO_IMAGE"],
-		AgentRunnerEnabled:            agentRunnerEnabled,
-		AgentRunnerExecutionTimeout:   agentRunnerExecutionTimeout,
-		SitesMaxArtifactSize:          sitesMaxArtifactSize,
-		SitesDefaultQuotaBytes:        sitesDefaultQuota,
-		SitesMaxExpandedBytes:         sitesMaxExpanded,
-		SitesMaxFiles:                 sitesMaxFiles,
-		SitesGitFetchConcurrency:      sitesGitFetchConcurrency,
-		TelemetryOTLPEndpoint:         telemetryEndpoint,
-		TelemetryServiceName:          telemetryServiceName,
-		TelemetrySampleRatio:          telemetrySampleRatio,
-		AgentProviderCatalog:          agentProviderCatalog,
+		DatabaseURL:                strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DatabaseMaxConns:           int32(databaseMaxConns),
+		DatabaseMinConns:           int32(databaseMinConns),
+		DatabaseMaxConnLifetime:    databaseMaxConnLifetime,
+		DatabaseMaxConnIdleTime:    databaseMaxConnIdleTime,
+		RedisURL:                   value("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		HTTPAddress:                value("HTTP_ADDR", ":8080"),
+		MetricsToken:               metricsToken,
+		TrustedProxyCIDRs:          trustedProxyCIDRs,
+		ACMEEnabled:                acmeEnabled,
+		ACMEEmail:                  acmeEmail,
+		ACMEDirectoryURL:           acmeDirectoryURL,
+		ACMETLSAddress:             acmeTLSAddress,
+		ACMEHTTPChallengeAddress:   acmeHTTPChallengeAddress,
+		ACMECertCacheDir:           filepath.Clean(acmeCertCacheDir),
+		SessionCookieName:          value("SESSION_COOKIE_NAME", "stealth_session"),
+		SessionTTL:                 ttl,
+		AppSessionTTL:              appSessionTTL,
+		AuthVerificationTTL:        verificationTTL,
+		AuthPasswordResetTTL:       passwordResetTTL,
+		PublicAppURL:               strings.TrimRight(publicAppURL, "/"),
+		ConsoleCORSOrigins:         consoleCORSOrigins,
+		EmailDeliveryMode:          emailDeliveryMode,
+		SMTPHost:                   smtpHost,
+		SMTPPort:                   smtpPort,
+		SMTPUsername:               strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:                   smtpFrom,
+		CookieSecure:               secure,
+		AuthRateLimit:              rateLimit,
+		AuthRateWindow:             rateWindow,
+		ProjectOperationRateLimit:  projectOperationRateLimit,
+		ProjectOperationRateWindow: projectOperationRateWindow,
+		StorageRoot:                filepath.Clean(storageRoot),
+		StorageMaxFileSize:         storageMaxFileSize,
+		StorageDefaultQuotaBytes:   storageDefaultQuota,
+		StorageDriver:              storageDriver,
+		StorageS3Endpoint:          storageS3Endpoint,
+		StorageS3Region:            storageS3Region,
+		StorageS3Bucket:            storageS3Bucket,
+		StorageS3AccessKey:         storageS3AccessKey,
+		StorageS3SecretKey:         storageS3SecretKey,
+		StorageS3UseSSL:            storageS3UseSSL,
+		StorageS3PathStyle:         storageS3PathStyle,
+		StorageS3Prefix:            storageS3Prefix,
+		StorageS3StagingRoot:       filepath.Clean(storageS3StagingRoot),
+		FunctionsSecretKey:         functionsSecretKey,
+		BootstrapCLIKey:            bootstrapCLIKey,
+		GitHubAppClientID:          strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
+		SitesMaxArtifactSize:       sitesMaxArtifactSize,
+		SitesDefaultQuotaBytes:     sitesDefaultQuota,
+		SitesMaxExpandedBytes:      sitesMaxExpanded,
+		SitesMaxFiles:              sitesMaxFiles,
+		SitesGitFetchConcurrency:   sitesGitFetchConcurrency,
+		TelemetryOTLPEndpoint:      telemetryEndpoint,
+		TelemetryServiceName:       telemetryServiceName,
+		TelemetrySampleRatio:       telemetrySampleRatio,
+		AgentProviderCatalog:       agentProviderCatalog,
 	}
+	executionSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
@@ -499,20 +427,6 @@ func decodeSecretKey(raw, name string) ([]byte, error) {
 		return nil, fmt.Errorf("%s must be base64-encoded 32 bytes", name)
 	}
 	return key, nil
-}
-
-// ValidateFunctions enforces the production credential gate. Load keeps the
-// key optional for tests and older hand-built Config values; the production
-// entrypoint calls this method before serving traffic. In all cases the HTTP
-// readiness endpoint also fails closed when the key is absent.
-func (c Config) ValidateFunctions() error {
-	if len(c.FunctionsSecretKey) != 32 {
-		return fmt.Errorf("FUNCTIONS_SECRET_KEY must be configured as base64-encoded 32 bytes")
-	}
-	if c.FunctionsMaxArtifactSize <= 0 || c.FunctionsDefaultQuotaBytes <= 0 || c.FunctionsMaxArtifactSize > c.FunctionsDefaultQuotaBytes {
-		return fmt.Errorf("function artifact size and quota settings are invalid")
-	}
-	return nil
 }
 
 // ValidateBootstrap enforces the production credential gate for the

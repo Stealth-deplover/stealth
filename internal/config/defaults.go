@@ -69,18 +69,7 @@ func (c Config) WithDefaults() Config {
 	if c.StorageDefaultQuotaBytes <= 0 {
 		c.StorageDefaultQuotaBytes = 1 << 30
 	}
-	if c.FunctionsMaxArtifactSize <= 0 {
-		c.FunctionsMaxArtifactSize = c.StorageMaxFileSize
-	}
-	if c.FunctionsMaxArtifactSize <= 0 {
-		c.FunctionsMaxArtifactSize = 50 << 20
-	}
-	if c.FunctionsDefaultQuotaBytes <= 0 {
-		c.FunctionsDefaultQuotaBytes = c.StorageDefaultQuotaBytes
-	}
-	if c.FunctionsDefaultQuotaBytes <= 0 {
-		c.FunctionsDefaultQuotaBytes = 1 << 30
-	}
+	c.applyExecutionDefaults()
 	if c.SitesMaxArtifactSize <= 0 {
 		c.SitesMaxArtifactSize = c.StorageMaxFileSize
 	}
