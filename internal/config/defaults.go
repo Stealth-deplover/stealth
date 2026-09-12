@@ -60,15 +60,7 @@ func (c Config) WithDefaults() Config {
 	if strings.TrimSpace(c.PublicAppURL) == "" {
 		c.PublicAppURL = "http://localhost:4173"
 	}
-	if c.StorageRoot == "" {
-		c.StorageRoot = "/var/lib/stealth/storage"
-	}
-	if c.StorageMaxFileSize <= 0 {
-		c.StorageMaxFileSize = 50 << 20
-	}
-	if c.StorageDefaultQuotaBytes <= 0 {
-		c.StorageDefaultQuotaBytes = 1 << 30
-	}
+	c.applyStorageDefaults()
 	if c.FunctionsMaxArtifactSize <= 0 {
 		c.FunctionsMaxArtifactSize = c.StorageMaxFileSize
 	}
