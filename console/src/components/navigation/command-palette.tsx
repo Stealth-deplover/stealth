@@ -2,8 +2,9 @@
 
 import { Command, FolderKanban, Search, Waypoints } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useOrganizations, useProjects } from "@/api/queries";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { organizationProjectsPath, projectPath } from "@/lib/console-routes";
 
 type PaletteCommand = {
   label: string;
@@ -22,89 +24,95 @@ type PaletteCommand = {
 
 export function CommandPalette() {
   const router = useRouter();
-  const pathname = usePathname();
+  const { organizationId, projectId } = useConsoleRouteContext();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
-  const segments = pathname.split("/").filter(Boolean);
-  const organizationId =
-    segments[0] === "organizations" ? segments[1] : undefined;
-  const projectId =
-    organizationId && segments[2] === "projects" ? segments[3] : undefined;
   const organizations = useOrganizations(undefined, { enabled: open });
   const projects = useProjects(organizationId, undefined, { enabled: open });
-  const base = projectId
-    ? `/organizations/${organizationId}/projects/${projectId}`
-    : organizationId
-      ? `/organizations/${organizationId}`
-      : "/organizations";
 
   const commands = useMemo<PaletteCommand[]>(() => {
-    const navigation: PaletteCommand[] = [
-      {
-        label: "Project overview",
-        hint: "View current project",
-        href: base,
-        kind: "navigation",
-      },
-      {
-        label: "Services canvas",
-        hint: "Map supported resources",
-        href: `${base}/services`,
-        kind: "navigation",
-      },
-      {
-        label: "Deployments",
-        hint: "Inspect resource deployments",
-        href: `${base}/deployments`,
-        kind: "navigation",
-      },
-      {
-        label: "Functions",
-        hint: "Run backend code",
-        href: `${base}/functions`,
-        kind: "navigation",
-      },
-      {
-        label: "Databases",
-        hint: "Browse schema and rows",
-        href: `${base}/databases`,
-        kind: "navigation",
-      },
-      {
-        label: "Storage",
-        hint: "Explore buckets and files",
-        href: `${base}/storage`,
-        kind: "navigation",
-      },
-      {
-        label: "Logs",
-        hint: "Open contextual log viewer",
-        href: `${base}/observability/logs`,
-        kind: "navigation",
-      },
-      {
-        label: "Traces",
-        hint: "Inspect durable root requests",
-        href: `${base}/observability/traces`,
-        kind: "navigation",
-      },
-      {
-        label: "Settings",
-        hint: "Project configuration",
-        href: `${base}/settings/project`,
-        kind: "navigation",
-      },
-    ].filter(
-      (command) => Boolean(projectId) && command.href.startsWith(base),
-    ) as PaletteCommand[];
+    const navigation: PaletteCommand[] =
+      organizationId && projectId
+        ? [
+            {
+              label: "Project overview",
+              hint: "View current project",
+              href: projectPath(organizationId, projectId),
+              kind: "navigation",
+            },
+            {
+              label: "Services canvas",
+              hint: "Map supported resources",
+              href: projectPath(organizationId, projectId, "services"),
+              kind: "navigation",
+            },
+            {
+              label: "Deployments",
+              hint: "Inspect resource deployments",
+              href: projectPath(organizationId, projectId, "deployments"),
+              kind: "navigation",
+            },
+            {
+              label: "Functions",
+              hint: "Run backend code",
+              href: projectPath(organizationId, projectId, "functions"),
+              kind: "navigation",
+            },
+            {
+              label: "Databases",
+              hint: "Browse schema and rows",
+              href: projectPath(organizationId, projectId, "databases"),
+              kind: "navigation",
+            },
+            {
+              label: "Storage",
+              hint: "Explore buckets and files",
+              href: projectPath(organizationId, projectId, "storage"),
+              kind: "navigation",
+            },
+            {
+              label: "Logs",
+              hint: "Open contextual log viewer",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "observability",
+                "logs",
+              ),
+              kind: "navigation",
+            },
+            {
+              label: "Traces",
+              hint: "Inspect durable root requests",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "observability",
+                "traces",
+              ),
+              kind: "navigation",
+            },
+            {
+              label: "Settings",
+              hint: "Project configuration",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "settings",
+                "project",
+              ),
+              kind: "navigation",
+            },
+          ]
+        : [];
     const workspaceCommands: PaletteCommand[] = (
       organizations.data?.organizations ?? []
     ).map((organization) => ({
       label: `Switch organization · ${organization.name}`,
       hint: organization.slug,
-      href: `/organizations/${organization.id}/projects`,
+      href: organizationProjectsPath(organization.id),
       kind: "organization" as const,
     }));
     const projectCommands: PaletteCommand[] = (
@@ -112,7 +120,7 @@ export function CommandPalette() {
     ).map((project) => ({
       label: `Switch project · ${project.name}`,
       hint: "Project",
-      href: `/organizations/${project.organization_id}/projects/${project.id}`,
+      href: projectPath(project.organization_id, project.id),
       kind: "project" as const,
     }));
     const searchTerm = query.trim().toLowerCase();
@@ -122,7 +130,7 @@ export function CommandPalette() {
         `${command.label} ${command.hint}`.toLowerCase().includes(searchTerm),
     );
   }, [
-    base,
+    organizationId,
     organizations.data?.organizations,
     projectId,
     projects.data?.projects,

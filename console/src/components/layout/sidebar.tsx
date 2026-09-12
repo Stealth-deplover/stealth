@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import {
   Activity,
   Bot,
@@ -24,6 +23,13 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
+import {
+  organizationPath,
+  organizationProjectsPath,
+  organizationsPath,
+  projectPath,
+} from "@/lib/console-routes";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -37,12 +43,13 @@ function NavGroup({
   label,
   items,
   collapsed,
+  pathname,
 }: {
   label: string;
   items: NavItem[];
   collapsed: boolean;
+  pathname: string;
 }) {
-  const pathname = usePathname();
   return (
     <div className="mb-5">
       <p
@@ -98,110 +105,221 @@ function NavGroup({
 }
 
 export function Sidebar({
-  organizationId,
-  projectId,
   mobile = false,
   collapsed = false,
   onToggle,
 }: {
-  organizationId?: string;
-  projectId?: string;
   mobile?: boolean;
   collapsed?: boolean;
   onToggle?: () => void;
 }) {
-  const orgBase = organizationId
-    ? `/organizations/${organizationId}`
-    : "/organizations";
-  const projectBase =
-    organizationId && projectId
-      ? `${orgBase}/projects/${projectId}`
-      : undefined;
+  const { organizationId, projectId, pathname } = useConsoleRouteContext();
+  const projectContext =
+    organizationId && projectId ? { organizationId, projectId } : undefined;
   const orgItems: NavItem[] = organizationId
     ? [
         {
           label: "Projects",
-          href: `${orgBase}/projects`,
+          href: organizationProjectsPath(organizationId),
           icon: FolderKanban,
           exact: true,
         },
-        { label: "Members", href: `${orgBase}/members`, icon: Users },
-        { label: "Plan & limits", href: `${orgBase}/plan`, icon: Gauge },
-        { label: "Incidents", href: `${orgBase}/incidents`, icon: Activity },
-        { label: "Audit", href: `${orgBase}/audit`, icon: ShieldCheck },
+        {
+          label: "Members",
+          href: organizationPath(organizationId, "members"),
+          icon: Users,
+        },
+        {
+          label: "Plan & limits",
+          href: organizationPath(organizationId, "plan"),
+          icon: Gauge,
+        },
+        {
+          label: "Incidents",
+          href: organizationPath(organizationId, "incidents"),
+          icon: Activity,
+        },
+        {
+          label: "Audit",
+          href: organizationPath(organizationId, "audit"),
+          icon: ShieldCheck,
+        },
       ]
     : [
         {
           label: "Organizations",
-          href: "/organizations",
+          href: organizationsPath(),
           icon: FolderKanban,
           exact: true,
         },
       ];
-  const projectItems: NavItem[] = projectBase
+  const projectItems: NavItem[] = projectContext
     ? [
-        { label: "Overview", href: projectBase, icon: Gauge, exact: true },
-        { label: "Services", href: `${projectBase}/services`, icon: Boxes },
+        {
+          label: "Overview",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+          ),
+          icon: Gauge,
+          exact: true,
+        },
+        {
+          label: "Services",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "services",
+          ),
+          icon: Boxes,
+        },
         {
           label: "Deployments",
-          href: `${projectBase}/deployments`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "deployments",
+          ),
           icon: CloudCog,
         },
       ]
     : [];
-  const computeItems: NavItem[] = projectBase
+  const computeItems: NavItem[] = projectContext
     ? [
-        { label: "Functions", href: `${projectBase}/functions`, icon: Zap },
-        { label: "Sites", href: `${projectBase}/sites`, icon: Globe2 },
-        { label: "Agents", href: `${projectBase}/agents`, icon: Bot },
+        {
+          label: "Functions",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "functions",
+          ),
+          icon: Zap,
+        },
+        {
+          label: "Sites",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "sites",
+          ),
+          icon: Globe2,
+        },
+        {
+          label: "Agents",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "agents",
+          ),
+          icon: Bot,
+        },
       ]
     : [];
-  const dataItems: NavItem[] = projectBase
+  const dataItems: NavItem[] = projectContext
     ? [
         {
           label: "Databases",
-          href: `${projectBase}/databases`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "databases",
+          ),
           icon: Database,
         },
-        { label: "Storage", href: `${projectBase}/storage`, icon: Layers3 },
+        {
+          label: "Storage",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "storage",
+          ),
+          icon: Layers3,
+        },
       ]
     : [];
-  const platformItems: NavItem[] = projectBase
+  const platformItems: NavItem[] = projectContext
     ? [
-        { label: "Users", href: `${projectBase}/users`, icon: Users },
+        {
+          label: "Users",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "users",
+          ),
+          icon: Users,
+        },
         {
           label: "Messaging",
-          href: `${projectBase}/messaging`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "messaging",
+          ),
           icon: MessageSquare,
         },
-        { label: "Webhooks", href: `${projectBase}/webhooks`, icon: Webhook },
-        { label: "API keys", href: `${projectBase}/api-keys`, icon: KeyRound },
+        {
+          label: "Webhooks",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "webhooks",
+          ),
+          icon: Webhook,
+        },
+        {
+          label: "API keys",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "api-keys",
+          ),
+          icon: KeyRound,
+        },
       ]
     : [];
-  const observability: NavItem[] = projectBase
+  const observability: NavItem[] = projectContext
     ? [
         {
           label: "Logs",
-          href: `${projectBase}/observability/logs`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "observability",
+            "logs",
+          ),
           icon: Cable,
         },
         {
           label: "Traces",
-          href: `${projectBase}/observability/traces`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "observability",
+            "traces",
+          ),
           icon: Activity,
         },
       ]
     : [];
-  const settings: NavItem[] = projectBase
+  const settings: NavItem[] = projectContext
     ? [
         {
           label: "Project settings",
-          href: `${projectBase}/settings/project`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "settings",
+            "project",
+          ),
           icon: Settings2,
         },
         {
           label: "Auth settings",
-          href: `${projectBase}/auth`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "auth",
+          ),
           icon: ShieldCheck,
         },
       ]
@@ -252,41 +370,48 @@ export function Sidebar({
         ) : null}
       </div>
       <NavGroup
-        label={projectBase ? "Workspace" : "Organization"}
+        label={projectContext ? "Workspace" : "Organization"}
         items={orgItems}
         collapsed={collapsed && !mobile}
+        pathname={pathname}
       />
-      {projectBase ? (
+      {projectContext ? (
         <>
           <NavGroup
             label="Project"
             items={projectItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Compute"
             items={computeItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Data"
             items={dataItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Platform"
             items={platformItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Observability"
             items={observability}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="System"
             items={settings}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
         </>
       ) : (

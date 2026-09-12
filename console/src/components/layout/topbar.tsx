@@ -19,18 +19,12 @@ import {
 import { useLogout } from "@/api/mutations";
 import { toast } from "sonner";
 import { Breadcrumbs } from "@/components/breadcrumbs";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
 
-export function Topbar({
-  organizationId,
-  projectId,
-  onMenu,
-}: {
-  organizationId?: string;
-  projectId?: string;
-  onMenu?: () => void;
-}) {
+export function Topbar({ onMenu }: { onMenu?: () => void }) {
   const router = useRouter();
   const logout = useLogout();
+  const { organizationId, projectId } = useConsoleRouteContext();
   return (
     <header className="sticky top-0 z-30 flex min-h-[4.5rem] items-center justify-between gap-2 border-b border-stealth-border bg-stealth-bg/85 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-6">
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
@@ -52,7 +46,7 @@ export function Topbar({
             />
           ) : null}
         </div>
-        <Breadcrumbs organizationId={organizationId} projectId={projectId} />
+        <Breadcrumbs />
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         <ContextBadge projectId={projectId} />

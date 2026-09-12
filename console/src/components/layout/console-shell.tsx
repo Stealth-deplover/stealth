@@ -1,34 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useCurrentAccount } from "@/api/queries";
 import { ApiError } from "@/api/client";
 import { ErrorState } from "@/components/feedback/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import {
+  ConsoleRouteContextProvider,
+  useConsoleRouteContext,
+} from "@/components/navigation/console-route-context";
 import { ProjectRealtimeListener } from "@/realtime/project-realtime-listener";
 
-function contextFromPath(pathname: string) {
-  const parts = pathname.split("/").filter(Boolean);
-  const organizationIndex = parts.indexOf("organizations");
-  const organizationId =
-    organizationIndex >= 0 ? parts[organizationIndex + 1] : undefined;
-  const projectsIndex = parts.indexOf("projects");
-  const projectId = projectsIndex >= 0 ? parts[projectsIndex + 1] : undefined;
-  return { organizationId, projectId };
-}
-
-export function ConsoleShell({
+function ConsoleShellContent({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const router = useRouter();
-  const pathname = usePathname();
+  const { pathname, projectId } = useConsoleRouteContext();
   const account = useCurrentAccount();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const context = useMemo(() => contextFromPath(pathname), [pathname]);
   const unauthorized =
     account.error instanceof ApiError && account.error.status === 401;
 
@@ -74,10 +67,9 @@ export function ConsoleShell({
 
   return (
     <div className="min-h-screen bg-stealth-bg">
-      <ProjectRealtimeListener projectId={context.projectId} />
+      <ProjectRealtimeListener projectId={projectId} />
       <div className="flex min-h-screen">
         <Sidebar
-          {...context}
           collapsed={sidebarCollapsed}
           onToggle={() => setSidebarCollapsed((value) => !value)}
         />
@@ -94,17 +86,27 @@ export function ConsoleShell({
               role="dialog"
               aria-label="Navigation menu"
             >
-              <Sidebar {...context} mobile />
+              <Sidebar mobile />
             </div>
           </div>
         ) : null}
         <div className="min-w-0 flex-1">
-          <Topbar {...context} onMenu={() => setMobileOpen(true)} />
+          <Topbar onMenu={() => setMobileOpen(true)} />
           <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-10">
             {children}
           </main>
         </div>
       </div>
     </div>
+  );
+}
+
+export function ConsoleShell({
+  children,
+}: Readonly<{ children: React.ReactNode }>) {
+  return (
+    <ConsoleRouteContextProvider>
+      <ConsoleShellContent>{children}</ConsoleShellContent>
+    </ConsoleRouteContextProvider>
   );
 }

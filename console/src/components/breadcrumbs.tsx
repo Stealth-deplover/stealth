@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { usePathname } from "next/navigation";
 import { useOrganization, useProject } from "@/api/queries";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
+import { organizationProjectsPath, projectPath } from "@/lib/console-routes";
 import { cn } from "@/lib/utils";
 
 const resourceLabels: Record<string, string> = {
@@ -30,38 +31,37 @@ function fallbackName(value: string | undefined, prefix: string) {
   return `${prefix} ${value.slice(0, 8)}`;
 }
 
-export function Breadcrumbs({
-  organizationId,
-  projectId,
-}: {
-  organizationId?: string;
-  projectId?: string;
-}) {
-  const pathname = usePathname();
+export function Breadcrumbs() {
+  const { organizationId, projectId, organizationSegments, projectSegments } =
+    useConsoleRouteContext();
   const organization = useOrganization(organizationId);
   const project = useProject(projectId);
   if (!organizationId) return null;
 
-  const orgBase = `/organizations/${organizationId}`;
   const items: Array<{ label: string; href?: string }> = [
     {
       label:
         organization.data?.name ?? fallbackName(organizationId, "Organization"),
-      href: `${orgBase}/projects`,
+      href: organizationProjectsPath(organizationId),
     },
   ];
   if (!projectId) {
     items.push({
-      label: pathname.includes("/projects") ? "Projects" : "Workspace",
+      label: organizationSegments.includes("projects")
+        ? "Projects"
+        : "Workspace",
     });
   } else {
     const projectName =
       project.data?.project?.name ?? fallbackName(projectId, "Project");
-    const projectBase = `${orgBase}/projects/${projectId}`;
-    items.push({ label: projectName, href: projectBase });
-    const rest = pathname.slice(projectBase.length).split("/").filter(Boolean);
-    if (rest[0]) {
-      const resource = resourceLabels[rest[0]] ?? rest[0].replace(/-/g, " ");
+    items.push({
+      label: projectName,
+      href: projectPath(organizationId, projectId),
+    });
+    if (projectSegments[0]) {
+      const resource =
+        resourceLabels[projectSegments[0]] ??
+        projectSegments[0].replace(/-/g, " ");
       items.push({ label: resource });
     }
   }
