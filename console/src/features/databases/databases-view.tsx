@@ -22,7 +22,11 @@ import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ProjectResourceIntro } from "@/features/resources/collection-shared";
 import { pageControls } from "@/lib/pagination";
 import { ResourceId } from "@/components/resource-id";
-import { databaseName } from "./data-values";
+import {
+  databaseFields,
+  databasePayload,
+  type DatabaseFormValues,
+} from "@/features/databases/database-form";
 
 export function DatabasesView({
   organizationId,
@@ -38,10 +42,8 @@ export function DatabasesView({
   const create = useCreateDatabase(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const canManage = query.data?.can_manage === true;
-  const handleCreateDatabase = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: databaseName.parse(values.name),
-    });
+  const handleCreateDatabase = async (values: DatabaseFormValues) => {
+    const result = await create.mutateAsync(databasePayload(values));
     toast.success("Database created");
     if (result?.database.id) {
       router.push(`${base}/databases/${result.database.id}`);
@@ -97,7 +99,7 @@ export function DatabasesView({
         description="Browse typed schemas, rows, indexes, relationships, and backups."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<DatabaseFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create database"
@@ -105,7 +107,7 @@ export function DatabasesView({
               pendingLabel="Creating database…"
               title="Create a database"
               description="A database gives your project a typed schema boundary."
-              fields={[{ name: "name", label: "Name", placeholder: "primary" }]}
+              fields={databaseFields}
               pending={create.isPending}
               onSubmit={handleCreateDatabase}
             />

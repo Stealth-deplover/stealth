@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateWebhook(projectId: string) {
@@ -15,9 +16,7 @@ export function useCreateWebhook(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhooks(projectId),
-      }),
+      applyCacheChanges(queryClient, [{ kind: "webhook", projectId }]),
   });
 }
 
@@ -31,14 +30,10 @@ export function useRotateWebhookSecret(projectId: string, webhookId: string) {
           { params: { path: { projectID: projectId, webhookID: webhookId } } },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhooks(projectId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhook(projectId, webhookId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "webhook", projectId, webhookId, includeDetail: true },
+      ]),
   });
 }
 
@@ -52,14 +47,10 @@ export function useUpdateWebhook(projectId: string, webhookId: string) {
           body,
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhooks(projectId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhook(projectId, webhookId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "webhook", projectId, webhookId, includeDetail: true },
+      ]),
   });
 }
 
@@ -76,9 +67,7 @@ export function useDeleteWebhook(projectId: string, webhookId: string) {
       queryClient.removeQueries({
         queryKey: queryKeys.webhook(projectId, webhookId),
       });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.webhooks(projectId),
-      });
+      void applyCacheChanges(queryClient, [{ kind: "webhook", projectId }]);
     },
   });
 }
