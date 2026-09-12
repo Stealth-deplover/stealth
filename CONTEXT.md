@@ -30,6 +30,11 @@ used by Console metadata and request validation. It clones catalog data when
 applying it and never treats catalog entries as provider credentials or worker
 capability.
 
+The secret settings loader owns decoding of the function-encryption key and
+dedicated bootstrap key, plus the GitHub App client ID. It keeps key material
+isolated and clones it into the application snapshot; `ValidateFunctions` and
+`ValidateBootstrap` remain the production fail-closed gates.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to

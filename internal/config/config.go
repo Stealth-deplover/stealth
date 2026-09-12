@@ -157,19 +157,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	var functionsSecretKey []byte
-	if raw := strings.TrimSpace(os.Getenv("FUNCTIONS_SECRET_KEY")); raw != "" {
-		functionsSecretKey, err = decodeSecretKey(raw, "FUNCTIONS_SECRET_KEY")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	var bootstrapCLIKey []byte
-	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_CLI_KEY")); raw != "" {
-		bootstrapCLIKey, err = decodeSecretKey(raw, "BOOTSTRAP_CLI_KEY")
-		if err != nil {
-			return Config{}, err
-		}
+	secretSettings, err := loadSecretSettings()
+	if err != nil {
+		return Config{}, err
 	}
 	storageRoot := value("STORAGE_ROOT", "/var/lib/stealth/storage")
 	storageRoot, err = filepath.Abs(storageRoot)
@@ -267,9 +257,6 @@ func Load() (Config, error) {
 		StorageS3PathStyle:       storageS3PathStyle,
 		StorageS3Prefix:          storageS3Prefix,
 		StorageS3StagingRoot:     filepath.Clean(storageS3StagingRoot),
-		FunctionsSecretKey:       functionsSecretKey,
-		BootstrapCLIKey:          bootstrapCLIKey,
-		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
 	}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
@@ -277,6 +264,7 @@ func Load() (Config, error) {
 	executionSettings.apply(&config)
 	telemetrySettings.apply(&config)
 	agentSettings.apply(&config)
+	secretSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
