@@ -85,6 +85,15 @@ CORS origins, auth/project rate limits, cookie security, and SMTP delivery
 settings. It must preserve the existing URL, origin, email, and numeric
 validation before applying values to `Config`.
 
+## Backend queue worker persistence
+
+Queue workers depend on local persistence capabilities instead of the concrete
+repository. Agent, messaging, webhook, realtime, and Site workers each expose
+their own narrow `Persistence` seam for leasing, terminal transitions, and
+worker-owned logs or retention. The repository remains the production
+implementation supplied by the worker composition root; tests can provide a
+small fake without constructing unrelated control-plane state.
+
 ## Console typed form adapters
 
 `CreateDialog` owns field rendering, transient string state, and interaction

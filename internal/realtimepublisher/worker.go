@@ -14,6 +14,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/retry"
+	"github.com/google/uuid"
 )
 
 const (
@@ -25,8 +26,19 @@ const (
 	pendingMetricPeriod = 15 * time.Second
 )
 
+// Persistence is the durable outbox capability required by the publisher.
+// Redis fanout and PostgreSQL recovery remain separate dependencies.
+type Persistence interface {
+	RequeueStaleRealtimeEvents(context.Context, time.Duration) (int64, error)
+	PendingRealtimeEvents(context.Context) (int64, error)
+	ClaimNextRealtimeEvent(context.Context, string, time.Duration) (repository.RealtimePublishJob, error)
+	FinishRealtimeEvent(context.Context, uuid.UUID, string, bool, *time.Time, string) error
+}
+
+var _ Persistence = (*repository.Repository)(nil)
+
 type Worker struct {
-	Repository   *repository.Repository
+	Store        Persistence
 	Broker       *realtime.Broker
 	WorkerID     string
 	PollInterval time.Duration
@@ -36,8 +48,8 @@ type Worker struct {
 	Metrics      *observability.WorkerMetrics
 }
 
-func New(repo *repository.Repository, broker *realtime.Broker, workerID string, logger *slog.Logger) (*Worker, error) {
-	if repo == nil || broker == nil || strings.TrimSpace(workerID) == "" {
+func New(store Persistence, broker *realtime.Broker, workerID string, logger *slog.Logger) (*Worker, error) {
+	if store == nil || broker == nil || strings.TrimSpace(workerID) == "" {
 		return nil, errors.New("invalid realtime publisher dependencies")
 	}
 	if len(workerID) > 128 {
@@ -47,7 +59,7 @@ func New(repo *repository.Repository, broker *realtime.Broker, workerID string, 
 		logger = slog.Default()
 	}
 	return &Worker{
-		Repository:   repo,
+		Store:        store,
 		Broker:       broker,
 		WorkerID:     workerID,
 		PollInterval: defaultPollInterval,
@@ -59,7 +71,7 @@ func New(repo *repository.Repository, broker *realtime.Broker, workerID string, 
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil || w.Broker == nil {
+	if w == nil || w.Store == nil || w.Broker == nil {
 		return errors.New("realtime publisher is not configured")
 	}
 	pollInterval := w.PollInterval
@@ -78,7 +90,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			w.refreshPendingMetric(ctx)
 			lastPendingMetric = time.Now()
 		}
-		if _, err := w.Repository.RequeueStaleRealtimeEvents(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := w.Store.RequeueStaleRealtimeEvents(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			w.logError("requeue stale realtime events failed", err)
 		}
 		processed, err := w.RunOnce(ctx)
@@ -103,7 +115,7 @@ func (w *Worker) refreshPendingMetric(ctx context.Context) {
 	if w.Metrics == nil {
 		return
 	}
-	pending, err := w.Repository.PendingRealtimeEvents(ctx)
+	pending, err := w.Store.PendingRealtimeEvents(ctx)
 	if err != nil {
 		w.logError("read realtime outbox depth failed", err)
 		return
@@ -116,7 +128,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if leaseAge <= 0 {
 		leaseAge = defaultLeaseAge
 	}
-	job, err := w.Repository.ClaimNextRealtimeEvent(ctx, w.WorkerID, leaseAge)
+	job, err := w.Store.ClaimNextRealtimeEvent(ctx, w.WorkerID, leaseAge)
 	if errors.Is(err, repository.ErrNoRealtimeEvent) {
 		return false, nil
 	}
@@ -127,7 +139,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.Metrics.OutboxPublishAttempts.Inc()
 	}
 	if !realtime.ShouldFanout(job.EventName) {
-		if finishErr := w.Repository.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, true, nil, ""); finishErr != nil {
+		if finishErr := w.Store.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, true, nil, ""); finishErr != nil {
 			return true, finishErr
 		}
 		if w.Metrics != nil {
@@ -142,14 +154,14 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 			w.Metrics.OutboxPublishDuration.Observe(time.Since(started).Seconds())
 		}
 		malformedErr := errors.New("realtime event payload is malformed")
-		if finishErr := w.Repository.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, false, nil, malformedErr.Error()); finishErr != nil {
+		if finishErr := w.Store.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, false, nil, malformedErr.Error()); finishErr != nil {
 			return true, errors.Join(malformedErr, finishErr)
 		}
 		return true, malformedErr
 	}
 	err = w.Broker.Publish(ctx, job.ProjectID.String(), job.Payload)
 	if err == nil {
-		finishErr := w.Repository.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, true, nil, "")
+		finishErr := w.Store.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, true, nil, "")
 		if finishErr != nil {
 			return true, finishErr
 		}
@@ -181,7 +193,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		next := time.Now().Add(retry.Exponential(job.AttemptCount, defaultRetryBase, defaultRetryMaximum))
 		retryAt = &next
 	}
-	finishErr := w.Repository.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, false, retryAt, err.Error())
+	finishErr := w.Store.FinishRealtimeEvent(ctx, job.EventID, w.WorkerID, false, retryAt, err.Error())
 	if finishErr != nil {
 		return true, errors.Join(err, finishErr)
 	}
