@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useLogStream, type LogLine } from "./use-log-stream";
+import type { LogLine, LogSource } from "./log-source";
+import { useLogStream } from "./use-log-stream";
 
 type PendingRequest = {
   after?: number;
@@ -17,6 +18,10 @@ function logLine(sequence: number): LogLine {
   };
 }
 
+function source(key: string, fetchPage: LogSource["fetchPage"]): LogSource {
+  return { key, fetchPage };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -31,9 +36,10 @@ describe("useLogStream", () => {
           requests.push({ after, signal, resolve });
         }),
     );
+    const logSource = source("function-build:one", fetchPage);
 
     const { result, unmount } = renderHook(() =>
-      useLogStream({ fetchPage, polling: true }),
+      useLogStream({ source: logSource, polling: true }),
     );
 
     expect(fetchPage).toHaveBeenCalledTimes(1);
@@ -81,9 +87,10 @@ describe("useLogStream", () => {
           requests.push({ signal, resolve });
         }),
     );
+    const logSource = source("agent-run:one", fetchPage);
 
     const { unmount } = renderHook(() =>
-      useLogStream({ fetchPage, polling: false }),
+      useLogStream({ source: logSource, polling: false }),
     );
 
     expect(requests[0].signal?.aborted).toBe(false);
@@ -94,5 +101,71 @@ describe("useLogStream", () => {
       requests[0].resolve([logLine(1)]);
       await Promise.resolve();
     });
+  });
+
+  it("resets the cursor and retained lines when the source changes", async () => {
+    const requests: PendingRequest[] = [];
+    const fetchPage = vi.fn(
+      (after?: number, signal?: AbortSignal) =>
+        new Promise<LogLine[]>((resolve) => {
+          requests.push({ after, signal, resolve });
+        }),
+    );
+    const firstSource = source("function-build:first", fetchPage);
+    const secondSource = source("function-build:second", fetchPage);
+
+    const { result, rerender } = renderHook(
+      ({ logSource }: { logSource: LogSource }) =>
+        useLogStream({ source: logSource, polling: false }),
+      { initialProps: { logSource: firstSource } },
+    );
+
+    await act(async () => {
+      requests[0].resolve([logLine(4)]);
+      await Promise.resolve();
+    });
+    expect(result.current.lines).toHaveLength(1);
+    expect(result.current.after).toBe(4);
+
+    await act(async () => {
+      rerender({ logSource: secondSource });
+      await Promise.resolve();
+    });
+
+    expect(result.current.lines).toEqual([]);
+    expect(result.current.after).toBeUndefined();
+    expect(requests[1].after).toBeUndefined();
+  });
+
+  it("aborts the previous source before accepting a new source response", async () => {
+    const requests: PendingRequest[] = [];
+    const fetchPage = vi.fn(
+      (after?: number, signal?: AbortSignal) =>
+        new Promise<LogLine[]>((resolve) => {
+          requests.push({ after, signal, resolve });
+        }),
+    );
+    const firstSource = source("site-build:first", fetchPage);
+    const secondSource = source("site-build:second", fetchPage);
+
+    const { result, rerender } = renderHook(
+      ({ logSource }: { logSource: LogSource }) =>
+        useLogStream({ source: logSource, polling: false }),
+      { initialProps: { logSource: firstSource } },
+    );
+
+    await act(async () => {
+      rerender({ logSource: secondSource });
+      await Promise.resolve();
+    });
+    expect(requests[0].signal?.aborted).toBe(true);
+    expect(requests[1].after).toBeUndefined();
+
+    await act(async () => {
+      requests[0].resolve([logLine(1)]);
+      requests[1].resolve([logLine(2)]);
+      await Promise.resolve();
+    });
+    expect(result.current.lines.map((line) => line.sequence)).toEqual([2]);
   });
 });

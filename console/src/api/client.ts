@@ -1,4 +1,5 @@
 import createClient from "openapi-fetch";
+import type { QueryFunctionContext } from "@tanstack/react-query";
 import type { paths } from "@/api/generated/schema";
 import { isRecord } from "@/lib/utils";
 
@@ -48,6 +49,40 @@ export async function unwrap<T>(result: {
   if (!result.response.ok)
     throw getApiError(result.error, result.response.status);
   return result.data as T | undefined;
+}
+
+type ApiResult<T = unknown> = {
+  data?: T;
+  error?: unknown;
+  response: Response;
+};
+
+type QueryData<TResult extends ApiResult> = TResult extends { data?: infer T }
+  ? T
+  : never;
+
+/**
+ * Adapts an OpenAPI operation to TanStack Query while preserving cancellation
+ * and the shared API error envelope.
+ */
+export function cancellableQuery<TResult extends ApiResult>(
+  operation: (signal: AbortSignal) => Promise<TResult>,
+): (
+  context: Pick<QueryFunctionContext, "signal"> &
+    Partial<Omit<QueryFunctionContext, "signal">>,
+) => Promise<QueryData<TResult> | undefined> {
+  return async ({ signal }) =>
+    unwrap<QueryData<TResult>>(
+      (await operation(signal)) as {
+        data?: QueryData<TResult>;
+        error?: unknown;
+        response: Response;
+      },
+    );
+}
+
+export async function execute<T>(operation: Promise<ApiResult<T>>) {
+  return unwrap(await operation);
 }
 
 export async function uploadMultipart<T>(
