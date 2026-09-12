@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 type Config struct {
@@ -121,13 +120,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	transportSettings, err := loadTransportSettings()
 	if err != nil {
 		return Config{}, err
-	}
-	metricsToken := strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
-	if len(metricsToken) > 256 || strings.IndexFunc(metricsToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
-		return Config{}, fmt.Errorf("METRICS_TOKEN must be at most 256 characters and contain no whitespace or control characters")
 	}
 	authSettings, err := loadAuthSettings()
 	if err != nil {
@@ -153,23 +148,13 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	agentProviderCatalog, err := parseAgentProviderCatalog(os.Getenv("AGENT_PROVIDER_CATALOG"))
+	agentSettings, err := loadAgentSettings()
 	if err != nil {
 		return Config{}, err
 	}
-	var functionsSecretKey []byte
-	if raw := strings.TrimSpace(os.Getenv("FUNCTIONS_SECRET_KEY")); raw != "" {
-		functionsSecretKey, err = decodeSecretKey(raw, "FUNCTIONS_SECRET_KEY")
-		if err != nil {
-			return Config{}, err
-		}
-	}
-	var bootstrapCLIKey []byte
-	if raw := strings.TrimSpace(os.Getenv("BOOTSTRAP_CLI_KEY")); raw != "" {
-		bootstrapCLIKey, err = decodeSecretKey(raw, "BOOTSTRAP_CLI_KEY")
-		if err != nil {
-			return Config{}, err
-		}
+	secretSettings, err := loadSecretSettings()
+	if err != nil {
+		return Config{}, err
 	}
 	storageRoot := value("STORAGE_ROOT", "/var/lib/stealth/storage")
 	storageRoot, err = filepath.Abs(storageRoot)
@@ -209,51 +194,11 @@ func Load() (Config, error) {
 	if err != nil || strings.TrimSpace(storageS3StagingRoot) == "" || storageS3StagingRoot == string(filepath.Separator) {
 		return Config{}, fmt.Errorf("STORAGE_S3_STAGING_ROOT must be a valid non-root filesystem path")
 	}
-	acmeEnabled, err := strconv.ParseBool(value("ACME_ENABLED", "false"))
+	tlsSettings, err := loadTLSSettings(storageRoot, transportSettings.httpAddress)
 	if err != nil {
-		return Config{}, fmt.Errorf("ACME_ENABLED must be true or false")
-	}
-	acmeDirectoryURL := value("ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory")
-	if !isACMEDirectoryURL(acmeDirectoryURL) {
-		return Config{}, fmt.Errorf("ACME_DIRECTORY_URL must be an absolute HTTPS URL without credentials, query, or fragment")
-	}
-	acmeTLSAddress := value("ACME_TLS_ADDR", ":8443")
-	if !isListenAddress(acmeTLSAddress) {
-		return Config{}, fmt.Errorf("ACME_TLS_ADDR must be a TCP host:port with a port between 1 and 65535")
-	}
-	acmeHTTPChallengeAddress := value("ACME_HTTP_CHALLENGE_ADDR", ":8081")
-	if !isListenAddress(acmeHTTPChallengeAddress) {
-		return Config{}, fmt.Errorf("ACME_HTTP_CHALLENGE_ADDR must be a TCP host:port with a port between 1 and 65535")
-	}
-	acmeEmail := strings.TrimSpace(os.Getenv("ACME_EMAIL"))
-	acmeCertCacheDir := value("ACME_CERT_CACHE_DIR", filepath.Join(storageRoot, "acme"))
-	acmeCertCacheDir, err = filepath.Abs(acmeCertCacheDir)
-	if err != nil || strings.TrimSpace(acmeCertCacheDir) == "" || acmeCertCacheDir == string(filepath.Separator) {
-		return Config{}, fmt.Errorf("ACME_CERT_CACHE_DIR must be a valid non-root filesystem path")
-	}
-	if acmeEnabled && !isACMEEmail(acmeEmail) {
-		return Config{}, fmt.Errorf("ACME_EMAIL must be a valid email address when ACME_ENABLED is true")
-	}
-	if acmeEnabled && acmeTLSAddress == acmeHTTPChallengeAddress {
-		return Config{}, fmt.Errorf("ACME_TLS_ADDR and ACME_HTTP_CHALLENGE_ADDR must be different listeners")
-	}
-	if acmeEnabled {
-		httpAddress := value("HTTP_ADDR", ":8080")
-		if sameListenPort(acmeTLSAddress, httpAddress) || sameListenPort(acmeHTTPChallengeAddress, httpAddress) {
-			return Config{}, fmt.Errorf("ACME listeners must not reuse the HTTP_ADDR port")
-		}
+		return Config{}, err
 	}
 	config := Config{
-		RedisURL:                 value("REDIS_URL", "redis://127.0.0.1:6379/0"),
-		HTTPAddress:              value("HTTP_ADDR", ":8080"),
-		MetricsToken:             metricsToken,
-		TrustedProxyCIDRs:        trustedProxyCIDRs,
-		ACMEEnabled:              acmeEnabled,
-		ACMEEmail:                acmeEmail,
-		ACMEDirectoryURL:         acmeDirectoryURL,
-		ACMETLSAddress:           acmeTLSAddress,
-		ACMEHTTPChallengeAddress: acmeHTTPChallengeAddress,
-		ACMECertCacheDir:         filepath.Clean(acmeCertCacheDir),
 		StorageRoot:              filepath.Clean(storageRoot),
 		StorageMaxFileSize:       storageMaxFileSize,
 		StorageDefaultQuotaBytes: storageDefaultQuota,
@@ -267,16 +212,16 @@ func Load() (Config, error) {
 		StorageS3PathStyle:       storageS3PathStyle,
 		StorageS3Prefix:          storageS3Prefix,
 		StorageS3StagingRoot:     filepath.Clean(storageS3StagingRoot),
-		FunctionsSecretKey:       functionsSecretKey,
-		BootstrapCLIKey:          bootstrapCLIKey,
-		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		AgentProviderCatalog:     agentProviderCatalog,
 	}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
 	siteSettings.apply(&config)
 	executionSettings.apply(&config)
 	telemetrySettings.apply(&config)
+	agentSettings.apply(&config)
+	secretSettings.apply(&config)
+	transportSettings.apply(&config)
+	tlsSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
@@ -569,45 +514,6 @@ func normalizeConsoleOrigin(raw string) (string, error) {
 		host = strings.TrimSuffix(host, ":"+parsed.Port())
 	}
 	return scheme + "://" + host, nil
-}
-
-// parseTrustedProxyCIDRs parses the direct peers that may provide sanitized
-// client-IP forwarding headers. Bare IPs are accepted as host networks for
-// small deployments; an empty value means trust nobody.
-func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	if len(raw) > 4096 {
-		return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS must be at most 4096 characters")
-	}
-	parts := strings.Split(raw, ",")
-	if len(parts) > 64 {
-		return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS must contain at most 64 networks")
-	}
-	networks := make([]*net.IPNet, 0, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value == "" {
-			return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS contains an empty entry")
-		}
-		if ip := net.ParseIP(value); ip != nil {
-			bits := 128
-			if ipv4 := ip.To4(); ipv4 != nil {
-				ip = ipv4
-				bits = 32
-			}
-			networks = append(networks, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
-			continue
-		}
-		_, network, err := net.ParseCIDR(value)
-		if err != nil || network == nil {
-			return nil, fmt.Errorf("TRUSTED_PROXY_CIDRS contains invalid IP or CIDR %q", value)
-		}
-		networks = append(networks, network)
-	}
-	return networks, nil
 }
 
 // parseBytes accepts plain bytes and binary IEC suffixes. Keeping this parser
