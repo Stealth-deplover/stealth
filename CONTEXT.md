@@ -16,6 +16,10 @@ constraints, then apply a complete validated slice to that snapshot. The
 execution loader owns function and agent runner settings; it must preserve the
 existing defaults and production credential gates.
 
+The storage loader owns local/S3 paths, quotas, credentials, and staging
+settings; it must preserve the existing defaults and storage validation
+contract.
+
 The site loader owns static publication limits and Git fetch concurrency. Its
 defaults intentionally inherit storage limits for struct-literal test or
 embedded configurations, while environment loading keeps the explicit site

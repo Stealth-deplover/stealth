@@ -9,15 +9,7 @@ package config
 func (c Config) WithDefaults() Config {
 	c.applyDatabaseDefaults()
 	c.applyAuthDefaults()
-	if c.StorageRoot == "" {
-		c.StorageRoot = "/var/lib/stealth/storage"
-	}
-	if c.StorageMaxFileSize <= 0 {
-		c.StorageMaxFileSize = 50 << 20
-	}
-	if c.StorageDefaultQuotaBytes <= 0 {
-		c.StorageDefaultQuotaBytes = 1 << 30
-	}
+	c.applyStorageDefaults()
 	c.applyExecutionDefaults()
 	c.applySiteDefaults()
 	return c

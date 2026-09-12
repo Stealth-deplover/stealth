@@ -132,14 +132,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	storageMaxFileSize, err := parseBytes(value("STORAGE_MAX_FILE_SIZE", "50MiB"))
-	if err != nil || storageMaxFileSize < 1 {
-		return Config{}, fmt.Errorf("STORAGE_MAX_FILE_SIZE must be a positive byte quantity")
-	}
-	storageDefaultQuota, err := parseBytes(value("STORAGE_DEFAULT_QUOTA_BYTES", "1GiB"))
-	if err != nil || storageDefaultQuota < 1 {
-		return Config{}, fmt.Errorf("STORAGE_DEFAULT_QUOTA_BYTES must be a positive byte quantity")
-	}
 	executionSettings, err := loadExecutionSettings()
 	if err != nil {
 		return Config{}, err
@@ -156,63 +148,15 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	storageRoot := value("STORAGE_ROOT", "/var/lib/stealth/storage")
-	storageRoot, err = filepath.Abs(storageRoot)
-	if err != nil || strings.TrimSpace(storageRoot) == "" {
-		return Config{}, fmt.Errorf("STORAGE_ROOT must be a valid filesystem path")
-	}
-	storageDriver := strings.ToLower(value("STORAGE_DRIVER", "local"))
-	if storageDriver != "local" && storageDriver != "s3" {
-		return Config{}, fmt.Errorf("STORAGE_DRIVER must be local or s3")
-	}
-	storageS3Endpoint := strings.TrimSpace(os.Getenv("STORAGE_S3_ENDPOINT"))
-	storageS3Region := value("STORAGE_S3_REGION", "us-east-1")
-	storageS3Bucket := strings.TrimSpace(os.Getenv("STORAGE_S3_BUCKET"))
-	storageS3AccessKey := strings.TrimSpace(os.Getenv("STORAGE_S3_ACCESS_KEY"))
-	storageS3SecretKey := os.Getenv("STORAGE_S3_SECRET_KEY")
-	storageS3UseSSL, err := strconv.ParseBool(value("STORAGE_S3_USE_SSL", "true"))
-	if err != nil {
-		return Config{}, fmt.Errorf("STORAGE_S3_USE_SSL must be true or false")
-	}
-	storageS3PathStyle, err := strconv.ParseBool(value("STORAGE_S3_PATH_STYLE", "true"))
-	if err != nil {
-		return Config{}, fmt.Errorf("STORAGE_S3_PATH_STYLE must be true or false")
-	}
-	storageS3Prefix := strings.Trim(strings.TrimSpace(os.Getenv("STORAGE_S3_PREFIX")), "/")
-	if len(storageS3Prefix) > 512 || strings.ContainsAny(storageS3Prefix, "\\\r\n\x00") {
-		return Config{}, fmt.Errorf("STORAGE_S3_PREFIX must be a safe object prefix")
-	}
-	if storageDriver == "s3" {
-		if storageS3Endpoint == "" || storageS3Bucket == "" || storageS3AccessKey == "" || storageS3SecretKey == "" {
-			return Config{}, fmt.Errorf("STORAGE_S3_ENDPOINT, STORAGE_S3_BUCKET, STORAGE_S3_ACCESS_KEY, and STORAGE_S3_SECRET_KEY are required when STORAGE_DRIVER is s3")
-		}
-		if !isStorageS3Endpoint(storageS3Endpoint) {
-			return Config{}, fmt.Errorf("STORAGE_S3_ENDPOINT must be an HTTP(S) endpoint without path or credentials")
-		}
-	}
-	storageS3StagingRoot, err := filepath.Abs(value("STORAGE_S3_STAGING_ROOT", filepath.Join(storageRoot, "s3-staging")))
-	if err != nil || strings.TrimSpace(storageS3StagingRoot) == "" || storageS3StagingRoot == string(filepath.Separator) {
-		return Config{}, fmt.Errorf("STORAGE_S3_STAGING_ROOT must be a valid non-root filesystem path")
-	}
-	tlsSettings, err := loadTLSSettings(storageRoot, transportSettings.httpAddress)
+	storageSettings, err := loadStorageSettings()
 	if err != nil {
 		return Config{}, err
 	}
-	config := Config{
-		StorageRoot:              filepath.Clean(storageRoot),
-		StorageMaxFileSize:       storageMaxFileSize,
-		StorageDefaultQuotaBytes: storageDefaultQuota,
-		StorageDriver:            storageDriver,
-		StorageS3Endpoint:        storageS3Endpoint,
-		StorageS3Region:          storageS3Region,
-		StorageS3Bucket:          storageS3Bucket,
-		StorageS3AccessKey:       storageS3AccessKey,
-		StorageS3SecretKey:       storageS3SecretKey,
-		StorageS3UseSSL:          storageS3UseSSL,
-		StorageS3PathStyle:       storageS3PathStyle,
-		StorageS3Prefix:          storageS3Prefix,
-		StorageS3StagingRoot:     filepath.Clean(storageS3StagingRoot),
+	tlsSettings, err := loadTLSSettings(storageSettings.root, transportSettings.httpAddress)
+	if err != nil {
+		return Config{}, err
 	}
+	config := Config{}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
 	siteSettings.apply(&config)
@@ -221,6 +165,7 @@ func Load() (Config, error) {
 	agentSettings.apply(&config)
 	secretSettings.apply(&config)
 	transportSettings.apply(&config)
+	storageSettings.apply(&config)
 	tlsSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
@@ -281,27 +226,6 @@ func validGitHubAppClientID(value string) bool {
 		return false
 	}
 	return true
-}
-
-func (c Config) ValidateStorage() error {
-	if c.StorageDriver != "local" && c.StorageDriver != "s3" {
-		return fmt.Errorf("storage driver must be local or s3")
-	}
-	if c.StorageMaxFileSize <= 0 || c.StorageDefaultQuotaBytes <= 0 {
-		return fmt.Errorf("storage size and quota settings are invalid")
-	}
-	if c.StorageDriver == "s3" {
-		if strings.TrimSpace(c.StorageS3Endpoint) == "" || strings.TrimSpace(c.StorageS3Bucket) == "" || strings.TrimSpace(c.StorageS3AccessKey) == "" || c.StorageS3SecretKey == "" {
-			return fmt.Errorf("S3 storage credentials and bucket are required")
-		}
-		if !isStorageS3Endpoint(c.StorageS3Endpoint) {
-			return fmt.Errorf("S3 storage endpoint is invalid")
-		}
-		if strings.TrimSpace(c.StorageS3StagingRoot) == "" || !filepath.IsAbs(c.StorageS3StagingRoot) || filepath.Clean(c.StorageS3StagingRoot) == string(filepath.Separator) {
-			return fmt.Errorf("S3 storage staging root is invalid")
-		}
-	}
-	return nil
 }
 
 // ValidateSites keeps production deployments from silently accepting a
