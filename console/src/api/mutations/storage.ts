@@ -31,7 +31,13 @@ export function useUploadStorageFile(projectId: string, bucketId: string) {
 export function useRenameStorageFile(projectId: string, bucketId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ fileId, name }: { fileId: string; name: string }) =>
+    mutationFn: async ({
+      fileId,
+      body,
+    }: {
+      fileId: string;
+      body: components["schemas"]["UpdateStorageFileRequest"];
+    }) =>
       unwrap(
         await api.PATCH(
           "/v1/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}",
@@ -43,7 +49,7 @@ export function useRenameStorageFile(projectId: string, bucketId: string) {
                 fileID: fileId,
               },
             },
-            body: { name },
+            body,
           },
         ),
       ),

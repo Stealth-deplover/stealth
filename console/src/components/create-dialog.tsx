@@ -19,8 +19,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-export type CreateField = {
-  name: string;
+export type CreateFormValues = Record<string, string>;
+
+export type CreateField<TValues extends CreateFormValues = CreateFormValues> = {
+  name: Extract<keyof TValues, string>;
   label: string;
   placeholder?: string;
   type?:
@@ -34,31 +36,30 @@ export type CreateField = {
     | "multiselect";
   options?: readonly { value: string; label: string }[];
   optionsForValues?: (
-    values: Readonly<Record<string, string>>,
+    values: Readonly<TValues>,
   ) => readonly { value: string; label: string }[];
-  onChange?: (
-    value: string,
-    values: Readonly<Record<string, string>>,
-  ) => Partial<Record<string, string>>;
+  onChange?: (value: string, values: Readonly<TValues>) => Partial<TValues>;
   defaultValue?: string;
   required?: boolean;
   help?: string;
 };
 
-function createInitialValues(fields: CreateField[]) {
+function createInitialValues<TValues extends CreateFormValues>(
+  fields: readonly CreateField<TValues>[],
+): TValues {
   return Object.fromEntries(
     fields.map((field) => [field.name, field.defaultValue ?? ""]),
-  );
+  ) as TValues;
 }
 
-type CreateDialogProps = {
+type CreateDialogProps<TValues extends CreateFormValues> = {
   triggerLabel: string;
   submitLabel: string;
   pendingLabel: string;
   title: string;
   description: string;
-  fields: CreateField[];
-  onSubmit: (values: Record<string, string>) => Promise<void> | void;
+  fields: readonly CreateField<TValues>[];
+  onSubmit: (values: TValues) => Promise<void> | void;
   pending?: boolean;
   disabled?: boolean;
   open?: boolean;
@@ -66,7 +67,9 @@ type CreateDialogProps = {
   trigger?: ReactNode;
 };
 
-export function CreateDialog({
+export function CreateDialog<
+  TValues extends CreateFormValues = CreateFormValues,
+>({
   triggerLabel,
   submitLabel,
   pendingLabel,
@@ -79,9 +82,9 @@ export function CreateDialog({
   open,
   onOpenChange,
   trigger,
-}: CreateDialogProps) {
+}: CreateDialogProps<TValues>) {
   const [internalOpen, setInternalOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>(() =>
+  const [values, setValues] = useState<TValues>(() =>
     createInitialValues(fields),
   );
   const controlled = open !== undefined;
@@ -103,19 +106,15 @@ export function CreateDialog({
     if (previousOpen.current && !dialogOpen) resetValues();
     previousOpen.current = dialogOpen;
   }, [dialogOpen, resetValues]);
-  const updateValue = (name: string, value: string) =>
+  const updateValue = (name: Extract<keyof TValues, string>, value: string) =>
     setValues((current) => {
       const field = fields.find((candidate) => candidate.name === name);
-      const next: Record<string, string> = {
+      const next = {
         ...current,
         [name]: value,
-      };
+      } as TValues;
       const dependentValues = field?.onChange?.(value, current);
-      if (dependentValues) {
-        for (const [key, nextValue] of Object.entries(dependentValues)) {
-          if (nextValue !== undefined) next[key] = nextValue;
-        }
-      }
+      if (dependentValues) Object.assign(next, dependentValues);
       return next;
     });
   const submit = async (event: FormEvent<HTMLFormElement>) => {
