@@ -34,7 +34,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBytes, formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
 import { BackLink } from "@/features/resources/detail-shared";
-import { databaseName } from "./data-values";
+import {
+  databaseTableFields,
+  databaseTablePayload,
+  type DatabaseTableFormValues,
+} from "@/features/databases/database-table-form";
 
 export { DatabaseRowsView } from "./table-detail-view";
 
@@ -228,11 +232,8 @@ export function DatabaseDetailView({
   const createTable = useCreateDatabaseTable(projectId, databaseId);
   const database = query.data?.database;
   const base = `/organizations/${organizationId}/projects/${projectId}`;
-  const handleCreateTable = async (values: Record<string, string>) => {
-    const result = await createTable.mutateAsync({
-      name: databaseName.parse(values.name),
-      row_security: values.row_security !== "false",
-    });
+  const handleCreateTable = async (values: DatabaseTableFormValues) => {
+    const result = await createTable.mutateAsync(databaseTablePayload(values));
     toast.success("Table created");
     if (result?.table.id)
       router.push(`${base}/databases/${databaseId}/tables/${result.table.id}`);
@@ -324,7 +325,7 @@ export function DatabaseDetailView({
         description="Manage tables, inspect application data, and capture logical backups."
         actions={
           tables.data?.can_manage === true ? (
-            <CreateDialog
+            <CreateDialog<DatabaseTableFormValues>
               open={createTableOpen}
               onOpenChange={setCreateTableOpen}
               triggerLabel="Create table"
@@ -332,25 +333,7 @@ export function DatabaseDetailView({
               pendingLabel="Creating table…"
               title="Create a table"
               description="Define a table before adding columns and rows. Application permissions start denied."
-              fields={[
-                {
-                  name: "name",
-                  label: "Table name",
-                  placeholder: "users",
-                  help: "Use 2–120 characters.",
-                },
-                {
-                  name: "row_security",
-                  label: "Row security",
-                  type: "select",
-                  defaultValue: "true",
-                  options: [
-                    { value: "true", label: "Enabled" },
-                    { value: "false", label: "Disabled" },
-                  ],
-                  help: "When enabled, individual row grants can allow access in addition to table grants.",
-                },
-              ]}
+              fields={databaseTableFields}
               onSubmit={handleCreateTable}
               pending={createTable.isPending}
             />
