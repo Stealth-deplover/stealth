@@ -26,27 +26,27 @@ const maxBodyBytes = 1 << 20
 const maxMultipartOverhead = 2 << 20
 
 type Server struct {
-	config         config.Config
-	repo           *repository.Repository
-	bootstrap      repository.BootstrapStore
-	logger         *slog.Logger
-	limiter        ratelimit.Limiter
-	storage        storage.BlobStore
-	storageReady   bool
-	functions      *functionstore.Store
-	functionCipher *functionsecret.Cipher
-	functionsReady bool
-	sites          *sitestore.Store
-	siteArchives   *functionstore.Store
-	siteGitFetcher gitarchive.SourceFetcher
-	siteGitSlots   chan struct{}
-	sitesReady     bool
-	metrics        *observability.APIMetrics
-	realtimeSlots  chan struct{}
-	realtimeBroker *realtime.Broker
-	emailSender    mailer.Sender
-	githubClient   githubauth.Client
-	githubFlowMu   sync.Mutex
+	config          config.Config
+	repo            *repository.Repository
+	bootstrap       repository.BootstrapStore
+	logger          *slog.Logger
+	limiter         ratelimit.Limiter
+	storage         storage.BlobStore
+	storageReady    bool
+	functions       *functionstore.Store
+	functionCipher  *functionsecret.Cipher
+	functionsReady  bool
+	sites           *sitestore.Store
+	siteArchives    *functionstore.Store
+	siteGitFetcher  gitarchive.SourceFetcher
+	siteGitSlots    chan struct{}
+	sitesReady      bool
+	metrics         *observability.APIMetrics
+	realtimeSlots   chan struct{}
+	realtimeBroker  *realtime.Broker
+	authEmailSender mailer.AuthSender
+	githubClient    githubauth.Client
+	githubFlowMu    sync.Mutex
 }
 
 // Dependencies carries the collaborators the console API accepts from the
@@ -58,6 +58,8 @@ type Server struct {
 type Dependencies struct {
 	AuthLimiter    ratelimit.Limiter
 	SiteGitFetcher gitarchive.SourceFetcher
+	// EmailSender is the low-level delivery transport. Authentication flows
+	// wrap it in mailer.AuthSender; project messaging uses it directly.
 	EmailSender    mailer.Sender
 	RealtimeBroker *realtime.Broker
 	GitHubClient   githubauth.Client
@@ -87,6 +89,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	if deps.EmailSender == nil {
 		deps.EmailSender = mailer.NewFromConfig(cfg, logger)
 	}
+	authEmailSender := mailer.NewAuthSender(deps.EmailSender)
 	if deps.GitHubClient == nil {
 		deps.GitHubClient = githubauth.NewClient(nil)
 	}
@@ -135,7 +138,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender, githubClient: deps.GitHubClient}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient}
 	return s.routes()
 }
 

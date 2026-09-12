@@ -104,6 +104,16 @@ All three remain methods on the repository so existing callers keep one
 transactional persistence boundary; the file/module split keeps each lifecycle
 invariant near the SQL that enforces it.
 
+## Backend authentication email delivery
+
+The mailer transport keeps a generic `Message`/`Sender` seam for explicit
+user-authored project messaging, while authentication flows use the private
+payload of `AuthMessage` through `AuthSender`. `NewAuthMessage` is the only
+constructor for security email content: it selects fixed Stealth-owned copy
+and accepts only a validated server-generated `AuthLink`. The HTTP API stores
+only the typed auth sender, so request handlers cannot pass an arbitrary body
+to authentication email delivery.
+
 ## Console typed form adapters
 
 `CreateDialog` owns field rendering, transient string state, and interaction
