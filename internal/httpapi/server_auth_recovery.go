@@ -453,7 +453,7 @@ func (s *Server) authLinkFor(r *http.Request, path string, projectID *uuid.UUID,
 }
 
 func (s *Server) sendAuthEmail(ctx context.Context, recipient string, kind mailer.AuthEmailKind, link string) error {
-	if s.emailSender == nil {
+	if s.authEmailSender == nil {
 		return mailer.ErrDisabled
 	}
 	authLink, err := mailer.NewAuthLink(link)
@@ -464,7 +464,7 @@ func (s *Server) sendAuthEmail(ctx context.Context, recipient string, kind maile
 	if err != nil {
 		return err
 	}
-	return s.emailSender.Send(ctx, message)
+	return s.authEmailSender.SendAuth(ctx, message)
 }
 
 func authEmailTTL(s *Server, kind mailer.AuthEmailKind) time.Duration {

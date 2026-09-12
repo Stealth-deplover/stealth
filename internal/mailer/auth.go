@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
@@ -26,6 +27,61 @@ const (
 // from an arbitrary body or an unvalidated URL string.
 type AuthLink struct{ value string }
 
+// AuthMessage is a security email assembled from a fixed Stealth-owned
+// template. Its transport payload is private so HTTP handlers cannot provide
+// an arbitrary authentication email body.
+type AuthMessage struct{ message Message }
+
+// AuthSender is the typed delivery boundary for authentication emails. The
+// generic Sender remains available to project messaging, where user-authored
+// message bodies are an explicit product feature.
+type AuthSender interface {
+	SendAuth(context.Context, AuthMessage) error
+}
+
+type authSender struct{ sender Sender }
+
+// NewAuthSender adapts the generic delivery transport to the constrained
+// authentication-email boundary.
+func NewAuthSender(sender Sender) AuthSender {
+	if sender == nil {
+		return nil
+	}
+	return authSender{sender: sender}
+}
+
+func (s authSender) SendAuth(ctx context.Context, message AuthMessage) error {
+	if s.sender == nil {
+		return ErrDisabled
+	}
+	if err := validateAuthMessage(message); err != nil {
+		return err
+	}
+	return s.sender.Send(ctx, message.message)
+}
+
+func validateAuthMessage(message AuthMessage) error {
+	if err := validHeaderValue(message.message.To, "recipient"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(message.message.To) == "" {
+		return errors.New("recipient is required")
+	}
+	if err := validHeaderValue(message.message.Subject, "subject"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(message.message.Subject) == "" {
+		return errors.New("subject is required")
+	}
+	if strings.TrimSpace(message.message.TextBody) == "" {
+		return errors.New("authentication email body is invalid")
+	}
+	if _, err := normalizeTextBody(message.message.TextBody); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewAuthLink validates the final link at the mailer boundary. The origin and
 // route policy is enforced by the HTTP layer; this check ensures that even a
 // future caller cannot put a control character, fragment, credential, or
@@ -46,23 +102,27 @@ func (l AuthLink) String() string { return l.value }
 // NewAuthMessage builds a plain-text security email from fixed Stealth-owned
 // copy plus the server-generated link. There is deliberately no body or
 // purpose string parameter.
-func NewAuthMessage(to string, kind AuthEmailKind, link AuthLink, ttl time.Duration) (Message, error) {
+func NewAuthMessage(to string, kind AuthEmailKind, link AuthLink, ttl time.Duration) (AuthMessage, error) {
 	if err := validHeaderValue(to, "recipient"); err != nil {
-		return Message{}, err
+		return AuthMessage{}, err
 	}
 	if strings.TrimSpace(to) == "" {
-		return Message{}, errors.New("recipient is required")
+		return AuthMessage{}, errors.New("recipient is required")
 	}
 	if link.value == "" {
-		return Message{}, errors.New("auth link is required")
+		return AuthMessage{}, errors.New("auth link is required")
 	}
 
 	subject, action, ok := authEmailCopy(kind)
 	if !ok {
-		return Message{}, errors.New("unknown authentication email kind")
+		return AuthMessage{}, errors.New("unknown authentication email kind")
 	}
 	body := "Use the following one-time link to complete " + action + ":\n\n" + link.value + "\n\nThis link expires in " + ttl.String() + " and can only be used once. If you did not request this, you can ignore this email."
-	return Message{To: to, Subject: subject, TextBody: body}, nil
+	message := AuthMessage{message: Message{To: to, Subject: subject, TextBody: body}}
+	if err := validateAuthMessage(message); err != nil {
+		return AuthMessage{}, err
+	}
+	return message, nil
 }
 
 func authEmailCopy(kind AuthEmailKind) (subject, action string, ok bool) {

@@ -71,10 +71,48 @@ connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
 `config.Load`.
 
+## Backend runtime composition
+
+`internal/runtime` owns shared process resource composition. API, worker, and
+migration entry points use its database pool policy and optional Redis and
+migration lifecycle, while keeping process-specific registration and execution
+in their own composition roots. Resource failures close any already-created
+clients before returning, so a partially assembled process cannot leak a pool
+or Redis client.
+
 The auth loader owns session lifetimes, the canonical public app URL, Console
 CORS origins, auth/project rate limits, cookie security, and SMTP delivery
 settings. It must preserve the existing URL, origin, email, and numeric
 validation before applying values to `Config`.
+
+## Backend queue worker persistence
+
+Queue workers depend on local persistence capabilities instead of the concrete
+repository. Agent, messaging, webhook, realtime, and Site workers each expose
+their own narrow `Persistence` seam for leasing, terminal transitions, and
+worker-owned logs or retention. The repository remains the production
+implementation supplied by the worker composition root; tests can provide a
+small fake without constructing unrelated control-plane state.
+
+## Backend Site lifecycle
+
+Site persistence is organized into three modules. The control-plane module
+owns Site metadata and authorization, the deployment module owns source
+metadata, activation, build leases, quota transitions, and build logs, and the
+artifact module owns immutable path cleanup and public artifact resolution.
+All three remain methods on the repository so existing callers keep one
+transactional persistence boundary; the file/module split keeps each lifecycle
+invariant near the SQL that enforces it.
+
+## Backend authentication email delivery
+
+The mailer transport keeps a generic `Message`/`Sender` seam for explicit
+user-authored project messaging, while authentication flows use the private
+payload of `AuthMessage` through `AuthSender`. `NewAuthMessage` is the only
+constructor for security email content: it selects fixed Stealth-owned copy
+and accepts only a validated server-generated `AuthLink`. The HTTP API stores
+only the typed auth sender, so request handlers cannot pass an arbitrary body
+to authentication email delivery.
 
 ## Console typed form adapters
 
@@ -100,3 +138,38 @@ the project realtime adapter both feed this policy; they do not treat realtime
 payloads as authoritative state. Cache removal and restore predicates remain
 local where they express lifecycle-specific behavior rather than ordinary
 resource staleness.
+
+## Console function variables
+
+`FunctionVariablesPanel` owns the complete function-variable workflow: cursor
+pagination, metadata-only query state, typed form adaptation, mutation
+feedback, and table actions. `FunctionDetailView` composes that panel with
+function deployment and execution views instead of owning each variable
+concern inline.
+
+## CLI lifecycle workflows
+
+The setup and uninstall workflows keep operational decisions and effects in
+their workflow modules, while Bubble Tea models and rendering live in sibling
+`*_tui.go` modules. Both TTY and non-TTY paths share the same bootstrap,
+uninstall-plan, safety, and cleanup operations; presentation does not decide
+which resources are safe to change.
+
+## Console database table detail
+
+`DatabaseRowsView` composes the table metadata shell, `TableRowsPanel` owns
+server-filtered row browsing and row creation, `TableSchemaPanel` owns column
+and index rendering plus column creation, and `TableRowDetail` owns the
+selected-row query and row mutations. URL query state remains the navigation
+seam shared by the shell and row browser, so pagination, filtering, and row
+inspection retain the existing route behavior.
+
+## Console storage bucket detail
+
+`BucketDetailView` composes storage metadata and tab state. `BucketObjectBrowser`
+owns paginated object listing, deletion, upload completion, and file selection;
+`BucketUploadDialog` owns filename/quota validation and multipart upload;
+`BucketObjectDetail` owns metadata and rename actions; and
+`BucketSettingsPanel` owns bucket-limit updates. The shell keeps only the
+permission projection and route-level selection so object and settings
+changes remain local to their modules.

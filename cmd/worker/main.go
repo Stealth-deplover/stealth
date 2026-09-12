@@ -21,16 +21,14 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/messagingrunner"
-	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/realtimepublisher"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/runtime"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/webhookrunner"
 	"github.com/Stealth-deplover/stealth/internal/workersupervisor"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -67,25 +65,17 @@ func main() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	resources, err := runtime.Open(ctx, cfg, runtime.OpenOptions{
+		WithRedis:       true,
+		ApplyMigrations: true,
+	})
 	if err != nil {
-		logger.Error("database configuration error", "error", err)
+		logger.Error("runtime resource configuration error", "error", err)
 		os.Exit(1)
 	}
-	poolConfig.MaxConns = cfg.DatabaseMaxConns
-	poolConfig.MinConns = cfg.DatabaseMinConns
-	poolConfig.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
-	poolConfig.MaxConnIdleTime = cfg.DatabaseMaxConnIdleTime
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		logger.Error("database connection error", "error", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-	if err := migrate.Apply(ctx, pool); err != nil {
-		logger.Error("migration error", "error", err)
-		os.Exit(1)
-	}
+	defer resources.Close()
+	pool := resources.Pool
+	redisClient := resources.Redis
 	store, err := functionstore.New(filepath.Join(cfg.StorageRoot, "functions"), cfg.FunctionsMaxArtifactSize)
 	if err != nil {
 		logger.Error("function artifact storage error", "error", err)
@@ -107,13 +97,6 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher})
-	redisOptions, err := redis.ParseURL(cfg.RedisURL)
-	if err != nil {
-		logger.Error("redis configuration error", "error", err)
-		os.Exit(1)
-	}
-	redisClient := redis.NewClient(redisOptions)
-	defer redisClient.Close()
 	realtimePublisher, err := realtimepublisher.New(repo, realtime.NewBroker(redisClient), cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("realtime publisher configuration error", "error", err)

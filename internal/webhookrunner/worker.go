@@ -23,6 +23,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/retry"
+	"github.com/google/uuid"
 )
 
 const (
@@ -41,8 +42,21 @@ type expiredEventPruner interface {
 	PruneExpiredWebhookEventsBatch(context.Context, int) (int64, error)
 }
 
+// Persistence is the queue and retention capability required by the webhook
+// worker. The worker does not need the repository's project-management or
+// query surface.
+type Persistence interface {
+	RequeueStaleWebhookDeliveries(context.Context, time.Duration) (int64, error)
+	ExpireWebhookDeliveries(context.Context) (int64, error)
+	ClaimNextWebhookDelivery(context.Context, string) (repository.WebhookDeliveryJob, error)
+	FinishWebhookDelivery(context.Context, uuid.UUID, string, bool, *int, string, *time.Time) error
+	PruneExpiredWebhookEventsBatch(context.Context, int) (int64, error)
+}
+
+var _ Persistence = (*repository.Repository)(nil)
+
 type Worker struct {
-	Repository      *repository.Repository
+	Store           Persistence
 	Cipher          *functionsecret.Cipher
 	WorkerID        string
 	HTTPClient      *http.Client
@@ -54,8 +68,8 @@ type Worker struct {
 	Logger          *slog.Logger
 }
 
-func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID string, logger *slog.Logger) (*Worker, error) {
-	if repo == nil || cipher == nil || strings.TrimSpace(workerID) == "" {
+func New(store Persistence, cipher *functionsecret.Cipher, workerID string, logger *slog.Logger) (*Worker, error) {
+	if store == nil || cipher == nil || strings.TrimSpace(workerID) == "" {
 		return nil, errors.New("invalid webhook worker dependencies")
 	}
 	if len(workerID) > 128 || !validWorkerID(workerID) {
@@ -65,7 +79,7 @@ func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID st
 		logger = slog.Default()
 	}
 	return &Worker{
-		Repository:      repo,
+		Store:           store,
 		Cipher:          cipher,
 		WorkerID:        workerID,
 		HTTPClient:      newSafeHTTPClient(defaultTimeout),
@@ -82,7 +96,7 @@ func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID st
 // cycle, while retained event cleanup runs in bounded maintenance passes so a
 // killed worker cannot permanently strand delivery or realtime rows.
 func (w *Worker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil || w.Cipher == nil {
+	if w == nil || w.Store == nil || w.Cipher == nil {
 		return errors.New("webhook worker is not configured")
 	}
 	poll := w.PollInterval
@@ -108,10 +122,10 @@ func (w *Worker) Run(ctx context.Context) error {
 			w.pruneExpiredEvents(ctx)
 		default:
 		}
-		if _, err := w.Repository.RequeueStaleWebhookDeliveries(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := w.Store.RequeueStaleWebhookDeliveries(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			w.Logger.Error("requeue stale webhook deliveries failed", "error", err)
 		}
-		if _, err := w.Repository.ExpireWebhookDeliveries(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := w.Store.ExpireWebhookDeliveries(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			w.Logger.Error("expire webhook deliveries failed", "error", err)
 		}
 		processed, err := w.RunOnce(ctx)
@@ -134,7 +148,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) pruneExpiredEvents(ctx context.Context) {
 	started := time.Now()
-	deleted, batches, err := runRealtimePruneCycle(ctx, w.Repository, defaultPruneBatch, defaultPruneBatches)
+	deleted, batches, err := runRealtimePruneCycle(ctx, w.Store, defaultPruneBatch, defaultPruneBatches)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
@@ -176,10 +190,10 @@ func runRealtimePruneCycle(ctx context.Context, pruner expiredEventPruner, batch
 // RunOnce claims and processes at most one delivery. It returns false when no
 // due delivery exists, allowing callers to back off without busy-spinning.
 func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
-	if w == nil || w.Repository == nil || w.Cipher == nil {
+	if w == nil || w.Store == nil || w.Cipher == nil {
 		return false, errors.New("webhook worker is not configured")
 	}
-	job, err := w.Repository.ClaimNextWebhookDelivery(ctx, w.WorkerID)
+	job, err := w.Store.ClaimNextWebhookDelivery(ctx, w.WorkerID)
 	if errors.Is(err, repository.ErrNoWebhookDelivery) {
 		return false, nil
 	}
@@ -196,12 +210,12 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 		maxAttempts = defaultMaxAttempts
 	}
 	if job.AttemptCount > maxAttempts {
-		finishErr := w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "maximum delivery attempts exceeded", nil)
+		finishErr := w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "maximum delivery attempts exceeded", nil)
 		return true, finishErr
 	}
 	secret, err := w.Cipher.Decrypt(job.SecretCiphertext)
 	if err != nil || len(secret) == 0 {
-		finishErr := w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "webhook secret could not be decrypted", nil)
+		finishErr := w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "webhook secret could not be decrypted", nil)
 		if finishErr != nil {
 			return true, finishErr
 		}
@@ -218,7 +232,7 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	defer cancel()
 	request, err := http.NewRequestWithContext(deliveryCtx, http.MethodPost, job.URL, strings.NewReader(string(job.EventPayload)))
 	if err != nil {
-		finishErr := w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "webhook URL could not be prepared", nil)
+		finishErr := w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "webhook URL could not be prepared", nil)
 		return true, finishErr
 	}
 	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
@@ -247,14 +261,14 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 		if job.AttemptCount >= maxAttempts {
 			retryAt = time.Time{}
 		}
-		finishErr := w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, safeError(err), nullableTime(retryAt))
+		finishErr := w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, safeError(err), nullableTime(retryAt))
 		return true, finishErr
 	}
 	defer response.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	statusCode := response.StatusCode
 	if statusCode >= 200 && statusCode <= 299 {
-		return true, w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, true, &statusCode, "", nil)
+		return true, w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, true, &statusCode, "", nil)
 	}
 	errorText := fmt.Sprintf("remote endpoint returned HTTP %d", statusCode)
 	if text := strings.TrimSpace(string(body)); text != "" {
@@ -265,9 +279,9 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	}
 	if retryableStatus(statusCode) && job.AttemptCount < maxAttempts {
 		retryAt := w.retryAt(job.AttemptCount, parseRetryAfter(response.Header.Get("Retry-After")))
-		return true, w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, &statusCode, errorText, nullableTime(retryAt))
+		return true, w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, &statusCode, errorText, nullableTime(retryAt))
 	}
-	return true, w.Repository.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, &statusCode, errorText, nil)
+	return true, w.Store.FinishWebhookDelivery(ctx, job.DeliveryID, w.WorkerID, false, &statusCode, errorText, nil)
 }
 
 func nullableTime(value time.Time) *time.Time {

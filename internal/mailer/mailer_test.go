@@ -215,12 +215,54 @@ func TestNewAuthMessageUsesFixedPlainTextTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Subject != "Reset your Stealth password" {
-		t.Fatalf("subject = %q", message.Subject)
+	if message.message.Subject != "Reset your Stealth password" {
+		t.Fatalf("subject = %q", message.message.Subject)
 	}
 	want := "Use the following one-time link to complete password recovery:\n\nhttps://console.example.test/reset-password?token=server-generated-token\n\nThis link expires in 15m0s and can only be used once. If you did not request this, you can ignore this email."
-	if message.TextBody != want {
-		t.Fatalf("body = %q, want %q", message.TextBody, want)
+	if message.message.TextBody != want {
+		t.Fatalf("body = %q, want %q", message.message.TextBody, want)
+	}
+}
+
+type recordingSender struct {
+	message Message
+}
+
+func (s *recordingSender) Send(_ context.Context, message Message) error {
+	s.message = message
+	return nil
+}
+
+func TestAuthSenderDeliversTypedTemplate(t *testing.T) {
+	link, err := NewAuthLink("https://console.example.test/reset-password?token=server-generated-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authMessage, err := NewAuthMessage("user@example.test", AuthEmailAccountPasswordReset, link, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	if err := NewAuthSender(recorder).SendAuth(context.Background(), authMessage); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.message != authMessage.message {
+		t.Fatalf("delivered auth message = %#v, want %#v", recorder.message, authMessage.message)
+	}
+}
+
+func TestAuthSenderRejectsInvalidPayload(t *testing.T) {
+	recorder := &recordingSender{}
+	message := AuthMessage{message: Message{
+		To:       "user@example.test",
+		Subject:  "Reset your Stealth password",
+		TextBody: "body\x00",
+	}}
+	if err := NewAuthSender(recorder).SendAuth(context.Background(), message); err == nil {
+		t.Fatal("AuthSender accepted an authentication body with a control character")
+	}
+	if recorder.message != (Message{}) {
+		t.Fatalf("invalid auth message was delivered: %#v", recorder.message)
 	}
 }
 

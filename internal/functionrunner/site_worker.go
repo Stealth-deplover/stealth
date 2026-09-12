@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/repository"
@@ -27,11 +28,24 @@ type SiteBuildExecutor interface {
 	BuildSite(context.Context, repository.SiteBuildJob, string, io.Writer) error
 }
 
+// SitePersistence is the site deployment lifecycle capability required by
+// the source-build worker. It owns leases, terminal transitions, and build
+// logs without exposing the rest of the repository to build execution.
+type SitePersistence interface {
+	RequeueStaleSiteDeployments(context.Context, time.Duration) (int64, error)
+	ClaimNextSiteDeployment(context.Context, string) (repository.SiteBuildJob, error)
+	CompleteSiteDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64) (domain.SiteDeployment, error)
+	FailSiteDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string) (domain.SiteDeployment, error)
+	AppendSiteBuildLog(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int64, string, string) (domain.SiteBuildLog, error)
+}
+
+var _ SitePersistence = (*repository.Repository)(nil)
+
 // SiteWorker consumes source Site deployments and publishes immutable static
 // directories. It is intentionally a separate queue loop so a long Site
 // build cannot block Function executions or their build leases.
 type SiteWorker struct {
-	Repository   *repository.Repository
+	Store        SitePersistence
 	SourceStore  *functionstore.Store
 	PublicStore  *sitestore.Store
 	Builder      SiteBuildExecutor
@@ -45,8 +59,8 @@ type SiteWorker struct {
 	Metrics      *observability.WorkerMetrics
 }
 
-func NewSiteWorker(repo *repository.Repository, sourceStore *functionstore.Store, publicStore *sitestore.Store, builder SiteBuildExecutor, workerID, stagingRoot string, logger *slog.Logger) (*SiteWorker, error) {
-	if repo == nil || sourceStore == nil || publicStore == nil || builder == nil || !validWorkerID(workerID) {
+func NewSiteWorker(store SitePersistence, sourceStore *functionstore.Store, publicStore *sitestore.Store, builder SiteBuildExecutor, workerID, stagingRoot string, logger *slog.Logger) (*SiteWorker, error) {
+	if store == nil || sourceStore == nil || publicStore == nil || builder == nil || !validWorkerID(workerID) {
 		return nil, fmt.Errorf("invalid site worker dependencies")
 	}
 	if strings.TrimSpace(stagingRoot) == "" {
@@ -63,7 +77,7 @@ func NewSiteWorker(repo *repository.Repository, sourceStore *functionstore.Store
 		logger = slog.Default()
 	}
 	return &SiteWorker{
-		Repository:   repo,
+		Store:        store,
 		SourceStore:  sourceStore,
 		PublicStore:  publicStore,
 		Builder:      builder,
@@ -79,7 +93,7 @@ func NewSiteWorker(repo *repository.Repository, sourceStore *functionstore.Store
 }
 
 func (w *SiteWorker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil || w.SourceStore == nil || w.PublicStore == nil || w.Builder == nil {
+	if w == nil || w.Store == nil || w.SourceStore == nil || w.PublicStore == nil || w.Builder == nil {
 		return errors.New("site worker is not configured")
 	}
 	poll := w.PollInterval
@@ -96,7 +110,7 @@ func (w *SiteWorker) Run(ctx context.Context) error {
 		if metrics := w.Metrics; metrics != nil {
 			metrics.Polls.Inc()
 		}
-		if requeued, err := w.Repository.RequeueStaleSiteDeployments(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if requeued, err := w.Store.RequeueStaleSiteDeployments(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			if metrics := w.Metrics; metrics != nil {
 				metrics.Errors.WithLabelValues("site_requeue_build").Inc()
 			}
@@ -125,7 +139,7 @@ func (w *SiteWorker) Run(ctx context.Context) error {
 }
 
 func (w *SiteWorker) RunOnce(ctx context.Context) (bool, error) {
-	job, err := w.Repository.ClaimNextSiteDeployment(ctx, w.WorkerID)
+	job, err := w.Store.ClaimNextSiteDeployment(ctx, w.WorkerID)
 	if errors.Is(err, repository.ErrNoSiteDeploymentJob) {
 		return false, nil
 	}
@@ -280,7 +294,7 @@ func (w *SiteWorker) buildDeployment(parent context.Context, job repository.Site
 		return w.failBuild(parent, projectID, siteID, deploymentID, "site build artifact could not be committed")
 	}
 	committed = true
-	if _, err := w.Repository.CompleteSiteDeploymentBuild(parent, projectID, siteID, deploymentID, w.WorkerID, checkedBuild.SumHex(), outputStats.Bytes); err != nil {
+	if _, err := w.Store.CompleteSiteDeploymentBuild(parent, projectID, siteID, deploymentID, w.WorkerID, checkedBuild.SumHex(), outputStats.Bytes); err != nil {
 		_ = w.PublicStore.RemoveRelative(artifactPath)
 		if errors.Is(err, repository.ErrSiteQuotaExceeded) {
 			return w.failBuild(parent, projectID, siteID, deploymentID, "site build artifact exceeds the remaining quota")
@@ -295,7 +309,7 @@ func (w *SiteWorker) failBuild(ctx context.Context, projectID, siteID, deploymen
 	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "error", ctx.Err()
 	}
-	if _, err := w.Repository.FailSiteDeploymentBuild(ctx, projectID, siteID, deploymentID, w.WorkerID, normalizeBuildLogMessage(message)); err != nil {
+	if _, err := w.Store.FailSiteDeploymentBuild(ctx, projectID, siteID, deploymentID, w.WorkerID, normalizeBuildLogMessage(message)); err != nil {
 		return "error", err
 	}
 	w.emitBuildLog(ctx, projectID, siteID, deploymentID, "error", message)
@@ -313,6 +327,6 @@ func (w *SiteWorker) appendBuildLog(ctx context.Context, projectID, siteID, depl
 	if strings.TrimSpace(message) == "" {
 		return nil
 	}
-	_, err := w.Repository.AppendSiteBuildLog(ctx, projectID, siteID, deploymentID, uuid.Must(uuid.NewV7()), 0, level, message)
+	_, err := w.Store.AppendSiteBuildLog(ctx, projectID, siteID, deploymentID, uuid.Must(uuid.NewV7()), 0, level, message)
 	return err
 }

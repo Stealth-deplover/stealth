@@ -104,8 +104,8 @@ func (r *authMessageRecorder) Send(_ context.Context, message mailer.Message) er
 func TestSendAuthEmailUsesFixedTemplateAndServerLink(t *testing.T) {
 	recorder := &authMessageRecorder{}
 	server := &Server{
-		config:      config.Config{AuthPasswordResetTTL: 15 * time.Minute},
-		emailSender: recorder,
+		config:          config.Config{AuthPasswordResetTTL: 15 * time.Minute},
+		authEmailSender: mailer.NewAuthSender(recorder),
 	}
 	const token = "server-generated-reset-token"
 	if err := server.sendAuthEmail(context.Background(), "user@example.test", mailer.AuthEmailAccountPasswordReset, "https://console.example.test/reset-password?token="+token); err != nil {

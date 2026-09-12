@@ -110,7 +110,19 @@ export function useUploadFunctionDeployment(
       const form = new FormData();
       form.append("source", file);
       return uploadMultipart(
-        `/v1/projects/${projectId}/functions/${functionId}/deployments`,
+        (body, signal) =>
+          api.POST(
+            "/v1/projects/{projectID}/functions/{functionID}/deployments",
+            {
+              params: {
+                path: { projectID: projectId, functionID: functionId },
+              },
+              // openapi-typescript represents binary parts as string; the
+              // browser transport receives the corresponding FormData.
+              body: body as unknown as components["schemas"]["FunctionDeploymentUploadRequest"],
+              signal,
+            },
+          ),
         form,
       );
     },

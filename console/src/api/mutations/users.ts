@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateProjectUser(projectId: string) {
@@ -17,7 +18,7 @@ export function useCreateProjectUser(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.users(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "project-user", projectId }]),
   });
 }
 
@@ -33,12 +34,10 @@ export function useUpdateProjectUserStatus(projectId: string, userId: string) {
           body,
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.users(projectId) });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.projectUser(projectId, userId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "project-user", projectId, userId },
+      ]),
   });
 }
 
@@ -52,10 +51,10 @@ export function useDeleteProjectUser(projectId: string, userId: string) {
         }),
       ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.users(projectId) });
       queryClient.removeQueries({
         queryKey: queryKeys.projectUser(projectId, userId),
       });
+      void applyCacheChanges(queryClient, [{ kind: "project-user", projectId }]);
     },
   });
 }

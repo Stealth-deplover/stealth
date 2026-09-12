@@ -51,7 +51,7 @@ export async function unwrap<T>(result: {
   return result.data as T | undefined;
 }
 
-type ApiResult<T = unknown> = {
+export type ApiResult<T = unknown> = {
   data?: T;
   error?: unknown;
   response: Response;
@@ -85,28 +85,22 @@ export async function execute<T>(operation: Promise<ApiResult<T>>) {
   return unwrap(await operation);
 }
 
-export async function uploadMultipart<T>(
-  path: string,
+type MultipartOperation<T> = (
   formData: FormData,
-  method = "POST",
+  signal?: AbortSignal,
+) => Promise<ApiResult<T>>;
+
+/**
+ * Adapts a typed OpenAPI multipart operation to the shared response/error
+ * normalizer. The operation owns the generated path and request schema; this
+ * helper deliberately does not accept arbitrary URLs or HTTP methods.
+ */
+export async function uploadMultipart<T>(
+  operation: MultipartOperation<T>,
+  formData: FormData,
+  signal?: AbortSignal,
 ) {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method,
-    body: formData,
-    credentials: "include",
-  });
-  const contentType = response.headers.get("content-type") ?? "";
-  const raw = await response.text();
-  let body: unknown;
-  if (raw && contentType.includes("json")) {
-    try {
-      body = JSON.parse(raw) as unknown;
-    } catch {
-      body = undefined;
-    }
-  }
-  if (!response.ok) throw getApiError(body, response.status);
-  return body as T | undefined;
+  return unwrap(await operation(formData, signal));
 }
 
 export function apiUrl(path: string) {

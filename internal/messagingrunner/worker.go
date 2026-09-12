@@ -21,6 +21,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/retry"
+	"github.com/google/uuid"
 )
 
 const (
@@ -31,6 +32,20 @@ const (
 	maxRetryDelay       = 24 * time.Hour
 	maxProviderResponse = 4096
 )
+
+// Persistence is the encrypted delivery capability required by the
+// messaging worker. Provider execution receives only the decrypted values it
+// needs and never depends on the repository's broader management surface.
+type Persistence interface {
+	RequeueStaleMessagingDeliveries(context.Context, time.Duration) (int64, error)
+	ClaimNextMessagingDelivery(context.Context, string) (repository.MessagingDeliveryJob, error)
+	FinishMessagingDelivery(context.Context, uuid.UUID, string, bool, *int, string, *time.Time) error
+	MessagingProviderCredentialsForDelivery(context.Context, repository.MessagingDeliveryJob) (repository.MessagingProviderCredentials, error)
+	MessagingDeliveryAddress(context.Context, repository.MessagingDeliveryJob) (string, error)
+	MessagingDeliveryPayload(context.Context, repository.MessagingDeliveryJob) (repository.MessagingMessagePayload, error)
+}
+
+var _ Persistence = (*repository.Repository)(nil)
 
 // Message is the decrypted message payload passed to one provider adapter.
 // Recipient is used only inside the worker and must never be logged.
@@ -140,7 +155,7 @@ func NewDefaultRegistry(logger *slog.Logger, client *http.Client) *Registry {
 }
 
 type Worker struct {
-	Repository      *repository.Repository
+	Store           Persistence
 	Cipher          *functionsecret.Cipher
 	WorkerID        string
 	Adapters        *Registry
@@ -151,15 +166,15 @@ type Worker struct {
 	Logger          *slog.Logger
 }
 
-func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID string, logger *slog.Logger) (*Worker, error) {
-	if repo == nil || cipher == nil || !validWorkerID(workerID) {
+func New(store Persistence, cipher *functionsecret.Cipher, workerID string, logger *slog.Logger) (*Worker, error) {
+	if store == nil || cipher == nil || !validWorkerID(workerID) {
 		return nil, errors.New("invalid messaging worker dependencies")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Worker{
-		Repository:      repo,
+		Store:           store,
 		Cipher:          cipher,
 		WorkerID:        workerID,
 		Adapters:        NewDefaultRegistry(logger, nil),
@@ -172,7 +187,7 @@ func New(repo *repository.Repository, cipher *functionsecret.Cipher, workerID st
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil || w.Cipher == nil || w.Adapters == nil {
+	if w == nil || w.Store == nil || w.Cipher == nil || w.Adapters == nil {
 		return errors.New("messaging worker is not configured")
 	}
 	poll := w.PollInterval
@@ -186,7 +201,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
-		if _, err := w.Repository.RequeueStaleMessagingDeliveries(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := w.Store.RequeueStaleMessagingDeliveries(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			w.Logger.Error("requeue stale messaging deliveries failed", "error", err)
 		}
 		processed, err := w.RunOnce(ctx)
@@ -208,10 +223,10 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
-	if w == nil || w.Repository == nil || w.Cipher == nil || w.Adapters == nil {
+	if w == nil || w.Store == nil || w.Cipher == nil || w.Adapters == nil {
 		return false, errors.New("messaging worker is not configured")
 	}
-	job, err := w.Repository.ClaimNextMessagingDelivery(ctx, w.WorkerID)
+	job, err := w.Store.ClaimNextMessagingDelivery(ctx, w.WorkerID)
 	if errors.Is(err, repository.ErrNoMessagingDelivery) {
 		return false, nil
 	}
@@ -228,20 +243,20 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 		maxAttempts = defaultMaxAttempts
 	}
 	if job.AttemptCount > maxAttempts {
-		return true, w.Repository.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "maximum delivery attempts exceeded", nil)
+		return true, w.Store.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, false, nil, "maximum delivery attempts exceeded", nil)
 	}
-	provider, err := w.Repository.MessagingProviderCredentialsForDelivery(ctx, job)
+	provider, err := w.Store.MessagingProviderCredentialsForDelivery(ctx, job)
 	if err != nil {
 		return true, w.finishFailure(ctx, job, maxAttempts, err, false, 0)
 	}
 	if !provider.Enabled {
 		return true, w.finishFailure(ctx, job, maxAttempts, errors.New("messaging provider is disabled"), true, 0)
 	}
-	address, err := w.Repository.MessagingDeliveryAddress(ctx, job)
+	address, err := w.Store.MessagingDeliveryAddress(ctx, job)
 	if err != nil {
 		return true, w.finishFailure(ctx, job, maxAttempts, err, false, 0)
 	}
-	payload, err := w.Repository.MessagingDeliveryPayload(ctx, job)
+	payload, err := w.Store.MessagingDeliveryPayload(ctx, job)
 	if err != nil {
 		return true, w.finishFailure(ctx, job, maxAttempts, err, false, 0)
 	}
@@ -258,7 +273,7 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	message := Message{Channel: job.Channel, Recipient: address, RecipientPreview: job.AddressPreview, Subject: payload.Subject, Body: payload.Body, Data: payload.Data}
 	err = adapter.Send(deliveryCtx, providerAdapterInput(provider), message)
 	if err == nil {
-		return true, w.Repository.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, true, nil, "", nil)
+		return true, w.Store.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, true, nil, "", nil)
 	}
 	var sendErr *SendError
 	if errors.As(err, &sendErr) {
@@ -285,7 +300,7 @@ func (w *Worker) finishFailure(ctx context.Context, job repository.MessagingDeli
 	if statusCode >= 100 && statusCode <= 599 {
 		code = &statusCode
 	}
-	return w.Repository.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, false, code, errorText, retryAt)
+	return w.Store.FinishMessagingDelivery(ctx, job.DeliveryID, w.WorkerID, false, code, errorText, retryAt)
 }
 
 func (w *Worker) retryAt(attempt int) time.Time {

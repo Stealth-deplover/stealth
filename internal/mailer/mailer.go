@@ -1,7 +1,7 @@
-// Package mailer contains the small delivery boundary used by Auth. Keeping
-// this interface separate from the HTTP handlers lets deployments use their
-// own SMTP relay (or a provider adapter) without ever persisting email
-// secrets or recovery tokens in the API process.
+// Package mailer contains the delivery boundary used by authentication and
+// project messaging. Authentication flows use AuthMessage/AuthSender so their
+// body is always produced by a fixed Stealth-owned template; the generic
+// Message/Sender pair remains for explicit user-authored project messages.
 package mailer
 
 import (
