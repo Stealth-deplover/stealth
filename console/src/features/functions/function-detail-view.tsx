@@ -2,9 +2,8 @@
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Upload } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { api, unwrap } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
 import {
   useActivateFunctionDeployment,
@@ -31,7 +30,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
-import { LogViewer, type LogLine } from "@/components/log-viewer";
+import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -212,6 +211,13 @@ export function FunctionDetailView({
   const fn = query.data?.function;
   const canManage = deployments.data?.can_manage === true;
   const activeDeploymentId = fn?.active_deployment_id;
+  const activeDeployment = deployments.data?.deployments.find(
+    (deployment) => deployment.id === activeDeploymentId,
+  );
+  const activeBuildInProgress = Boolean(
+    activeDeploymentId &&
+    (!activeDeployment || isDeploymentInProgress(activeDeployment)),
+  );
   const showFirstDeployment =
     !deploymentsNavigation.cursor && deployments.data?.deployments.length === 0;
   const openFilePicker = () => fileInputRef.current?.click();
@@ -228,26 +234,16 @@ export function FunctionDetailView({
       },
     );
   };
-  const logs = useCallback(
-    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
-      if (!activeDeploymentId) return [];
-      const result = await api.GET(
-        "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              functionID: functionId,
-              deploymentID: activeDeploymentId,
-            },
-            query: after === undefined ? {} : { after },
-          },
-          signal,
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      activeDeploymentId
+        ? createLogSource({
+            kind: "function-build",
+            projectId,
+            functionId,
+            deploymentId: activeDeploymentId,
+          })
+        : null,
     [activeDeploymentId, functionId, projectId],
   );
   if (query.error)
@@ -554,8 +550,9 @@ export function FunctionDetailView({
             key={activeDeploymentId ?? "no-deployment"}
             title="Active deployment build logs"
             description="Build output from the active deployment. Open an execution to inspect runtime logs."
-            fetchPage={logs}
-            enabled={Boolean(fn.active_deployment_id)}
+            source={logSource}
+            enabled={Boolean(logSource)}
+            polling={activeBuildInProgress}
             emptyMessage={
               fn.active_deployment_id
                 ? "No build logs yet. Output will appear when the deployment starts."
@@ -586,25 +583,14 @@ export function FunctionDeploymentView({
   deploymentId: string;
 }) {
   const query = useFunctionDeployment(projectId, functionId, deploymentId);
-  const logFetcher = useCallback(
-    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
-      const result = await api.GET(
-        "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              functionID: functionId,
-              deploymentID: deploymentId,
-            },
-            query: after === undefined ? {} : { after },
-          },
-          signal,
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      createLogSource({
+        kind: "function-build",
+        projectId,
+        functionId,
+        deploymentId,
+      }),
     [deploymentId, functionId, projectId],
   );
   const deployment = query.data?.deployment;
@@ -723,7 +709,8 @@ export function FunctionDeploymentView({
           key={deploymentId}
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
-          fetchPage={logFetcher}
+          source={logSource}
+          polling={isDeploymentInProgress(deployment)}
           emptyMessage="No logs yet. Build output will appear when this deployment starts."
         />
       </div>

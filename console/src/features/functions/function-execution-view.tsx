@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback } from "react";
-import { api, unwrap } from "@/api/client";
+import { useMemo } from "react";
 import { useFunctionExecution } from "@/api/queries";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
-import { LogViewer, type LogLine } from "@/components/log-viewer";
+import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
 import { HttpStatusBadge, StatusBadge } from "@/components/ui/badge";
@@ -47,25 +46,14 @@ export function FunctionExecutionView({
   executionId: string;
 }) {
   const query = useFunctionExecution(projectId, functionId, executionId);
-  const fetchLogs = useCallback(
-    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
-      const result = await api.GET(
-        "/v1/projects/{projectID}/functions/{functionID}/executions/{executionID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              functionID: functionId,
-              executionID: executionId,
-            },
-            query: after === undefined ? {} : { after },
-          },
-          signal,
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      createLogSource({
+        kind: "function-execution",
+        projectId,
+        functionId,
+        executionId,
+      }),
     [executionId, functionId, projectId],
   );
   const execution = query.data?.execution;
@@ -183,7 +171,10 @@ export function FunctionExecutionView({
           key={executionId}
           title="Execution logs"
           description="Runtime output for this function execution."
-          fetchPage={fetchLogs}
+          source={logSource}
+          polling={
+            execution.status === "accepted" || execution.status === "running"
+          }
           emptyMessage="No execution logs yet. Logs will appear when the runtime starts."
         />
       </div>

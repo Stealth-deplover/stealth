@@ -1,2 +1,8 @@
 export { LogViewer } from "./log-viewer/log-viewer";
-export type { LogLine } from "./log-viewer/use-log-stream";
+export {
+  createLogSource,
+  type LogLine,
+  type LogPageFetcher,
+  type LogSource,
+  type LogSourceContext,
+} from "./log-viewer/log-source";

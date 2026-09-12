@@ -3,9 +3,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { FileUp } from "lucide-react";
-import { useCallback, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { api, unwrap } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
 import {
   useActivateSiteDeployment,
@@ -17,7 +16,7 @@ import { DataTable } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
-import { LogViewer, type LogLine } from "@/components/log-viewer";
+import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -246,25 +245,14 @@ export function SiteDeploymentView({
   deploymentId: string;
 }) {
   const query = useSiteDeployment(projectId, siteId, deploymentId);
-  const logFetcher = useCallback(
-    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
-      const result = await api.GET(
-        "/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              siteID: siteId,
-              deploymentID: deploymentId,
-            },
-            query: after === undefined ? { limit: 100 } : { limit: 100, after },
-          },
-          signal,
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      createLogSource({
+        kind: "site-build",
+        projectId,
+        siteId,
+        deploymentId,
+      }),
     [deploymentId, projectId, siteId],
   );
   const deployment = query.data?.deployment;
@@ -383,7 +371,8 @@ export function SiteDeploymentView({
           key={deploymentId}
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
-          fetchPage={logFetcher}
+          source={logSource}
+          polling={isDeploymentInProgress(deployment)}
           emptyMessage="No logs yet. Build output will appear when this deployment starts."
         />
       </div>
