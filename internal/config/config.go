@@ -149,17 +149,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	telemetryEndpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	if telemetryEndpoint != "" {
-		parsed, parseErr := url.Parse(telemetryEndpoint)
-		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return Config{}, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be an absolute HTTP(S) URL without query or fragment")
-		}
-	}
-	telemetryServiceName := value("OTEL_SERVICE_NAME", "")
-	telemetrySampleRatio, err := strconv.ParseFloat(value("OTEL_TRACES_SAMPLER_ARG", "0.1"), 64)
-	if err != nil || telemetrySampleRatio < 0 || telemetrySampleRatio > 1 {
-		return Config{}, fmt.Errorf("OTEL_TRACES_SAMPLER_ARG must be a number between 0 and 1")
+	telemetrySettings, err := loadTelemetrySettings()
+	if err != nil {
+		return Config{}, err
 	}
 	agentProviderCatalog, err := parseAgentProviderCatalog(os.Getenv("AGENT_PROVIDER_CATALOG"))
 	if err != nil {
@@ -278,15 +270,13 @@ func Load() (Config, error) {
 		FunctionsSecretKey:       functionsSecretKey,
 		BootstrapCLIKey:          bootstrapCLIKey,
 		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		TelemetryOTLPEndpoint:    telemetryEndpoint,
-		TelemetryServiceName:     telemetryServiceName,
-		TelemetrySampleRatio:     telemetrySampleRatio,
 		AgentProviderCatalog:     agentProviderCatalog,
 	}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
 	siteSettings.apply(&config)
 	executionSettings.apply(&config)
+	telemetrySettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")

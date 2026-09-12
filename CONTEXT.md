@@ -21,6 +21,10 @@ defaults intentionally inherit storage limits for struct-literal test or
 embedded configurations, while environment loading keeps the explicit site
 values and original bounds.
 
+The telemetry loader owns the optional OTLP endpoint, service name, and sample
+ratio. An empty endpoint is a supported no-op configuration; non-empty values
+must remain absolute HTTP(S) URLs without credentials, query, or fragment.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
