@@ -30,7 +30,7 @@ sh bootstrap.sh
 To pin a release:
 
 ```bash
-STEALTH_VERSION=v0.1.0 \
+STEALTH_VERSION=v0.2.0 \
   sh bootstrap.sh
 ```
 
@@ -54,7 +54,7 @@ Release contains the versioned CLI archive and `checksums.txt`.
 8. first-run Instance Owner onboarding.
 
 The installer requires Docker and Docker Compose. It does not silently run a
-third-party Docker installation script. The `v0.1.0` release uses bundled
+third-party Docker installation script. The current stable release uses bundled
 infrastructure and the existing local storage volume. External S3-compatible
 storage remains an operator configuration documented by the production
 deployment guide.
