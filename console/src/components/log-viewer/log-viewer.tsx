@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
-import { useLogStream, type LogLine } from "./use-log-stream";
+import { useLogStream } from "./use-log-stream";
+import type { LogLine, LogSource } from "./log-source";
 
 const LOG_LEVEL_CLASSES: Record<string, string> = {
   error: "text-rose-300",
@@ -179,20 +180,20 @@ function LogBody({
 export function LogViewer({
   title = "Logs",
   description = "Incremental log stream",
-  fetchPage,
+  source,
   enabled = true,
   polling = enabled,
   emptyMessage = "No log lines returned yet.",
 }: {
   title?: string;
   description?: string;
-  fetchPage: (after?: number) => Promise<LogLine[]>;
+  source: LogSource | null;
   enabled?: boolean;
   polling?: boolean;
   emptyMessage?: string;
 }) {
   const { lines, after, loading, error, localCleared, clearLocal } =
-    useLogStream({ fetchPage, enabled, polling });
+    useLogStream({ source, enabled, polling });
   const [search, setSearch] = useState("");
   const [autoFollow, setAutoFollow] = useState(true);
   const [copied, setCopied] = useState(false);
