@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateDatabaseColumn(
@@ -165,9 +166,7 @@ export function useCreateDatabase(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.databases(projectId),
-      }),
+      applyCacheChanges(queryClient, [{ kind: "database", projectId }]),
   });
 }
 

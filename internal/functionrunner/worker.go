@@ -43,23 +43,24 @@ type BuildExecutor interface {
 }
 
 type Worker struct {
-	Repository   *repository.Repository
-	Store        *functionstore.Store
-	Cipher       *functionsecret.Cipher
-	Executor     RuntimeExecutor
-	Builder      BuildExecutor
-	WorkerID     string
-	StagingRoot  string
-	ArchiveLimit ArchiveLimits
-	PollInterval time.Duration
-	LeaseAge     time.Duration
-	BuildTimeout time.Duration
-	Logger       *slog.Logger
-	Metrics      *observability.WorkerMetrics
+	BuildStore     repository.FunctionBuildStore
+	ExecutionStore repository.FunctionExecutionStore
+	Store          *functionstore.Store
+	Cipher         *functionsecret.Cipher
+	Executor       RuntimeExecutor
+	Builder        BuildExecutor
+	WorkerID       string
+	StagingRoot    string
+	ArchiveLimit   ArchiveLimits
+	PollInterval   time.Duration
+	LeaseAge       time.Duration
+	BuildTimeout   time.Duration
+	Logger         *slog.Logger
+	Metrics        *observability.WorkerMetrics
 }
 
-func NewWorker(repo *repository.Repository, store *functionstore.Store, cipher *functionsecret.Cipher, executor RuntimeExecutor, workerID, stagingRoot string, logger *slog.Logger) (*Worker, error) {
-	if repo == nil || store == nil || cipher == nil || executor == nil || !validWorkerID(workerID) {
+func NewWorker(persistence repository.FunctionWorkerStore, store *functionstore.Store, cipher *functionsecret.Cipher, executor RuntimeExecutor, workerID, stagingRoot string, logger *slog.Logger) (*Worker, error) {
+	if persistence == nil || store == nil || cipher == nil || executor == nil || !validWorkerID(workerID) {
 		return nil, fmt.Errorf("invalid function worker dependencies")
 	}
 	if strings.TrimSpace(stagingRoot) == "" {
@@ -76,13 +77,13 @@ func NewWorker(repo *repository.Repository, store *functionstore.Store, cipher *
 		logger = slog.Default()
 	}
 	builder, _ := executor.(BuildExecutor)
-	return &Worker{Repository: repo, Store: store, Cipher: cipher, Executor: executor, Builder: builder, WorkerID: workerID, StagingRoot: filepath.Clean(stagingRoot), ArchiveLimit: ArchiveLimits{}, PollInterval: defaultWorkerPoll, LeaseAge: defaultLeaseAge, BuildTimeout: defaultBuildTimeout, Logger: logger, Metrics: observability.NewWorkerMetrics()}, nil
+	return &Worker{BuildStore: persistence, ExecutionStore: persistence, Store: store, Cipher: cipher, Executor: executor, Builder: builder, WorkerID: workerID, StagingRoot: filepath.Clean(stagingRoot), ArchiveLimit: ArchiveLimits{}, PollInterval: defaultWorkerPoll, LeaseAge: defaultLeaseAge, BuildTimeout: defaultBuildTimeout, Logger: logger, Metrics: observability.NewWorkerMetrics()}, nil
 }
 
 // Run polls until ctx is cancelled. RequeueStaleFunctionExecutions is called
 // before each poll so a crashed worker does not leave accepted work blocked.
 func (w *Worker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil {
+	if w == nil || w.BuildStore == nil || w.ExecutionStore == nil {
 		return errors.New("function worker is not configured")
 	}
 	poll := w.PollInterval
@@ -99,7 +100,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if metrics := w.Metrics; metrics != nil {
 			metrics.Polls.Inc()
 		}
-		if requeued, err := w.Repository.RequeueStaleFunctionDeployments(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if requeued, err := w.BuildStore.RequeueStaleFunctionDeployments(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			if metrics := w.Metrics; metrics != nil {
 				metrics.Errors.WithLabelValues("requeue_build").Inc()
 			}
@@ -109,7 +110,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				metrics.BuildRequeued.Add(float64(requeued))
 			}
 		}
-		if requeued, err := w.Repository.RequeueStaleFunctionExecutions(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if requeued, err := w.ExecutionStore.RequeueStaleFunctionExecutions(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			if metrics := w.Metrics; metrics != nil {
 				metrics.Errors.WithLabelValues("requeue").Inc()
 			}

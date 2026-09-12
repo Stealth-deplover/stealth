@@ -20,7 +20,11 @@ import { formatBytes, formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ProjectResourceIntro } from "@/features/resources/collection-shared";
 import { pageControls } from "@/lib/pagination";
-import { bucketName } from "./storage-values";
+import {
+  storageFields,
+  storagePayload,
+  type StorageFormValues,
+} from "@/features/storage/storage-form";
 
 export function StorageView({
   organizationId,
@@ -36,11 +40,8 @@ export function StorageView({
   const create = useCreateBucket(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const canManage = query.data?.can_manage === true;
-  const handleCreateBucket = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: bucketName.parse(values.name),
-      file_security: true,
-    });
+  const handleCreateBucket = async (values: StorageFormValues) => {
+    const result = await create.mutateAsync(storagePayload(values));
     toast.success("Bucket created");
     if (result?.bucket.id) {
       router.push(`${base}/storage/${result.bucket.id}`);
@@ -93,7 +94,7 @@ export function StorageView({
         description="Flat object storage for files and artifacts, with backend-defined permissions."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<StorageFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create bucket"
@@ -101,7 +102,7 @@ export function StorageView({
               pendingLabel="Creating bucket…"
               title="Create a bucket"
               description="Bucket names are lowercase and hyphenated. Folders are not modeled by this API."
-              fields={[{ name: "name", label: "Name", placeholder: "assets" }]}
+              fields={storageFields}
               pending={create.isPending}
               onSubmit={handleCreateBucket}
             />

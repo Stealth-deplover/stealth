@@ -4,10 +4,7 @@ import { useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
-import {
-  ComponentsParametersOrderDirection,
-  DatabaseColumnType,
-} from "@/api/generated/schema";
+import { ComponentsParametersOrderDirection } from "@/api/generated/schema";
 import type { DatabaseColumn, DatabaseRow } from "@/api/types";
 import {
   useDatabaseTable,
@@ -48,8 +45,17 @@ import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
 import { formatDate } from "@/lib/format";
 import { BackLink } from "@/features/resources/detail-shared";
-import { parseColumn, parseRowData } from "./data-values";
+import { parseRowData } from "./data-values";
 import { RowValue } from "./row-value";
+import {
+  databaseColumnFields,
+  databaseColumnPayload,
+  databasePartialRowPayload,
+  databaseRowFields,
+  databaseRowPayload,
+  type DatabaseColumnFormValues,
+  type DatabaseRowFormValues,
+} from "@/features/databases/table-form";
 
 type TableScope = { projectId: string; databaseId: string; tableId: string };
 const selectClass =
@@ -124,26 +130,19 @@ function RowDetail({
             </dl>
             {canManage ? (
               <div className="flex gap-2">
-                <CreateDialog
+                <CreateDialog<DatabaseRowFormValues>
                   key={row.id + row.updated_at}
                   triggerLabel="Edit row"
                   submitLabel="Save row"
                   pendingLabel="Saving row…"
                   title="Edit row"
                   description="Supply typed JSON fields. Omitted fields keep their current values; null clears an optional value."
-                  fields={[
-                    {
-                      name: "data",
-                      label: "Row data (JSON)",
-                      type: "textarea",
-                      defaultValue: JSON.stringify(row.data, null, 2),
-                    },
-                  ]}
+                  fields={databaseRowFields(JSON.stringify(row.data, null, 2))}
                   pending={update.isPending}
                   onSubmit={async (values) => {
                     await update.mutateAsync({
                       rowId: row.id,
-                      body: { data: parseRowData(values.data, columns, true) },
+                      body: databasePartialRowPayload(values, columns),
                     });
                     toast.success("Row updated");
                   }}
@@ -317,7 +316,7 @@ export function DatabaseRowsView({
         description="Inspect schema and browse typed application data."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<DatabaseRowFormValues>
               open={addOpen}
               onOpenChange={setAddOpen}
               triggerLabel="Add row"
@@ -325,20 +324,13 @@ export function DatabaseRowsView({
               pendingLabel="Adding row…"
               title="Add row"
               description="Use declared column names and JSON values. Application permissions remain denied by default."
-              fields={[
-                {
-                  name: "data",
-                  label: "Row data (JSON)",
-                  type: "textarea",
-                  defaultValue: "{}",
-                },
-              ]}
+              fields={databaseRowFields()}
               disabled={columns.isPending || Boolean(columns.error)}
               pending={createRow.isPending}
               onSubmit={async (values) => {
-                const result = await createRow.mutateAsync({
-                  data: parseRowData(values.data, schema),
-                });
+                const result = await createRow.mutateAsync(
+                  databaseRowPayload(values, schema),
+                );
                 toast.success("Row added");
                 if (result?.row.id) updateUrl({ row_id: result.row.id });
               }}
@@ -548,55 +540,18 @@ export function DatabaseRowsView({
             <CardHeader className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle>Columns</CardTitle>
               {canManage ? (
-                <CreateDialog
+                <CreateDialog<DatabaseColumnFormValues>
                   triggerLabel="Create column"
                   submitLabel="Create column"
                   pendingLabel="Creating column…"
                   title="Create column"
                   description="Required columns need a default when rows already exist. Column types cannot be edited after creation."
-                  fields={[
-                    {
-                      name: "key",
-                      label: "Column key",
-                      placeholder: "email",
-                      help: "Letters, numbers, and underscores; start with a letter or underscore. Maximum 120 characters.",
-                    },
-                    {
-                      name: "type",
-                      label: "Type",
-                      type: "select",
-                      defaultValue: "text",
-                      options: Object.values(DatabaseColumnType).map(
-                        (value) => ({ value, label: value }),
-                      ),
-                    },
-                    {
-                      name: "required",
-                      label: "Required",
-                      type: "select",
-                      defaultValue: "false",
-                      options: [
-                        { value: "false", label: "No (nullable)" },
-                        { value: "true", label: "Yes (not nullable)" },
-                      ],
-                    },
-                    {
-                      name: "varchar_size",
-                      label: "Varchar size",
-                      required: false,
-                      help: "Required only for varchar, from 1 to 10000.",
-                    },
-                    {
-                      name: "default",
-                      label: "Default value (JSON)",
-                      type: "textarea",
-                      required: false,
-                      help: 'Leave blank for no default. Use JSON literals, for example "hello", true, or 42.',
-                    },
-                  ]}
+                  fields={databaseColumnFields}
                   pending={createColumn.isPending}
                   onSubmit={async (values) => {
-                    await createColumn.mutateAsync(parseColumn(values));
+                    await createColumn.mutateAsync(
+                      databaseColumnPayload(values),
+                    );
                     toast.success("Column created");
                   }}
                 />

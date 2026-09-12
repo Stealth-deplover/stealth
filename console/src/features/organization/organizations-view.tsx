@@ -17,6 +17,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
+import {
+  organizationFields,
+  organizationPayload,
+  type OrganizationFormValues,
+} from "@/features/organization/organization-form";
 
 export function OrganizationsIndexView() {
   const router = useRouter();
@@ -24,11 +29,8 @@ export function OrganizationsIndexView() {
   const [createOpen, setCreateOpen] = useState(false);
   const query = useOrganizations({ cursor: navigation.cursor });
   const create = useCreateOrganization();
-  const handleCreateOrganization = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: values.name,
-      slug: values.slug,
-    });
+  const handleCreateOrganization = async (values: OrganizationFormValues) => {
+    const result = await create.mutateAsync(organizationPayload(values));
     toast.success("Organization created");
     if (result?.organization) {
       router.replace(`/organizations/${result.organization.id}/projects`);
@@ -42,7 +44,7 @@ export function OrganizationsIndexView() {
         title="Organizations"
         description="Choose a workspace, then open a project to operate its services."
         actions={
-          <CreateDialog
+          <CreateDialog<OrganizationFormValues>
             open={createOpen}
             onOpenChange={setCreateOpen}
             triggerLabel="Create organization"
@@ -50,15 +52,7 @@ export function OrganizationsIndexView() {
             pendingLabel="Creating organization…"
             title="Create an organization"
             description="Organizations group people, projects, and plan limits."
-            fields={[
-              { name: "name", label: "Display name", placeholder: "Acme Inc" },
-              {
-                name: "slug",
-                label: "Slug",
-                placeholder: "acme-inc",
-                help: "Lowercase letters, numbers, and hyphens.",
-              },
-            ]}
+            fields={organizationFields}
             pending={create.isPending}
             onSubmit={handleCreateOrganization}
           />

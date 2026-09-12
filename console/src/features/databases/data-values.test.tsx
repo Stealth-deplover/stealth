@@ -62,6 +62,7 @@ describe("typed row data", () => {
         key: "enabled",
         type: "boolean",
         required: "true",
+        varchar_size: "",
         default: '"false"',
       }),
     ).toThrow();
@@ -70,6 +71,7 @@ describe("typed row data", () => {
         key: "enabled",
         type: "boolean",
         required: "false",
+        varchar_size: "",
         default: "false",
       }).default,
     ).toBe(false);

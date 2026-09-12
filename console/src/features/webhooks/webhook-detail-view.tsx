@@ -30,11 +30,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { formatDate, formatRelative } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-import {
-  parseCommaSeparatedValues,
-  webhookDeliveryStatusLabel,
-} from "@/features/integrations/integration-values";
+import { webhookDeliveryStatusLabel } from "@/features/integrations/integration-values";
 import { BackLink } from "@/features/resources/detail-shared";
+import {
+  webhookFields,
+  webhookUpdatePayload,
+  type WebhookFormValues,
+} from "@/features/webhooks/webhook-form";
 
 export function WebhookDetailView({
   organizationId,
@@ -139,13 +141,8 @@ export function WebhookDetailView({
   const secretResult = (result: unknown) =>
     result as components["schemas"]["WebhookSecretResponse"] | undefined;
 
-  const handleUpdate = async (values: Record<string, string>) => {
-    await update.mutateAsync({
-      name: values.name.trim(),
-      url: values.url.trim(),
-      events: parseCommaSeparatedValues(values.events),
-      enabled: values.enabled === "true",
-    });
+  const handleUpdate = async (values: WebhookFormValues) => {
+    await update.mutateAsync(webhookUpdatePayload(values));
     toast.success("Webhook settings updated");
   };
 
@@ -167,42 +164,18 @@ export function WebhookDetailView({
             <StatusBadge status={current.enabled ? "active" : "inactive"} />
             {canManage ? (
               <>
-                <CreateDialog
+                <CreateDialog<WebhookFormValues>
                   triggerLabel="Edit settings"
                   submitLabel="Save changes"
                   pendingLabel="Saving changes…"
                   title="Edit webhook settings"
                   description="The Go API validates the HTTPS endpoint and event names before saving."
-                  fields={[
-                    {
-                      name: "name",
-                      label: "Name",
-                      defaultValue: current.name,
-                    },
-                    {
-                      name: "url",
-                      label: "HTTPS URL",
-                      type: "url",
-                      defaultValue: current.url,
-                    },
-                    {
-                      name: "events",
-                      label: "Events",
-                      required: false,
-                      defaultValue: current.events.join(", "),
-                      help: "Comma-separated event names, or * for all.",
-                    },
-                    {
-                      name: "enabled",
-                      label: "State",
-                      type: "select",
-                      defaultValue: current.enabled ? "true" : "false",
-                      options: [
-                        { value: "true", label: "Enabled" },
-                        { value: "false", label: "Disabled" },
-                      ],
-                    },
-                  ]}
+                  fields={webhookFields({
+                    name: current.name,
+                    url: current.url,
+                    events: current.events.join(", "),
+                    enabled: current.enabled ? "true" : "false",
+                  })}
                   pending={update.isPending}
                   onSubmit={handleUpdate}
                 />
