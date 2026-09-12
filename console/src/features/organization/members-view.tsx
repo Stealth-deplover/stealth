@@ -8,7 +8,6 @@ import {
   useDeleteOrganizationMembership,
   useUpdateOrganizationMembership,
 } from "@/api/mutations";
-import { UpdateOrganizationMembershipRequestRole } from "@/api/generated/schema";
 import { nextCursor } from "@/api/pagination";
 import { useMemberships } from "@/api/queries";
 import type { Membership } from "@/api/types";
@@ -24,13 +23,11 @@ import { Card } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-
-const roleOptions = Object.values(UpdateOrganizationMembershipRequestRole).map(
-  (role) => ({
-    value: role,
-    label: role[0].toUpperCase() + role.slice(1),
-  }),
-);
+import {
+  membershipRoleFields,
+  membershipRolePayload,
+  type MembershipRoleFormValues,
+} from "@/features/organization/membership-form";
 
 function membershipIdentity(member: Membership) {
   if (member.email) return member.email;
@@ -87,7 +84,7 @@ export function OrganizationMembersView({
       cell: ({ row }) =>
         canManage && row.original.role !== "owner" ? (
           <div className="flex items-center justify-end gap-1">
-            <CreateDialog
+            <CreateDialog<MembershipRoleFormValues>
               trigger={
                 <Button variant="ghost" size="sm">
                   Change role
@@ -98,22 +95,12 @@ export function OrganizationMembersView({
               pendingLabel="Saving role…"
               title="Change member role"
               description="The Go API enforces which organization roles the current member may change."
-              fields={[
-                {
-                  name: "role",
-                  label: "Role",
-                  type: "select",
-                  defaultValue: row.original.role,
-                  options: roleOptions,
-                },
-              ]}
+              fields={membershipRoleFields(row.original.role)}
               pending={update.isPending}
               onSubmit={async (values) => {
                 await update.mutateAsync({
                   accountId: row.original.account_id,
-                  body: {
-                    role: values.role as UpdateOrganizationMembershipRequestRole,
-                  },
+                  body: membershipRolePayload(values),
                 });
                 toast.success("Member role updated");
               }}
