@@ -9,7 +9,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
 	"strings"
@@ -154,16 +156,25 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	if err != nil {
 		return fmt.Errorf("open smtp message: %w", err)
 	}
-	body := "From: " + s.From + "\r\n" +
+	headers := "From: " + s.From + "\r\n" +
 		"To: " + message.To + "\r\n" +
 		"Subject: " + message.Subject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		normalizedBody + "\r\n"
-	if _, err := writer.Write([]byte(body)); err != nil {
+		"Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+	if _, err := io.WriteString(writer, headers); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("write smtp headers: %w", err)
+	}
+	bodyWriter := quotedprintable.NewWriter(writer)
+	if _, err := io.WriteString(bodyWriter, normalizedBody+"\r\n"); err != nil {
+		_ = bodyWriter.Close()
 		_ = writer.Close()
 		return fmt.Errorf("write smtp message: %w", err)
+	}
+	if err := bodyWriter.Close(); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("finish smtp message encoding: %w", err)
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("finish smtp message: %w", err)
