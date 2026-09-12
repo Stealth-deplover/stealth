@@ -1,7 +1,6 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
 import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
@@ -30,17 +29,10 @@ export function useCreateDatabaseColumn(
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.columns(projectId, databaseId, tableId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rows(projectId, databaseId, tableId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "database-table-schema", projectId, databaseId, tableId },
+      ]),
   });
 }
 
@@ -69,14 +61,10 @@ export function useCreateDatabaseRow(
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rows(projectId, databaseId, tableId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "database-table-rows", projectId, databaseId, tableId },
+      ]),
   });
 }
 
@@ -110,14 +98,10 @@ export function useUpdateDatabaseRow(
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rows(projectId, databaseId, tableId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "database-table-rows", projectId, databaseId, tableId },
+      ]),
   });
 }
 
@@ -144,14 +128,10 @@ export function useDeleteDatabaseRow(
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rows(projectId, databaseId, tableId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.rowScope(projectId, databaseId, tableId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "database-table-rows", projectId, databaseId, tableId },
+      ]),
   });
 }
 
@@ -188,9 +168,9 @@ export function useCreateDatabaseTable(projectId: string, databaseId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.tables(projectId, databaseId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "database-table", projectId, databaseId },
+      ]),
   });
 }
 
@@ -210,9 +190,9 @@ export function useCreateDatabaseBackup(projectId: string, databaseId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.databaseBackups(projectId, databaseId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "database-backup", projectId, databaseId },
+      ]),
   });
 }
 
@@ -235,9 +215,9 @@ export function useDeleteDatabaseBackup(projectId: string, databaseId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.databaseBackups(projectId, databaseId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "database-backup", projectId, databaseId },
+      ]),
   });
 }
 
@@ -262,29 +242,9 @@ export function useRestoreDatabaseBackup(
           },
         ),
       ),
-    onSuccess: () => {
-      const scopes = [
-        queryKeys.rowsScope(projectId, databaseId),
-        queryKeys.rowDatabaseScope(projectId, databaseId),
-        queryKeys.tableScope(projectId, databaseId),
-        queryKeys.columnsScope(projectId, databaseId),
-        queryKeys.indexesScope(projectId, databaseId),
-      ];
-      queryClient.invalidateQueries({
-        predicate: (query) =>
-          scopes.some((scope) =>
-            scope.every((value, index) => query.queryKey[index] === value),
-          ),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.database(projectId, databaseId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.tables(projectId, databaseId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.databaseBackups(projectId, databaseId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "database-backup", projectId, databaseId, restore: true },
+      ]),
   });
 }

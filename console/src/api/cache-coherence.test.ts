@@ -31,6 +31,54 @@ describe("cache coherence", () => {
     ]);
   });
 
+  it("maps an authenticated account refresh to all affected global keys", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "account",
+        includeOrganizations: true,
+        includeBootstrapStatus: true,
+      }),
+    ).toEqual([
+      ["account"],
+      ["organizations"],
+      ["bootstrap-status"],
+    ]);
+  });
+
+  it("keeps database restore invalidation policy in one module", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "database-backup",
+        projectId: "project-1",
+        databaseId: "database-1",
+        restore: true,
+      }),
+    ).toEqual([
+      ["rows", "project-1", "database-1"],
+      ["row", "project-1", "database-1"],
+      ["table", "project-1", "database-1"],
+      ["columns", "project-1", "database-1"],
+      ["indexes", "project-1", "database-1"],
+      ["database", "project-1", "database-1"],
+      ["tables", "project-1", "database-1"],
+      ["database-backups", "project-1", "database-1"],
+    ]);
+  });
+
+  it("maps storage file changes without leaking query keys to callers", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "storage-file",
+        projectId: "project-1",
+        bucketId: "bucket-1",
+        operation: "rename",
+      }),
+    ).toEqual([
+      ["files", "project-1", "bucket-1"],
+      ["file", "project-1", "bucket-1"],
+    ]);
+  });
+
   it("applies every unique invalidation key exactly once", async () => {
     const invalidateQueries = vi.fn().mockResolvedValue(undefined);
     const queryClient = { invalidateQueries };

@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useLogin() {
@@ -9,12 +10,10 @@ export function useLogin() {
   return useMutation({
     mutationFn: async (body: components["schemas"]["LoginRequest"]) =>
       unwrap(await api.POST("/v1/sessions/email-password", { body })),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
-      ]);
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "account", includeOrganizations: true },
+      ]),
   });
 }
 
@@ -23,12 +22,10 @@ export function useRegister() {
   return useMutation({
     mutationFn: async (body: components["schemas"]["RegisterRequest"]) =>
       unwrap(await api.POST("/v1/account/registrations", { body })),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
-      ]);
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "account", includeOrganizations: true },
+      ]),
   });
 }
 
@@ -54,12 +51,14 @@ export function usePollGitHubDeviceFlow() {
     mutationFn: async (
       body: components["schemas"]["PollGitHubDeviceRequest"],
     ) => unwrap(await api.POST("/v1/bootstrap/github/poll", { body })),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       if (result?.status !== "complete") return;
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.account }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.bootstrapStatus }),
+      return applyCacheChanges(queryClient, [
+        {
+          kind: "account",
+          includeOrganizations: true,
+          includeBootstrapStatus: true,
+        },
       ]);
     },
   });
@@ -86,8 +85,8 @@ export function useConfirmAccountVerification() {
   return useMutation({
     mutationFn: async (body: components["schemas"]["AuthTokenRequest"]) =>
       unwrap(await api.PUT("/v1/account/verification", { body })),
-    onSuccess: async () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.account }),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "account" }]),
   });
 }
 
@@ -118,7 +117,7 @@ export function useRevokeAccountSession() {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.accountSessions }),
+      applyCacheChanges(queryClient, [{ kind: "account-sessions" }]),
   });
 }
 
@@ -127,7 +126,7 @@ export function useRevokeOtherAccountSessions() {
   return useMutation({
     mutationFn: async () => unwrap(await api.DELETE("/v1/account/sessions")),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.accountSessions }),
+      applyCacheChanges(queryClient, [{ kind: "account-sessions" }]),
   });
 }
 
@@ -138,6 +137,6 @@ export function useUpdateAccountPassword() {
       body: components["schemas"]["UpdateAccountPasswordRequest"],
     ) => unwrap(await api.PATCH("/v1/account/password", { body })),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.accountSessions }),
+      applyCacheChanges(queryClient, [{ kind: "account-sessions" }]),
   });
 }

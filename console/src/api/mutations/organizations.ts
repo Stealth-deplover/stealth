@@ -1,7 +1,10 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, unwrap } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import {
+  applyCacheChanges,
+  type CacheChange,
+} from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 import { isSlug, toSlug } from "@/lib/utils";
 
@@ -12,7 +15,7 @@ export function useCreateOrganization() {
       body: components["schemas"]["CreateOrganizationRequest"],
     ) => unwrap(await api.POST("/v1/organizations", { body })),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.organizations }),
+      applyCacheChanges(queryClient, [{ kind: "organizations" }]),
   });
 }
 
@@ -35,9 +38,9 @@ export function useCreateProject(organizationId: string) {
       );
     },
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.projects(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-projects", organizationId },
+      ]),
   });
 }
 
@@ -54,9 +57,9 @@ export function useCreateOrganizationMembership(organizationId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.memberships(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-memberships", organizationId },
+      ]),
   });
 }
 
@@ -82,9 +85,9 @@ export function useUpdateOrganizationMembership(organizationId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.memberships(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-memberships", organizationId },
+      ]),
   });
 }
 
@@ -103,9 +106,9 @@ export function useDeleteOrganizationMembership(organizationId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.memberships(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-memberships", organizationId },
+      ]),
   });
 }
 
@@ -122,9 +125,9 @@ export function useCreateOrganizationInvitation(organizationId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.invitations(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-invitations", organizationId },
+      ]),
   });
 }
 
@@ -146,9 +149,9 @@ export function useRevokeOrganizationInvitation(organizationId: string) {
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.invitations(organizationId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "organization-invitations", organizationId },
+      ]),
   });
 }
 
@@ -160,12 +163,14 @@ export function useAcceptOrganizationInvitation() {
     ) =>
       unwrap(await api.POST("/v1/organization-invitations/accept", { body })),
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.organizations });
+      const changes: CacheChange[] = [{ kind: "organizations" }];
       const organizationId = result?.membership.organization_id;
       if (organizationId)
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.memberships(organizationId),
+        changes.push({
+          kind: "organization-memberships",
+          organizationId,
         });
+      void applyCacheChanges(queryClient, changes);
     },
   });
 }
