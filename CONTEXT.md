@@ -30,6 +30,21 @@ used by Console metadata and request validation. It clones catalog data when
 applying it and never treats catalog entries as provider credentials or worker
 capability.
 
+The secret settings loader owns decoding of the function-encryption key and
+dedicated bootstrap key, plus the GitHub App client ID. It keeps key material
+isolated and clones it into the application snapshot; `ValidateFunctions` and
+`ValidateBootstrap` remain the production fail-closed gates.
+
+The transport settings loader owns the HTTP listener, Redis endpoint, metrics
+token, and trusted proxy network list. It clones network values into the
+application snapshot so request-IP trust remains an explicit, immutable
+boundary for the API.
+
+The TLS settings loader owns optional ACME listener, directory, email, and
+certificate-cache configuration. It receives the resolved storage root and
+HTTP listener so certificate cache placement and listener collision checks are
+validated before the application snapshot is assembled.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
