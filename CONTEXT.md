@@ -16,6 +16,11 @@ constraints, then apply a complete validated slice to that snapshot. The
 execution loader owns function and agent runner settings; it must preserve the
 existing defaults and production credential gates.
 
+The site loader owns static publication limits and Git fetch concurrency. Its
+defaults intentionally inherit storage limits for struct-literal test or
+embedded configurations, while environment loading keeps the explicit site
+values and original bounds.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to

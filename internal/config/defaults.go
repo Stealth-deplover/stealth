@@ -19,32 +19,6 @@ func (c Config) WithDefaults() Config {
 		c.StorageDefaultQuotaBytes = 1 << 30
 	}
 	c.applyExecutionDefaults()
-	if c.SitesMaxArtifactSize <= 0 {
-		c.SitesMaxArtifactSize = c.StorageMaxFileSize
-	}
-	if c.SitesMaxArtifactSize <= 0 {
-		c.SitesMaxArtifactSize = 50 << 20
-	}
-	if c.SitesDefaultQuotaBytes <= 0 {
-		c.SitesDefaultQuotaBytes = c.StorageDefaultQuotaBytes
-	}
-	if c.SitesDefaultQuotaBytes <= 0 {
-		c.SitesDefaultQuotaBytes = 1 << 30
-	}
-	if c.SitesMaxExpandedBytes <= 0 {
-		c.SitesMaxExpandedBytes = 256 << 20
-	}
-	if c.SitesMaxExpandedBytes > c.SitesDefaultQuotaBytes {
-		c.SitesMaxExpandedBytes = c.SitesDefaultQuotaBytes
-	}
-	if c.SitesMaxFiles <= 0 {
-		c.SitesMaxFiles = 4096
-	}
-	if c.SitesGitFetchConcurrency <= 0 {
-		c.SitesGitFetchConcurrency = 4
-	}
-	if c.SitesGitFetchConcurrency > 32 {
-		c.SitesGitFetchConcurrency = 32
-	}
+	c.applySiteDefaults()
 	return c
 }

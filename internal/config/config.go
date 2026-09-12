@@ -133,6 +133,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	siteSettings, err := loadSiteSettings()
+	if err != nil {
+		return Config{}, err
+	}
 	storageMaxFileSize, err := parseBytes(value("STORAGE_MAX_FILE_SIZE", "50MiB"))
 	if err != nil || storageMaxFileSize < 1 {
 		return Config{}, fmt.Errorf("STORAGE_MAX_FILE_SIZE must be a positive byte quantity")
@@ -140,26 +144,6 @@ func Load() (Config, error) {
 	storageDefaultQuota, err := parseBytes(value("STORAGE_DEFAULT_QUOTA_BYTES", "1GiB"))
 	if err != nil || storageDefaultQuota < 1 {
 		return Config{}, fmt.Errorf("STORAGE_DEFAULT_QUOTA_BYTES must be a positive byte quantity")
-	}
-	sitesMaxArtifactSize, err := parseBytes(value("SITES_MAX_ARTIFACT_SIZE", "50MiB"))
-	if err != nil || sitesMaxArtifactSize < 1 {
-		return Config{}, fmt.Errorf("SITES_MAX_ARTIFACT_SIZE must be a positive byte quantity")
-	}
-	sitesDefaultQuota, err := parseBytes(value("SITES_DEFAULT_QUOTA_BYTES", "1GiB"))
-	if err != nil || sitesDefaultQuota < 1 {
-		return Config{}, fmt.Errorf("SITES_DEFAULT_QUOTA_BYTES must be a positive byte quantity")
-	}
-	sitesMaxExpanded, err := parseBytes(value("SITES_MAX_EXPANDED_BYTES", "256MiB"))
-	if err != nil || sitesMaxExpanded < 1 {
-		return Config{}, fmt.Errorf("SITES_MAX_EXPANDED_BYTES must be a positive byte quantity")
-	}
-	sitesMaxFiles, err := strconv.Atoi(value("SITES_MAX_FILES", "4096"))
-	if err != nil || sitesMaxFiles < 1 || sitesMaxFiles > 100000 {
-		return Config{}, fmt.Errorf("SITES_MAX_FILES must be an integer between 1 and 100000")
-	}
-	sitesGitFetchConcurrency, err := strconv.Atoi(value("SITES_GIT_FETCH_CONCURRENCY", "4"))
-	if err != nil || sitesGitFetchConcurrency < 1 || sitesGitFetchConcurrency > 32 {
-		return Config{}, fmt.Errorf("SITES_GIT_FETCH_CONCURRENCY must be an integer between 1 and 32")
 	}
 	executionSettings, err := loadExecutionSettings()
 	if err != nil {
@@ -294,11 +278,6 @@ func Load() (Config, error) {
 		FunctionsSecretKey:       functionsSecretKey,
 		BootstrapCLIKey:          bootstrapCLIKey,
 		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		SitesMaxArtifactSize:     sitesMaxArtifactSize,
-		SitesDefaultQuotaBytes:   sitesDefaultQuota,
-		SitesMaxExpandedBytes:    sitesMaxExpanded,
-		SitesMaxFiles:            sitesMaxFiles,
-		SitesGitFetchConcurrency: sitesGitFetchConcurrency,
 		TelemetryOTLPEndpoint:    telemetryEndpoint,
 		TelemetryServiceName:     telemetryServiceName,
 		TelemetrySampleRatio:     telemetrySampleRatio,
@@ -306,6 +285,7 @@ func Load() (Config, error) {
 	}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
+	siteSettings.apply(&config)
 	executionSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
