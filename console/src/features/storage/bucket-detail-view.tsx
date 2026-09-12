@@ -43,7 +43,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBytes, formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
 import { BackLink } from "@/features/resources/detail-shared";
-import { bucketName, objectName, positiveBytes } from "./storage-values";
+import { objectName } from "./storage-values";
+import {
+  storageBucketSettingsFields,
+  storageBucketSettingsPayload,
+  storageObjectFields,
+  storageObjectPayload,
+  type StorageBucketSettingsFormValues,
+  type StorageObjectFormValues,
+} from "@/features/storage/bucket-form";
 
 function UploadObject({
   projectId,
@@ -239,25 +247,19 @@ function ObjectDetail({
                 </a>
               </Button>
               {canManage ? (
-                <CreateDialog
+                <CreateDialog<StorageObjectFormValues>
                   key={file.updated_at}
                   triggerLabel="Rename object"
                   submitLabel="Save name"
                   pendingLabel="Saving name…"
                   title="Rename object"
                   description="Change the display name. The object ID and file contents stay the same."
-                  fields={[
-                    {
-                      name: "name",
-                      label: "Object name",
-                      defaultValue: file.name,
-                    },
-                  ]}
+                  fields={storageObjectFields(file.name)}
                   pending={rename.isPending}
                   onSubmit={async (values) => {
                     await rename.mutateAsync({
                       fileId: file.id,
-                      name: objectName.parse(values.name),
+                      body: storageObjectPayload(values),
                     });
                     toast.success("Object renamed");
                   }}
@@ -513,44 +515,23 @@ export function BucketDetailView({
                 ))}
               </dl>
               {canManage ? (
-                <CreateDialog
+                <CreateDialog<StorageBucketSettingsFormValues>
                   key={current.updated_at}
                   triggerLabel="Edit bucket settings"
                   submitLabel="Save settings"
                   pendingLabel="Saving settings…"
                   title="Edit bucket settings"
                   description="Update the name and size limits. Existing access permissions stay unchanged. The server enforces its global upload limit."
-                  fields={[
-                    {
-                      name: "name",
-                      label: "Bucket name",
-                      defaultValue: current.name,
-                    },
-                    {
-                      name: "max_file_size_bytes",
-                      label: "Maximum object size (bytes)",
-                      defaultValue: String(current.max_file_size_bytes),
-                    },
-                    {
-                      name: "quota_bytes",
-                      label: "Quota (bytes)",
-                      defaultValue: String(current.quota_bytes),
-                    },
-                  ]}
+                  fields={storageBucketSettingsFields({
+                    name: current.name,
+                    max_file_size_bytes: String(current.max_file_size_bytes),
+                    quota_bytes: String(current.quota_bytes),
+                  })}
                   pending={update.isPending}
                   onSubmit={async (values) => {
-                    const quota = positiveBytes(values.quota_bytes);
-                    if (quota < current.used_bytes)
-                      throw new Error(
-                        "Quota cannot be smaller than current usage.",
-                      );
-                    await update.mutateAsync({
-                      name: bucketName.parse(values.name),
-                      max_file_size_bytes: positiveBytes(
-                        values.max_file_size_bytes,
-                      ),
-                      quota_bytes: quota,
-                    });
+                    await update.mutateAsync(
+                      storageBucketSettingsPayload(values, current.used_bytes),
+                    );
                     toast.success("Bucket settings updated");
                   }}
                 />
