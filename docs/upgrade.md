@@ -15,6 +15,16 @@ forwarding packages are provided.
 
 ## Upgrade procedure
 
+For a CLI-only update, use the installed self-update command:
+
+```bash
+stealth update
+```
+
+This changes only the CLI binary and does not pull images, run migrations, or
+restart the server stack. Use the coordinated procedure below for API,
+worker, migration, Console, PostgreSQL, Redis, or proxy changes.
+
 1. Read the GitHub Release notes for the target version, especially migration
    and configuration changes.
 2. Verify PostgreSQL and object-storage backups and record where the restore

@@ -54,6 +54,10 @@ onboarding and is not production ingress. The default local proxy, Console, and 
 See [Production deployment](docs/production-deployment.md) and the
 [CLI guide](docs/cli.md) for the supported self-hosting path.
 
+After installation, `stealth update` securely updates only the installed CLI
+from the latest stable release. It does not upgrade or restart the running
+Stealth server stack; use [Upgrade and rollback](docs/upgrade.md) for that.
+
 ## Development
 
 The backend uses Go 1.26, PostgreSQL, and Redis:

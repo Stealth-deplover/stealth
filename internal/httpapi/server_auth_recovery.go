@@ -97,11 +97,10 @@ func (s *Server) sendAccountVerification(w http.ResponseWriter, r *http.Request)
 		internalError(s, w, err)
 		return
 	}
-	link, err := s.authLinkFor(r, "verify-email", nil, token, req.URL)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
-		return
-	}
+	// The request URL is accepted for client compatibility, but security email
+	// links always use the configured Console origin. Request data must never
+	// become an email body or link destination.
+	link := s.authLink("verify-email", nil, token)
 	if _, err := s.repo.IssueAccountAuthToken(r.Context(), accountID, repository.AuthTokenEmailVerification, tokenHash, time.Now().UTC().Add(s.config.AuthVerificationTTL)); err != nil {
 		internalError(s, w, err)
 		return
@@ -158,11 +157,9 @@ func (s *Server) createAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	link, linkErr := s.authLinkFor(r, "reset-password", nil, token, req.URL)
-	if linkErr != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", linkErr.Error())
-		return
-	}
+	// Keep the emailed recovery link on the trusted configured origin. The
+	// request URL is an accepted compatibility field, not an email destination.
+	link := s.authLink("reset-password", nil, token)
 	account, found, err := s.repo.CreateAccountPasswordResetToken(r.Context(), email, tokenHash, time.Now().UTC().Add(s.config.AuthPasswordResetTTL))
 	if err != nil {
 		internalError(s, w, err)
@@ -233,11 +230,7 @@ func (s *Server) sendProjectUserVerification(w http.ResponseWriter, r *http.Requ
 		internalError(s, w, err)
 		return
 	}
-	link, err := s.authLinkFor(r, "verify-email", &projectID, token, req.URL)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
-		return
-	}
+	link := s.authLink("verify-email", &projectID, token)
 	if _, err := s.repo.IssueProjectUserAuthToken(r.Context(), projectID, userID, repository.AuthTokenEmailVerification, tokenHash, time.Now().UTC().Add(s.config.AuthVerificationTTL)); err != nil {
 		internalError(s, w, err)
 		return
@@ -300,11 +293,7 @@ func (s *Server) createProjectUserRecovery(w http.ResponseWriter, r *http.Reques
 		internalError(s, w, err)
 		return
 	}
-	link, linkErr := s.authLinkFor(r, "reset-password", &projectID, token, req.URL)
-	if linkErr != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", linkErr.Error())
-		return
-	}
+	link := s.authLink("reset-password", &projectID, token)
 	user, found, err := s.repo.CreateProjectUserPasswordResetToken(r.Context(), projectID, email, tokenHash, time.Now().UTC().Add(s.config.AuthPasswordResetTTL))
 	if err != nil {
 		internalError(s, w, err)

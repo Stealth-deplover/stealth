@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	defaultRawBaseURL = "https://raw.githubusercontent.com/Stealth-deplover/stealth"
-	defaultHomeName   = ".stealth"
+	defaultRawBaseURL           = "https://raw.githubusercontent.com/Stealth-deplover/stealth"
+	defaultGitHubAPIBaseURL     = "https://api.github.com/repos/Stealth-deplover/stealth"
+	defaultGitHubReleaseBaseURL = "https://github.com/Stealth-deplover/stealth/releases/download"
+	defaultHomeName             = ".stealth"
 )
 
 // CommandRunner is the small boundary around external commands used by the
@@ -40,14 +42,19 @@ type execCommandRunner struct{}
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
 type App struct {
-	in         io.Reader
-	out        io.Writer
-	errOut     io.Writer
-	runner     CommandRunner
-	httpClient *http.Client
-	homeDir    string
-	assetBase  string
-	verbose    bool
+	in                  io.Reader
+	out                 io.Writer
+	errOut              io.Writer
+	runner              CommandRunner
+	httpClient          *http.Client
+	homeDir             string
+	assetBase           string
+	releaseAPIBase      string
+	releaseDownloadBase string
+	executablePath      func() (string, error)
+	renameFile          func(string, string) error
+	currentVersion      func() string
+	verbose             bool
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.
@@ -60,15 +67,20 @@ type App struct {
 func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	homeDir, _ := os.UserHomeDir()
 	return &App{
-		in:           in,
-		out:          out,
-		errOut:       errOut,
-		runner:       execCommandRunner{},
-		httpClient:   &http.Client{Timeout: 20 * time.Second},
-		homeDir:      homeDir,
-		assetBase:    defaultRawBaseURL,
-		pollAttempts: 60,
-		pollInterval: 2 * time.Second,
+		in:                  in,
+		out:                 out,
+		errOut:              errOut,
+		runner:              execCommandRunner{},
+		httpClient:          &http.Client{Timeout: 20 * time.Second},
+		homeDir:             homeDir,
+		assetBase:           defaultRawBaseURL,
+		releaseAPIBase:      defaultGitHubAPIBaseURL,
+		releaseDownloadBase: defaultGitHubReleaseBaseURL,
+		executablePath:      os.Executable,
+		renameFile:          os.Rename,
+		currentVersion:      func() string { return buildinfo.Version },
+		pollAttempts:        60,
+		pollInterval:        2 * time.Second,
 	}
 }
 
@@ -95,6 +107,8 @@ func (a *App) run(args []string) int {
 		return a.runSetup(args[1:])
 	case "uninstall":
 		return a.runUninstall(args[1:])
+	case "update":
+		return a.runUpdate(args[1:])
 	case "status":
 		return a.runStatus(args[1:])
 	case "doctor":
@@ -115,6 +129,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")
 	fmt.Fprintln(w, "  stealth setup [--adopt-owner]")
 	fmt.Fprintln(w, "  stealth uninstall [--keep-data|--purge] [--yes] [--dry-run]")
+	fmt.Fprintln(w, "  stealth update [--check]")
 	fmt.Fprintln(w, "  stealth status")
 	fmt.Fprintln(w, "  stealth doctor")
 	fmt.Fprintln(w, "  stealth logs [api|worker|console|proxy|postgres|redis]")

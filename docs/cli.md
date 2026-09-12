@@ -115,6 +115,31 @@ service health, API health/readiness/version endpoints, Console/proxy HTTP
 reachability, and available disk space. `logs` delegates to
 `docker compose logs`; it does not build a log storage subsystem.
 
+To update the installed Stealth CLI to the latest stable GitHub Release:
+
+```bash
+stealth update
+```
+
+The command downloads only the Linux amd64/arm64 CLI archive for the running
+platform, verifies its entry in `checksums.txt`, validates the extracted
+binary, and replaces the installed CLI with an atomic file swap. A failed
+download, checksum, extraction, or replacement leaves the current CLI
+untouched. Development builds can use `stealth update --check` to inspect
+availability, but a release build is recommended for self-update.
+
+Use `stealth update --check` for a network-only check; it exits non-zero when
+an update is available. The update source is the official stable release only:
+drafts, prereleases, arbitrary URLs, and downgrades are rejected. If the
+installation directory is not writable, rerun the command with the
+appropriate system permissions; Stealth never invokes `sudo` or asks for its
+password.
+
+`stealth update` updates the CLI binary only. It does not pull or restart API,
+worker, Console, PostgreSQL, Redis, or proxy containers, apply migrations, or
+upgrade the running Stealth server stack. Use the production upgrade runbook
+for coordinated platform changes.
+
 ## First-run Instance Owner setup
 
 On a new installation, `stealth install` waits for PostgreSQL, Redis,
