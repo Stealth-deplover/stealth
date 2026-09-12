@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, uploadMultipart } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useUploadStorageFile(projectId: string, bucketId: string) {
@@ -75,12 +76,15 @@ export function useUpdateStorageBucket(projectId: string, bucketId: string) {
           body,
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.bucket(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "storage-bucket",
+          projectId,
+          bucketId,
+          includeDetail: true,
+        },
+      ]),
   });
 }
 
@@ -97,7 +101,7 @@ export function useCreateBucket(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "storage-bucket", projectId }]),
   });
 }
 
