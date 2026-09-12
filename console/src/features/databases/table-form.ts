@@ -2,7 +2,13 @@ import { DatabaseColumnType } from "@/api/generated/schema";
 import type { components } from "@/api/generated/schema";
 import type { DatabaseColumn } from "@/api/types";
 import type { CreateField } from "@/components/create-dialog";
-import { parseColumn, parseRowData } from "@/features/databases/data-values";
+import {
+  parseColumn,
+  parseRowData,
+  type DatabaseColumnFormValues,
+} from "@/features/databases/data-values";
+
+export type { DatabaseColumnFormValues } from "@/features/databases/data-values";
 
 export type DatabaseRowFormValues = {
   data: string;
@@ -34,14 +40,6 @@ export function databasePartialRowPayload(
 ): components["schemas"]["UpdateDatabaseRowRequest"] {
   return { data: parseRowData(values.data, columns, true) };
 }
-
-export type DatabaseColumnFormValues = {
-  key: string;
-  type: string;
-  required: string;
-  varchar_size: string;
-  default: string;
-};
 
 export const databaseColumnFields: readonly CreateField<DatabaseColumnFormValues>[] =
   [
