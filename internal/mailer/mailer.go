@@ -7,11 +7,11 @@ package mailer
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"mime/quotedprintable"
 	"net"
 	"net/smtp"
 	"strings"
@@ -161,26 +161,36 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 		"Subject: " + message.Subject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: quoted-printable\r\n\r\n"
+		"Content-Transfer-Encoding: base64\r\n\r\n"
 	if _, err := io.WriteString(writer, headers); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write smtp headers: %w", err)
 	}
-	bodyWriter := quotedprintable.NewWriter(writer)
-	if _, err := io.WriteString(bodyWriter, normalizedBody+"\r\n"); err != nil {
-		_ = bodyWriter.Close()
+	if err := writeBase64Body(writer, normalizedBody+"\r\n"); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write smtp message: %w", err)
-	}
-	if err := bodyWriter.Close(); err != nil {
-		_ = writer.Close()
-		return fmt.Errorf("finish smtp message encoding: %w", err)
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("finish smtp message: %w", err)
 	}
 	if err := client.Quit(); err != nil {
 		return fmt.Errorf("close smtp session: %w", err)
+	}
+	return nil
+}
+
+func writeBase64Body(writer io.Writer, body string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	const lineLength = 76
+	for len(encoded) > 0 {
+		end := lineLength
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		if _, err := io.WriteString(writer, encoded[:end]+"\r\n"); err != nil {
+			return err
+		}
+		encoded = encoded[end:]
 	}
 	return nil
 }

@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
-	"mime/quotedprintable"
 	"net"
 	"strings"
 	"testing"
@@ -191,10 +191,10 @@ func TestSMTPSenderQuotesDynamicPlainTextBody(t *testing.T) {
 	if len(headerAndBody) != 2 {
 		t.Fatalf("SMTP message did not contain a header/body boundary: %q", data)
 	}
-	if !strings.Contains(headerAndBody[0], "Content-Transfer-Encoding: quoted-printable") {
-		t.Fatalf("SMTP headers did not select quoted-printable encoding: %q", headerAndBody[0])
+	if !strings.Contains(headerAndBody[0], "Content-Transfer-Encoding: base64") {
+		t.Fatalf("SMTP headers did not select base64 encoding: %q", headerAndBody[0])
 	}
-	decoded, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(headerAndBody[1])))
+	decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, strings.NewReader(headerAndBody[1])))
 	if err != nil {
 		t.Fatal(err)
 	}
