@@ -94,6 +94,16 @@ worker-owned logs or retention. The repository remains the production
 implementation supplied by the worker composition root; tests can provide a
 small fake without constructing unrelated control-plane state.
 
+## Backend Site lifecycle
+
+Site persistence is organized into three modules. The control-plane module
+owns Site metadata and authorization, the deployment module owns source
+metadata, activation, build leases, quota transitions, and build logs, and the
+artifact module owns immutable path cleanup and public artifact resolution.
+All three remain methods on the repository so existing callers keep one
+transactional persistence boundary; the file/module split keeps each lifecycle
+invariant near the SQL that enforces it.
+
 ## Console typed form adapters
 
 `CreateDialog` owns field rendering, transient string state, and interaction
