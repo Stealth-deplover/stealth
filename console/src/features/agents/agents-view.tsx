@@ -19,9 +19,8 @@ import {
   useAgents,
 } from "@/api/queries";
 import type { Agent, AgentCatalog, AgentRun } from "@/api/types";
-import type { components } from "@/api/generated/schema";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { CreateDialog, type CreateField } from "@/components/create-dialog";
+import { CreateDialog } from "@/components/create-dialog";
 import { DataTable } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -33,135 +32,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import {
-  agentModelAfterProviderChange,
-  agentModelOptions,
-  agentProvider,
-  defaultAgentModel,
-  isValidAgentProviderModel,
-} from "@/features/agents/agent-configuration";
+  agentFields,
+  agentPayload,
+  type AgentFormValues,
+} from "@/features/agents/agent-form";
 import { formatAgentRunDuration } from "@/features/agents/agent-run-state";
 import { AgentRunStatusBadge } from "@/features/agents/agent-run-status-badge";
 import { formatDate } from "@/lib/format";
-
-function optionalText(value: string | undefined) {
-  const trimmed = value?.trim() ?? "";
-  return trimmed || null;
-}
-
-function parseAgentTools(value: string | undefined) {
-  return (value ?? "")
-    .split(",")
-    .map((tool) => tool.trim())
-    .filter(Boolean) as components["schemas"]["AgentTool"][];
-}
 
 function catalogReady(catalog: AgentCatalog | undefined) {
   return Boolean(
     catalog?.providers.length && catalog.roles.length && catalog.tools.length,
   );
-}
-
-function selectedAgentProviderModel(
-  catalog: AgentCatalog | undefined,
-  values: Record<string, string>,
-) {
-  const provider = values.provider?.trim() ?? "";
-  const model = values.model?.trim() ?? "";
-  if (!isValidAgentProviderModel(catalog, provider, model)) {
-    throw new Error("Select a model supported by the selected provider.");
-  }
-  return { provider, model };
-}
-
-function agentFields(
-  catalog: AgentCatalog | undefined,
-  current?: Agent,
-): CreateField[] {
-  const providers = catalog?.providers ?? [];
-  const selectedProvider =
-    agentProvider(catalog, current?.provider) ?? providers[0];
-
-  return [
-    {
-      name: "name",
-      label: "Name",
-      placeholder: "frontend-reviewer",
-      defaultValue: current?.name ?? "",
-    },
-    {
-      name: "description",
-      label: "Description",
-      type: "textarea",
-      required: false,
-      defaultValue: current?.description ?? "",
-      placeholder: "What should this task runner own?",
-    },
-    {
-      name: "role",
-      label: "Role",
-      type: "select",
-      defaultValue: current?.role ?? catalog?.roles[0] ?? "",
-      options: (catalog?.roles ?? []).map((role) => ({
-        value: role,
-        label: role,
-      })),
-    },
-    {
-      name: "provider",
-      label: "Provider",
-      type: "select",
-      defaultValue: current?.provider ?? selectedProvider?.id ?? "",
-      options: providers.map((provider) => ({
-        value: provider.id,
-        label: provider.name,
-      })),
-      onChange: (value, values) => ({
-        model: agentModelAfterProviderChange(catalog, value, values.model),
-      }),
-    },
-    {
-      name: "model",
-      label: "Model",
-      type: "select",
-      defaultValue: defaultAgentModel(
-        catalog,
-        selectedProvider?.id,
-        current?.model,
-      ),
-      optionsForValues: (values) =>
-        agentModelOptions(catalog, values.provider).map((model) => ({
-          value: model,
-          label: model,
-        })),
-      help: "Provider and model values come from the server catalog; selections are sent unchanged to the Go API.",
-    },
-    {
-      name: "branch",
-      label: "Branch",
-      defaultValue: current?.branch ?? "main",
-      placeholder: "main",
-    },
-    {
-      name: "tools",
-      label: "Tools",
-      type: "multiselect",
-      required: false,
-      defaultValue: current?.tools.join(",") ?? "",
-      options: (catalog?.tools ?? []).map((tool) => ({
-        value: tool,
-        label: tool,
-      })),
-      help: "Only tools published by the server catalog can be selected.",
-    },
-    {
-      name: "instructions",
-      label: "Instructions",
-      type: "textarea",
-      required: false,
-      defaultValue: current?.instructions ?? "",
-      placeholder: "Optional execution instructions",
-    },
-  ];
 }
 
 function AgentRunSummary({ run, base }: { run: AgentRun; base: string }) {
@@ -202,18 +84,10 @@ export function AgentsView({
   const agents = query.data?.agents ?? [];
   const canManage = query.data?.can_manage === true;
 
-  const handleCreateAgent = async (values: Record<string, string>) => {
-    const selected = selectedAgentProviderModel(catalog.data, values);
+  const handleCreateAgent = async (values: AgentFormValues) => {
     const result = await create.mutateAsync({
       project_id: projectId,
-      name: values.name.trim(),
-      description: values.description?.trim() ?? "",
-      role: values.role as components["schemas"]["AgentRole"],
-      provider: selected.provider,
-      model: selected.model,
-      branch: values.branch.trim(),
-      tools: parseAgentTools(values.tools),
-      instructions: optionalText(values.instructions),
+      ...agentPayload(catalog.data, values),
     });
     if (!result?.agent.id) {
       throw new Error("The API did not return the created agent.");
@@ -279,7 +153,7 @@ export function AgentsView({
         description="Run backend-owned developer tasks through durable Agent Runs."
         actions={
           canManage && ready ? (
-            <CreateDialog
+            <CreateDialog<AgentFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create agent"
@@ -399,18 +273,8 @@ export function AgentDetailView({
       />
     );
 
-  const handleUpdate = async (values: Record<string, string>) => {
-    const selected = selectedAgentProviderModel(catalog.data, values);
-    await update.mutateAsync({
-      name: values.name.trim(),
-      description: values.description?.trim() ?? "",
-      role: values.role as components["schemas"]["AgentRole"],
-      provider: selected.provider,
-      model: selected.model,
-      branch: values.branch.trim(),
-      tools: parseAgentTools(values.tools),
-      instructions: optionalText(values.instructions),
-    });
+  const handleUpdate = async (values: AgentFormValues) => {
+    await update.mutateAsync(agentPayload(catalog.data, values));
     toast.success("Agent configuration updated");
   };
 
@@ -445,7 +309,7 @@ export function AgentDetailView({
                   </Link>
                 </Button>
                 {ready ? (
-                  <CreateDialog
+                  <CreateDialog<AgentFormValues>
                     triggerLabel="Edit configuration"
                     submitLabel="Save changes"
                     pendingLabel="Saving changes…"
