@@ -25,6 +25,11 @@ The telemetry loader owns the optional OTLP endpoint, service name, and sample
 ratio. An empty endpoint is a supported no-op configuration; non-empty values
 must remain absolute HTTP(S) URLs without credentials, query, or fragment.
 
+The agent settings loader owns only the validated public provider/model catalog
+used by Console metadata and request validation. It clones catalog data when
+applying it and never treats catalog entries as provider credentials or worker
+capability.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to

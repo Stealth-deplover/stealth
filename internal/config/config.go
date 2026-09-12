@@ -153,7 +153,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	agentProviderCatalog, err := parseAgentProviderCatalog(os.Getenv("AGENT_PROVIDER_CATALOG"))
+	agentSettings, err := loadAgentSettings()
 	if err != nil {
 		return Config{}, err
 	}
@@ -270,13 +270,13 @@ func Load() (Config, error) {
 		FunctionsSecretKey:       functionsSecretKey,
 		BootstrapCLIKey:          bootstrapCLIKey,
 		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		AgentProviderCatalog:     agentProviderCatalog,
 	}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
 	siteSettings.apply(&config)
 	executionSettings.apply(&config)
 	telemetrySettings.apply(&config)
+	agentSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
