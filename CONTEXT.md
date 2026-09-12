@@ -153,3 +153,13 @@ and index rendering plus column creation, and `TableRowDetail` owns the
 selected-row query and row mutations. URL query state remains the navigation
 seam shared by the shell and row browser, so pagination, filtering, and row
 inspection retain the existing route behavior.
+
+## Console storage bucket detail
+
+`BucketDetailView` composes storage metadata and tab state. `BucketObjectBrowser`
+owns paginated object listing, deletion, upload completion, and file selection;
+`BucketUploadDialog` owns filename/quota validation and multipart upload;
+`BucketObjectDetail` owns metadata and rename actions; and
+`BucketSettingsPanel` owns bucket-limit updates. The shell keeps only the
+permission projection and route-level selection so object and settings
+changes remain local to their modules.
