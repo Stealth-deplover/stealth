@@ -73,7 +73,7 @@ const (
 )
 
 func (s *Server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := s.repo.BootstrapStatus(r.Context())
+	status, err := s.bootstrap.BootstrapStatus(r.Context())
 	if err != nil {
 		internalError(s, w, err)
 		return
@@ -95,7 +95,7 @@ func (s *Server) createBootstrapSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	expiresAt := time.Now().UTC().Add(bootstrap.CodeLifetime)
-	if err := s.repo.CreateBootstrapSession(r.Context(), repository.BootstrapSessionInput{
+	if err := s.bootstrap.CreateBootstrapSession(r.Context(), repository.BootstrapSessionInput{
 		ID:        uuid.Must(uuid.NewV7()),
 		CodeHash:  bootstrap.HashCode(code),
 		ExpiresAt: expiresAt,
@@ -125,7 +125,7 @@ func (s *Server) verifyBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		writeBootstrapError(w, http.StatusUnauthorized, "invalid_bootstrap_code", "invalid, expired, or already used setup code")
 		return
 	}
-	verification, err := s.repo.VerifyBootstrapCode(r.Context(), bootstrap.HashCode(req.SetupCode))
+	verification, err := s.bootstrap.VerifyBootstrapCode(r.Context(), bootstrap.HashCode(req.SetupCode))
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrBootstrapSealed):
@@ -164,7 +164,7 @@ func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	// racing to replace the one persisted device flow.
 	s.githubFlowMu.Lock()
 	defer s.githubFlowMu.Unlock()
-	verification, err := s.repo.VerifyBootstrapCode(r.Context(), codeHash)
+	verification, err := s.bootstrap.VerifyBootstrapCode(r.Context(), codeHash)
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrBootstrapSealed):
@@ -203,7 +203,7 @@ func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	if githubExpiresAt.After(verification.ExpiresAt) {
 		githubExpiresAt = verification.ExpiresAt
 	}
-	flow, err := s.repo.StartGitHubDeviceFlow(r.Context(), repository.GitHubDeviceFlowInput{
+	flow, err := s.bootstrap.StartGitHubDeviceFlow(r.Context(), repository.GitHubDeviceFlowInput{
 		ID:                   sessionID,
 		CodeHash:             codeHash,
 		DeviceCodeCiphertext: sealedDeviceCode,
@@ -246,7 +246,7 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 		writeBootstrapError(w, http.StatusUnauthorized, "invalid_github_session", "GitHub authorization session is invalid")
 		return
 	}
-	flow, allowed, err := s.repo.ClaimGitHubDevicePoll(r.Context(), sessionID)
+	flow, allowed, err := s.bootstrap.ClaimGitHubDevicePoll(r.Context(), sessionID)
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrBootstrapSealed):
@@ -351,7 +351,7 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 		}
 		input.TokenHash = tokenHash
 		input.SessionExpiresAt = time.Now().UTC().Add(s.config.SessionTTL)
-		account, ownerErr := s.repo.CreateGitHubInstanceOwner(r.Context(), input)
+		account, ownerErr := s.bootstrap.CreateGitHubInstanceOwner(r.Context(), input)
 		if ownerErr != nil {
 			switch {
 			case errors.Is(ownerErr, repository.ErrBootstrapSealed):
@@ -379,7 +379,7 @@ func (s *Server) listBootstrapAdoptionAccounts(w http.ResponseWriter, r *http.Re
 	if !s.verifyBootstrapCLI(w, r) {
 		return
 	}
-	accounts, err := s.repo.ListBootstrapAdoptionAccounts(r.Context())
+	accounts, err := s.bootstrap.ListBootstrapAdoptionAccounts(r.Context())
 	if err != nil {
 		if errors.Is(err, repository.ErrBootstrapSealed) {
 			writeBootstrapError(w, http.StatusConflict, "adoption_unavailable", "instance owner adoption is not available")
@@ -404,7 +404,7 @@ func (s *Server) adoptBootstrapOwner(w http.ResponseWriter, r *http.Request) {
 		writeBootstrapError(w, http.StatusUnprocessableEntity, "validation_error", "account_id must be a UUID")
 		return
 	}
-	if err := s.repo.AdoptInstanceOwner(r.Context(), accountID); err != nil {
+	if err := s.bootstrap.AdoptInstanceOwner(r.Context(), accountID); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrNotFound):
 			writeBootstrapError(w, http.StatusNotFound, "not_found", "account was not found")
@@ -473,7 +473,7 @@ func (s *Server) verifyBootstrapCLI(w http.ResponseWriter, r *http.Request) bool
 }
 
 func (s *Server) updateGitHubDeviceFlow(w http.ResponseWriter, r *http.Request, sessionID uuid.UUID, status string, interval time.Duration, nextPollAt time.Time) bool {
-	if err := s.repo.UpdateGitHubDeviceFlow(r.Context(), sessionID, status, interval, nextPollAt); err != nil {
+	if err := s.bootstrap.UpdateGitHubDeviceFlow(r.Context(), sessionID, status, interval, nextPollAt); err != nil {
 		internalError(s, w, err)
 		return false
 	}

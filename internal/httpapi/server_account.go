@@ -35,7 +35,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !s.allowAccountAuth(w, r, "registration", email) {
 		return
 	}
-	bootstrapStatus, err := s.repo.BootstrapStatus(r.Context())
+	bootstrapStatus, err := s.bootstrap.BootstrapStatus(r.Context())
 	if err != nil {
 		s.logger.Error("bootstrap status lookup failed", "error", err)
 		writeError(w, http.StatusServiceUnavailable, "service_unavailable", "instance setup state is temporarily unavailable")

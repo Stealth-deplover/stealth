@@ -28,6 +28,7 @@ const maxMultipartOverhead = 2 << 20
 type Server struct {
 	config         config.Config
 	repo           *repository.Repository
+	bootstrap      repository.BootstrapStore
 	logger         *slog.Logger
 	limiter        ratelimit.Limiter
 	storage        storage.BlobStore
@@ -60,6 +61,7 @@ type Dependencies struct {
 	EmailSender    mailer.Sender
 	RealtimeBroker *realtime.Broker
 	GitHubClient   githubauth.Client
+	BootstrapStore repository.BootstrapStore
 }
 
 // New builds the console API with production dependencies.
@@ -87,6 +89,10 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	if deps.GitHubClient == nil {
 		deps.GitHubClient = githubauth.NewClient(nil)
+	}
+	bootstrapStore := deps.BootstrapStore
+	if bootstrapStore == nil && repo != nil {
+		bootstrapStore = repo.BootstrapStore()
 	}
 	var storageStore storage.BlobStore
 	var storageErr error
@@ -129,7 +135,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
-	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender, githubClient: deps.GitHubClient}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender, githubClient: deps.GitHubClient}
 	return s.routes()
 }
 
