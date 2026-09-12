@@ -71,6 +71,15 @@ connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
 `config.Load`.
 
+## Backend runtime composition
+
+`internal/runtime` owns shared process resource composition. API, worker, and
+migration entry points use its database pool policy and optional Redis and
+migration lifecycle, while keeping process-specific registration and execution
+in their own composition roots. Resource failures close any already-created
+clients before returning, so a partially assembled process cannot leak a pool
+or Redis client.
+
 The auth loader owns session lifetimes, the canonical public app URL, Console
 CORS origins, auth/project rate limits, cookie security, and SMTP delivery
 settings. It must preserve the existing URL, origin, email, and numeric
