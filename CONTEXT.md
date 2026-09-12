@@ -136,3 +136,11 @@ pagination, metadata-only query state, typed form adaptation, mutation
 feedback, and table actions. `FunctionDetailView` composes that panel with
 function deployment and execution views instead of owning each variable
 concern inline.
+
+## CLI lifecycle workflows
+
+The setup and uninstall workflows keep operational decisions and effects in
+their workflow modules, while Bubble Tea models and rendering live in sibling
+`*_tui.go` modules. Both TTY and non-TTY paths share the same bootstrap,
+uninstall-plan, safety, and cleanup operations; presentation does not decide
+which resources are safe to change.
