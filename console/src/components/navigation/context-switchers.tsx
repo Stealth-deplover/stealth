@@ -28,6 +28,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
+import {
+  organizationProjectsPath,
+  organizationsPath,
+  projectPath,
+} from "@/lib/console-routes";
 import { cn, getInitials } from "@/lib/utils";
 
 function SelectorItem({
@@ -102,7 +107,7 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const navigate = (organization: Organization) => {
     setOpen(false);
     setSearch("");
-    router.push(`/organizations/${organization.id}/projects`);
+    router.push(organizationProjectsPath(organization.id));
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -169,7 +174,7 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
           className="mt-4 w-full"
           onClick={() => {
             setOpen(false);
-            router.push("/organizations");
+            router.push(organizationsPath());
           }}
         >
           <Plus className="size-4" /> Create organization
@@ -211,9 +216,7 @@ export function ProjectSwitcher({
   const navigate = (project: Project) => {
     setOpen(false);
     setSearch("");
-    router.push(
-      `/organizations/${project.organization_id}/projects/${project.id}`,
-    );
+    router.push(projectPath(project.organization_id, project.id));
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -271,13 +274,13 @@ export function ProjectSwitcher({
             </p>
           )}
         </div>
-        {data?.can_manage === true ? (
+        {data?.can_manage === true && organizationId ? (
           <Button
             variant="outline"
             className="mt-4 w-full"
             onClick={() => {
               setOpen(false);
-              router.push(`/organizations/${organizationId}/projects`);
+              router.push(organizationProjectsPath(organizationId));
             }}
           >
             <Plus className="size-4" /> Create project
