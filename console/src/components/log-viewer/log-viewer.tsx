@@ -149,7 +149,7 @@ function LogBody({
         ) : null}
         {lines.length ? (
           lines.map((line) => (
-            <div key={line.sequence} className="flex gap-3">
+            <div key={line.sequence} className="stealth-log-line flex gap-3">
               <span className="w-32 shrink-0 text-slate-700">
                 {formatDate(line.created_at)}
               </span>

@@ -247,7 +247,7 @@ export function SiteDeploymentView({
 }) {
   const query = useSiteDeployment(projectId, siteId, deploymentId);
   const logFetcher = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
+    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
       const result = await api.GET(
         "/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}/logs",
         {
@@ -259,6 +259,7 @@ export function SiteDeploymentView({
             },
             query: after === undefined ? { limit: 100 } : { limit: 100, after },
           },
+          signal,
         },
       );
       const data = await unwrap(result);

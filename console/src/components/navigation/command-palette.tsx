@@ -25,12 +25,12 @@ type PaletteCommand = {
 export function CommandPalette() {
   const router = useRouter();
   const { organizationId, projectId } = useConsoleRouteContext();
-  const organizations = useOrganizations();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
-  const projects = useProjects(organizationId);
+  const organizations = useOrganizations(undefined, { enabled: open });
+  const projects = useProjects(organizationId, undefined, { enabled: open });
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const navigation: PaletteCommand[] =

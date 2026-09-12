@@ -48,7 +48,7 @@ export function FunctionExecutionView({
 }) {
   const query = useFunctionExecution(projectId, functionId, executionId);
   const fetchLogs = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
+    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
       const result = await api.GET(
         "/v1/projects/{projectID}/functions/{functionID}/executions/{executionID}/logs",
         {
@@ -60,6 +60,7 @@ export function FunctionExecutionView({
             },
             query: after === undefined ? {} : { after },
           },
+          signal,
         },
       );
       const data = await unwrap(result);
