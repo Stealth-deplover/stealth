@@ -26,9 +26,10 @@ The CLI installer is the supported release path. The bootstrap script is
 read through GitHub Raw's `HEAD` reference, so it follows the repository's
 current default branch when that branch is renamed to `main`.
 
-The latest stable release is `v0.1.0`. Read the [release notes](https://github.com/Stealth-deplover/stealth/releases/tag/v0.1.0)
-before installing, and use [Upgrade and rollback](docs/upgrade.md) for
-operational changes and recovery boundaries.
+The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
+is the supported install target. Read its release notes before installing, and
+use [Upgrade and rollback](docs/upgrade.md) for operational changes and recovery
+boundaries.
 
 Supported host: Linux amd64 or arm64 with Docker Engine, Docker Compose v2,
 access to `/var/run/docker.sock`, and a writable installation directory.
@@ -148,10 +149,12 @@ managed-service availability.
 Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
 coordinated GHCR images for API, worker, migration, and Console plus Linux
 amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
-The latest stable release is `v0.1.0`; see the [release notes](https://github.com/Stealth-deplover/stealth/releases/latest),
-[Release engineering](docs/release.md), the [release checklist](docs/RELEASING.md),
-and [Upgrade and rollback](docs/upgrade.md). The installer still requires a
-clean-host validation pass, and upgrades remain an operator-runbook workflow.
+The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
+is documented with [Release engineering](docs/release.md), the [release
+checklist](docs/RELEASING.md), and [Upgrade and rollback](docs/upgrade.md). The
+installer still requires a clean-host validation pass; `stealth update` is for
+the CLI only, while coordinated server-stack upgrades remain an operator-runbook
+workflow.
 
 ## Screenshots
 
