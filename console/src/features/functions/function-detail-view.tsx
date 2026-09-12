@@ -229,7 +229,7 @@ export function FunctionDetailView({
     );
   };
   const logs = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
+    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
       if (!activeDeploymentId) return [];
       const result = await api.GET(
         "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
@@ -242,6 +242,7 @@ export function FunctionDetailView({
             },
             query: after === undefined ? {} : { after },
           },
+          signal,
         },
       );
       const data = await unwrap(result);
@@ -586,7 +587,7 @@ export function FunctionDeploymentView({
 }) {
   const query = useFunctionDeployment(projectId, functionId, deploymentId);
   const logFetcher = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
+    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
       const result = await api.GET(
         "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
         {
@@ -598,6 +599,7 @@ export function FunctionDeploymentView({
             },
             query: after === undefined ? {} : { after },
           },
+          signal,
         },
       );
       const data = await unwrap(result);

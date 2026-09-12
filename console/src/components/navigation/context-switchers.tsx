@@ -75,10 +75,10 @@ function SelectorItem({
 
 export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const router = useRouter();
-  const { data, isLoading } = useOrganizations();
-  const selectedOrganization = useOrganization(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const { data, isLoading } = useOrganizations(undefined, { enabled: open });
+  const selectedOrganization = useOrganization(currentId);
   const organizations = useMemo(() => {
     const items = data?.organizations ?? [];
     const selected = selectedOrganization.data;
@@ -187,10 +187,10 @@ export function ProjectSwitcher({
   currentId?: string;
 }) {
   const router = useRouter();
-  const { data } = useProjects(organizationId);
-  const selectedProject = useProject(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const { data } = useProjects(organizationId, undefined, { enabled: open });
+  const selectedProject = useProject(currentId);
   const projects = useMemo(() => {
     const items = data?.projects ?? [];
     const selected = selectedProject.data?.project;

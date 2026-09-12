@@ -4,14 +4,19 @@ import { api, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 
+type ListQueryOptions = {
+  enabled?: boolean;
+};
+
 export function useProjects(
   organizationId: string | undefined,
   query?: CursorQuery,
+  options?: ListQueryOptions,
 ) {
   const params = withCursorPage(query);
   return useQuery({
     queryKey: [...queryKeys.projects(organizationId ?? ""), params],
-    enabled: Boolean(organizationId),
+    enabled: Boolean(organizationId) && (options?.enabled ?? true),
     queryFn: async () =>
       unwrap(
         await api.GET("/v1/organizations/{organizationID}/projects", {

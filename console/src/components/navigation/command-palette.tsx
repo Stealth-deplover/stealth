@@ -23,7 +23,6 @@ type PaletteCommand = {
 export function CommandPalette() {
   const router = useRouter();
   const pathname = usePathname();
-  const organizations = useOrganizations();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -33,7 +32,8 @@ export function CommandPalette() {
     segments[0] === "organizations" ? segments[1] : undefined;
   const projectId =
     organizationId && segments[2] === "projects" ? segments[3] : undefined;
-  const projects = useProjects(organizationId);
+  const organizations = useOrganizations(undefined, { enabled: open });
+  const projects = useProjects(organizationId, undefined, { enabled: open });
   const base = projectId
     ? `/organizations/${organizationId}/projects/${projectId}`
     : organizationId
