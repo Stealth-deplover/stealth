@@ -9,7 +9,7 @@ export type LogLine = {
 };
 
 type UseLogStreamOptions = {
-  fetchPage: (after?: number) => Promise<LogLine[]>;
+  fetchPage: (after?: number, signal?: AbortSignal) => Promise<LogLine[]>;
   enabled?: boolean;
   polling?: boolean;
 };
@@ -25,13 +25,20 @@ export function useLogStream({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const afterRef = useRef<number | undefined>(undefined);
+  const inFlightRef = useRef(false);
+  const activeControllerRef = useRef<AbortController | null>(null);
 
   const pull = useCallback(async () => {
-    if (!enabled) return;
+    if (!enabled || inFlightRef.current) return;
 
+    const controller = new AbortController();
+    inFlightRef.current = true;
+    activeControllerRef.current = controller;
     setLoading(true);
     try {
-      const next = await fetchPage(afterRef.current);
+      const next = await fetchPage(afterRef.current, controller.signal);
+      if (controller.signal.aborted) return;
+
       setError(null);
       if (!next.length) return;
 
@@ -46,23 +53,45 @@ export function useLogStream({
       });
       setLocalCleared(false);
     } catch (caught) {
+      if (controller.signal.aborted) return;
+
       setError(
         caught instanceof Error ? caught.message : "Unable to fetch logs.",
       );
     } finally {
-      setLoading(false);
+      if (activeControllerRef.current === controller) {
+        activeControllerRef.current = null;
+        inFlightRef.current = false;
+        setLoading(false);
+      }
     }
   }, [enabled, fetchPage]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // An aborted pull does not update loading state in its own finally block.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLoading(false);
+      return;
+    }
 
-    // The initial pull starts an external request; its async completion updates the viewer state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void pull();
-    if (!polling) return;
-    const timer = window.setInterval(() => void pull(), 3_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number | undefined;
+    const run = async () => {
+      await pull();
+      if (!cancelled && polling) {
+        timer = window.setTimeout(() => void run(), 3_000);
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = null;
+      inFlightRef.current = false;
+    };
   }, [enabled, polling, pull]);
 
   const clearLocal = useCallback(() => {

@@ -232,12 +232,13 @@ export function AgentRunDetailView({
   const cancel = useCancelAgentRun(agentId, runId);
   const run = query.data?.run;
   const logFetcher = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
+    async (after?: number, signal?: AbortSignal): Promise<LogLine[]> => {
       const result = await api.GET("/v1/agents/{agentID}/runs/{runID}/logs", {
         params: {
           path: { agentID: agentId, runID: runId },
           query: after === undefined ? { limit: 100 } : { limit: 100, after },
         },
+        signal,
       });
       const data = await unwrap(result);
       return (data?.logs ?? []).map((log) => ({

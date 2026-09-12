@@ -94,6 +94,11 @@ select:focus-visible {
   border-radius: 999px;
 }
 
+.stealth-log-line {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 1.5rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

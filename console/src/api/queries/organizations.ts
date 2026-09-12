@@ -18,10 +18,18 @@ async function findOrganizationById(organizationId: string) {
   );
 }
 
-export function useOrganizations(query?: CursorQuery) {
+type ListQueryOptions = {
+  enabled?: boolean;
+};
+
+export function useOrganizations(
+  query?: CursorQuery,
+  options?: ListQueryOptions,
+) {
   const params = withCursorPage(query);
   return useQuery({
     queryKey: [...queryKeys.organizations, params],
+    enabled: options?.enabled ?? true,
     queryFn: async () =>
       unwrap(await api.GET("/v1/organizations", { params: { query: params } })),
     placeholderData: keepPreviousData,
