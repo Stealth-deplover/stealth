@@ -1,12 +1,19 @@
 package functionrunner
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"strings"
 	"testing"
 )
+
+func TestRunOnceRequiresExecutionStore(t *testing.T) {
+	if _, err := (&Worker{}).RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce accepted an unconfigured execution store")
+	}
+}
 
 func TestChecksumReaderHashesExactlyWhatWasRead(t *testing.T) {
 	input := "archive bytes are opaque"
