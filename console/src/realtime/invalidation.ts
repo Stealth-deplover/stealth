@@ -1,4 +1,8 @@
-import { queryKeys } from "@/api/query-keys";
+import {
+  invalidationKeysFor,
+  type CacheChange,
+  type CacheQueryKey,
+} from "@/api/cache-coherence";
 
 export type RealtimeNotification = {
   type?: string;
@@ -9,8 +13,6 @@ export type RealtimeNotification = {
   payload?: Record<string, unknown>;
   data?: Record<string, unknown>;
 };
-
-type QueryKey = readonly unknown[];
 
 function stringValue(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -25,125 +27,113 @@ function resourceId(event: RealtimeNotification) {
 }
 
 /**
- * Maps notifications to query prefixes. The event is never used as a state
- * snapshot: callers invalidate these keys and refetch the Go API source of
- * truth.
+ * Converts a wire notification into a semantic cache change. The event is
+ * never used as a state snapshot: callers invalidate these keys and refetch
+ * the Go API source of truth.
  */
-export function realtimeInvalidationKeys(
+export function realtimeCacheChanges(
   projectId: string,
   event: RealtimeNotification,
-): QueryKey[] {
+): CacheChange[] {
   const type = stringValue(event.type) ?? stringValue(event.event) ?? "";
   const data = metadata(event);
-  const keys: QueryKey[] = [];
-  const add = (key: QueryKey | undefined) => {
-    if (
-      key &&
-      !keys.some(
-        (candidate) => JSON.stringify(candidate) === JSON.stringify(key),
-      )
-    ) {
-      keys.push(key);
-    }
-  };
 
   if (type.startsWith("agent.run.")) {
     const agentId = stringValue(data.agent_id);
     const runId = resourceId(event);
-    if (agentId) add(queryKeys.agentRuns(agentId));
-    if (agentId && runId) add(queryKeys.agentRun(agentId, runId));
-    if (!agentId) add(queryKeys.agents(projectId));
-    return keys;
+    return [
+      {
+        kind: "agent-run",
+        projectId,
+        agentId,
+        runId,
+      },
+    ];
   }
 
   if (type.startsWith("agent.")) {
-    add(queryKeys.agents(projectId));
-    const agentId = resourceId(event);
-    if (agentId) add(queryKeys.agent(agentId));
-    return keys;
+    return [{ kind: "agent", projectId, agentId: resourceId(event) }];
   }
 
   if (type.startsWith("function_execution.")) {
-    const functionId = stringValue(data.function_id);
-    const executionId = resourceId(event);
-    if (functionId) add(queryKeys.functionExecutions(projectId, functionId));
-    if (functionId && executionId) {
-      add(queryKeys.functionExecution(projectId, functionId, executionId));
-    }
-    return keys;
+    return [
+      {
+        kind: "function-execution",
+        projectId,
+        functionId: stringValue(data.function_id),
+        executionId: resourceId(event),
+      },
+    ];
   }
 
   if (type.startsWith("function_deployment.")) {
     const functionId = stringValue(data.function_id);
-    const deploymentId = resourceId(event);
-    if (functionId) {
-      add(queryKeys.function(projectId, functionId));
-      add(queryKeys.functionDeployments(projectId, functionId));
-    }
-    if (functionId && deploymentId) {
-      add(queryKeys.functionDeployment(projectId, functionId, deploymentId));
-    }
-    return keys;
+    if (!functionId) return [];
+    return [
+      {
+        kind: "function-deployment",
+        projectId,
+        functionId,
+        deploymentId: resourceId(event),
+      },
+    ];
   }
 
   if (type.startsWith("site_deployment.")) {
     const siteId = stringValue(data.site_id);
-    const deploymentId = resourceId(event);
-    if (siteId) {
-      add(queryKeys.site(projectId, siteId));
-      add(queryKeys.siteDeployments(projectId, siteId));
-    }
-    if (siteId && deploymentId) {
-      add(queryKeys.siteDeployment(projectId, siteId, deploymentId));
-    }
-    return keys;
+    if (!siteId) return [];
+    return [
+      {
+        kind: "site-deployment",
+        projectId,
+        siteId,
+        deploymentId: resourceId(event),
+      },
+    ];
   }
 
   if (type.startsWith("webhook.")) {
-    const webhookId = stringValue(data.webhook_id);
-    if (webhookId && type.startsWith("webhook.delivery.")) {
-      add(queryKeys.webhookDeliveries(projectId, webhookId));
-    }
-    add(queryKeys.webhooks(projectId));
-    return keys;
+    return [
+      {
+        kind: "webhook",
+        projectId,
+        webhookId: stringValue(data.webhook_id),
+        delivery: type.startsWith("webhook.delivery."),
+      },
+    ];
   }
 
   if (type.startsWith("messaging.")) {
-    add(queryKeys.messagingProviders(projectId));
-    add(queryKeys.messagingTopics(projectId));
-    add(queryKeys.messagingMessages(projectId));
-    return keys;
+    return [{ kind: "messaging", projectId }];
   }
 
   if (type.startsWith("database.") || type.startsWith("database_")) {
-    add(queryKeys.databases(projectId));
-    return keys;
+    return [{ kind: "database", projectId }];
   }
 
   if (type.startsWith("storage_")) {
-    add(queryKeys.buckets(projectId));
-    return keys;
+    return [{ kind: "storage-bucket", projectId }];
   }
 
   if (type.startsWith("project.")) {
-    add(queryKeys.project(projectId));
-    add(queryKeys.audit("project", projectId));
+    return [{ kind: "project", projectId }];
   }
 
   if (type.startsWith("function.")) {
-    add(queryKeys.functions(projectId));
-    const functionId = resourceId(event);
-    if (functionId) add(queryKeys.function(projectId, functionId));
-    return keys;
+    return [{ kind: "function", projectId, functionId: resourceId(event) }];
   }
 
   if (type.startsWith("site.")) {
-    add(queryKeys.sites(projectId));
-    const siteId = resourceId(event);
-    if (siteId) add(queryKeys.site(projectId, siteId));
-    return keys;
+    return [{ kind: "site", projectId, siteId: resourceId(event) }];
   }
-  return keys;
+  return [];
+}
+
+export function realtimeInvalidationKeys(
+  projectId: string,
+  event: RealtimeNotification,
+): CacheQueryKey[] {
+  return realtimeCacheChanges(projectId, event).flatMap(invalidationKeysFor);
 }
 
 export function eventTypesForProjectStream() {

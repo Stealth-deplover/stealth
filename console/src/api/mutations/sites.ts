@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, uploadMultipart } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateSite(projectId: string) {
@@ -15,7 +15,7 @@ export function useCreateSite(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.sites(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "site", projectId }]),
   });
 }
 
@@ -37,17 +37,10 @@ export function useUploadSiteDeployment(projectId: string, siteId: string) {
         form,
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.site(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeployments(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeploymentScope(projectId, siteId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "site-deployment", projectId, siteId, includeScope: true },
+      ]),
   });
 }
 
@@ -69,16 +62,9 @@ export function useActivateSiteDeployment(projectId: string, siteId: string) {
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.site(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeployments(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeploymentScope(projectId, siteId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "site-deployment", projectId, siteId, includeScope: true },
+      ]),
   });
 }
