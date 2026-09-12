@@ -10,8 +10,20 @@ export function useUploadStorageFile(projectId: string, bucketId: string) {
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append("file", file);
-      return uploadMultipart<components["schemas"]["StorageFileResponse"]>(
-        `/v1/projects/${projectId}/storage/buckets/${bucketId}/files`,
+      return uploadMultipart(
+        (body, signal) =>
+          api.POST(
+            "/v1/projects/{projectID}/storage/buckets/{bucketID}/files",
+            {
+              params: {
+                path: { projectID: projectId, bucketID: bucketId },
+              },
+              // openapi-typescript represents binary parts as string; the
+              // browser transport receives the corresponding FormData.
+              body: body as unknown as components["schemas"]["StorageUploadRequest"],
+              signal,
+            },
+          ),
         form,
       );
     },
