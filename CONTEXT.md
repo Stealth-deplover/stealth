@@ -20,3 +20,8 @@ The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
 `config.Load`.
+
+The auth loader owns session lifetimes, the canonical public app URL, Console
+CORS origins, auth/project rate limits, cookie security, and SMTP delivery
+settings. It must preserve the existing URL, origin, email, and numeric
+validation before applying values to `Config`.

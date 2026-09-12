@@ -129,62 +129,9 @@ func Load() (Config, error) {
 	if len(metricsToken) > 256 || strings.IndexFunc(metricsToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 		return Config{}, fmt.Errorf("METRICS_TOKEN must be at most 256 characters and contain no whitespace or control characters")
 	}
-	ttl, err := time.ParseDuration(value("SESSION_TTL", "720h"))
-	if err != nil || ttl <= 0 {
-		return Config{}, fmt.Errorf("SESSION_TTL must be a positive duration")
-	}
-	appSessionTTL, err := time.ParseDuration(value("APP_SESSION_TTL", "720h"))
-	if err != nil || appSessionTTL <= 0 || appSessionTTL > 720*time.Hour {
-		return Config{}, fmt.Errorf("APP_SESSION_TTL must be a positive duration no longer than 720h")
-	}
-	verificationTTL, err := time.ParseDuration(value("AUTH_VERIFICATION_TTL", "24h"))
-	if err != nil || verificationTTL <= 0 || verificationTTL > 7*24*time.Hour {
-		return Config{}, fmt.Errorf("AUTH_VERIFICATION_TTL must be a positive duration no longer than 168h")
-	}
-	passwordResetTTL, err := time.ParseDuration(value("AUTH_PASSWORD_RESET_TTL", "1h"))
-	if err != nil || passwordResetTTL <= 0 || passwordResetTTL > 24*time.Hour {
-		return Config{}, fmt.Errorf("AUTH_PASSWORD_RESET_TTL must be a positive duration no longer than 24h")
-	}
-	publicAppURL := value("PUBLIC_APP_URL", "http://localhost:4173")
-	if !isPublicAppURL(publicAppURL) {
-		return Config{}, fmt.Errorf("PUBLIC_APP_URL must be an absolute HTTP(S) URL without credentials, query, or fragment")
-	}
-	consoleCORSOrigins, err := parseConsoleCORSOrigins(os.Getenv("CONSOLE_CORS_ORIGINS"))
+	authSettings, err := loadAuthSettings()
 	if err != nil {
 		return Config{}, err
-	}
-	emailDeliveryMode := strings.ToLower(value("EMAIL_DELIVERY_MODE", "disabled"))
-	if emailDeliveryMode != "disabled" && emailDeliveryMode != "log" && emailDeliveryMode != "smtp" {
-		return Config{}, fmt.Errorf("EMAIL_DELIVERY_MODE must be disabled, log, or smtp")
-	}
-	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
-	smtpPort, err := strconv.Atoi(value("SMTP_PORT", "587"))
-	if err != nil || smtpPort < 1 || smtpPort > 65535 {
-		return Config{}, fmt.Errorf("SMTP_PORT must be an integer between 1 and 65535")
-	}
-	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM"))
-	if emailDeliveryMode == "smtp" && (smtpHost == "" || !isACMEEmail(smtpFrom)) {
-		return Config{}, fmt.Errorf("SMTP_HOST and SMTP_FROM must be configured when EMAIL_DELIVERY_MODE is smtp")
-	}
-	secure, err := strconv.ParseBool(value("COOKIE_SECURE", "false"))
-	if err != nil {
-		return Config{}, fmt.Errorf("COOKIE_SECURE must be true or false")
-	}
-	rateLimit, err := strconv.Atoi(value("AUTH_RATE_LIMIT", "10"))
-	if err != nil || rateLimit < 1 || rateLimit > 1000 {
-		return Config{}, fmt.Errorf("AUTH_RATE_LIMIT must be an integer between 1 and 1000")
-	}
-	rateWindow, err := time.ParseDuration(value("AUTH_RATE_WINDOW", "1m"))
-	if err != nil || rateWindow <= 0 || rateWindow > time.Hour {
-		return Config{}, fmt.Errorf("AUTH_RATE_WINDOW must be a positive duration no longer than 1h")
-	}
-	projectOperationRateLimit, err := strconv.Atoi(value("PROJECT_OPERATION_RATE_LIMIT", "120"))
-	if err != nil || projectOperationRateLimit < 1 || projectOperationRateLimit > 10000 {
-		return Config{}, fmt.Errorf("PROJECT_OPERATION_RATE_LIMIT must be an integer between 1 and 10000")
-	}
-	projectOperationRateWindow, err := time.ParseDuration(value("PROJECT_OPERATION_RATE_WINDOW", "1m"))
-	if err != nil || projectOperationRateWindow <= 0 || projectOperationRateWindow > time.Hour {
-		return Config{}, fmt.Errorf("PROJECT_OPERATION_RATE_WINDOW must be a positive duration no longer than 1h")
 	}
 	storageMaxFileSize, err := parseBytes(value("STORAGE_MAX_FILE_SIZE", "50MiB"))
 	if err != nil || storageMaxFileSize < 1 {
@@ -321,61 +268,44 @@ func Load() (Config, error) {
 		}
 	}
 	config := Config{
-		RedisURL:                   value("REDIS_URL", "redis://127.0.0.1:6379/0"),
-		HTTPAddress:                value("HTTP_ADDR", ":8080"),
-		MetricsToken:               metricsToken,
-		TrustedProxyCIDRs:          trustedProxyCIDRs,
-		ACMEEnabled:                acmeEnabled,
-		ACMEEmail:                  acmeEmail,
-		ACMEDirectoryURL:           acmeDirectoryURL,
-		ACMETLSAddress:             acmeTLSAddress,
-		ACMEHTTPChallengeAddress:   acmeHTTPChallengeAddress,
-		ACMECertCacheDir:           filepath.Clean(acmeCertCacheDir),
-		SessionCookieName:          value("SESSION_COOKIE_NAME", "stealth_session"),
-		SessionTTL:                 ttl,
-		AppSessionTTL:              appSessionTTL,
-		AuthVerificationTTL:        verificationTTL,
-		AuthPasswordResetTTL:       passwordResetTTL,
-		PublicAppURL:               strings.TrimRight(publicAppURL, "/"),
-		ConsoleCORSOrigins:         consoleCORSOrigins,
-		EmailDeliveryMode:          emailDeliveryMode,
-		SMTPHost:                   smtpHost,
-		SMTPPort:                   smtpPort,
-		SMTPUsername:               strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-		SMTPPassword:               os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:                   smtpFrom,
-		CookieSecure:               secure,
-		AuthRateLimit:              rateLimit,
-		AuthRateWindow:             rateWindow,
-		ProjectOperationRateLimit:  projectOperationRateLimit,
-		ProjectOperationRateWindow: projectOperationRateWindow,
-		StorageRoot:                filepath.Clean(storageRoot),
-		StorageMaxFileSize:         storageMaxFileSize,
-		StorageDefaultQuotaBytes:   storageDefaultQuota,
-		StorageDriver:              storageDriver,
-		StorageS3Endpoint:          storageS3Endpoint,
-		StorageS3Region:            storageS3Region,
-		StorageS3Bucket:            storageS3Bucket,
-		StorageS3AccessKey:         storageS3AccessKey,
-		StorageS3SecretKey:         storageS3SecretKey,
-		StorageS3UseSSL:            storageS3UseSSL,
-		StorageS3PathStyle:         storageS3PathStyle,
-		StorageS3Prefix:            storageS3Prefix,
-		StorageS3StagingRoot:       filepath.Clean(storageS3StagingRoot),
-		FunctionsSecretKey:         functionsSecretKey,
-		BootstrapCLIKey:            bootstrapCLIKey,
-		GitHubAppClientID:          strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
-		SitesMaxArtifactSize:       sitesMaxArtifactSize,
-		SitesDefaultQuotaBytes:     sitesDefaultQuota,
-		SitesMaxExpandedBytes:      sitesMaxExpanded,
-		SitesMaxFiles:              sitesMaxFiles,
-		SitesGitFetchConcurrency:   sitesGitFetchConcurrency,
-		TelemetryOTLPEndpoint:      telemetryEndpoint,
-		TelemetryServiceName:       telemetryServiceName,
-		TelemetrySampleRatio:       telemetrySampleRatio,
-		AgentProviderCatalog:       agentProviderCatalog,
+		RedisURL:                 value("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		HTTPAddress:              value("HTTP_ADDR", ":8080"),
+		MetricsToken:             metricsToken,
+		TrustedProxyCIDRs:        trustedProxyCIDRs,
+		ACMEEnabled:              acmeEnabled,
+		ACMEEmail:                acmeEmail,
+		ACMEDirectoryURL:         acmeDirectoryURL,
+		ACMETLSAddress:           acmeTLSAddress,
+		ACMEHTTPChallengeAddress: acmeHTTPChallengeAddress,
+		ACMECertCacheDir:         filepath.Clean(acmeCertCacheDir),
+		StorageRoot:              filepath.Clean(storageRoot),
+		StorageMaxFileSize:       storageMaxFileSize,
+		StorageDefaultQuotaBytes: storageDefaultQuota,
+		StorageDriver:            storageDriver,
+		StorageS3Endpoint:        storageS3Endpoint,
+		StorageS3Region:          storageS3Region,
+		StorageS3Bucket:          storageS3Bucket,
+		StorageS3AccessKey:       storageS3AccessKey,
+		StorageS3SecretKey:       storageS3SecretKey,
+		StorageS3UseSSL:          storageS3UseSSL,
+		StorageS3PathStyle:       storageS3PathStyle,
+		StorageS3Prefix:          storageS3Prefix,
+		StorageS3StagingRoot:     filepath.Clean(storageS3StagingRoot),
+		FunctionsSecretKey:       functionsSecretKey,
+		BootstrapCLIKey:          bootstrapCLIKey,
+		GitHubAppClientID:        strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
+		SitesMaxArtifactSize:     sitesMaxArtifactSize,
+		SitesDefaultQuotaBytes:   sitesDefaultQuota,
+		SitesMaxExpandedBytes:    sitesMaxExpanded,
+		SitesMaxFiles:            sitesMaxFiles,
+		SitesGitFetchConcurrency: sitesGitFetchConcurrency,
+		TelemetryOTLPEndpoint:    telemetryEndpoint,
+		TelemetryServiceName:     telemetryServiceName,
+		TelemetrySampleRatio:     telemetrySampleRatio,
+		AgentProviderCatalog:     agentProviderCatalog,
 	}
 	databaseSettings.apply(&config)
+	authSettings.apply(&config)
 	executionSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
