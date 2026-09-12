@@ -144,3 +144,12 @@ their workflow modules, while Bubble Tea models and rendering live in sibling
 `*_tui.go` modules. Both TTY and non-TTY paths share the same bootstrap,
 uninstall-plan, safety, and cleanup operations; presentation does not decide
 which resources are safe to change.
+
+## Console database table detail
+
+`DatabaseRowsView` composes the table metadata shell, `TableRowsPanel` owns
+server-filtered row browsing and row creation, `TableSchemaPanel` owns column
+and index rendering plus column creation, and `TableRowDetail` owns the
+selected-row query and row mutations. URL query state remains the navigation
+seam shared by the shell and row browser, so pagination, filtering, and row
+inspection retain the existing route behavior.
