@@ -23,6 +23,14 @@ export const columnRequest = z
     },
   );
 
+export type DatabaseColumnFormValues = {
+  key: string;
+  type: string;
+  required: string;
+  varchar_size: string;
+  default: string;
+};
+
 function validateValue(
   value: unknown,
   column: Pick<DatabaseColumn, "key" | "type" | "required" | "varchar_size">,
@@ -84,7 +92,7 @@ export function parseRowData(
   return record;
 }
 
-export function parseColumn(values: Record<string, string>) {
+export function parseColumn(values: DatabaseColumnFormValues) {
   const result = columnRequest.parse({
     key: values.key.trim(),
     type: values.type,
