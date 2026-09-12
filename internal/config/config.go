@@ -194,46 +194,11 @@ func Load() (Config, error) {
 	if err != nil || strings.TrimSpace(storageS3StagingRoot) == "" || storageS3StagingRoot == string(filepath.Separator) {
 		return Config{}, fmt.Errorf("STORAGE_S3_STAGING_ROOT must be a valid non-root filesystem path")
 	}
-	acmeEnabled, err := strconv.ParseBool(value("ACME_ENABLED", "false"))
+	tlsSettings, err := loadTLSSettings(storageRoot, transportSettings.httpAddress)
 	if err != nil {
-		return Config{}, fmt.Errorf("ACME_ENABLED must be true or false")
-	}
-	acmeDirectoryURL := value("ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory")
-	if !isACMEDirectoryURL(acmeDirectoryURL) {
-		return Config{}, fmt.Errorf("ACME_DIRECTORY_URL must be an absolute HTTPS URL without credentials, query, or fragment")
-	}
-	acmeTLSAddress := value("ACME_TLS_ADDR", ":8443")
-	if !isListenAddress(acmeTLSAddress) {
-		return Config{}, fmt.Errorf("ACME_TLS_ADDR must be a TCP host:port with a port between 1 and 65535")
-	}
-	acmeHTTPChallengeAddress := value("ACME_HTTP_CHALLENGE_ADDR", ":8081")
-	if !isListenAddress(acmeHTTPChallengeAddress) {
-		return Config{}, fmt.Errorf("ACME_HTTP_CHALLENGE_ADDR must be a TCP host:port with a port between 1 and 65535")
-	}
-	acmeEmail := strings.TrimSpace(os.Getenv("ACME_EMAIL"))
-	acmeCertCacheDir := value("ACME_CERT_CACHE_DIR", filepath.Join(storageRoot, "acme"))
-	acmeCertCacheDir, err = filepath.Abs(acmeCertCacheDir)
-	if err != nil || strings.TrimSpace(acmeCertCacheDir) == "" || acmeCertCacheDir == string(filepath.Separator) {
-		return Config{}, fmt.Errorf("ACME_CERT_CACHE_DIR must be a valid non-root filesystem path")
-	}
-	if acmeEnabled && !isACMEEmail(acmeEmail) {
-		return Config{}, fmt.Errorf("ACME_EMAIL must be a valid email address when ACME_ENABLED is true")
-	}
-	if acmeEnabled && acmeTLSAddress == acmeHTTPChallengeAddress {
-		return Config{}, fmt.Errorf("ACME_TLS_ADDR and ACME_HTTP_CHALLENGE_ADDR must be different listeners")
-	}
-	if acmeEnabled {
-		if sameListenPort(acmeTLSAddress, transportSettings.httpAddress) || sameListenPort(acmeHTTPChallengeAddress, transportSettings.httpAddress) {
-			return Config{}, fmt.Errorf("ACME listeners must not reuse the HTTP_ADDR port")
-		}
+		return Config{}, err
 	}
 	config := Config{
-		ACMEEnabled:              acmeEnabled,
-		ACMEEmail:                acmeEmail,
-		ACMEDirectoryURL:         acmeDirectoryURL,
-		ACMETLSAddress:           acmeTLSAddress,
-		ACMEHTTPChallengeAddress: acmeHTTPChallengeAddress,
-		ACMECertCacheDir:         filepath.Clean(acmeCertCacheDir),
 		StorageRoot:              filepath.Clean(storageRoot),
 		StorageMaxFileSize:       storageMaxFileSize,
 		StorageDefaultQuotaBytes: storageDefaultQuota,
@@ -256,6 +221,7 @@ func Load() (Config, error) {
 	agentSettings.apply(&config)
 	secretSettings.apply(&config)
 	transportSettings.apply(&config)
+	tlsSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")

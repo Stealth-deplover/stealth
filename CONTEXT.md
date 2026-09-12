@@ -40,6 +40,11 @@ token, and trusted proxy network list. It clones network values into the
 application snapshot so request-IP trust remains an explicit, immutable
 boundary for the API.
 
+The TLS settings loader owns optional ACME listener, directory, email, and
+certificate-cache configuration. It receives the resolved storage root and
+HTTP listener so certificate cache placement and listener collision checks are
+validated before the application snapshot is assembled.
+
 The database loader owns the required `DATABASE_URL`, pool bounds, and
 connection lifetime settings. Other configuration domains should follow the
 same loader-and-apply boundary instead of adding parsing branches to
