@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 
@@ -17,12 +17,12 @@ export function useProjects(
   return useQuery({
     queryKey: [...queryKeys.projects(organizationId ?? ""), params],
     enabled: Boolean(organizationId) && (options?.enabled ?? true),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/organizations/{organizationID}/projects", {
-          params: { path: { organizationID: organizationId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/organizations/{organizationID}/projects", {
+        params: { path: { organizationID: organizationId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -31,12 +31,12 @@ export function useProject(projectId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.project(projectId ?? ""),
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}", {
-          params: { path: { projectID: projectId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}", {
+        params: { path: { projectID: projectId! } },
+        signal,
+      }),
+    ),
   });
 }
 
@@ -44,11 +44,11 @@ export function useProjectUsage(projectId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.usage(projectId ?? ""),
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/usage", {
-          params: { path: { projectID: projectId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/usage", {
+        params: { path: { projectID: projectId! } },
+        signal,
+      }),
+    ),
   });
 }

@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, uploadMultipart } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateFunction(projectId: string) {
@@ -15,9 +15,7 @@ export function useCreateFunction(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.functions(projectId),
-      }),
+      applyCacheChanges(queryClient, [{ kind: "function", projectId }]),
   });
 }
 
@@ -40,9 +38,9 @@ export function useCreateFunctionVariable(
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.functionVariables(projectId, functionId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "function-variable", projectId, functionId },
+      ]),
   });
 }
 
@@ -68,9 +66,9 @@ export function useDeleteFunctionVariable(
         ),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.functionVariables(projectId, functionId),
-      }),
+      applyCacheChanges(queryClient, [
+        { kind: "function-variable", projectId, functionId },
+      ]),
   });
 }
 
@@ -95,14 +93,10 @@ export function useActivateFunctionDeployment(
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.function(projectId, functionId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.functionDeployments(projectId, functionId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "function-deployment", projectId, functionId },
+      ]),
   });
 }
 
@@ -120,13 +114,9 @@ export function useUploadFunctionDeployment(
         form,
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.function(projectId, functionId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.functionDeployments(projectId, functionId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "function-deployment", projectId, functionId },
+      ]),
   });
 }

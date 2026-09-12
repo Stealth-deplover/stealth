@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery, execute } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 
@@ -12,12 +12,12 @@ export function useWebhooks(
   return useQuery({
     queryKey: [...queryKeys.webhooks(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/webhooks", {
-          params: { path: { projectID: projectId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/webhooks", {
+        params: { path: { projectID: projectId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -29,12 +29,12 @@ export function useWebhook(
   return useQuery({
     queryKey: queryKeys.webhook(projectId ?? "", webhookId ?? ""),
     enabled: Boolean(projectId && webhookId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/webhooks/{webhookID}", {
-          params: { path: { projectID: projectId!, webhookID: webhookId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/webhooks/{webhookID}", {
+        params: { path: { projectID: projectId!, webhookID: webhookId! } },
+        signal,
+      }),
+    ),
   });
 }
 
@@ -50,17 +50,15 @@ export function useWebhookDeliveries(
       params,
     ],
     enabled: Boolean(projectId && webhookId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/webhooks/{webhookID}/deliveries",
-          {
-            params: {
-              path: { projectID: projectId!, webhookID: webhookId! },
-              query: params,
-            },
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/projects/{projectID}/webhooks/{webhookID}/deliveries", {
+          params: {
+            path: { projectID: projectId!, webhookID: webhookId! },
+            query: params,
           },
-        ),
+          signal,
+        }),
       ),
     placeholderData: keepPreviousData,
     refetchInterval: (query) => {
