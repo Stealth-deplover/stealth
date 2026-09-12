@@ -1,9 +1,13 @@
 package mailer
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +89,120 @@ func TestSMTPSenderRejectsUnexpectedBodyControlCharactersBeforeDial(t *testing.T
 	sender := &SMTP{Host: "127.0.0.1", Port: 1, From: "no-reply@example.test"}
 	if err := sender.Send(context.Background(), Message{To: "user@example.test", TextBody: "body\x00"}); err == nil || !strings.Contains(err.Error(), "smtp body contains an unexpected control character") {
 		t.Fatalf("body control validation error = %v", err)
+	}
+}
+
+func TestSMTPSenderQuotesDynamicPlainTextBody(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	messageCh := make(chan string, 1)
+	serverErrCh := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErrCh <- acceptErr
+			return
+		}
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		writeResponse := func(response string) error {
+			_, writeErr := io.WriteString(connection, response+"\r\n")
+			return writeErr
+		}
+		if err := writeResponse("220 test"); err != nil {
+			serverErrCh <- err
+			return
+		}
+		for {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				serverErrCh <- readErr
+				return
+			}
+			switch {
+			case strings.HasPrefix(line, "EHLO"), strings.HasPrefix(line, "HELO"):
+				if err := writeResponse("250 test"); err != nil {
+					serverErrCh <- err
+					return
+				}
+			case strings.HasPrefix(line, "MAIL FROM"), strings.HasPrefix(line, "RCPT TO"):
+				if err := writeResponse("250 ok"); err != nil {
+					serverErrCh <- err
+					return
+				}
+			case strings.TrimSpace(line) == "DATA":
+				if err := writeResponse("354 continue"); err != nil {
+					serverErrCh <- err
+					return
+				}
+				var data strings.Builder
+				for {
+					bodyLine, bodyErr := reader.ReadString('\n')
+					if bodyErr != nil {
+						serverErrCh <- bodyErr
+						return
+					}
+					if bodyLine == ".\r\n" {
+						break
+					}
+					data.WriteString(bodyLine)
+				}
+				messageCh <- data.String()
+				if err := writeResponse("250 queued"); err != nil {
+					serverErrCh <- err
+					return
+				}
+			case strings.TrimSpace(line) == "QUIT":
+				serverErrCh <- writeResponse("221 bye")
+				return
+			}
+		}
+	}()
+
+	sender := &SMTP{
+		Host:    "127.0.0.1",
+		Port:    listener.Addr().(*net.TCPAddr).Port,
+		From:    "no-reply@example.test",
+		Timeout: time.Second,
+	}
+	message := "first line\r\nBcc: attacker@example.test\r\nlast line"
+	if err := sender.Send(context.Background(), Message{To: "user@example.test", Subject: "subject", TextBody: message}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case serverErr := <-serverErrCh:
+		if serverErr != nil {
+			t.Fatal(serverErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake SMTP server did not finish")
+	}
+	var data string
+	select {
+	case data = <-messageCh:
+	case <-time.After(time.Second):
+		t.Fatal("fake SMTP server did not capture a message")
+	}
+	headerAndBody := strings.SplitN(data, "\r\n\r\n", 2)
+	if len(headerAndBody) != 2 {
+		t.Fatalf("SMTP message did not contain a header/body boundary: %q", data)
+	}
+	if !strings.Contains(headerAndBody[0], "Content-Transfer-Encoding: base64") {
+		t.Fatalf("SMTP headers did not select base64 encoding: %q", headerAndBody[0])
+	}
+	if strings.Contains(headerAndBody[0], "To:") || strings.Contains(headerAndBody[0], "Bcc:") {
+		t.Fatalf("SMTP headers copied the recipient into message headers: %q", headerAndBody[0])
+	}
+	decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, strings.NewReader(headerAndBody[1])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != message+"\r\n" {
+		t.Fatalf("decoded SMTP body = %q, want %q", decoded, message+"\r\n")
 	}
 }
 

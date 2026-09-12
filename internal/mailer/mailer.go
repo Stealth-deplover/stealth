@@ -7,9 +7,12 @@ package mailer
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/smtp"
 	"strings"
@@ -154,14 +157,21 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	if err != nil {
 		return fmt.Errorf("open smtp message: %w", err)
 	}
-	body := "From: " + s.From + "\r\n" +
-		"To: " + message.To + "\r\n" +
-		"Subject: " + message.Subject + "\r\n" +
+	// The SMTP envelope above already carries the recipient. Do not copy the
+	// request-derived address into the message headers. The subject is encoded
+	// as a MIME encoded-word after validation so it cannot become a header
+	// continuation or a second header.
+	encodedSubject := mime.QEncoding.Encode("UTF-8", message.Subject)
+	headers := "From: " + s.From + "\r\n" +
+		"Subject: " + encodedSubject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		normalizedBody + "\r\n"
-	if _, err := writer.Write([]byte(body)); err != nil {
+		"Content-Transfer-Encoding: base64\r\n\r\n"
+	if _, err := io.WriteString(writer, headers); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("write smtp headers: %w", err)
+	}
+	if err := writeBase64Body(writer, normalizedBody+"\r\n"); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write smtp message: %w", err)
 	}
@@ -170,6 +180,22 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	}
 	if err := client.Quit(); err != nil {
 		return fmt.Errorf("close smtp session: %w", err)
+	}
+	return nil
+}
+
+func writeBase64Body(writer io.Writer, body string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	const lineLength = 76
+	for len(encoded) > 0 {
+		end := lineLength
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		if _, err := io.WriteString(writer, encoded[:end]+"\r\n"); err != nil {
+			return err
+		}
+		encoded = encoded[end:]
 	}
 	return nil
 }
