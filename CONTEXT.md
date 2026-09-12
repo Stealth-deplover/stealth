@@ -109,3 +109,11 @@ the project realtime adapter both feed this policy; they do not treat realtime
 payloads as authoritative state. Cache removal and restore predicates remain
 local where they express lifecycle-specific behavior rather than ordinary
 resource staleness.
+
+## Console function variables
+
+`FunctionVariablesPanel` owns the complete function-variable workflow: cursor
+pagination, metadata-only query state, typed form adaptation, mutation
+feedback, and table actions. `FunctionDetailView` composes that panel with
+function deployment and execution views instead of owning each variable
+concern inline.
