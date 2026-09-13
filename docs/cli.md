@@ -30,7 +30,7 @@ sh bootstrap.sh
 To pin a release:
 
 ```bash
-STEALTH_VERSION=v0.2.1 \
+STEALTH_VERSION=v0.2.2 \
   sh bootstrap.sh
 ```
 
