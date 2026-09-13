@@ -3,8 +3,9 @@ name: ${COMPOSE_PROJECT_NAME:-stealth}
 # Setup is a short-lived, browser-facing Compose project. The setup API is
 # deliberately a different service from production api so it can start the
 # finalized production stack, verify it, and then remove only itself and the
-# setup proxy/Console. It is the only service in either file that mounts the
-# host Docker socket.
+# setup proxy/Console. It is the only service in the setup Compose project
+# that mounts the host Docker socket. The production worker has a separate,
+# intentional socket mount for the existing Docker-backed runner.
 
 services:
   postgres:

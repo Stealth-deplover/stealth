@@ -31,8 +31,13 @@ The setup install input module translates that durable state into the shared
 does not assemble release inputs itself.
 
 The browser setup flow module owns form state, provider callbacks, install
-progress effects, and handoff actions. The browser setup view owns stage
-rendering and delegates lifecycle transitions to that flow module.
+progress effects, and handoff actions. Cloudflare setup is token-first: the
+server verifies the scoped token, discovers accounts and zones, provisions the
+named tunnel and DNS, and the shared installer starts and verifies the
+production cloudflared service before Quick Tunnel cleanup. The browser setup
+view owns stage rendering and delegates lifecycle transitions to that flow
+module. Cloudflare OAuth remains an explicit inactive experimental seam and is
+not a browser connection path.
 
 ## Console log stream
 

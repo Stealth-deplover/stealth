@@ -159,10 +159,12 @@ browser wizard reviews the public URL, GitHub App, networking, database,
 Redis, storage, and final production tunnel settings before invoking the
 shared Go install engine.
 
-The setup image is the only setup service with the host Docker socket. It
-starts and verifies the final production Compose project through that socket,
-then the setup API removes the setup API, Console, and proxy. Production API
-and worker services do not receive the socket from the setup project.
+The setup image is the only service in the setup Compose project with the host
+Docker socket. It starts and verifies the final production Compose project
+through that socket, then the setup API removes the setup API, Console, and
+proxy. The production API and Console do not receive the socket. The
+production worker intentionally retains it for the existing Docker-backed
+function and site runner and runs non-root with the configured `DOCKER_GID`.
 
 The operator enters the Stealth setup code first. The API stores only a hash of
 the code and encrypts provider credentials and short-lived OAuth state with
@@ -170,9 +172,21 @@ the configured Functions secret. GitHub access tokens are used only for the
 server-side `/user` lookup and are discarded, never returned to the browser or
 persisted.
 
-The GitHub Device Flow is used specifically because the random
-`*.trycloudflare.com` hostname is not a Stealth-controlled OAuth callback
-domain. The browser opens GitHub's fixed device verification URL instead.
+Cloudflare setup uses a scoped API token, not a Global API Key. The Console
+verifies the token, discovers accounts and domains, and sends the selected
+account, domain, and dashboard hostname to the setup API. The API creates and
+configures the named tunnel and proxied DNS record, writes the private
+cloudflared token file, starts the production tunnel, verifies tunnel health
+and the production hostname, and removes the Quick Tunnel only after those
+checks pass. The minimum custom-token permissions are Account: Cloudflare
+Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS Edit,
+scoped to the resources used by the installation.
+
+Cloudflare OAuth remains experimental and inactive. The setup Console does
+not offer it, the inactive endpoint never builds an authorization redirect,
+and a random `*.trycloudflare.com` hostname is neither a Stealth-controlled
+OAuth callback domain nor a valid redirect for a shared Cloudflare OAuth
+client. The browser opens GitHub's fixed device verification URL instead.
 The current image reference uses the multi-architecture manifest digest
 `sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9`;
 maintainers should update the version and digest together after verifying the

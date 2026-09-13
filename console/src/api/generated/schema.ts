@@ -247,7 +247,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Consume Cloudflare's one-time OAuth callback. The access and refresh tokens remain server-side. */
+        /** @description Experimental and inactive compatibility callback. Cloudflare OAuth is not a browser setup path in this release; the callback never exchanges a code or stores credentials. */
         get: operations["completeSetupCloudflareOAuth"];
         put?: never;
         post?: never;
@@ -264,7 +264,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Check the setup service's database, Redis, storage, and Docker prerequisites. */
+        /** @description Check setup dependencies plus CPU, memory, free disk, Docker, Cloudflare API reachability, and Cloudflare Tunnel edge connectivity. */
         get: operations["getSetupPreflight"];
         put?: never;
         post?: never;
@@ -334,7 +334,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Create a short-lived Cloudflare OAuth authorization URL with account and DNS permissions needed for a named tunnel. */
+        /**
+         * @deprecated
+         * @description Experimental and inactive. This endpoint never creates an OAuth redirect; use a scoped Cloudflare API token through the token endpoint.
+         */
         post: operations["startSetupCloudflareOAuth"];
         delete?: never;
         options?: never;
@@ -383,7 +386,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Validate and save a scoped Cloudflare API token. The token is write-only and encrypted in the setup state. */
+        /** @description Validate and save the recommended scoped Cloudflare API token. The token is write-only and encrypted in setup state. The token must allow Account Cloudflare Tunnel Edit and Account Settings Read plus Zone Zone Read and DNS Edit for account and domain discovery and named-tunnel DNS setup. */
         post: operations["saveSetupCloudflareToken"];
         delete?: never;
         options?: never;
@@ -2589,6 +2592,7 @@ export interface components {
             /** Format: date-time */
             manifest_expires_at?: string;
         };
+        /** @description OAuth is retained only as an inactive experimental compatibility value. Production setup uses api_token. */
         SetupCloudflareState: {
             /** @enum {string} */
             mode?: SetupCloudflareStateMode;
@@ -2642,6 +2646,7 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
         };
+        /** @description Use a custom token scoped to the selected account and domain with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit. Global API keys are not accepted. */
         SetupCloudflareTokenRequest: {
             api_token: string;
         };
@@ -5406,19 +5411,17 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Cloudflare OAuth URL */
-            200: {
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Cloudflare OAuth is experimental and inactive */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SetupCloudflareOAuthResponse"];
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            422: components["responses"]["ValidationError"];
-            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listSetupCloudflareAccounts: {

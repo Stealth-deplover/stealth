@@ -248,7 +248,10 @@ func ValidateInstallableSetup(state setupstate.State) error {
 		return errors.New("choose a valid networking mode")
 	}
 	if state.Draft.NetworkMode == "cloudflare_tunnel" {
-		if state.Draft.Hostname == "" || state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareZoneID == "" || state.Draft.CloudflareTunnelID == "" || state.Draft.CloudflareRecordID == "" || state.Secret("cloudflare_tunnel_token") == "" {
+		if state.Cloudflare.Mode != "api_token" || !state.Cloudflare.Connected || !state.Cloudflare.TokenValid {
+			return errors.New("verify a scoped Cloudflare API token before installing")
+		}
+		if state.Draft.Hostname == "" || state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareZoneID == "" || state.Draft.CloudflareTunnelID == "" || state.Draft.CloudflareRecordID == "" || state.Secret("cloudflare_access_token") == "" || state.Secret("cloudflare_tunnel_token") == "" {
 			return errors.New("finish Cloudflare tunnel and DNS setup before installing")
 		}
 	}

@@ -166,53 +166,6 @@ func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setupStatusResponse{SetupRequired: status.SetupRequired, Ready: s.setupStateReady(), State: state.Public()})
 }
 
-func (s *Server) setupPreflight(w http.ResponseWriter, r *http.Request) {
-	checks := make([]setupCheck, 0, 5)
-	add := func(name, detail string, ok, required bool) {
-		status := "pass"
-		if !ok {
-			status = "fail"
-			if !required {
-				status = "warn"
-			}
-		}
-		checks = append(checks, setupCheck{Name: name, Detail: detail, Status: status, Required: required})
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	if s.repo == nil {
-		add("Database", "database dependency is not configured", false, true)
-	} else if err := s.repo.Ping(ctx); err != nil {
-		add("Database", "PostgreSQL is not ready", false, true)
-	} else {
-		add("Database", "PostgreSQL is reachable", true, true)
-	}
-	if s.storage == nil || !s.storageReady {
-		add("Storage", "storage is not configured", false, true)
-	} else if err := s.storage.Ping(ctx); err != nil {
-		add("Storage", "storage is not reachable", false, true)
-	} else {
-		add("Storage", "storage is reachable", true, true)
-	}
-	if s.limiter == nil {
-		add("Redis", "rate limiter is not configured", false, true)
-	} else if err := s.limiter.Ping(ctx); err != nil {
-		add("Redis", "Redis is not reachable", false, true)
-	} else {
-		add("Redis", "Redis is reachable", true, true)
-	}
-	if s.setupRunner == nil {
-		add("Docker", "Docker command runner is not configured", false, true)
-	} else {
-		if _, err := s.setupRunner.Output(ctx, "", "docker", "version", "--format", "{{.Server.Version}}"); err != nil {
-			add("Docker", "Docker is not available", false, true)
-		} else {
-			add("Docker", "Docker is available", true, true)
-		}
-	}
-	writeJSON(w, http.StatusOK, setupPreflightResponse{Checks: checks})
-}
-
 func (s *Server) saveSetupConfig(w http.ResponseWriter, r *http.Request) {
 	var request setupconfig.Request
 	if !decodeJSON(w, r, &request) {
@@ -363,89 +316,17 @@ func (s *Server) saveGitHubManual(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startCloudflareOAuth(w http.ResponseWriter, r *http.Request) {
-	if s.cloudflareOAuth == nil {
-		writeError(w, http.StatusServiceUnavailable, "cloudflare_oauth_unavailable", "Cloudflare OAuth is not configured; use a scoped API token instead")
-		return
-	}
-	callbackURL, err := s.externalURL(r, "/v1/setup/cloudflare/oauth/callback")
-	if err != nil || !strings.HasPrefix(callbackURL, "https://") {
-		writeError(w, http.StatusUnprocessableEntity, "https_required", "open the temporary HTTPS setup URL before connecting Cloudflare")
-		return
-	}
-	plainState, hash, expiresAt, err := setupstate.NewManifestState()
-	if err != nil {
-		internalError(s, w, err)
-		return
-	}
-	authorizationURL, err := s.cloudflareOAuth.AuthorizationURL(callbackURL, plainState, []string{"account:read", "account:write", "zone:read", "zone:dns_records:edit"})
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "cloudflare_oauth_invalid", "Cloudflare OAuth could not be started")
-		return
-	}
-	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
-			return errors.New("installation is already in progress or complete")
-		}
-		state.Cloudflare.Mode = "oauth"
-		state.Cloudflare.OAuthStateHash = hash
-		state.Cloudflare.OAuthExpiresAt = expiresAt
-		return nil
-	}); err != nil {
-		writeError(w, http.StatusConflict, "setup_state_conflict", "the Cloudflare setup session could not be started")
-		return
-	}
-	writeJSON(w, http.StatusOK, setupCloudflareOAuthResponse{AuthorizationURL: authorizationURL, ExpiresAt: expiresAt})
+	// OAuth support remains in the repository for future provider validation,
+	// but this setup flow deliberately stays inactive until Cloudflare provides
+	// a verified redirect and scope configuration for the deployed origin. In
+	// particular, never derive an OAuth redirect from a random Quick Tunnel.
+	writeError(w, http.StatusGone, "cloudflare_oauth_inactive", "Cloudflare OAuth is experimental and inactive; use a scoped Cloudflare API token")
 }
 
 func (s *Server) setupCloudflareOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	code := strings.TrimSpace(r.URL.Query().Get("code"))
-	providedState := strings.TrimSpace(r.URL.Query().Get("state"))
-	if code == "" || len(code) > 4096 || strings.ContainsAny(code, "\x00\r\n") || providedState == "" || s.cloudflareOAuth == nil {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	state, err := s.setupState.Load(r.Context())
-	if err != nil || state.Cloudflare.OAuthExpiresAt.Before(time.Now().UTC()) || !compareStateHash(state.Cloudflare.OAuthStateHash, providedState) {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Cloudflare.OAuthExpiresAt.Before(time.Now().UTC()) || !compareStateHash(state.Cloudflare.OAuthStateHash, providedState) {
-			return errors.New("Cloudflare OAuth state is expired or already used")
-		}
-		state.Cloudflare.OAuthStateHash = ""
-		state.Cloudflare.OAuthExpiresAt = time.Time{}
-		return nil
-	}); err != nil {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	callbackURL, err := s.externalURL(r, "/v1/setup/cloudflare/oauth/callback")
-	if err != nil {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	token, err := s.cloudflareOAuth.Exchange(r.Context(), code, callbackURL)
-	if err != nil || strings.TrimSpace(token.AccessToken) == "" {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	_, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		state.Cloudflare.Mode = "oauth"
-		state.Cloudflare.Connected = true
-		state.Cloudflare.TokenValid = true
-		if token.ExpiresIn > 0 {
-			state.Cloudflare.ExpiresAt = time.Now().UTC().Add(time.Duration(token.ExpiresIn) * time.Second)
-		}
-		state.SetSecret("cloudflare_access_token", token.AccessToken)
-		state.SetSecret("cloudflare_refresh_token", token.RefreshToken)
-		return nil
-	})
-	if err != nil {
-		http.Redirect(w, r, setupRedirect("/setup?cloudflare=error"), http.StatusFound)
-		return
-	}
-	http.Redirect(w, r, setupRedirect("/setup?cloudflare=connected"), http.StatusFound)
+	// A stale or externally initiated callback must not exchange a code or
+	// mutate encrypted setup state while OAuth is inactive.
+	http.Redirect(w, r, setupRedirect("/setup?cloudflare=oauth-inactive"), http.StatusFound)
 }
 
 func (s *Server) listCloudflareAccounts(w http.ResponseWriter, r *http.Request) {
@@ -491,6 +372,10 @@ func (s *Server) saveCloudflareToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "Cloudflare API token is invalid")
 		return
 	}
+	if s.cloudflareFactory == nil || s.setupState == nil {
+		writeError(w, http.StatusServiceUnavailable, "cloudflare_unavailable", "Cloudflare setup is not available")
+		return
+	}
 	client, err := s.cloudflareFactory(token)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "cloudflare_token_invalid", "Cloudflare API token is invalid")
@@ -506,6 +391,9 @@ func (s *Server) saveCloudflareToken(w http.ResponseWriter, r *http.Request) {
 		state.Cloudflare.Mode = "api_token"
 		state.Cloudflare.Connected = true
 		state.Cloudflare.TokenValid = true
+		state.Cloudflare.ExpiresAt = time.Time{}
+		state.Cloudflare.OAuthStateHash = ""
+		state.Cloudflare.OAuthExpiresAt = time.Time{}
 		state.SetSecret("cloudflare_access_token", token)
 		state.SetSecret("cloudflare_refresh_token", "")
 		return nil
@@ -670,6 +558,9 @@ func (s *Server) cloudflareClient(ctx context.Context) (cloudflare.Client, error
 	state, err := s.setupState.Load(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if state.Cloudflare.Mode != "api_token" || !state.Cloudflare.Connected || !state.Cloudflare.TokenValid {
+		return nil, errors.New("Cloudflare is not connected with a scoped API token")
 	}
 	token := state.Secret("cloudflare_access_token")
 	if token == "" {
@@ -991,6 +882,15 @@ func (s *Server) runSetupInstall(runID string, plan installengine.Plan) {
 		})
 		return
 	}
+	if plan.Cloudflare {
+		if err := s.waitForCloudflareTunnelHealth(ctx); err != nil {
+			// Keep the temporary Quick Tunnel and setup services available when
+			// production ingress cannot be proven healthy. Cleanup is only safe
+			// after both the public hostname and the named tunnel are healthy.
+			s.publishSetupEvent(ctx, installengine.Event{Step: "Cloudflare Tunnel health", Status: "failed", Error: safeSetupError(err)})
+			return
+		}
+	}
 	_, _ = s.setupState.Update(ctx, func(state *setupstate.State) error {
 		if state.InstallRunID == runID {
 			state.Step = "Cleanup"
@@ -1038,6 +938,39 @@ func (s *Server) runSetupInstall(runID string, plan installengine.Plan) {
 	})
 	s.publishSetupEvent(ctx, installengine.Event{Step: "Handoff", Status: "succeeded", Message: "production is ready; transferring the Console session"})
 	go s.waitForSetupHandoff(runID, plan)
+}
+
+func (s *Server) waitForCloudflareTunnelHealth(ctx context.Context) error {
+	state, err := s.setupState.Load(ctx)
+	if err != nil {
+		return errors.New("Cloudflare Tunnel health could not be verified")
+	}
+	if state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareTunnelID == "" {
+		return errors.New("Cloudflare Tunnel identifiers are missing")
+	}
+	client, err := s.cloudflareClient(ctx)
+	if err != nil {
+		return errors.New("Cloudflare Tunnel health could not be verified")
+	}
+	healthContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		status, statusErr := client.TunnelStatus(healthContext, state.Draft.CloudflareAccountID, state.Draft.CloudflareTunnelID)
+		if statusErr == nil && cloudflare.StatusIsHealthy(status) {
+			return nil
+		}
+		if healthContext.Err() != nil {
+			break
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-healthContext.Done():
+			timer.Stop()
+			return errors.New("Cloudflare Tunnel did not become healthy")
+		case <-timer.C:
+		}
+	}
+	return errors.New("Cloudflare Tunnel did not become healthy")
 }
 
 type pendingSetupHandoff interface {

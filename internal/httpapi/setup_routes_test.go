@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
+	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
@@ -183,6 +185,61 @@ func authenticatedSetupRequest(t *testing.T, handler http.Handler, cookie *http.
 	request.AddCookie(cookie)
 	handler.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func TestCloudflareOAuthIsExplicitlyInactive(t *testing.T) {
+	server := &Server{}
+	start := httptest.NewRecorder()
+	server.startCloudflareOAuth(start, httptest.NewRequest(http.MethodPost, "/v1/setup/cloudflare/oauth/start", nil))
+	if start.Code != http.StatusGone || !strings.Contains(start.Body.String(), "cloudflare_oauth_inactive") || strings.Contains(start.Body.String(), "authorization_url") {
+		t.Fatalf("inactive OAuth start = %d: %s", start.Code, start.Body.String())
+	}
+
+	callback := httptest.NewRecorder()
+	server.setupCloudflareOAuthCallback(callback, httptest.NewRequest(http.MethodGet, "/v1/setup/cloudflare/oauth/callback?code=secret-code&state=secret-state", nil))
+	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "cloudflare=oauth-inactive") {
+		t.Fatalf("inactive OAuth callback = %d, headers=%#v", callback.Code, callback.Header())
+	}
+}
+
+func TestSaveCloudflareTokenKeepsTokenOutOfPublicState(t *testing.T) {
+	root := t.TempDir()
+	cipher, err := functionsecret.New(bytes.Repeat([]byte{0x63}, functionsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/accounts" || r.Header.Get("Authorization") != "Bearer scoped-token" {
+			t.Fatalf("unexpected Cloudflare verification request: %s %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"account-1","name":"Acme"}]}`)
+	}))
+	defer provider.Close()
+	server := &Server{
+		setupState: store,
+		cloudflareFactory: func(token string) (cloudflare.Client, error) {
+			return cloudflare.NewClient(token, provider.URL, provider.Client())
+		},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/setup/cloudflare/token", strings.NewReader(`{"api_token":"scoped-token"}`))
+	request.Header.Set("Content-Type", "application/json")
+	server.saveCloudflareToken(recorder, request)
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "scoped-token") {
+		t.Fatalf("Cloudflare token response = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Cloudflare.Mode != "api_token" || state.Secret("cloudflare_access_token") != "scoped-token" {
+		t.Fatalf("Cloudflare token was not stored in encrypted state: %#v", state.Cloudflare)
+	}
 }
 
 func TestSetupCookiePayloadIsOpaqueAndBoundToClaim(t *testing.T) {

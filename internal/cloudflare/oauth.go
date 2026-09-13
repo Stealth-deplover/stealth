@@ -1,3 +1,6 @@
+// OAuth support is retained as an experimental provider adapter only. Browser
+// setup intentionally does not invoke it until a verified Cloudflare OAuth
+// client, redirect URI, and scope set are available for the deployed origin.
 package cloudflare
 
 import (

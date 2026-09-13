@@ -104,7 +104,7 @@ func TestAPIClientDoesNotExposeTokenInProviderErrors(t *testing.T) {
 	const token = "secret-cloudflare-token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"invalid credentials"}]}`)
+		_, _ = io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"invalid credentials: secret-cloudflare-token"}]}`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
@@ -115,6 +115,52 @@ func TestAPIClientDoesNotExposeTokenInProviderErrors(t *testing.T) {
 	_, err = client.ListAccounts(context.Background())
 	if err == nil || strings.Contains(err.Error(), token) {
 		t.Fatalf("provider error = %v", err)
+	}
+}
+
+func TestAPIClientPaginatesAccountsAndZones(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		page := r.URL.Query().Get("page")
+		switch r.URL.Path {
+		case "/accounts":
+			switch page {
+			case "1":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"account-1","name":"Acme"}],"result_info":{"total_pages":2}}`)
+			case "2":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"account-2","name":"Beta"}],"result_info":{"total_pages":2}}`)
+			default:
+				t.Errorf("unexpected accounts page %q", page)
+			}
+		case "/zones":
+			if r.URL.Query().Get("account.id") != "account-1" {
+				t.Errorf("zone account query = %q", r.URL.Query().Get("account.id"))
+			}
+			switch page {
+			case "1":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"zone-1","name":"one.example"}],"result_info":{"total_pages":2}}`)
+			case "2":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"zone-2","name":"two.example"}],"result_info":{"total_pages":2}}`)
+			default:
+				t.Errorf("unexpected zones page %q", page)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient("token", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := client.ListAccounts(context.Background())
+	if err != nil || len(accounts) != 2 || accounts[1].ID != "account-2" {
+		t.Fatalf("ListAccounts() = %#v, %v", accounts, err)
+	}
+	zones, err := client.ListZones(context.Background(), "account-1")
+	if err != nil || len(zones) != 2 || zones[1].ID != "zone-2" {
+		t.Fatalf("ListZones() = %#v, %v", zones, err)
 	}
 }
 

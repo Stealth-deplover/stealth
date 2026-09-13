@@ -33,7 +33,8 @@ The setup Console walks through these stages:
 2. Instance name and public URL.
 3. GitHub App connection, using the GitHub Manifest flow when available or
    manual App credentials as a fallback.
-4. Networking, including Cloudflare OAuth or a narrowly scoped API token.
+4. Networking, using a scoped Cloudflare API token for a named production
+   tunnel or one of the local/reverse-proxy modes.
 5. Database and Redis selection. Bundled services are the default; external
    PostgreSQL and Redis URLs must pass a live connection test.
 6. Storage selection. Local storage is the default; S3-compatible settings
@@ -58,12 +59,31 @@ single-use, and expires quickly. The final owner identity still uses the
 server-side GitHub Device Flow; its device code and access token do not enter
 the URL, browser storage, or logs.
 
-Cloudflare OAuth uses explicit account and zone scopes. The API token fallback
-is accepted only after an account request succeeds. The API creates a named
-tunnel, configures ingress to the Stealth proxy with a catch-all 404 rule,
-creates a proxied CNAME, and stores the official cloudflared token file with
-private permissions. The temporary Quick Tunnel is setup transport only and
-is never promoted to production ingress.
+Cloudflare setup is token-first. The Console shows an API Token field and a
+`Verify Token` action. The setup API validates the token by discovering the
+accessible Cloudflare accounts, then the browser selects an account and
+domain. `Continue` performs the remaining provisioning on the server: it
+creates or resumes the named tunnel, configures ingress to the Stealth proxy
+with a catch-all 404 rule, creates the proxied CNAME, writes the private
+cloudflared token file, starts the production Compose profile, checks the
+named tunnel health, and verifies the production hostname. The temporary
+Quick Tunnel is removed only after those production checks pass.
+
+Create a custom Cloudflare API token scoped to the account and domain used by
+the installation. The minimum permissions are:
+
+- Account: `Cloudflare Tunnel` `Edit`.
+- Account: `Account Settings` `Read`, required for account discovery.
+- Zone: `Zone` `Read`, required for domain discovery.
+- Zone: `DNS` `Edit`, required for the proxied CNAME.
+
+Stealth does not accept a Global API Key. The token is submitted to the setup
+API, stored only in encrypted setup state, and never returned in public setup
+state, browser query data, SSE events, or logs. Cloudflare OAuth support is
+experimental and inactive in this release. It is not shown as a connection
+option and the inactive endpoint never redirects to Cloudflare or exchanges a
+callback code. A random `*.trycloudflare.com` setup hostname is never used as
+an OAuth redirect URI.
 
 ## External infrastructure
 
@@ -89,4 +109,7 @@ production URL, not a query parameter.
 If cleanup fails after production becomes healthy, the setup state reports a
 cleanup failure and keeps the browser flow resumable. Retry from the setup
 Console or local CLI after checking `stealth doctor`. Do not remove Docker
-volumes as a repair action.
+volumes as a repair action. The host preflight also reports CPU, memory, free
+disk, Docker, Cloudflare API reachability, and Cloudflare Tunnel edge
+connectivity. The final `cloudflared` startup performs its own DNS and
+TCP/UDP port 7844 checks.

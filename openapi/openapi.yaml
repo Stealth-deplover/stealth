@@ -154,7 +154,7 @@ paths:
   /v1/setup/cloudflare/oauth/callback:
     get:
       operationId: completeSetupCloudflareOAuth
-      description: Consume Cloudflare's one-time OAuth callback. The access and refresh tokens remain server-side.
+      description: Experimental and inactive compatibility callback. Cloudflare OAuth is not a browser setup path in this release; the callback never exchanges a code or stores credentials.
       security: [{}]
       parameters:
         - { name: code, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } }
@@ -164,7 +164,7 @@ paths:
   /v1/setup/preflight:
     get:
       operationId: getSetupPreflight
-      description: Check the setup service's database, Redis, storage, and Docker prerequisites.
+      description: Check setup dependencies plus CPU, memory, free disk, Docker, Cloudflare API reachability, and Cloudflare Tunnel edge connectivity.
       security: [{ setupCookie: [] }]
       responses:
         '200': { description: Prerequisite checks, content: { application/json: { schema: { $ref: '#/components/schemas/SetupPreflightResponse' } } } }
@@ -210,15 +210,14 @@ paths:
   /v1/setup/cloudflare/oauth/start:
     post:
       operationId: startSetupCloudflareOAuth
-      description: Create a short-lived Cloudflare OAuth authorization URL with account and DNS permissions needed for a named tunnel.
+      deprecated: true
+      description: Experimental and inactive. This endpoint never creates an OAuth redirect; use a scoped Cloudflare API token through the token endpoint.
       security: [{ setupCookie: [] }]
       parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
       responses:
-        '200': { description: Cloudflare OAuth URL, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareOAuthResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+        '410': { description: Cloudflare OAuth is experimental and inactive, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
   /v1/setup/cloudflare/accounts:
     get:
       operationId: listSetupCloudflareAccounts
@@ -242,7 +241,7 @@ paths:
   /v1/setup/cloudflare/token:
     post:
       operationId: saveSetupCloudflareToken
-      description: Validate and save a scoped Cloudflare API token. The token is write-only and encrypted in the setup state.
+      description: Validate and save the recommended scoped Cloudflare API token. The token is write-only and encrypted in setup state. The token must allow Account Cloudflare Tunnel Edit and Account Settings Read plus Zone Zone Read and DNS Edit for account and domain discovery and named-tunnel DNS setup.
       security: [{ setupCookie: [] }]
       parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareTokenRequest' } } } }
@@ -2411,12 +2410,12 @@ components:
     SetupState: { type: object, additionalProperties: false, required: [version, phase, draft, github, cloudflare, updated_at], properties: { version: { type: integer, minimum: 1 }, phase: { type: string, enum: [collecting, installing, complete, failed, handoff] }, step: { type: string, maxLength: 120 }, error_code: { type: string, maxLength: 120 }, error_message: { type: string, maxLength: 240 }, draft: { $ref: '#/components/schemas/SetupDraft' }, github: { $ref: '#/components/schemas/SetupGitHubState' }, cloudflare: { $ref: '#/components/schemas/SetupCloudflareState' }, updated_at: { type: string, format: date-time }, last_event_id: { type: integer, format: int64, minimum: 0 } } }
     SetupDraft: { type: object, additionalProperties: false, properties: { instance_name: { type: string, maxLength: 120 }, public_url: { type: string, format: uri }, network_mode: { type: string, enum: [cloudflare_tunnel, public_ip, reverse_proxy, local_only] }, hostname: { type: string, maxLength: 253 }, cloudflare_account_id: { type: string, maxLength: 128 }, cloudflare_zone_id: { type: string, maxLength: 128 }, cloudflare_tunnel_id: { type: string, maxLength: 128 }, cloudflare_record_id: { type: string, maxLength: 128 }, database_mode: { type: string, enum: [bundled, external] }, database_tested: { type: boolean }, redis_mode: { type: string, enum: [bundled, external] }, redis_tested: { type: boolean }, storage_mode: { type: string, enum: [local, s3] }, storage_tested: { type: boolean }, storage_s3_endpoint: { type: string, format: uri, writeOnly: true }, storage_s3_region: { type: string, writeOnly: true }, storage_s3_bucket: { type: string, writeOnly: true }, storage_s3_use_ssl: { type: boolean, writeOnly: true }, storage_s3_path_style: { type: boolean, writeOnly: true }, storage_s3_prefix: { type: string, writeOnly: true } } }
     SetupGitHubState: { type: object, additionalProperties: false, properties: { mode: { type: string, enum: [manifest, manual] }, client_id: { type: string, maxLength: 160 }, connected: { type: boolean }, authorization_session: { type: string, format: uuid }, manifest_expires_at: { type: string, format: date-time } } }
-    SetupCloudflareState: { type: object, additionalProperties: false, properties: { mode: { type: string, enum: [oauth, api_token] }, connected: { type: boolean }, expires_at: { type: string, format: date-time }, token_valid: { type: boolean } } }
+    SetupCloudflareState: { type: object, additionalProperties: false, description: OAuth is retained only as an inactive experimental compatibility value. Production setup uses api_token., properties: { mode: { type: string, enum: [oauth, api_token] }, connected: { type: boolean }, expires_at: { type: string, format: date-time }, token_valid: { type: boolean } } }
     SetupConfigRequest: { type: object, additionalProperties: false, required: [instance_name, network_mode, database_mode, redis_mode, storage_mode], properties: { instance_name: { type: string, minLength: 1, maxLength: 120 }, public_url: { type: string, format: uri }, network_mode: { type: string, enum: [cloudflare_tunnel, public_ip, reverse_proxy, local_only] }, hostname: { type: string, maxLength: 253 }, database_mode: { type: string, enum: [bundled, external] }, database_url: { type: string, format: uri, maxLength: 2048, writeOnly: true }, redis_mode: { type: string, enum: [bundled, external] }, redis_url: { type: string, format: uri, maxLength: 2048, writeOnly: true }, storage_mode: { type: string, enum: [local, s3] }, storage_s3_endpoint: { type: string, format: uri, maxLength: 2048, writeOnly: true }, storage_s3_region: { type: string, maxLength: 120, writeOnly: true }, storage_s3_bucket: { type: string, minLength: 3, maxLength: 63, writeOnly: true }, storage_s3_access_key: { type: string, maxLength: 512, writeOnly: true }, storage_s3_secret_key: { type: string, maxLength: 512, writeOnly: true }, storage_s3_use_ssl: { type: boolean, writeOnly: true }, storage_s3_path_style: { type: boolean, writeOnly: true }, storage_s3_prefix: { type: string, maxLength: 512, writeOnly: true } } }
     SetupGitHubManifestResponse: { type: object, additionalProperties: false, required: [manifest_url, expires_at], properties: { manifest_url: { type: string, format: uri }, expires_at: { type: string, format: date-time } } }
     SetupGitHubManualRequest: { type: object, additionalProperties: false, required: [client_id, client_secret, private_key], properties: { client_id: { type: string, minLength: 1, maxLength: 160 }, client_secret: { type: string, minLength: 1, maxLength: 512, writeOnly: true }, private_key: { type: string, minLength: 1, maxLength: 32768, writeOnly: true }, webhook_secret: { type: string, maxLength: 512, writeOnly: true } } }
     SetupCloudflareOAuthResponse: { type: object, additionalProperties: false, required: [authorization_url, expires_at], properties: { authorization_url: { type: string, format: uri }, expires_at: { type: string, format: date-time } } }
-    SetupCloudflareTokenRequest: { type: object, additionalProperties: false, required: [api_token], properties: { api_token: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } } }
+    SetupCloudflareTokenRequest: { type: object, additionalProperties: false, description: "Use a custom token scoped to the selected account and domain with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit. Global API keys are not accepted.", required: [api_token], properties: { api_token: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } } }
     SetupCloudflareTunnelRequest: { type: object, additionalProperties: false, required: [account_id, zone_id, hostname], properties: { account_id: { type: string, minLength: 1, maxLength: 128 }, zone_id: { type: string, minLength: 1, maxLength: 128 }, hostname: { type: string, minLength: 4, maxLength: 253 }, name: { type: string, maxLength: 120 } } }
     SetupCloudflareAccount: { type: object, additionalProperties: false, required: [id, name], properties: { id: { type: string, maxLength: 128 }, name: { type: string, maxLength: 255 }, created_on: { type: string } } }
     SetupCloudflareZone: { type: object, additionalProperties: false, required: [id, name], properties: { id: { type: string, maxLength: 128 }, name: { type: string, maxLength: 253 }, status: { type: string } } }

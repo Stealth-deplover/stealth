@@ -10,7 +10,6 @@ import {
   useSaveSetupCloudflareToken,
   useSaveSetupConfig,
   useSaveSetupGitHubManual,
-  useStartSetupCloudflareOAuth,
   useStartSetupGitHubManifest,
   useStartSetupInstall,
   useTestSetupDatabase,
@@ -82,8 +81,10 @@ export function useBrowserSetupFlow() {
     "idle",
   );
   const [cloudflareToken, setCloudflareToken] = useState("");
-  const [cloudflareAccountID, setCloudflareAccountID] = useState("");
-  const [cloudflareZoneID, setCloudflareZoneID] = useState("");
+  const [cloudflareAccountID, setCloudflareAccountID] = useState<string | null>(
+    null,
+  );
+  const [cloudflareZoneID, setCloudflareZoneID] = useState<string | null>(null);
   const [handoffToken, setHandoffToken] = useState("");
   const [installState, setInstallState] = useState<SetupState>();
   const [sseConnected, setSSEConnected] = useState(false);
@@ -99,7 +100,6 @@ export function useBrowserSetupFlow() {
   const saveConfig = useSaveSetupConfig();
   const startManifest = useStartSetupGitHubManifest();
   const saveManual = useSaveSetupGitHubManual();
-  const startCloudflareOAuth = useStartSetupCloudflareOAuth();
   const saveCloudflareToken = useSaveSetupCloudflareToken();
   const createCloudflareTunnel = useCreateSetupCloudflareTunnel();
   const testDatabase = useTestSetupDatabase();
@@ -113,10 +113,10 @@ export function useBrowserSetupFlow() {
     watchedConfig.database_mode ?? defaultConfig.database_mode;
   const redisMode = watchedConfig.redis_mode ?? defaultConfig.redis_mode;
   const storageMode = watchedConfig.storage_mode ?? defaultConfig.storage_mode;
-  const selectedAccount =
-    cloudflareAccountID || state?.draft.cloudflare_account_id || "";
-  const selectedZone =
-    cloudflareZoneID || state?.draft.cloudflare_zone_id || "";
+  const requestedAccount =
+    cloudflareAccountID ?? state?.draft.cloudflare_account_id ?? "";
+  const requestedZone =
+    cloudflareZoneID ?? state?.draft.cloudflare_zone_id ?? "";
   const ownerConfirmed = Boolean(
     setupStatus.data && !setupStatus.data.setup_required,
   );
@@ -124,14 +124,32 @@ export function useBrowserSetupFlow() {
     setupVerified ||
     ownerConfirmed ||
     Boolean(state?.github.authorization_session);
+  const cloudflareConnected = Boolean(
+    state?.cloudflare.connected &&
+    state.cloudflare.mode === "api_token" &&
+    state.cloudflare.token_valid,
+  );
   const preflight = useSetupPreflight(setupAccess);
   const accounts = useSetupCloudflareAccounts(
-    setupAccess && Boolean(state?.cloudflare.connected),
+    setupAccess && cloudflareConnected,
   );
+  const availableAccounts = accounts.data?.accounts;
+  const selectedAccount =
+    cloudflareConnected && availableAccounts?.length
+      ? availableAccounts.some((account) => account.id === requestedAccount)
+        ? requestedAccount
+        : availableAccounts[0].id
+      : requestedAccount;
   const zones = useSetupCloudflareZones(
     selectedAccount,
-    setupAccess && Boolean(state?.cloudflare.connected),
+    setupAccess && cloudflareConnected && Boolean(availableAccounts?.length),
   );
+  const availableZones = zones.data?.zones;
+  const selectedZone = availableZones?.length
+    ? availableZones.some((zone) => zone.id === requestedZone)
+      ? requestedZone
+      : availableZones[0].id
+    : requestedZone;
   const activeStep =
     state?.phase === "installing" ||
     state?.phase === "failed" ||
@@ -384,34 +402,34 @@ export function useBrowserSetupFlow() {
     }
   };
 
-  const startCloudflareAuthorization = async () => {
-    setActionError(undefined);
-    try {
-      const result = await startCloudflareOAuth.mutateAsync();
-      if (result?.authorization_url)
-        window.location.assign(result.authorization_url);
-    } catch (error) {
-      setActionError(error);
-    }
-  };
-
-  const createTunnel = async () => {
+  const continueCloudflareSetup = async () => {
     const values = configForm.getValues();
-    if (!selectedAccount || !selectedZone || !values.hostname.trim()) {
-      setActionError(new Error("Choose an account, zone, and hostname first."));
+    if (
+      networkMode === "cloudflare_tunnel" &&
+      (!selectedAccount || !selectedZone || !values.hostname.trim())
+    ) {
+      setActionError(
+        new Error("Choose an account, domain, and hostname first."),
+      );
       return;
     }
     setActionError(undefined);
     try {
       await persistConfig(values);
-      const result = await createCloudflareTunnel.mutateAsync({
-        account_id: selectedAccount,
-        zone_id: selectedZone,
-        hostname: values.hostname.trim(),
-      });
-      if (result?.draft.public_url)
-        configForm.setValue("public_url", result.draft.public_url);
+      if (networkMode === "cloudflare_tunnel") {
+        const result = await createCloudflareTunnel.mutateAsync({
+          account_id: selectedAccount,
+          zone_id: selectedZone,
+          hostname: values.hostname.trim(),
+        });
+        if (result?.draft.public_url) {
+          configForm.setValue("public_url", result.draft.public_url, {
+            shouldDirty: false,
+          });
+        }
+      }
       await setupStatus.refetch();
+      moveTo("data");
     } catch (error) {
       setActionError(error);
     }
@@ -502,7 +520,6 @@ export function useBrowserSetupFlow() {
   const checksPass =
     checks.length > 0 &&
     checks.every((check) => !check.required || check.status === "pass");
-  const cloudflareConnected = Boolean(state?.cloudflare.connected);
   const tunnelReady = Boolean(
     state?.draft.cloudflare_tunnel_id &&
     state.draft.cloudflare_record_id &&
@@ -523,13 +540,18 @@ export function useBrowserSetupFlow() {
   const callbackNotice = callbackStatus.includes("connected")
     ? "Connection saved. Continue when the status below is ready."
     : "";
-  const callbackError =
-    callbackStatus && !callbackStatus.includes("connected")
+  const callbackError = callbackStatus.includes("oauth-inactive")
+    ? new Error(
+        "Cloudflare OAuth is experimental and inactive. Use a scoped API token.",
+      )
+    : callbackStatus && !callbackStatus.includes("connected")
       ? new Error("The provider connection was not completed.")
       : undefined;
   const isPending =
     saveConfig.isPending ||
     saveManual.isPending ||
+    saveCloudflareToken.isPending ||
+    createCloudflareTunnel.isPending ||
     startInstall.isPending ||
     issueHandoff.isPending;
 
@@ -546,7 +568,7 @@ export function useBrowserSetupFlow() {
     configForm,
     copyState,
     createCloudflareTunnel,
-    createTunnel,
+    continueCloudflareSetup,
     dataReady,
     databaseMode,
     device,
@@ -579,8 +601,6 @@ export function useBrowserSetupFlow() {
     setupCode,
     setupStatus,
     setupVerified,
-    startCloudflareAuthorization,
-    startCloudflareOAuth,
     startDevice,
     startManifest,
     storageMode,

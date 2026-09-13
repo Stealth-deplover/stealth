@@ -99,6 +99,27 @@ func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 	}
 }
 
+func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner})
+	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, Cloudflare: true}
+
+	if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("recorded calls = %#v, want one service call", calls)
+	}
+	if !containsPair(calls[0].args, "--profile", "cloudflare") {
+		t.Fatalf("Cloudflare profile was not enabled: %#v", calls[0])
+	}
+	if got := calls[0].args[len(calls[0].args)-5:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "cloudflared"}) {
+		t.Fatalf("Cloudflare service command = %#v", calls[0])
+	}
+}
+
 func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 	layout := writeEngineFixture(t, false)
 	runner := &fakeRunner{}

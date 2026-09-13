@@ -75,6 +75,31 @@ func TestApplyRejectsCompletedState(t *testing.T) {
 	}
 }
 
+func TestValidateInstallableCloudflareSetupRequiresVerifiedAPIToken(t *testing.T) {
+	state := setupstate.NewState()
+	state.GitHub.Connected = true
+	state.GitHub.ClientID = "Iv1.setup-client"
+	state.Draft.PublicURL = "https://console.example.test"
+	state.Draft.NetworkMode = "cloudflare_tunnel"
+	state.Draft.Hostname = "console.example.test"
+	state.Draft.CloudflareAccountID = "account-1"
+	state.Draft.CloudflareZoneID = "zone-1"
+	state.Draft.CloudflareTunnelID = "tunnel-1"
+	state.Draft.CloudflareRecordID = "record-1"
+	state.SetSecret("cloudflare_access_token", "api-token")
+	state.SetSecret("cloudflare_tunnel_token", "tunnel-token")
+
+	if err := ValidateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "scoped Cloudflare API token") {
+		t.Fatalf("unverified Cloudflare setup error = %v", err)
+	}
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.TokenValid = true
+	if err := ValidateInstallableSetup(state); err != nil {
+		t.Fatalf("verified Cloudflare setup error = %v", err)
+	}
+}
+
 func TestCredentialValidators(t *testing.T) {
 	tests := []struct {
 		name  string

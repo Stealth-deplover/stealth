@@ -19,6 +19,8 @@ import (
 
 const defaultAPIBaseURL = "https://api.cloudflare.com/client/v4"
 
+const maxListPages = 1000
+
 type Account struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -127,13 +129,22 @@ func NewClient(apiToken, baseURL string, httpClient *http.Client) (*APIClient, e
 }
 
 func (c *APIClient) ListAccounts(ctx context.Context) ([]Account, error) {
-	var result struct {
-		Result []Account `json:"result"`
+	accounts := make([]Account, 0)
+	for page := 1; page <= maxListPages; page++ {
+		var result struct {
+			Result     []Account `json:"result"`
+			ResultInfo pageInfo  `json:"result_info"`
+		}
+		path := "/accounts?per_page=50&page=" + strconv.Itoa(page)
+		if err := c.do(ctx, http.MethodGet, path, nil, &result); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, result.Result...)
+		if pageInfoDone(page, len(result.Result), result.ResultInfo) {
+			return accounts, nil
+		}
 	}
-	if err := c.do(ctx, http.MethodGet, "/accounts?per_page=100", nil, &result); err != nil {
-		return nil, err
-	}
-	return result.Result, nil
+	return nil, errors.New("Cloudflare returned too many account pages")
 }
 
 func (c *APIClient) ListZones(ctx context.Context, accountID string) ([]Zone, error) {
@@ -141,14 +152,30 @@ func (c *APIClient) ListZones(ctx context.Context, accountID string) ([]Zone, er
 	if err != nil {
 		return nil, err
 	}
-	var result struct {
-		Result []Zone `json:"result"`
+	zones := make([]Zone, 0)
+	for page := 1; page <= maxListPages; page++ {
+		var result struct {
+			Result     []Zone   `json:"result"`
+			ResultInfo pageInfo `json:"result_info"`
+		}
+		path := "/zones?per_page=50&page=" + strconv.Itoa(page) + "&account.id=" + url.QueryEscape(accountID)
+		if err := c.do(ctx, http.MethodGet, path, nil, &result); err != nil {
+			return nil, err
+		}
+		zones = append(zones, result.Result...)
+		if pageInfoDone(page, len(result.Result), result.ResultInfo) {
+			return zones, nil
+		}
 	}
-	path := "/zones?per_page=100&account.id=" + url.QueryEscape(accountID)
-	if err := c.do(ctx, http.MethodGet, path, nil, &result); err != nil {
-		return nil, err
-	}
-	return result.Result, nil
+	return nil, errors.New("Cloudflare returned too many zone pages")
+}
+
+type pageInfo struct {
+	TotalPages int `json:"total_pages"`
+}
+
+func pageInfoDone(page, resultCount int, info pageInfo) bool {
+	return resultCount == 0 || info.TotalPages == 0 || page >= info.TotalPages
 }
 
 func (c *APIClient) CreateTunnel(ctx context.Context, accountID, name string) (Tunnel, error) {
@@ -304,7 +331,11 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, resul
 		return fmt.Errorf("Cloudflare returned invalid JSON (HTTP %d)", response.StatusCode)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || !envelope.Success {
-		return fmt.Errorf("Cloudflare request was rejected (HTTP %d): %s", response.StatusCode, publicAPIError(envelope.Errors))
+		message := publicAPIError(envelope.Errors)
+		if c.apiToken != "" {
+			message = strings.ReplaceAll(message, c.apiToken, "[redacted]")
+		}
+		return fmt.Errorf("Cloudflare request was rejected (HTTP %d): %s", response.StatusCode, message)
 	}
 	if result == nil {
 		return nil

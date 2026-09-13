@@ -57,13 +57,6 @@ export function useSaveSetupGitHubManual() {
   });
 }
 
-export function useStartSetupCloudflareOAuth() {
-  return useMutation({
-    mutationFn: async () =>
-      unwrap(await api.POST("/v1/setup/cloudflare/oauth/start", setupMutation)),
-  });
-}
-
 export function useSaveSetupCloudflareToken() {
   const queryClient = useQueryClient();
   return useMutation({

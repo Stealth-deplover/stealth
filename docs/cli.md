@@ -48,10 +48,12 @@ setup proxy, PostgreSQL, and Redis. It does not collect provider credentials in
 the terminal. The browser wizard owns the reviewed configuration and calls the
 same reusable Go install engine that the CLI uses.
 
-The setup image is the only setup service allowed to mount the host Docker
-socket. It writes the final production files through the host installation
-mount, starts and verifies the production stack, and is then removed. The
-production API image does not receive the Docker socket.
+The setup image is the only service in the setup Compose project allowed to
+mount the host Docker socket. It writes the final production files through the
+host installation mount, starts and verifies the production stack, and is then
+removed. The production API and Console images do not receive the socket. The
+production worker still mounts it for the existing non-root Docker-backed
+function and site runner.
 
 See the [browser setup guide](web-setup.md) for the complete wizard, provider
 connection, external infrastructure, and recovery behavior. The owner is an

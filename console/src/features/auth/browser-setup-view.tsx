@@ -51,6 +51,12 @@ function safeError(error: unknown) {
     if (error.code === "handoff_unavailable") {
       return "The production session handoff is not ready yet. Keep this setup window open and retry.";
     }
+    if (error.code === "cloudflare_oauth_inactive") {
+      return "Cloudflare OAuth is experimental and inactive. Use a scoped API token instead.";
+    }
+    if (error.code === "cloudflare_token_rejected") {
+      return "Cloudflare rejected the token. Check Account Settings Read, Cloudflare Tunnel Edit, Zone Read, and DNS Edit on the selected resources.";
+    }
   }
   return errorMessage(error);
 }
@@ -317,7 +323,7 @@ export function BrowserSetupView() {
     configForm,
     copyState,
     createCloudflareTunnel,
-    createTunnel,
+    continueCloudflareSetup,
     dataReady,
     databaseMode,
     device,
@@ -356,8 +362,6 @@ export function BrowserSetupView() {
     setDevice,
     setProviderMode,
     setSetupCode,
-    startCloudflareAuthorization,
-    startCloudflareOAuth,
     startDevice,
     startManifest,
     startProductionInstall,
@@ -974,55 +978,61 @@ export function BrowserSetupView() {
                         Cloudflare connection
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        OAuth is preferred. The API token fallback is checked
-                        before it is saved.
+                        Verify a scoped API token here. Stealth discovers the
+                        account and domain, then configures the named tunnel and
+                        DNS for you.
                       </p>
                     </div>
                     {cloudflareConnected ? (
-                      <StatusPill status="ready">Connected</StatusPill>
+                      <StatusPill status="ready">
+                        <CheckCircle2 className="size-3.5" />
+                        Cloudflare connected
+                      </StatusPill>
                     ) : null}
                   </div>
                   {!cloudflareConnected ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Button
-                        type="button"
-                        onClick={() => void startCloudflareAuthorization()}
-                        disabled={startCloudflareOAuth.isPending}
+                    <div className="space-y-3">
+                      <Field
+                        id="cloudflare-api-token"
+                        label="API Token"
+                        hint="The token is sent only to the setup API and is never returned to browser state."
                       >
-                        {startCloudflareOAuth.isPending ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Cloud className="size-4" />
-                        )}
-                        Connect with Cloudflare OAuth
-                      </Button>
-                      <div className="flex gap-2">
-                        <Input
-                          type="password"
-                          placeholder="Scoped API token"
-                          value={cloudflareToken}
-                          onChange={(event) =>
-                            setCloudflareToken(event.target.value)
-                          }
-                          autoComplete="new-password"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => void connectCloudflareToken()}
-                          disabled={saveCloudflareToken.isPending}
-                        >
-                          Use token
-                        </Button>
-                      </div>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <Input
+                            id="cloudflare-api-token"
+                            type="password"
+                            placeholder="Scoped Cloudflare API token"
+                            value={cloudflareToken}
+                            onChange={(event) =>
+                              setCloudflareToken(event.target.value)
+                            }
+                            autoComplete="new-password"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void connectCloudflareToken()}
+                            disabled={saveCloudflareToken.isPending}
+                            className="sm:min-w-32"
+                          >
+                            {saveCloudflareToken.isPending ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : null}
+                            Verify Token
+                          </Button>
+                        </div>
+                      </Field>
+                      <p className="text-xs leading-5 text-slate-500">
+                        Create a custom token with Account: Cloudflare Tunnel
+                        Edit and Account Settings Read; Zone: Zone Read and DNS
+                        Edit. Scope it to the account and domain you will use.
+                        Global API keys are not accepted.
+                      </p>
                     </div>
                   ) : (
                     <>
                       <div className="grid gap-4 sm:grid-cols-2">
-                        <Field
-                          id="cloudflare-account"
-                          label="Cloudflare account"
-                        >
+                        <Field id="cloudflare-account" label="Account">
                           <select
                             id="cloudflare-account"
                             value={selectedAccount}
@@ -1032,15 +1042,25 @@ export function BrowserSetupView() {
                             }}
                             className="min-h-11 w-full rounded-lg border border-stealth-border bg-stealth-panel px-3 text-sm text-white focus:border-cyan-300/60"
                           >
-                            <option value="">Select an account</option>
+                            <option value="">
+                              {accounts.isPending
+                                ? "Discovering accounts…"
+                                : "Select an account"}
+                            </option>
                             {(accounts.data?.accounts ?? []).map((account) => (
                               <option key={account.id} value={account.id}>
                                 {account.name}
                               </option>
                             ))}
                           </select>
+                          {accounts.isError ? (
+                            <p className="text-xs leading-5 text-rose-300">
+                              Account discovery failed. Check the token scope
+                              and try again.
+                            </p>
+                          ) : null}
                         </Field>
-                        <Field id="cloudflare-zone" label="Cloudflare zone">
+                        <Field id="cloudflare-zone" label="Domain">
                           <select
                             id="cloudflare-zone"
                             value={selectedZone}
@@ -1050,18 +1070,28 @@ export function BrowserSetupView() {
                             disabled={!selectedAccount}
                             className="min-h-11 w-full rounded-lg border border-stealth-border bg-stealth-panel px-3 text-sm text-white focus:border-cyan-300/60 disabled:opacity-50"
                           >
-                            <option value="">Select a zone</option>
+                            <option value="">
+                              {zones.isPending
+                                ? "Discovering domains…"
+                                : "Select a domain"}
+                            </option>
                             {(zones.data?.zones ?? []).map((zone) => (
                               <option key={zone.id} value={zone.id}>
                                 {zone.name}
                               </option>
                             ))}
                           </select>
+                          {zones.isError ? (
+                            <p className="text-xs leading-5 text-rose-300">
+                              Domain discovery failed. Check Zone Read access
+                              for the selected account.
+                            </p>
+                          ) : null}
                         </Field>
                       </div>
                       <Field
                         id="cloudflare-hostname"
-                        label="Production hostname"
+                        label="Dashboard hostname"
                         hint="The hostname must be inside the selected zone."
                       >
                         <Input
@@ -1070,27 +1100,17 @@ export function BrowserSetupView() {
                           {...configForm.register("hostname")}
                         />
                       </Field>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Button
-                          type="button"
-                          onClick={() => void createTunnel()}
-                          disabled={createCloudflareTunnel.isPending}
-                        >
-                          {createCloudflareTunnel.isPending ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Cloud className="size-4" />
-                          )}
-                          {tunnelReady
-                            ? "Verify named tunnel again"
-                            : "Create named tunnel"}
-                        </Button>
-                        {tunnelReady ? (
-                          <StatusPill status="ready">
-                            Tunnel and DNS ready
-                          </StatusPill>
-                        ) : null}
-                      </div>
+                      {tunnelReady ? (
+                        <StatusPill status="ready">
+                          <CheckCircle2 className="size-3.5" />
+                          Tunnel and DNS ready
+                        </StatusPill>
+                      ) : (
+                        <p className="text-xs leading-5 text-slate-500">
+                          Continue provisions the named tunnel, ingress, DNS,
+                          and cloudflared configuration automatically.
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
@@ -1108,19 +1128,23 @@ export function BrowserSetupView() {
               )}
               <StageActions
                 back={() => moveTo("github")}
-                next={async () => {
-                  try {
-                    await persistConfig(configForm.getValues());
-                    moveTo("data");
-                  } catch (error) {
-                    setActionError(error);
-                  }
-                }}
-                nextLabel="Save and configure data"
+                next={() => void continueCloudflareSetup()}
+                nextLabel="Continue"
                 nextDisabled={
-                  networkMode === "cloudflare_tunnel" && !tunnelReady
+                  networkMode === "cloudflare_tunnel" &&
+                  (!cloudflareConnected ||
+                    !selectedAccount ||
+                    !selectedZone ||
+                    !accounts.data?.accounts?.length ||
+                    !zones.data?.zones?.length ||
+                    accounts.isError ||
+                    zones.isError ||
+                    !watchedConfig.hostname?.trim() ||
+                    createCloudflareTunnel.isPending)
                 }
-                pending={saveConfig.isPending}
+                pending={
+                  saveConfig.isPending || createCloudflareTunnel.isPending
+                }
               />
             </>
           ) : null}
