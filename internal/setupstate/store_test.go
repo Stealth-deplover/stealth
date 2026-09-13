@@ -30,9 +30,11 @@ func TestFileStoreEncryptsStateAndKeepsFilesPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := NewState()
-	state.Draft.DatabaseURL = "postgres://setup-user:database-password@example.test/stealth"
-	state.Draft.StorageS3AccessKey = "access-key"
-	state.Draft.StorageS3SecretKey = "storage-secret"
+	state.SetSetupCredentials(SetupCredentials{
+		DatabaseURL:        "postgres://setup-user:database-password@example.test/stealth",
+		StorageS3AccessKey: "access-key",
+		StorageS3SecretKey: "storage-secret",
+	})
 	state.Cloudflare.OAuthStateHash = "oauth-hash"
 	state.SetSecret("github_private_key", "PRIVATE KEY MATERIAL")
 	if err := store.Save(context.Background(), state); err != nil {
@@ -57,7 +59,7 @@ func TestFileStoreEncryptsStateAndKeepsFilesPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Secret("github_private_key") != "PRIVATE KEY MATERIAL" || loaded.Draft.DatabaseURL == "" {
+	if loaded.Secret("github_private_key") != "PRIVATE KEY MATERIAL" || loaded.SetupCredentials().DatabaseURL == "" {
 		t.Fatalf("decrypted state lost secrets or draft: %#v", loaded)
 	}
 	public, err := json.Marshal(loaded.Public())
@@ -100,12 +102,71 @@ func TestFileStoreUpdateIsAtomicAcrossConcurrentWriters(t *testing.T) {
 	}
 }
 
+func TestFileStoreMigratesLegacyDraftCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.enc")
+	cipher := testCipher(t)
+	store, err := NewFileStore(path, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"version":1,"phase":"collecting","draft":{"database_url":"postgres://legacy-user:legacy-password@example.test/stealth","redis_url":"redis://:legacy-redis-password@example.test/0","storage_s3_access_key":"legacy-access","storage_s3_secret_key":"legacy-secret"}}`)
+	ciphertext, err := cipher.Encrypt(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, ciphertext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != stateVersion {
+		t.Fatalf("migrated state version = %d, want %d", state.Version, stateVersion)
+	}
+	credentials := state.SetupCredentials()
+	if credentials.DatabaseURL != "postgres://legacy-user:legacy-password@example.test/stealth" || credentials.RedisURL != "redis://:legacy-redis-password@example.test/0" || credentials.StorageS3AccessKey != "legacy-access" || credentials.StorageS3SecretKey != "legacy-secret" {
+		t.Fatalf("migrated credentials = %#v", credentials)
+	}
+	if _, err := store.Update(context.Background(), func(*State) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := cipher.Decrypt(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted struct {
+		Version int                        `json:"version"`
+		Draft   map[string]json.RawMessage `json:"draft"`
+		Secrets map[string]string          `json:"secrets"`
+	}
+	if err := json.Unmarshal(plaintext, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Version != stateVersion || persisted.Secrets["database_url"] != credentials.DatabaseURL || persisted.Secrets["redis_url"] != credentials.RedisURL || persisted.Secrets["storage_s3_access_key"] != credentials.StorageS3AccessKey || persisted.Secrets["storage_s3_secret_key"] != credentials.StorageS3SecretKey {
+		t.Fatalf("persisted migrated state = %#v", persisted)
+	}
+	for _, name := range []string{"database_url", "redis_url", "storage_s3_access_key", "storage_s3_secret_key"} {
+		if _, ok := persisted.Draft[name]; ok {
+			t.Fatalf("legacy credential %q remained in draft", name)
+		}
+	}
+}
+
 func TestPublicProjectionOmitsRawCredentialFields(t *testing.T) {
 	state := NewState()
-	state.Draft.DatabaseURL = "postgres://user:password@example.test/db"
-	state.Draft.RedisURL = "redis://:redis-password@example.test/0"
-	state.Draft.StorageS3AccessKey = "access"
-	state.Draft.StorageS3SecretKey = "secret"
+	state.SetSetupCredentials(SetupCredentials{
+		DatabaseURL:        "postgres://user:password@example.test/db",
+		RedisURL:           "redis://:redis-password@example.test/0",
+		StorageS3AccessKey: "access",
+		StorageS3SecretKey: "secret",
+	})
 	state.SetSecret("cloudflare_access_token", "cf-token")
 	state.GitHub.ManifestStateHash = "manifest-hash"
 	state.Cloudflare.OAuthStateHash = "oauth-hash"

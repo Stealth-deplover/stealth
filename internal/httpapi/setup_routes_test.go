@@ -19,6 +19,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/setupconfig"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/google/uuid"
 )
@@ -118,6 +119,10 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	if configResponse.Code != http.StatusOK || strings.Contains(configResponse.Body.String(), "db-password") || strings.Contains(configResponse.Body.String(), "redis-password") {
 		t.Fatalf("setup config response = %d: %s", configResponse.Code, configResponse.Body.String())
 	}
+	s3ConfigResponse := authenticatedSetupRequest(t, handler, setupCookie[0], http.MethodPut, "https://silent-moon.trycloudflare.com/v1/setup/config", `{"instance_name":"My Stealth","network_mode":"cloudflare_tunnel","hostname":"app.example.test","database_mode":"external","redis_mode":"external","storage_mode":"s3","storage_s3_endpoint":"https://s3.example.test","storage_s3_region":"us-east-1","storage_s3_bucket":"stealth","storage_s3_access_key":"s3-access-key","storage_s3_secret_key":"s3-secret-key","storage_s3_use_ssl":true,"storage_s3_path_style":true}`)
+	if s3ConfigResponse.Code != http.StatusOK || strings.Contains(s3ConfigResponse.Body.String(), "s3-secret-key") {
+		t.Fatalf("S3 setup config response = %d: %s", s3ConfigResponse.Code, s3ConfigResponse.Body.String())
+	}
 
 	manifestResponse := authenticatedSetupRequest(t, handler, setupCookie[0], http.MethodPost, "https://silent-moon.trycloudflare.com/v1/setup/github/manifest/start", `{}`)
 	if manifestResponse.Code != http.StatusOK {
@@ -154,10 +159,14 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"db-password", "redis-password", "github-client-secret", "private-key", "github-webhook-secret", "bootstrap"} {
+	for _, secret := range []string{"db-password", "redis-password", "s3-access-key", "s3-secret-key", "github-client-secret", "private-key", "github-webhook-secret", "bootstrap"} {
 		if bytes.Contains(public, []byte(secret)) {
 			t.Fatalf("public setup state contains secret %q: %s", secret, public)
 		}
+	}
+	credentials := state.SetupCredentials()
+	if credentials.DatabaseURL != "postgres://db-user:db-password@example.test/stealth" || credentials.RedisURL != "redis://:redis-password@example.test/0" || credentials.StorageS3AccessKey != "s3-access-key" || credentials.StorageS3SecretKey != "s3-secret-key" {
+		t.Fatalf("setup credentials were not persisted in the encrypted state: %#v", credentials)
 	}
 	if state.Secret("github_client_secret") != "github-client-secret" || state.Secret("github_private_key") == "" {
 		t.Fatalf("provider credentials were not persisted in encrypted state: %#v", state)
@@ -257,20 +266,22 @@ func TestValidateInstallableSetupRequiresSavedExternalChecks(t *testing.T) {
 	state.Draft.PublicURL = "http://localhost:8081"
 	state.Draft.NetworkMode = "local_only"
 	state.Draft.DatabaseMode = "external"
-	state.Draft.DatabaseURL = "postgres://user:password@example.test/stealth"
 	state.Draft.RedisMode = "external"
-	state.Draft.RedisURL = "redis://:password@example.test/0"
+	state.SetSetupCredentials(setupstate.SetupCredentials{
+		DatabaseURL: "postgres://user:password@example.test/stealth",
+		RedisURL:    "redis://:password@example.test/0",
+	})
 
-	if err := validateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "PostgreSQL") {
+	if err := setupconfig.ValidateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "PostgreSQL") {
 		t.Fatalf("database check error = %v", err)
 	}
 	state.Draft.DatabaseTested = true
-	if err := validateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "Redis") {
+	if err := setupconfig.ValidateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "Redis") {
 		t.Fatalf("Redis check error = %v", err)
 	}
 	state.Draft.RedisTested = true
-	if err := validateInstallableSetup(state); err != nil {
-		t.Fatalf("validateInstallableSetup() after checks: %v", err)
+	if err := setupconfig.ValidateInstallableSetup(state); err != nil {
+		t.Fatalf("ValidateInstallableSetup() after checks: %v", err)
 	}
 }
 

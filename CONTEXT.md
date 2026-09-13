@@ -17,6 +17,23 @@ repository. The capability preserves the existing transaction and sealing
 invariants: only the verified first-owner flow can seal bootstrap, and an
 existing installation can be adopted only through the explicit legacy path.
 
+The setup-state credential seam owns the database URL, Redis URL, and S3 key
+pair needed by the setup flow. These values live only in encrypted
+`State.Secrets`; `Draft` and `PublicState` carry the non-secret choices and
+tested markers. Any state-format change must migrate older encrypted setup
+state before rewriting it.
+
+The setup configuration module is the deep seam between HTTP input and durable
+setup state. It owns normalization, validation, credential fallback, and the
+rules that invalidate a dependency's tested marker after a relevant change.
+The setup install input module translates that durable state into the shared
+`installengine.Plan` and private production environment, so the HTTP adapter
+does not assemble release inputs itself.
+
+The browser setup flow module owns form state, provider callbacks, install
+progress effects, and handoff actions. The browser setup view owns stage
+rendering and delegates lifecycle transitions to that flow module.
+
 ## Console log stream
 
 Console log viewers consume a typed `LogSource` identified by the resource

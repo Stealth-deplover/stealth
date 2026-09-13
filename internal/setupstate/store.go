@@ -24,14 +24,17 @@ import (
 )
 
 const (
-	PhaseCollecting = "collecting"
-	PhaseInstalling = "installing"
-	PhaseComplete   = "complete"
-	PhaseFailed     = "failed"
-	PhaseHandoff    = "handoff"
-	stateVersion    = 1
+	PhaseCollecting    = "collecting"
+	PhaseInstalling    = "installing"
+	PhaseComplete      = "complete"
+	PhaseFailed        = "failed"
+	PhaseHandoff       = "handoff"
+	stateVersion       = 2
+	legacyStateVersion = 1
 )
 
+// Draft contains setup choices that can safely be represented by the public
+// setup-state projection. Credential material belongs in SetupCredentials.
 type Draft struct {
 	InstanceName        string `json:"instance_name,omitempty"`
 	PublicURL           string `json:"public_url,omitempty"`
@@ -42,21 +45,26 @@ type Draft struct {
 	CloudflareTunnelID  string `json:"cloudflare_tunnel_id,omitempty"`
 	CloudflareRecordID  string `json:"cloudflare_record_id,omitempty"`
 	DatabaseMode        string `json:"database_mode,omitempty"`
-	DatabaseURL         string `json:"database_url,omitempty"`
 	DatabaseTested      bool   `json:"database_tested,omitempty"`
 	RedisMode           string `json:"redis_mode,omitempty"`
-	RedisURL            string `json:"redis_url,omitempty"`
 	RedisTested         bool   `json:"redis_tested,omitempty"`
 	StorageMode         string `json:"storage_mode,omitempty"`
 	StorageTested       bool   `json:"storage_tested,omitempty"`
 	StorageS3Endpoint   string `json:"storage_s3_endpoint,omitempty"`
 	StorageS3Region     string `json:"storage_s3_region,omitempty"`
 	StorageS3Bucket     string `json:"storage_s3_bucket,omitempty"`
-	StorageS3AccessKey  string `json:"storage_s3_access_key,omitempty"`
-	StorageS3SecretKey  string `json:"storage_s3_secret_key,omitempty"`
 	StorageS3UseSSL     bool   `json:"storage_s3_use_ssl"`
 	StorageS3PathStyle  bool   `json:"storage_s3_path_style"`
 	StorageS3Prefix     string `json:"storage_s3_prefix,omitempty"`
+}
+
+// SetupCredentials is the single in-memory view of setup credentials. The
+// FileStore persists these values only through State.Secrets.
+type SetupCredentials struct {
+	DatabaseURL        string
+	RedisURL           string
+	StorageS3AccessKey string
+	StorageS3SecretKey string
 }
 
 type GitHubState struct {
@@ -78,7 +86,7 @@ type CloudflareState struct {
 }
 
 // State is encrypted in its entirety when persisted. Secrets are available to
-// the setup service through methods, but the HTTP layer only serializes the
+// the setup module through methods, but the HTTP adapter only serializes the
 // public projection below.
 type State struct {
 	Version        int               `json:"version"`
@@ -97,6 +105,29 @@ type State struct {
 	SetupExpiresAt time.Time         `json:"setup_expires_at,omitempty"`
 	InstallRunID   string            `json:"install_run_id,omitempty"`
 	LastEventID    uint64            `json:"last_event_id,omitempty"`
+}
+
+const (
+	setupDatabaseURLSecret        = "database_url"
+	setupRedisURLSecret           = "redis_url"
+	setupStorageS3AccessKeySecret = "storage_s3_access_key"
+	setupStorageS3SecretKeySecret = "storage_s3_secret_key"
+)
+
+func (s State) SetupCredentials() SetupCredentials {
+	return SetupCredentials{
+		DatabaseURL:        s.Secret(setupDatabaseURLSecret),
+		RedisURL:           s.Secret(setupRedisURLSecret),
+		StorageS3AccessKey: s.Secret(setupStorageS3AccessKeySecret),
+		StorageS3SecretKey: s.Secret(setupStorageS3SecretKeySecret),
+	}
+}
+
+func (s *State) SetSetupCredentials(credentials SetupCredentials) {
+	s.SetSecret(setupDatabaseURLSecret, credentials.DatabaseURL)
+	s.SetSecret(setupRedisURLSecret, credentials.RedisURL)
+	s.SetSecret(setupStorageS3AccessKeySecret, credentials.StorageS3AccessKey)
+	s.SetSecret(setupStorageS3SecretKeySecret, credentials.StorageS3SecretKey)
 }
 
 type PublicState struct {
@@ -213,6 +244,20 @@ type FileStore struct {
 	mu     sync.Mutex
 }
 
+// legacyDraft contains the credential fields written by state version 1. It
+// is deliberately separate from Draft so new state cannot accidentally gain a
+// second credential source again.
+type legacyDraft struct {
+	DatabaseURL        string `json:"database_url,omitempty"`
+	RedisURL           string `json:"redis_url,omitempty"`
+	StorageS3AccessKey string `json:"storage_s3_access_key,omitempty"`
+	StorageS3SecretKey string `json:"storage_s3_secret_key,omitempty"`
+}
+
+type legacyState struct {
+	Draft legacyDraft `json:"draft"`
+}
+
 func NewFileStore(path string, cipher *functionsecret.Cipher) (*FileStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" || filepath.Clean(path) == string(filepath.Separator) || cipher == nil {
@@ -301,16 +346,42 @@ func (s *FileStore) loadLocked(ctx context.Context) (State, error) {
 	if err := json.Unmarshal(plaintext, &state); err != nil {
 		return State{}, fmt.Errorf("decode setup state: %w", err)
 	}
-	if err := ValidateState(state); err != nil {
+	var legacy legacyState
+	if err := json.Unmarshal(plaintext, &legacy); err != nil {
+		return State{}, fmt.Errorf("decode legacy setup state: %w", err)
+	}
+	if err := migrateState(&state, legacy); err != nil {
 		return State{}, err
 	}
-	if state.Version == 0 {
-		state.Version = stateVersion
+	if err := ValidateState(state); err != nil {
+		return State{}, err
 	}
 	if state.Secrets == nil {
 		state.Secrets = make(map[string]string)
 	}
 	return state, nil
+}
+
+func migrateState(state *State, legacy legacyState) error {
+	if state.Version != 0 && state.Version != legacyStateVersion && state.Version != stateVersion {
+		return fmt.Errorf("unsupported setup state version")
+	}
+	credentials := state.SetupCredentials()
+	if credentials.DatabaseURL == "" {
+		credentials.DatabaseURL = legacy.Draft.DatabaseURL
+	}
+	if credentials.RedisURL == "" {
+		credentials.RedisURL = legacy.Draft.RedisURL
+	}
+	if credentials.StorageS3AccessKey == "" {
+		credentials.StorageS3AccessKey = legacy.Draft.StorageS3AccessKey
+	}
+	if credentials.StorageS3SecretKey == "" {
+		credentials.StorageS3SecretKey = legacy.Draft.StorageS3SecretKey
+	}
+	state.SetSetupCredentials(credentials)
+	state.Version = stateVersion
+	return nil
 }
 
 func (s *FileStore) saveLocked(state State) error {

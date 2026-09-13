@@ -18,6 +18,8 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/installengine"
+	"github.com/Stealth-deplover/stealth/internal/setupconfig"
+	"github.com/Stealth-deplover/stealth/internal/setupinstall"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -41,26 +43,6 @@ type setupCheck struct {
 
 type setupPreflightResponse struct {
 	Checks []setupCheck `json:"checks"`
-}
-
-type setupConfigRequest struct {
-	InstanceName       string `json:"instance_name"`
-	PublicURL          string `json:"public_url"`
-	NetworkMode        string `json:"network_mode"`
-	Hostname           string `json:"hostname"`
-	DatabaseMode       string `json:"database_mode"`
-	DatabaseURL        string `json:"database_url"`
-	RedisMode          string `json:"redis_mode"`
-	RedisURL           string `json:"redis_url"`
-	StorageMode        string `json:"storage_mode"`
-	StorageS3Endpoint  string `json:"storage_s3_endpoint"`
-	StorageS3Region    string `json:"storage_s3_region"`
-	StorageS3Bucket    string `json:"storage_s3_bucket"`
-	StorageS3AccessKey string `json:"storage_s3_access_key"`
-	StorageS3SecretKey string `json:"storage_s3_secret_key"`
-	StorageS3UseSSL    *bool  `json:"storage_s3_use_ssl"`
-	StorageS3PathStyle *bool  `json:"storage_s3_path_style"`
-	StorageS3Prefix    string `json:"storage_s3_prefix"`
 }
 
 type setupGitHubManifestResponse struct {
@@ -232,181 +214,22 @@ func (s *Server) setupPreflight(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveSetupConfig(w http.ResponseWriter, r *http.Request) {
-	var request setupConfigRequest
+	var request setupconfig.Request
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	state, err := s.saveSetupDraft(r.Context(), request)
+	if s.setupState == nil {
+		writeError(w, http.StatusServiceUnavailable, "setup_unavailable", "setup state is not available")
+		return
+	}
+	state, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		return setupconfig.Apply(state, request)
+	})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, state.Public())
-}
-
-func (s *Server) saveSetupDraft(ctx context.Context, request setupConfigRequest) (setupstate.State, error) {
-	if s.setupState == nil {
-		return setupstate.State{}, setupstate.ErrUnavailable
-	}
-	instanceName := strings.TrimSpace(request.InstanceName)
-	if instanceName == "" {
-		instanceName = "Stealth"
-	}
-	if len(instanceName) > 120 || strings.ContainsAny(instanceName, "\x00\r\n") {
-		return setupstate.State{}, errors.New("instance name is invalid")
-	}
-	state, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseHandoff || state.Phase == setupstate.PhaseComplete {
-			return errors.New("installation is already in progress or complete")
-		}
-		networkMode := strings.ToLower(strings.TrimSpace(request.NetworkMode))
-		if networkMode == "" {
-			networkMode = state.Draft.NetworkMode
-		}
-		if !validNetworkMode(networkMode) {
-			return errors.New("network mode is invalid")
-		}
-		hostname := strings.TrimSpace(request.Hostname)
-		if hostname != "" {
-			var validationErr error
-			hostname, validationErr = setupstate.ValidateHostname(hostname)
-			if validationErr != nil {
-				return validationErr
-			}
-		}
-		publicURL := strings.TrimSpace(request.PublicURL)
-		if publicURL == "" && hostname != "" {
-			publicURL = "https://" + hostname
-		}
-		if publicURL == "" {
-			publicURL = "http://localhost:8081"
-		}
-		validatedPublicURL, validationErr := setupstate.ValidatePublicURL(publicURL)
-		if validationErr != nil {
-			return validationErr
-		}
-		publicURL = validatedPublicURL
-		databaseMode := strings.ToLower(strings.TrimSpace(request.DatabaseMode))
-		if databaseMode == "" {
-			databaseMode = "bundled"
-		}
-		if databaseMode != "bundled" && databaseMode != "external" {
-			return errors.New("database mode must be bundled or external")
-		}
-		databaseURL := strings.TrimSpace(request.DatabaseURL)
-		if databaseMode == "external" {
-			if databaseURL == "" {
-				databaseURL = state.Draft.DatabaseURL
-			}
-			if !validDatabaseURL(databaseURL) {
-				return errors.New("external PostgreSQL URL is invalid")
-			}
-		} else {
-			databaseURL = ""
-		}
-		redisMode := strings.ToLower(strings.TrimSpace(request.RedisMode))
-		if redisMode == "" {
-			redisMode = "bundled"
-		}
-		if redisMode != "bundled" && redisMode != "external" {
-			return errors.New("Redis mode must be bundled or external")
-		}
-		redisURL := strings.TrimSpace(request.RedisURL)
-		if redisMode == "external" {
-			if redisURL == "" {
-				redisURL = state.Draft.RedisURL
-			}
-			if !validRedisURL(redisURL) {
-				return errors.New("external Redis URL is invalid")
-			}
-		} else {
-			redisURL = ""
-		}
-		storageMode := strings.ToLower(strings.TrimSpace(request.StorageMode))
-		if storageMode == "" {
-			storageMode = "local"
-		}
-		if storageMode != "local" && storageMode != "s3" {
-			return errors.New("storage mode must be local or s3")
-		}
-		storageEndpoint := strings.TrimSpace(request.StorageS3Endpoint)
-		if storageEndpoint == "" {
-			storageEndpoint = state.Draft.StorageS3Endpoint
-		}
-		storageRegion := strings.TrimSpace(request.StorageS3Region)
-		if storageRegion == "" {
-			storageRegion = state.Draft.StorageS3Region
-		}
-		storageBucket := strings.TrimSpace(request.StorageS3Bucket)
-		if storageBucket == "" {
-			storageBucket = state.Draft.StorageS3Bucket
-		}
-		storageAccessKey := strings.TrimSpace(request.StorageS3AccessKey)
-		if storageAccessKey == "" {
-			storageAccessKey = state.Secret("storage_s3_access_key")
-		}
-		storageSecretKey := request.StorageS3SecretKey
-		if storageSecretKey == "" {
-			storageSecretKey = state.Secret("storage_s3_secret_key")
-		}
-		storageUseSSL := state.Draft.StorageS3UseSSL
-		if request.StorageS3UseSSL != nil {
-			storageUseSSL = *request.StorageS3UseSSL
-		}
-		storagePathStyle := state.Draft.StorageS3PathStyle
-		if request.StorageS3PathStyle != nil {
-			storagePathStyle = *request.StorageS3PathStyle
-		}
-		if storageMode == "s3" && !validS3Settings(storageEndpoint, storageRegion, storageBucket, storageAccessKey, storageSecretKey) {
-			return errors.New("S3-compatible storage settings are incomplete or invalid")
-		}
-		databaseChanged := state.Draft.DatabaseMode != databaseMode || state.Draft.DatabaseURL != databaseURL
-		redisChanged := state.Draft.RedisMode != redisMode || state.Draft.RedisURL != redisURL
-		storagePrefix := strings.Trim(strings.TrimSpace(request.StorageS3Prefix), "/")
-		storageChanged := state.Draft.StorageMode != storageMode ||
-			state.Draft.StorageS3Endpoint != storageEndpoint ||
-			state.Draft.StorageS3Region != storageRegion ||
-			state.Draft.StorageS3Bucket != storageBucket ||
-			state.Draft.StorageS3AccessKey != storageAccessKey ||
-			state.Draft.StorageS3SecretKey != storageSecretKey ||
-			state.Draft.StorageS3UseSSL != storageUseSSL ||
-			state.Draft.StorageS3PathStyle != storagePathStyle ||
-			state.Draft.StorageS3Prefix != storagePrefix
-		state.Draft.InstanceName = instanceName
-		state.Draft.PublicURL = publicURL
-		state.Draft.NetworkMode = networkMode
-		state.Draft.Hostname = hostname
-		state.Draft.DatabaseMode = databaseMode
-		state.Draft.DatabaseURL = databaseURL
-		state.Draft.RedisMode = redisMode
-		state.Draft.RedisURL = redisURL
-		state.Draft.StorageMode = storageMode
-		state.Draft.StorageS3Endpoint = storageEndpoint
-		state.Draft.StorageS3Region = storageRegion
-		state.Draft.StorageS3Bucket = storageBucket
-		state.Draft.StorageS3AccessKey = storageAccessKey
-		state.Draft.StorageS3SecretKey = storageSecretKey
-		state.Draft.StorageS3UseSSL = storageUseSSL
-		state.Draft.StorageS3PathStyle = storagePathStyle
-		state.Draft.StorageS3Prefix = storagePrefix
-		if databaseChanged {
-			state.Draft.DatabaseTested = false
-		}
-		if redisChanged {
-			state.Draft.RedisTested = false
-		}
-		if storageChanged {
-			state.Draft.StorageTested = false
-		}
-		state.SetSecret("database_url", databaseURL)
-		state.SetSecret("redis_url", redisURL)
-		state.SetSecret("storage_s3_access_key", storageAccessKey)
-		state.SetSecret("storage_s3_secret_key", storageSecretKey)
-		state.ErrorCode = ""
-		state.ErrorMessage = ""
-		return nil
-	})
-	return state, err
 }
 
 func (s *Server) startGitHubManifest(w http.ResponseWriter, r *http.Request) {
@@ -865,9 +688,10 @@ func (s *Server) testSetupDatabase(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
+	credentials := state.SetupCredentials()
 	databaseURL := strings.TrimSpace(request.URL)
 	if databaseURL == "" {
-		databaseURL = state.Draft.DatabaseURL
+		databaseURL = credentials.DatabaseURL
 		if databaseURL == "" {
 			databaseURL = s.config.DatabaseURL
 		}
@@ -879,7 +703,7 @@ func (s *Server) testSetupDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Draft.DatabaseMode != "external" || state.Draft.DatabaseURL != databaseURL {
+		if state.Draft.DatabaseMode != "external" || state.SetupCredentials().DatabaseURL != databaseURL {
 			return errors.New("test the saved external PostgreSQL URL before installing")
 		}
 		state.Draft.DatabaseTested = true
@@ -901,9 +725,10 @@ func (s *Server) testSetupRedis(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
+	credentials := state.SetupCredentials()
 	redisURL := strings.TrimSpace(request.URL)
 	if redisURL == "" {
-		redisURL = state.Draft.RedisURL
+		redisURL = credentials.RedisURL
 		if redisURL == "" {
 			redisURL = s.config.RedisURL
 		}
@@ -915,7 +740,7 @@ func (s *Server) testSetupRedis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Draft.RedisMode != "external" || state.Draft.RedisURL != redisURL {
+		if state.Draft.RedisMode != "external" || state.SetupCredentials().RedisURL != redisURL {
 			return errors.New("test the saved external Redis URL before installing")
 		}
 		state.Draft.RedisTested = true
@@ -948,11 +773,12 @@ func (s *Server) testSetupStorage(w http.ResponseWriter, r *http.Request) {
 			state.Draft.StorageTested = true
 			return nil
 		}
+		credentials := state.SetupCredentials()
 		endpoint := valueOr(request.Endpoint, state.Draft.StorageS3Endpoint)
 		region := valueOr(request.Region, state.Draft.StorageS3Region)
 		bucket := valueOr(request.Bucket, state.Draft.StorageS3Bucket)
-		accessKey := valueOr(request.AccessKey, state.Secret("storage_s3_access_key"))
-		secretKey := valueOr(request.SecretKey, state.Secret("storage_s3_secret_key"))
+		accessKey := valueOr(request.AccessKey, credentials.StorageS3AccessKey)
+		secretKey := valueOr(request.SecretKey, credentials.StorageS3SecretKey)
 		useSSL := state.Draft.StorageS3UseSSL
 		if request.UseSSL != nil {
 			useSSL = *request.UseSSL
@@ -961,7 +787,7 @@ func (s *Server) testSetupStorage(w http.ResponseWriter, r *http.Request) {
 		if request.PathStyle != nil {
 			pathStyle = *request.PathStyle
 		}
-		if endpoint != state.Draft.StorageS3Endpoint || region != state.Draft.StorageS3Region || bucket != state.Draft.StorageS3Bucket || accessKey != state.Secret("storage_s3_access_key") || secretKey != state.Secret("storage_s3_secret_key") || useSSL != state.Draft.StorageS3UseSSL || pathStyle != state.Draft.StorageS3PathStyle {
+		if endpoint != state.Draft.StorageS3Endpoint || region != state.Draft.StorageS3Region || bucket != state.Draft.StorageS3Bucket || accessKey != credentials.StorageS3AccessKey || secretKey != credentials.StorageS3SecretKey || useSSL != state.Draft.StorageS3UseSSL || pathStyle != state.Draft.StorageS3PathStyle {
 			return errors.New("test the saved S3-compatible storage settings before installing")
 		}
 		state.Draft.StorageTested = true
@@ -1037,11 +863,12 @@ func (s *Server) pingSetupStorage(ctx context.Context, state setupstate.State, r
 		}
 		return file.Close()
 	}
+	credentials := state.SetupCredentials()
 	endpoint := valueOr(request.Endpoint, state.Draft.StorageS3Endpoint)
 	region := valueOr(request.Region, state.Draft.StorageS3Region)
 	bucket := valueOr(request.Bucket, state.Draft.StorageS3Bucket)
-	accessKey := valueOr(request.AccessKey, state.Secret("storage_s3_access_key"))
-	secretKey := valueOr(request.SecretKey, state.Secret("storage_s3_secret_key"))
+	accessKey := valueOr(request.AccessKey, credentials.StorageS3AccessKey)
+	secretKey := valueOr(request.SecretKey, credentials.StorageS3SecretKey)
 	useSSL := state.Draft.StorageS3UseSSL
 	if request.UseSSL != nil {
 		useSSL = *request.UseSSL
@@ -1122,11 +949,11 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "setup_complete", "installation has already been handed off")
 		return
 	}
-	if err := validateInstallableSetup(state); err != nil {
+	if err := setupconfig.ValidateInstallableSetup(state); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	plan, err := s.buildFinalInstallPlan(state)
+	plan, err := setupinstall.BuildPlan(state, s.config.InstallRoot)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "configuration_error", "the reviewed configuration could not be prepared")
 		return
@@ -1146,79 +973,6 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	go s.runSetupInstall(runID, plan)
 	writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: "installing", State: state.Public()})
-}
-
-func (s *Server) buildFinalInstallPlan(state setupstate.State) (installengine.Plan, error) {
-	layout, err := installengine.NewLayout(s.config.InstallRoot)
-	if err != nil {
-		return installengine.Plan{}, err
-	}
-	base, err := installengine.ReadEnvFile(layout.EnvFile)
-	if err != nil {
-		return installengine.Plan{}, err
-	}
-	databaseURL := state.Draft.DatabaseURL
-	if databaseURL == "" {
-		databaseURL = base["DATABASE_URL"]
-	}
-	redisURL := state.Draft.RedisURL
-	if redisURL == "" {
-		redisURL = base["REDIS_URL"]
-	}
-	updates := map[string]string{
-		"SETUP_MODE":           "false",
-		"GITHUB_APP_CLIENT_ID": state.GitHub.ClientID,
-		"PUBLIC_APP_URL":       state.Draft.PublicURL,
-		"DATABASE_URL":         databaseURL,
-		"REDIS_URL":            redisURL,
-		"COOKIE_SECURE":        strconv.FormatBool(strings.HasPrefix(state.Draft.PublicURL, "https://")),
-	}
-	if state.Draft.NetworkMode == "public_ip" {
-		updates["PROXY_HTTP_BIND"] = "0.0.0.0"
-	} else {
-		updates["PROXY_HTTP_BIND"] = "127.0.0.1"
-	}
-	if state.Draft.StorageMode != "s3" {
-		updates["STORAGE_DRIVER"] = "local"
-	} else {
-		updates["STORAGE_DRIVER"] = "s3"
-		updates["STORAGE_S3_ENDPOINT"] = state.Draft.StorageS3Endpoint
-		updates["STORAGE_S3_REGION"] = state.Draft.StorageS3Region
-		updates["STORAGE_S3_BUCKET"] = state.Draft.StorageS3Bucket
-		updates["STORAGE_S3_ACCESS_KEY"] = state.Secret("storage_s3_access_key")
-		updates["STORAGE_S3_SECRET_KEY"] = state.Secret("storage_s3_secret_key")
-		updates["STORAGE_S3_USE_SSL"] = strconv.FormatBool(state.Draft.StorageS3UseSSL)
-		updates["STORAGE_S3_PATH_STYLE"] = strconv.FormatBool(state.Draft.StorageS3PathStyle)
-		updates["STORAGE_S3_PREFIX"] = state.Draft.StorageS3Prefix
-	}
-	cloudflareEnabled := state.Draft.NetworkMode == "cloudflare_tunnel"
-	if cloudflareEnabled {
-		if err := installengine.WritePrivateFile(filepath.Join(layout.Root, "state", "cloudflare-tunnel-token"), state.Secret("cloudflare_tunnel_token")+"\n"); err != nil {
-			return installengine.Plan{}, err
-		}
-		updates["CLOUDFLARE_TUNNEL_TOKEN_FILE"] = "./state/cloudflare-tunnel-token"
-	}
-	contents, err := installengine.MergeEnv(base, updates)
-	if err != nil {
-		return installengine.Plan{}, err
-	}
-	if err := installengine.WritePrivateFile(layout.EnvFile, contents); err != nil {
-		return installengine.Plan{}, err
-	}
-	return installengine.Plan{
-		Layout:             layout,
-		Version:            baseVersion(base),
-		PublicURL:          state.Draft.PublicURL,
-		GitHubAppClientID:  state.GitHub.ClientID,
-		Existing:           true,
-		ExternalDatabase:   state.Draft.DatabaseMode == "external",
-		ExternalRedis:      state.Draft.RedisMode == "external",
-		Cloudflare:         cloudflareEnabled,
-		VerifyPublicURL:    cloudflareEnabled || state.Draft.NetworkMode == "public_ip",
-		InternalAPIURL:     "http://api:8080",
-		InternalConsoleURL: "http://console:3000",
-		InternalProxyURL:   "http://proxy:80",
-	}, nil
 }
 
 func (s *Server) runSetupInstall(runID string, plan installengine.Plan) {
@@ -1302,7 +1056,7 @@ func (s *Server) resumeSetupLifecycle() {
 			s.markSetupResumeFailed("setup installation has no durable run identifier")
 			return
 		}
-		plan, planErr := s.buildFinalInstallPlan(state)
+		plan, planErr := setupinstall.BuildPlan(state, s.config.InstallRoot)
 		if planErr != nil {
 			s.markSetupResumeFailed(planErr.Error())
 			return
@@ -1466,66 +1220,8 @@ func writeSSE(w io.Writer, eventName string, id uint64, payload any) {
 	_, _ = io.WriteString(w, "data: "+contents+"\n\n")
 }
 
-func validNetworkMode(value string) bool {
-	switch value {
-	case "cloudflare_tunnel", "public_ip", "reverse_proxy", "local_only":
-		return true
-	default:
-		return false
-	}
-}
-
-func validateInstallableSetup(state setupstate.State) error {
-	if !state.GitHub.Connected || !githubauth.ValidClientID(state.GitHub.ClientID) {
-		return errors.New("connect GitHub before installing Stealth")
-	}
-	if _, err := setupstate.ValidatePublicURL(state.Draft.PublicURL); err != nil {
-		return errors.New("choose a valid public Console URL")
-	}
-	if !validNetworkMode(state.Draft.NetworkMode) {
-		return errors.New("choose a valid networking mode")
-	}
-	if state.Draft.NetworkMode == "cloudflare_tunnel" {
-		if state.Draft.Hostname == "" || state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareZoneID == "" || state.Draft.CloudflareTunnelID == "" || state.Draft.CloudflareRecordID == "" || state.Secret("cloudflare_tunnel_token") == "" {
-			return errors.New("finish Cloudflare tunnel and DNS setup before installing")
-		}
-	}
-	if state.Draft.DatabaseMode == "external" {
-		if !validDatabaseURL(state.Draft.DatabaseURL) || !state.Draft.DatabaseTested {
-			return errors.New("test and save an external PostgreSQL connection before installing")
-		}
-	}
-	if state.Draft.RedisMode == "external" {
-		if !validRedisURL(state.Draft.RedisURL) || !state.Draft.RedisTested {
-			return errors.New("test and save an external Redis connection before installing")
-		}
-	}
-	if state.Draft.StorageMode == "s3" {
-		if !validS3Settings(state.Draft.StorageS3Endpoint, state.Draft.StorageS3Region, state.Draft.StorageS3Bucket, state.Secret("storage_s3_access_key"), state.Secret("storage_s3_secret_key")) || !state.Draft.StorageTested {
-			return errors.New("test and save S3-compatible storage before installing")
-		}
-	}
-	return nil
-}
-
-func validDatabaseURL(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && (parsed.Scheme == "postgres" || parsed.Scheme == "postgresql") && parsed.Host != "" && parsed.User != nil && !strings.ContainsAny(raw, "\x00\r\n")
-}
-
-func validRedisURL(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && (parsed.Scheme == "redis" || parsed.Scheme == "rediss") && parsed.Host != "" && !strings.ContainsAny(raw, "\x00\r\n")
-}
-
-func validS3Settings(endpoint, region, bucket, accessKey, secretKey string) bool {
-	endpoint = strings.TrimSpace(endpoint)
-	parsed, err := url.Parse(endpoint)
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && strings.TrimSpace(region) != "" && len(bucket) >= 3 && len(bucket) <= 63 && strings.TrimSpace(accessKey) != "" && strings.TrimSpace(secretKey) != "" && !strings.ContainsAny(endpoint+region+bucket+accessKey+secretKey, "\x00\r\n")
-}
-
 func pingDatabase(ctx context.Context, raw string) error {
-	if !validDatabaseURL(raw) {
+	if !setupconfig.ValidDatabaseURL(raw) {
 		return errors.New("invalid PostgreSQL URL")
 	}
 	poolConfig, err := pgxpool.ParseConfig(raw)
@@ -1543,7 +1239,7 @@ func pingDatabase(ctx context.Context, raw string) error {
 }
 
 func pingRedis(ctx context.Context, raw string) error {
-	if !validRedisURL(raw) {
+	if !setupconfig.ValidRedisURL(raw) {
 		return errors.New("invalid Redis URL")
 	}
 	options, err := redis.ParseURL(raw)
@@ -1582,15 +1278,6 @@ func safeDockerName(value string) bool {
 		return false
 	}
 	return true
-}
-
-func baseVersion(values map[string]string) string {
-	if value := strings.TrimSpace(values["STEALTH_API_IMAGE"]); value != "" {
-		if index := strings.LastIndexByte(value, ':'); index >= 0 && index+1 < len(value) {
-			return value[index+1:]
-		}
-	}
-	return "v0.0.0"
 }
 
 func valueOr(value, fallback string) string {

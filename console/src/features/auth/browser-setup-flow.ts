@@ -1,0 +1,610 @@
+"use client";
+
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useForm, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { apiUrl } from "@/api/client";
+import {
+  usePollGitHubDeviceFlow,
+  useSaveSetupCloudflareToken,
+  useSaveSetupConfig,
+  useSaveSetupGitHubManual,
+  useStartSetupCloudflareOAuth,
+  useStartSetupGitHubManifest,
+  useStartSetupInstall,
+  useTestSetupDatabase,
+  useTestSetupRedis,
+  useTestSetupStorage,
+  useVerifyBootstrapCode,
+  useStartGitHubDeviceFlow,
+  useIssueSetupHandoffToken,
+  useCreateSetupCloudflareTunnel,
+} from "@/api/mutations";
+import {
+  useSetupCloudflareAccounts,
+  useSetupCloudflareZones,
+  useSetupPreflight,
+  useSetupStatus,
+} from "@/api/queries";
+import type { components } from "@/api/generated/schema";
+import {
+  configFromState,
+  configSchema,
+  defaultConfig,
+  manualGitHubSchema,
+  setupCodeSchema,
+  toSetupRequest,
+  type ConfigValues,
+  type ManualGitHubValues,
+  type SetupState,
+  type SetupStep,
+} from "./browser-setup-model";
+
+export function useBrowserSetupFlow() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const setupStatus = useSetupStatus();
+  const state = setupStatus.data?.state;
+  const callbackStatus = [
+    searchParams.get("github"),
+    searchParams.get("cloudflare"),
+  ]
+    .filter(Boolean)
+    .join(":");
+  const configForm = useForm<ConfigValues>({
+    resolver: zodResolver(configSchema),
+    defaultValues: defaultConfig,
+    mode: "onTouched",
+  });
+  const manualForm = useForm<ManualGitHubValues>({
+    resolver: zodResolver(manualGitHubSchema),
+    defaultValues: {
+      client_id: "",
+      client_secret: "",
+      private_key: "",
+      webhook_secret: "",
+    },
+    mode: "onTouched",
+  });
+  const [step, setStep] = useState<SetupStep>("welcome");
+  const [setupCode, setSetupCode] = useState("");
+  const [setupVerified, setSetupVerified] = useState(false);
+  const [providerMode, setProviderMode] = useState<"manifest" | "manual">(
+    "manifest",
+  );
+  const [device, setDevice] =
+    useState<components["schemas"]["GitHubDeviceResponse"]>();
+  const [authorizationSessionID, setAuthorizationSessionID] = useState("");
+  const [pollDelay, setPollDelay] = useState(5_000);
+  const [pollError, setPollError] = useState<unknown>();
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
+  const [cloudflareToken, setCloudflareToken] = useState("");
+  const [cloudflareAccountID, setCloudflareAccountID] = useState("");
+  const [cloudflareZoneID, setCloudflareZoneID] = useState("");
+  const [handoffToken, setHandoffToken] = useState("");
+  const [installState, setInstallState] = useState<SetupState>();
+  const [sseConnected, setSSEConnected] = useState(false);
+  const [actionError, setActionError] = useState<unknown>();
+  const [notice, setNotice] = useState("");
+  const hydrated = useRef(false);
+  const callbackHandled = useRef("");
+  const pollDevice = usePollGitHubDeviceFlow();
+  const pollRef = useRef(pollDevice.mutateAsync);
+  const handoffSubmitted = useRef(false);
+  const verifyCode = useVerifyBootstrapCode();
+  const startDevice = useStartGitHubDeviceFlow();
+  const saveConfig = useSaveSetupConfig();
+  const startManifest = useStartSetupGitHubManifest();
+  const saveManual = useSaveSetupGitHubManual();
+  const startCloudflareOAuth = useStartSetupCloudflareOAuth();
+  const saveCloudflareToken = useSaveSetupCloudflareToken();
+  const createCloudflareTunnel = useCreateSetupCloudflareTunnel();
+  const testDatabase = useTestSetupDatabase();
+  const testRedis = useTestSetupRedis();
+  const testStorage = useTestSetupStorage();
+  const startInstall = useStartSetupInstall();
+  const issueHandoff = useIssueSetupHandoffToken();
+  const watchedConfig = useWatch({ control: configForm.control });
+  const networkMode = watchedConfig.network_mode ?? defaultConfig.network_mode;
+  const databaseMode =
+    watchedConfig.database_mode ?? defaultConfig.database_mode;
+  const redisMode = watchedConfig.redis_mode ?? defaultConfig.redis_mode;
+  const storageMode = watchedConfig.storage_mode ?? defaultConfig.storage_mode;
+  const selectedAccount =
+    cloudflareAccountID || state?.draft.cloudflare_account_id || "";
+  const selectedZone =
+    cloudflareZoneID || state?.draft.cloudflare_zone_id || "";
+  const ownerConfirmed = Boolean(
+    setupStatus.data && !setupStatus.data.setup_required,
+  );
+  const setupAccess =
+    setupVerified ||
+    ownerConfirmed ||
+    Boolean(state?.github.authorization_session);
+  const preflight = useSetupPreflight(setupAccess);
+  const accounts = useSetupCloudflareAccounts(
+    setupAccess && Boolean(state?.cloudflare.connected),
+  );
+  const zones = useSetupCloudflareZones(
+    selectedAccount,
+    setupAccess && Boolean(state?.cloudflare.connected),
+  );
+  const activeStep =
+    state?.phase === "installing" ||
+    state?.phase === "failed" ||
+    state?.phase === "handoff"
+      ? "install"
+      : step;
+
+  useEffect(() => {
+    pollRef.current = pollDevice.mutateAsync;
+  }, [pollDevice.mutateAsync]);
+
+  useEffect(() => {
+    if (!state || hydrated.current) return;
+    configForm.reset(configFromState(state));
+    setAuthorizationSessionID(state.github.authorization_session ?? "");
+    setCloudflareAccountID(state.draft.cloudflare_account_id ?? "");
+    setCloudflareZoneID(state.draft.cloudflare_zone_id ?? "");
+    setSetupVerified(Boolean(state.github.authorization_session));
+    hydrated.current = true;
+  }, [configForm, state]);
+
+  useEffect(() => {
+    const callback = callbackStatus;
+    if (!callback || callbackHandled.current === callback) return;
+    callbackHandled.current = callback;
+    void setupStatus.refetch();
+    router.replace("/setup", { scroll: false });
+  }, [callbackStatus, router, setupStatus]);
+
+  useEffect(() => {
+    if (activeStep !== "install") return;
+    const source = new EventSource(apiUrl("/v1/setup/install/events"), {
+      withCredentials: true,
+    });
+    source.onopen = () => setSSEConnected(true);
+    source.addEventListener("snapshot", (event) => {
+      try {
+        setInstallState(JSON.parse(event.data) as SetupState);
+      } catch {
+        setActionError(
+          new Error("Install progress returned an invalid snapshot."),
+        );
+      }
+    });
+    source.addEventListener("progress", (event) => {
+      try {
+        const progress = JSON.parse(event.data) as {
+          step?: string;
+          error?: string;
+        };
+        setInstallState((current) =>
+          current
+            ? {
+                ...current,
+                step: progress.step,
+                error_message: progress.error,
+              }
+            : current,
+        );
+      } catch {
+        setActionError(
+          new Error("Install progress returned an invalid event."),
+        );
+      }
+    });
+    source.onerror = () => setSSEConnected(false);
+    return () => source.close();
+  }, [activeStep]);
+
+  useEffect(() => {
+    if (activeStep !== "install") return;
+    const timer = window.setInterval(() => void setupStatus.refetch(), 2_000);
+    return () => window.clearInterval(timer);
+  }, [activeStep, setupStatus]);
+
+  useEffect(() => {
+    if (
+      activeStep !== "install" ||
+      !state ||
+      (state.phase !== "complete" && state.phase !== "handoff") ||
+      handoffSubmitted.current
+    ) {
+      return;
+    }
+    const publicURL =
+      state.draft.public_url ?? configForm.getValues("public_url");
+    if (!publicURL) return;
+    handoffSubmitted.current = true;
+    if (handoffToken) {
+      return;
+    }
+    void issueHandoff
+      .mutateAsync()
+      .then((result) => {
+        if (result?.token) {
+          setHandoffToken(result.token);
+        } else {
+          handoffSubmitted.current = false;
+          setActionError(
+            new Error("The production session handoff was empty."),
+          );
+        }
+      })
+      .catch((error) => {
+        handoffSubmitted.current = false;
+        setActionError(error);
+      });
+  }, [activeStep, configForm, handoffToken, issueHandoff, state]);
+
+  const persistConfig = useCallback(
+    async (values: ConfigValues) => {
+      const saved = await saveConfig.mutateAsync(toSetupRequest(values));
+      await setupStatus.refetch();
+      return saved;
+    },
+    [saveConfig, setupStatus],
+  );
+
+  const moveTo = (next: SetupStep) => {
+    setActionError(undefined);
+    setNotice("");
+    setStep(next);
+  };
+
+  const verifySetupCode = async () => {
+    const parsed = setupCodeSchema.safeParse(setupCode);
+    if (!parsed.success) {
+      setActionError(
+        new Error(
+          parsed.error.issues[0]?.message ??
+            "Enter the setup code shown by the CLI.",
+        ),
+      );
+      return;
+    }
+    setActionError(undefined);
+    try {
+      const result = await verifyCode.mutateAsync({ setup_code: parsed.data });
+      if (!result) return;
+      setSetupCode(parsed.data);
+      setAuthorizationSessionID(result.authorization_session_id);
+      setSetupVerified(true);
+      await preflight.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const beginDeviceFlow = async () => {
+    const parsed = setupCodeSchema.safeParse(setupCode);
+    if (!parsed.success) {
+      setActionError(
+        new Error("Enter the setup code again to confirm the first owner."),
+      );
+      return;
+    }
+    setActionError(undefined);
+    try {
+      let sessionID = authorizationSessionID;
+      if (!sessionID) {
+        const verified = await verifyCode.mutateAsync({
+          setup_code: parsed.data,
+        });
+        if (!verified) return;
+        sessionID = verified.authorization_session_id;
+        setAuthorizationSessionID(sessionID);
+        setSetupVerified(true);
+      }
+      const result = await startDevice.mutateAsync({
+        authorization_session_id: sessionID,
+        setup_code: parsed.data,
+      });
+      if (!result) return;
+      setDevice(result);
+      setPollDelay(Math.max(1, result.interval_seconds) * 1_000);
+      setPollError(undefined);
+      setCopyState("idle");
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  useEffect(() => {
+    if (!device || !authorizationSessionID) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (new Date(device.expires_at).getTime() <= Date.now()) {
+        setPollError(
+          new Error("GitHub authorization expired. Start it again."),
+        );
+        setDevice(undefined);
+        return;
+      }
+      try {
+        const result = await pollRef.current({
+          authorization_session_id: authorizationSessionID,
+        });
+        if (cancelled || !result) return;
+        if (result.status === "complete") {
+          let ticket = result.handoff_token ?? "";
+          if (!ticket) {
+            const handoff = await issueHandoff.mutateAsync();
+            ticket = handoff?.token ?? "";
+          }
+          setHandoffToken(ticket);
+          setDevice(undefined);
+          setNotice("GitHub verified. The Instance Owner is ready.");
+          await setupStatus.refetch();
+          return;
+        }
+        setPollError(undefined);
+        setPollDelay(Math.max(1, result.retry_after_seconds ?? 5) * 1_000);
+      } catch (error) {
+        if (cancelled) return;
+        setPollError(error);
+        setPollDelay(5_000);
+      }
+    }, pollDelay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [authorizationSessionID, device, issueHandoff, pollDelay, setupStatus]);
+
+  const saveManualGitHub = manualForm.handleSubmit(async (values) => {
+    setActionError(undefined);
+    try {
+      await saveManual.mutateAsync(values);
+      await setupStatus.refetch();
+      setNotice("GitHub App credentials saved in encrypted setup state.");
+    } catch (error) {
+      setActionError(error);
+    }
+  });
+
+  const connectCloudflareToken = async () => {
+    if (!cloudflareToken.trim()) {
+      setActionError(new Error("Enter a Cloudflare API token."));
+      return;
+    }
+    setActionError(undefined);
+    try {
+      await saveCloudflareToken.mutateAsync({
+        api_token: cloudflareToken.trim(),
+      });
+      setCloudflareToken("");
+      await setupStatus.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const startCloudflareAuthorization = async () => {
+    setActionError(undefined);
+    try {
+      const result = await startCloudflareOAuth.mutateAsync();
+      if (result?.authorization_url)
+        window.location.assign(result.authorization_url);
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const createTunnel = async () => {
+    const values = configForm.getValues();
+    if (!selectedAccount || !selectedZone || !values.hostname.trim()) {
+      setActionError(new Error("Choose an account, zone, and hostname first."));
+      return;
+    }
+    setActionError(undefined);
+    try {
+      await persistConfig(values);
+      const result = await createCloudflareTunnel.mutateAsync({
+        account_id: selectedAccount,
+        zone_id: selectedZone,
+        hostname: values.hostname.trim(),
+      });
+      if (result?.draft.public_url)
+        configForm.setValue("public_url", result.draft.public_url);
+      await setupStatus.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const testDatabaseConnection = async () => {
+    setActionError(undefined);
+    try {
+      await persistConfig(configForm.getValues());
+      await testDatabase.mutateAsync({
+        url: configForm.getValues("database_url") || undefined,
+      });
+      await setupStatus.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const testRedisConnection = async () => {
+    setActionError(undefined);
+    try {
+      await persistConfig(configForm.getValues());
+      await testRedis.mutateAsync({
+        url: configForm.getValues("redis_url") || undefined,
+      });
+      await setupStatus.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const testStorageConnection = async () => {
+    setActionError(undefined);
+    try {
+      const values = configForm.getValues();
+      await persistConfig(values);
+      await testStorage.mutateAsync({
+        endpoint: values.storage_s3_endpoint || undefined,
+        region: values.storage_s3_region || undefined,
+        bucket: values.storage_s3_bucket || undefined,
+        access_key: values.storage_s3_access_key || undefined,
+        secret_key: values.storage_s3_secret_key || undefined,
+        use_ssl: values.storage_s3_use_ssl,
+        path_style: values.storage_s3_path_style,
+      });
+      await setupStatus.refetch();
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const startProductionInstall = async () => {
+    setActionError(undefined);
+    handoffSubmitted.current = false;
+    try {
+      if (!ownerConfirmed) {
+        throw new Error(
+          "Finish GitHub first-owner verification before installing.",
+        );
+      }
+      const ticket = await issueHandoff.mutateAsync();
+      if (!ticket?.token)
+        throw new Error("The production session handoff is not ready.");
+      setHandoffToken(ticket.token);
+      await persistConfig(configForm.getValues());
+      const result = await startInstall.mutateAsync();
+      if (result) setInstallState(result.state);
+      moveTo("install");
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const retryProductionInstall = async () => {
+    setActionError(undefined);
+    handoffSubmitted.current = false;
+    try {
+      const ticket = await issueHandoff.mutateAsync();
+      if (ticket?.token) setHandoffToken(ticket.token);
+      const result = await startInstall.mutateAsync();
+      if (result) setInstallState(result.state);
+    } catch (error) {
+      setActionError(error);
+    }
+  };
+
+  const checks = preflight.data?.checks ?? [];
+  const checksPass =
+    checks.length > 0 &&
+    checks.every((check) => !check.required || check.status === "pass");
+  const cloudflareConnected = Boolean(state?.cloudflare.connected);
+  const tunnelReady = Boolean(
+    state?.draft.cloudflare_tunnel_id &&
+    state.draft.cloudflare_record_id &&
+    state.draft.hostname,
+  );
+  const dataReady =
+    (databaseMode === "bundled" || Boolean(state?.draft.database_tested)) &&
+    (redisMode === "bundled" || Boolean(state?.draft.redis_tested));
+  const storageReady =
+    storageMode === "local" || Boolean(state?.draft.storage_tested);
+  const installViewState = installState ?? state;
+  const installPhase = state?.phase ?? installViewState?.phase;
+  const installPublicURL =
+    installViewState?.draft.public_url ?? watchedConfig.public_url ?? "";
+  const handoffReady =
+    Boolean(handoffToken) &&
+    (installPhase === "handoff" || installPhase === "complete");
+  const callbackNotice = callbackStatus.includes("connected")
+    ? "Connection saved. Continue when the status below is ready."
+    : "";
+  const callbackError =
+    callbackStatus && !callbackStatus.includes("connected")
+      ? new Error("The provider connection was not completed.")
+      : undefined;
+  const isPending =
+    saveConfig.isPending ||
+    saveManual.isPending ||
+    startInstall.isPending ||
+    issueHandoff.isPending;
+
+  return {
+    accounts,
+    actionError,
+    activeStep,
+    callbackError,
+    callbackNotice,
+    checks,
+    checksPass,
+    cloudflareConnected,
+    cloudflareToken,
+    configForm,
+    copyState,
+    createCloudflareTunnel,
+    createTunnel,
+    dataReady,
+    databaseMode,
+    device,
+    beginDeviceFlow,
+    handoffReady,
+    handoffToken,
+    installPhase,
+    installPublicURL,
+    installViewState,
+    isPending,
+    manualForm,
+    moveTo,
+    networkMode,
+    notice,
+    ownerConfirmed,
+    persistConfig,
+    preflight,
+    providerMode,
+    pollError,
+    redisMode,
+    retryProductionInstall,
+    saveConfig,
+    saveManual,
+    saveManualGitHub,
+    saveCloudflareToken,
+    selectedAccount,
+    selectedZone,
+    setActionError,
+    sseConnected,
+    setupCode,
+    setupStatus,
+    setupVerified,
+    startCloudflareAuthorization,
+    startCloudflareOAuth,
+    startDevice,
+    startManifest,
+    storageMode,
+    storageReady,
+    state,
+    testDatabase,
+    testDatabaseConnection,
+    testRedis,
+    testRedisConnection,
+    testStorage,
+    testStorageConnection,
+    tunnelReady,
+    verifyCode,
+    verifySetupCode,
+    watchedConfig,
+    zones,
+    connectCloudflareToken,
+    setCloudflareAccountID,
+    setCloudflareToken,
+    setCloudflareZoneID,
+    setCopyState,
+    setDevice,
+    setProviderMode,
+    setSetupCode,
+    startProductionInstall,
+  };
+}
