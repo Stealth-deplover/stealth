@@ -133,7 +133,7 @@ const setupSteps: Array<{ id: SetupStep; label: string; short: string }> = [
 
 const defaultConfig: ConfigValues = {
   instance_name: "Stealth",
-  public_url: "http://127.0.0.1:8081",
+  public_url: "http://localhost:8081",
   network_mode: "cloudflare_tunnel",
   hostname: "",
   database_mode: "bundled",
@@ -417,18 +417,52 @@ function ProductionLink({ publicURL }: { publicURL?: string }) {
   );
 }
 
-function submitHandoff(publicURL: string, token: string) {
-  const form = document.createElement("form");
-  form.method = "post";
-  form.action = `${publicURL.replace(/\/+$/, "")}/v1/setup/handoff`;
-  form.style.display = "none";
-  const input = document.createElement("input");
-  input.type = "hidden";
-  input.name = "token";
-  input.value = token;
-  form.appendChild(input);
-  document.body.appendChild(form);
-  form.submit();
+function handoffURL(publicURL: string) {
+  try {
+    const target = new URL(publicURL);
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      target.username ||
+      target.password ||
+      target.search ||
+      target.hash ||
+      (target.pathname !== "" && target.pathname !== "/")
+    ) {
+      return "";
+    }
+    target.pathname = "/v1/setup/handoff";
+    return target.toString();
+  } catch {
+    return "";
+  }
+}
+
+function HandoffSubmission({
+  publicURL,
+  token,
+}: {
+  publicURL: string;
+  token: string;
+}) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const action = handoffURL(publicURL);
+
+  useEffect(() => {
+    if (action) formRef.current?.requestSubmit();
+  }, [action, token]);
+
+  if (!action) return null;
+  return (
+    <form
+      ref={formRef}
+      method="post"
+      action={action}
+      className="hidden"
+      aria-hidden="true"
+    >
+      <input type="hidden" name="token" value={token} />
+    </form>
+  );
 }
 
 export function BrowserSetupView() {
@@ -611,17 +645,19 @@ export function BrowserSetupView() {
     if (!publicURL) return;
     handoffSubmitted.current = true;
     if (handoffToken) {
-      submitHandoff(publicURL, handoffToken);
       return;
     }
     void issueHandoff
       .mutateAsync()
       .then((result) => {
-        if (result?.token) submitHandoff(publicURL, result.token);
-        else
+        if (result?.token) {
+          setHandoffToken(result.token);
+        } else {
+          handoffSubmitted.current = false;
           setActionError(
             new Error("The production session handoff was empty."),
           );
+        }
       })
       .catch((error) => {
         handoffSubmitted.current = false;
@@ -902,6 +938,12 @@ export function BrowserSetupView() {
   const storageReady =
     storageMode === "local" || Boolean(state?.draft.storage_tested);
   const installViewState = installState ?? state;
+  const installPhase = state?.phase ?? installViewState?.phase;
+  const installPublicURL =
+    installViewState?.draft.public_url ?? watchedConfig.public_url ?? "";
+  const handoffReady =
+    Boolean(handoffToken) &&
+    (installPhase === "handoff" || installPhase === "complete");
   const currentIndex = setupSteps.findIndex((item) => item.id === activeStep);
   const callbackNotice = callbackStatus.includes("connected")
     ? "Connection saved. Continue when the status below is ready."
@@ -959,10 +1001,16 @@ export function BrowserSetupView() {
     );
   }
 
-  if (installViewState?.phase === "complete") {
+  if (installPhase === "complete") {
     return (
       <SetupShell currentStep="install">
-        <ProductionLink publicURL={installViewState.draft.public_url} />
+        {handoffReady ? (
+          <HandoffSubmission
+            publicURL={installPublicURL}
+            token={handoffToken}
+          />
+        ) : null}
+        <ProductionLink publicURL={installPublicURL} />
       </SetupShell>
     );
   }
@@ -974,6 +1022,9 @@ export function BrowserSetupView() {
 
   return (
     <SetupShell currentStep={activeStep}>
+      {handoffReady ? (
+        <HandoffSubmission publicURL={installPublicURL} token={handoffToken} />
+      ) : null}
       <div className="grid gap-7 lg:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="Setup progress" className="lg:pt-1">
           <div className="mb-3 flex items-center justify-between lg:block">

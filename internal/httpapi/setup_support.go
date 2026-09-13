@@ -123,7 +123,10 @@ func (s *Server) setSetupCookie(w http.ResponseWriter, r *http.Request, sessionI
 		Value:    base64.RawURLEncoding.EncodeToString(ciphertext),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   s.requestIsHTTPS(r) || s.config.CookieSecure,
+		// Setup is served through the temporary HTTPS origin. Keep this
+		// unconditional so missing forwarded headers cannot downgrade the
+		// authentication cookie after a tunnel terminates TLS.
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   maxAge,
 		Expires:  expiresAt,
@@ -341,12 +344,12 @@ func compareStateHash(expected, supplied string) bool {
 }
 
 func setupRedirect(path string) string {
-	if path == "" || path[0] != '/' {
+	if path == "" || path[0] != '/' || strings.HasPrefix(path, "//") || strings.HasPrefix(path, "/\\") || strings.ContainsAny(path, "\r\n") {
 		return "/setup"
 	}
 	return path
 }
 
 func (s *Server) clearSetupCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: setupCookieName, Value: "", Path: "/", HttpOnly: true, Secure: s.requestIsHTTPS(r) || s.config.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+	http.SetCookie(w, &http.Cookie{Name: setupCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 }

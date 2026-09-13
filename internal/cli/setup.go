@@ -103,7 +103,7 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 	if !existing {
 		configContents, err = installengine.GenerateConfig(installengine.ConfigOptions{
 			Version:     version,
-			PublicURL:   "http://127.0.0.1:8081",
+			PublicURL:   "http://localhost:8081",
 			DockerGID:   gid,
 			Setup:       true,
 			InstallRoot: layout.Root,
@@ -116,7 +116,7 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 	plan := InstallPlan{
 		Layout:             layout,
 		Version:            version,
-		PublicURL:          "http://127.0.0.1:8081",
+		PublicURL:          "http://localhost:8081",
 		DockerGID:          gid,
 		Setup:              true,
 		ConfigContents:     configContents,
@@ -188,7 +188,7 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 		_ = a.closeQuickTunnel(cleanupContext, layout, containerName)
 		cleanupCancel()
 		fmt.Fprintf(a.errOut, "could not start the temporary setup tunnel: %v\n", tunnelErr)
-		fmt.Fprintln(a.errOut, "The setup service remains available on the local host at http://127.0.0.1:8081/setup.")
+		fmt.Fprintln(a.errOut, "The setup service remains available on the local host at http://localhost:8081/setup.")
 		return 1
 	}
 	if err := a.registerQuickTunnel(ctx, apiURL+"/v1/setup/quick-tunnel", key, containerName, quickURL); err != nil {

@@ -74,7 +74,7 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 		ProductionComposeFile: filepath.Join(installRoot, "compose.production.yaml"),
 		SetupComposeFile:      filepath.Join(installRoot, "compose.setup.yaml"),
 		StorageRoot:           filepath.Join(root, "storage"),
-		PublicAppURL:          "http://127.0.0.1:8081",
+		PublicAppURL:          "http://localhost:8081",
 		CookieSecure:          false,
 	}
 	handler := NewWithDependencies(configValue, nil, slog.Default(), Dependencies{
@@ -101,7 +101,7 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 		t.Fatalf("bootstrap verification = %d: %s", verify.Code, verify.Body.String())
 	}
 	setupCookie := verify.Result().Cookies()
-	if len(setupCookie) != 1 || setupCookie[0].Name != setupCookieName || !setupCookie[0].HttpOnly || setupCookie[0].SameSite != http.SameSiteLaxMode || setupCookie[0].Value == setupCode || strings.Contains(verify.Body.String(), setupCode) {
+	if len(setupCookie) != 1 || setupCookie[0].Name != setupCookieName || !setupCookie[0].HttpOnly || !setupCookie[0].Secure || setupCookie[0].SameSite != http.SameSiteLaxMode || setupCookie[0].Value == setupCode || strings.Contains(verify.Body.String(), setupCode) {
 		t.Fatalf("setup verification exposed code or issued an unsafe cookie: cookies=%#v body=%s", setupCookie, verify.Body.String())
 	}
 
@@ -254,7 +254,7 @@ func TestValidateInstallableSetupRequiresSavedExternalChecks(t *testing.T) {
 	state := setupstate.NewState()
 	state.GitHub.Connected = true
 	state.GitHub.ClientID = "Iv1.setup-client"
-	state.Draft.PublicURL = "http://127.0.0.1:8081"
+	state.Draft.PublicURL = "http://localhost:8081"
 	state.Draft.NetworkMode = "local_only"
 	state.Draft.DatabaseMode = "external"
 	state.Draft.DatabaseURL = "postgres://user:password@example.test/stealth"
@@ -271,6 +271,29 @@ func TestValidateInstallableSetupRequiresSavedExternalChecks(t *testing.T) {
 	state.Draft.RedisTested = true
 	if err := validateInstallableSetup(state); err != nil {
 		t.Fatalf("validateInstallableSetup() after checks: %v", err)
+	}
+}
+
+func TestSetupRedirectRejectsUnsafeTargets(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty", raw: "", want: "/setup"},
+		{name: "relative without slash", raw: "setup", want: "/setup"},
+		{name: "absolute URL", raw: "https://attacker.example", want: "/setup"},
+		{name: "protocol relative URL", raw: "//attacker.example", want: "/setup"},
+		{name: "backslash URL", raw: "/\\attacker.example", want: "/setup"},
+		{name: "CRLF injection", raw: "/setup\r\nLocation: https://attacker.example", want: "/setup"},
+		{name: "safe setup status", raw: "/setup?github=connected", want: "/setup?github=connected"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := setupRedirect(test.raw); got != test.want {
+				t.Fatalf("setupRedirect(%q) = %q, want %q", test.raw, got, test.want)
+			}
+		})
 	}
 }
 

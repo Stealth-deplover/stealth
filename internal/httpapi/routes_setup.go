@@ -279,7 +279,7 @@ func (s *Server) saveSetupDraft(ctx context.Context, request setupConfigRequest)
 			publicURL = "https://" + hostname
 		}
 		if publicURL == "" {
-			publicURL = "http://127.0.0.1:8081"
+			publicURL = "http://localhost:8081"
 		}
 		validatedPublicURL, validationErr := setupstate.ValidatePublicURL(publicURL)
 		if validationErr != nil {
