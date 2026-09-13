@@ -16,6 +16,7 @@ import { DataTable } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
@@ -73,6 +74,7 @@ export function SiteDetailView({
   };
   if (query.error)
     return <ErrorState error={query.error} retry={() => query.refetch()} />;
+  if (query.isPending) return <LoadingState rows={6} />;
   if (deployments.error)
     return (
       <ErrorState
@@ -258,6 +260,7 @@ export function SiteDeploymentView({
   const deployment = query.data?.deployment;
   if (query.error)
     return <ErrorState error={query.error} retry={() => query.refetch()} />;
+  if (query.isPending) return <LoadingState rows={5} />;
   if (!deployment)
     return (
       <EmptyState

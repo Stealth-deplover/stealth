@@ -123,7 +123,7 @@ func (a *App) run(args []string) int {
 }
 
 func (a *App) printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Stealth — Developer Cloud Control Plane")
+	fmt.Fprintln(w, "Stealth: Developer Cloud Control Plane")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")

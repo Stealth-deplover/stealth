@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCurrentAccount } from "@/api/queries";
 import { ApiError } from "@/api/client";
@@ -8,6 +8,13 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ConsoleRouteContextProvider,
   useConsoleRouteContext,
@@ -22,6 +29,7 @@ function ConsoleShellContent({
   const account = useCurrentAccount();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const unauthorized =
     account.error instanceof ApiError && account.error.status === 401;
 
@@ -73,25 +81,28 @@ function ConsoleShellContent({
           collapsed={sidebarCollapsed}
           onToggle={() => setSidebarCollapsed((value) => !value)}
         />
-        {mobileOpen ? (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <button
-              type="button"
-              className="absolute inset-0 cursor-default bg-black/70"
-              aria-label="Close navigation"
-              onClick={() => setMobileOpen(false)}
-            />
-            <div
-              className="relative z-10 h-full w-72"
-              role="dialog"
-              aria-label="Navigation menu"
-            >
-              <Sidebar mobile />
-            </div>
-          </div>
-        ) : null}
+        <Dialog open={mobileOpen} onOpenChange={setMobileOpen}>
+          <DialogContent
+            className="left-0 top-0 h-full max-h-full w-72 max-w-none translate-x-0 translate-y-0 rounded-none border-y-0 border-l-0 p-0"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              mobileMenuTriggerRef.current?.focus();
+            }}
+          >
+            <DialogHeader className="sr-only">
+              <DialogTitle>Navigation menu</DialogTitle>
+              <DialogDescription>
+                Move between Stealth workspaces and resources.
+              </DialogDescription>
+            </DialogHeader>
+            <Sidebar mobile />
+          </DialogContent>
+        </Dialog>
         <div className="min-w-0 flex-1">
-          <Topbar onMenu={() => setMobileOpen(true)} />
+          <Topbar
+            onMenu={() => setMobileOpen(true)}
+            menuButtonRef={mobileMenuTriggerRef}
+          />
           <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-10">
             {children}
           </main>

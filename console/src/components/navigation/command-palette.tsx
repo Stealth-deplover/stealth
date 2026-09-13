@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { organizationProjectsPath, projectPath } from "@/lib/console-routes";
 
@@ -31,6 +32,15 @@ export function CommandPalette() {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
   const organizations = useOrganizations(undefined, { enabled: open });
   const projects = useProjects(organizationId, undefined, { enabled: open });
+  const dynamicLoading =
+    organizations.isPending || (Boolean(organizationId) && projects.isPending);
+  const dynamicError =
+    organizations.error ?? (organizationId ? projects.error : null);
+
+  const retryDynamic = () => {
+    if (organizations.error) void organizations.refetch();
+    if (organizationId && projects.error) void projects.refetch();
+  };
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const navigation: PaletteCommand[] =
@@ -160,7 +170,7 @@ export function CommandPalette() {
     setActiveIndex(0);
   };
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (!commands.length) return;
+    if (!commands.length || !(event.target instanceof HTMLInputElement)) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((index) => (index + 1) % commands.length);
@@ -211,6 +221,26 @@ export function CommandPalette() {
             }
           />
         </div>
+        {dynamicLoading ? (
+          <div
+            className="mt-2 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.04] px-3 py-2 text-xs text-cyan-200"
+            role="status"
+            aria-live="polite"
+          >
+            Loading workspace navigation…
+          </div>
+        ) : null}
+        {dynamicError ? (
+          <div
+            className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-300/20 bg-rose-400/[0.04] px-3 py-2 text-xs text-rose-200"
+            role="alert"
+          >
+            <span>Could not load workspace navigation.</span>
+            <Button variant="outline" size="sm" onClick={retryDynamic}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
         <div
           id="console-command-list"
           className="mt-2 max-h-80 overflow-y-auto"
@@ -255,7 +285,7 @@ export function CommandPalette() {
                 <span className="text-[10px] text-slate-600">↵</span>
               </button>
             ))
-          ) : (
+          ) : dynamicLoading || dynamicError ? null : (
             <p className="px-3 py-8 text-center text-sm text-slate-500">
               No matching command.
             </p>

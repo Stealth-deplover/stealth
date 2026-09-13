@@ -18,6 +18,8 @@ import {
 } from "@/api/queries";
 import type { Organization, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import {
   Dialog,
   DialogContent,
@@ -82,7 +84,9 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const { data, isLoading } = useOrganizations(undefined, { enabled: open });
+  const { data, error, isLoading, refetch } = useOrganizations(undefined, {
+    enabled: open,
+  });
   const selectedOrganization = useOrganization(currentId);
   const organizations = useMemo(() => {
     const items = data?.organizations ?? [];
@@ -149,9 +153,13 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
         </div>
         <div className="max-h-72 space-y-1 overflow-y-auto">
           {isLoading ? (
-            <p className="px-3 py-4 text-sm text-slate-500">
-              Loading organizations…
-            </p>
+            <LoadingState rows={2} />
+          ) : error ? (
+            <ErrorState
+              title="Could not load organizations"
+              error={error}
+              retry={() => refetch()}
+            />
           ) : filtered.length ? (
             filtered.map((organization) => (
               <SelectorItem
@@ -194,7 +202,11 @@ export function ProjectSwitcher({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const { data } = useProjects(organizationId, undefined, { enabled: open });
+  const { data, error, isLoading, refetch } = useProjects(
+    organizationId,
+    undefined,
+    { enabled: open },
+  );
   const selectedProject = useProject(currentId);
   const projects = useMemo(() => {
     const items = data?.projects ?? [];
@@ -257,7 +269,15 @@ export function ProjectSwitcher({
           />
         </div>
         <div className="max-h-72 space-y-1 overflow-y-auto">
-          {filtered.length ? (
+          {isLoading ? (
+            <LoadingState rows={2} />
+          ) : error ? (
+            <ErrorState
+              title="Could not load projects"
+              error={error}
+              retry={() => refetch()}
+            />
+          ) : filtered.length ? (
             filtered.map((project) => (
               <SelectorItem
                 key={project.id}

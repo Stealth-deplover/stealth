@@ -1,6 +1,7 @@
 "use client";
 
 import { Command, LogOut, Menu, Search, UserRound } from "lucide-react";
+import type { RefObject } from "react";
 import { useRouter } from "next/navigation";
 import {
   OrganizationSwitcher,
@@ -21,7 +22,13 @@ import { toast } from "sonner";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
 
-export function Topbar({ onMenu }: { onMenu?: () => void }) {
+export function Topbar({
+  onMenu,
+  menuButtonRef,
+}: {
+  onMenu?: () => void;
+  menuButtonRef?: RefObject<HTMLButtonElement | null>;
+}) {
   const router = useRouter();
   const logout = useLogout();
   const { organizationId, projectId } = useConsoleRouteContext();
@@ -29,6 +36,7 @@ export function Topbar({ onMenu }: { onMenu?: () => void }) {
     <header className="sticky top-0 z-30 flex min-h-[4.5rem] items-center justify-between gap-2 border-b border-stealth-border bg-stealth-bg/85 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-6">
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
         <Button
+          ref={menuButtonRef}
           variant="ghost"
           size="icon"
           className="lg:hidden"

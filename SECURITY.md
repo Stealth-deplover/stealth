@@ -1,6 +1,6 @@
 # Security Policy
 
-Stealth handles sessions, API keys, provider credentials, tenant data, and—when enabled—the Docker-backed Function/Site runner. Please report security issues responsibly.
+Stealth handles sessions, API keys, provider credentials, tenant data, and, when enabled, the Docker-backed Function/Site runner. Please report security issues responsibly.
 
 ## Reporting a vulnerability
 
