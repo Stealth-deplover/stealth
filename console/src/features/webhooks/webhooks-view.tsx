@@ -93,7 +93,7 @@ export function WebhooksView({
             className="block max-w-sm truncate font-mono text-xs text-slate-400"
             title={events}
           >
-            {events || "—"}
+            {events || "Not available"}
           </span>
         );
       },

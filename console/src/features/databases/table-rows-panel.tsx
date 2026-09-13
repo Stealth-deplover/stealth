@@ -29,7 +29,7 @@ import { RowValue } from "./row-value";
 import type { TableScope, TableURLUpdate } from "./table-scope";
 
 const selectClass =
-  "h-9 rounded-lg border border-stealth-border bg-stealth-panel px-2 text-sm text-white";
+  "min-h-11 rounded-lg border border-stealth-border bg-stealth-panel px-2 text-sm text-white";
 
 type TableRowsSharedProps = TableScope & {
   schema: DatabaseColumn[];

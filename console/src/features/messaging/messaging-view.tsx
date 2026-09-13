@@ -7,6 +7,7 @@ import {
 } from "@/api/queries";
 import { CursorPaginationControls } from "@/components/cursor-pagination-controls";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,6 +38,9 @@ export function MessagingView({ projectId }: { projectId: string }) {
         }}
       />
     );
+  if (providers.isLoading || topics.isLoading || messages.isLoading) {
+    return <LoadingState rows={3} />;
+  }
   return (
     <>
       <PageHeader
@@ -49,7 +53,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Providers on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {providers.data?.providers.length ?? "—"}
+              {providers.data?.providers.length ?? "Not available"}
             </p>
             <p className="mt-2 text-xs text-slate-600">
               Encrypted credentials are never returned.
@@ -73,7 +77,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Topics on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {topics.data?.topics.length ?? "—"}
+              {topics.data?.topics.length ?? "Not available"}
             </p>
             <CursorPaginationControls
               {...{
@@ -93,7 +97,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Messages on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {messages.data?.messages.length ?? "—"}
+              {messages.data?.messages.length ?? "Not available"}
             </p>
             <p className="mt-2 text-xs text-slate-600">
               Metadata only; content remains encrypted.

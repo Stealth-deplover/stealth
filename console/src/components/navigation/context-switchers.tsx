@@ -2,11 +2,11 @@
 
 import {
   Check,
+  Cable,
   ChevronsUpDown,
   FolderKanban,
   Plus,
   Search,
-  Sparkles,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -54,7 +54,7 @@ function SelectorItem({
       onClick={onClick}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
+        "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
         selected && "bg-cyan-300/10",
       )}
     >
@@ -294,7 +294,7 @@ export function ProjectSwitcher({
 export function ContextBadge({ projectId }: { projectId?: string }) {
   return projectId ? (
     <span className="hidden items-center gap-1.5 text-[11px] text-slate-500 md:flex">
-      <Sparkles className="size-3 text-cyan-300" /> Live API context
+      <Cable className="size-3 text-cyan-300" /> Live API context
     </span>
   ) : null;
 }

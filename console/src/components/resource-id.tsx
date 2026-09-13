@@ -26,7 +26,7 @@ export function ResourceId({
       <CopyButton
         value={id}
         label={`Copy ${label.toLowerCase()}`}
-        className="size-6 text-slate-600 hover:text-slate-200"
+        className="text-slate-600 hover:text-slate-200"
       />
     </span>
   );

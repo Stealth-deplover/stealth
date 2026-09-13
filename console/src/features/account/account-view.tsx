@@ -12,6 +12,8 @@ import {
   useUpdateAccountPassword,
 } from "@/api/mutations";
 import { ErrorState } from "@/components/feedback/error-state";
+import { EmptyState } from "@/components/empty-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,7 +52,14 @@ export function AccountView() {
         retry={() => account.refetch()}
       />
     );
-  if (!current) return null;
+  if (account.isLoading) return <LoadingState rows={4} />;
+  if (!current)
+    return (
+      <EmptyState
+        title="Account unavailable"
+        description="The API did not return the account details needed for this page."
+      />
+    );
 
   const submitPassword = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

@@ -110,7 +110,7 @@ export function parseColumn(values: DatabaseColumnFormValues) {
 
 export function displayRowValue(value: unknown, type?: string) {
   if (value === null) return "null";
-  if (value === undefined) return "—";
+  if (value === undefined) return "Not available";
   if (type === "datetime" && typeof value === "string")
     return formatDate(value);
   if (typeof value === "object") return JSON.stringify(value, null, 2);

@@ -28,7 +28,7 @@ export const DialogContent = ({
       {children}
       {showClose ? (
         <DialogPrimitive.Close
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 hover:bg-white/[0.06] hover:text-white"
+          className="absolute right-3 top-3 flex size-11 items-center justify-center rounded-md text-slate-500 hover:bg-white/[0.06] hover:text-white"
           aria-label="Close dialog"
         >
           <X className="size-4" />

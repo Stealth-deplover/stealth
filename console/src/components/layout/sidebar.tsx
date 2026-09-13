@@ -75,7 +75,7 @@ function NavGroup({
               title={collapsed ? item.label : undefined}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "group flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-100",
+                "group flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-3 text-[13px] text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-100",
                 collapsed && "justify-center px-2",
                 active && "bg-cyan-300/[0.09] text-cyan-200",
               )}
@@ -357,7 +357,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={onToggle}
-            className="ml-auto rounded-md p-1.5 text-slate-600 transition hover:bg-white/[0.06] hover:text-slate-200"
+            className="ml-auto flex size-11 items-center justify-center rounded-md text-slate-600 transition hover:bg-white/[0.06] hover:text-slate-200"
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >

@@ -91,7 +91,7 @@ function ResourceNode({ data }: NodeProps<ResourceNode>) {
   const Icon = RESOURCE_ICONS[data.type];
   return (
     <div
-      className={`min-w-48 rounded-xl border px-4 py-3 shadow-xl ${resourceAccent[data.type]}`}
+      className={`min-w-48 rounded-xl border px-4 py-3 ${resourceAccent[data.type]}`}
     >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-black/20">

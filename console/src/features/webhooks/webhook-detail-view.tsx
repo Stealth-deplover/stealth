@@ -132,7 +132,7 @@ export function WebhookDetailView({
           className="block max-w-xs truncate text-xs text-rose-200/80"
           title={row.original.last_error ?? undefined}
         >
-          {row.original.last_error ?? "—"}
+          {row.original.last_error ?? "Not available"}
         </span>
       ),
     },
@@ -248,14 +248,14 @@ export function WebhookDetailView({
                 <CopyButton
                   value={current.url}
                   label="Copy webhook URL"
-                  className="size-6 shrink-0 text-slate-600 hover:text-slate-200"
+                  className="shrink-0 text-slate-600 hover:text-slate-200"
                 />
               </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-600">Events</dt>
               <dd className="mt-1 font-mono text-xs text-slate-300">
-                {current.events.join(", ") || "—"}
+                {current.events.join(", ") || "Not available"}
               </dd>
             </div>
             <div>

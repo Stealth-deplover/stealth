@@ -16,7 +16,7 @@ import { formatDate, formatDuration } from "@/lib/format";
 import { BackLink } from "@/features/resources/detail-shared";
 
 function formatJson(value: unknown) {
-  if (value === undefined) return "—";
+  if (value === undefined) return "Not available";
   try {
     return JSON.stringify(value, null, 2) ?? String(value);
   } catch {
@@ -105,7 +105,7 @@ export function FunctionExecutionView({
               execution.response_status !== undefined ? (
                 <HttpStatusBadge status={execution.response_status} />
               ) : (
-                <span className="text-sm text-slate-500">—</span>
+                <span className="text-sm text-slate-500">Not available</span>
               )}
             </div>
           </CardContent>

@@ -103,7 +103,7 @@ export function OrganizationProjectList({
                 cell: ({ row }) => (
                   <button
                     type="button"
-                    className="font-medium text-white hover:text-cyan-200"
+                    className="min-h-11 text-left font-medium text-white hover:text-cyan-200"
                     onClick={() =>
                       router.push(
                         `/organizations/${organizationId}/projects/${row.original.id}`,
