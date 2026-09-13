@@ -1,0 +1,144 @@
+name: ${COMPOSE_PROJECT_NAME:-stealth}
+
+# Setup is a short-lived, browser-facing Compose project. The setup API is
+# deliberately a different service from production api so it can start the
+# finalized production stack, verify it, and then remove only itself and the
+# setup proxy/Console. It is the only service in either file that mounts the
+# host Docker socket.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?set POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER:?set POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [stealth]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD}"
+    command: ["sh", "-ec", "exec redis-server --requirepass \"$${REDIS_PASSWORD}\" --appendonly no"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    networks: [stealth]
+
+  migrate:
+    image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
+    restart: "no"
+    env_file: ["${STEALTH_ENV_FILE:-./config.env}"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [stealth]
+
+  setup:
+    image: "${STEALTH_SETUP_IMAGE:?set STEALTH_SETUP_IMAGE to a versioned setup image}"
+    restart: unless-stopped
+    env_file: ["${STEALTH_ENV_FILE:-./config.env}"]
+    environment:
+      SETUP_MODE: "true"
+      STEALTH_SETUP_HANDOFF_FILE: "${STEALTH_SETUP_HANDOFF_FILE:-/var/lib/stealth/storage/.setup-handoff.enc}"
+      GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:-}"
+      # Keep the host installation path identical inside this container. The
+      # setup API invokes Docker Compose through the host socket; Docker
+      # resolves bind sources on the daemon host, not in this container's
+      # private filesystem namespace.
+      STEALTH_INSTALL_ROOT: "${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}"
+      STEALTH_SETUP_STATE_FILE: "${STEALTH_SETUP_STATE_FILE:?set STEALTH_SETUP_STATE_FILE}"
+      STEALTH_PRODUCTION_COMPOSE_FILE: "${STEALTH_PRODUCTION_COMPOSE_FILE:?set STEALTH_PRODUCTION_COMPOSE_FILE}"
+      STEALTH_SETUP_COMPOSE_FILE: "${STEALTH_SETUP_COMPOSE_FILE:?set STEALTH_SETUP_COMPOSE_FILE}"
+      PUBLIC_APP_URL: "${PUBLIC_APP_URL:-http://127.0.0.1:8081}"
+      COOKIE_SECURE: "false"
+      TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-172.30.0.0/24}"
+      CLOUDFLARE_OAUTH_CLIENT_ID: "${CLOUDFLARE_OAUTH_CLIENT_ID:-}"
+      CLOUDFLARE_OAUTH_CLIENT_SECRET: "${CLOUDFLARE_OAUTH_CLIENT_SECRET:-}"
+      CLOUDFLARE_API_BASE_URL: "${CLOUDFLARE_API_BASE_URL:-}"
+    volumes:
+      - stealth_storage:/var/lib/stealth/storage
+      - "${STEALTH_INSTALL_ROOT:-.}:${STEALTH_INSTALL_ROOT:-.}"
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:${SETUP_API_HOST_PORT:-18081}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      stealth:
+        aliases: [stealth-api]
+
+  setup-console:
+    image: "${STEALTH_CONSOLE_IMAGE:?set STEALTH_CONSOLE_IMAGE to a versioned image}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "127.0.0.1:${SETUP_CONSOLE_HOST_PORT:-13001}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      stealth:
+        aliases: [stealth-web]
+
+  setup-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_healthy
+      setup-console:
+        condition: service_healthy
+    volumes:
+      - ./console/deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:${SETUP_PROXY_HTTP_PORT:-8081}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [stealth]
+
+volumes:
+  postgres_data:
+    name: "${POSTGRES_VOLUME_NAME:-stealth_postgres_data}"
+  stealth_storage:
+    name: "${STORAGE_VOLUME_NAME:-stealth_storage}"
+  function_runner_staging:
+    name: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
+
+networks:
+  stealth:
+    name: "${STEALTH_NETWORK_NAME:-stealth_network}"
+    ipam:
+      config:
+        - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"

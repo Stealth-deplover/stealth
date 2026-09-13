@@ -109,6 +109,252 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /v1/setup/status:
+    get:
+      operationId: getSetupStatus
+      description: Return the public, secret-free state of the short-lived browser installer. Provider credentials and infrastructure connection strings are never serialized.
+      security: [{}]
+      responses:
+        '200': { description: Setup state, content: { application/json: { schema: { $ref: '#/components/schemas/SetupStatusResponse' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/setup/quick-tunnel:
+    post:
+      operationId: registerSetupQuickTunnel
+      description: Register the exact temporary TryCloudflare hostname started by the local CLI. The endpoint accepts only the derived local CLI proof and never accepts a browser credential.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupQuickTunnelRequest' } } } }
+      responses:
+        '200': { description: Registered temporary tunnel, content: { application/json: { schema: { $ref: '#/components/schemas/SetupState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /v1/setup/recovery:
+    post:
+      operationId: createSetupRecoverySession
+      description: Mint a fresh short-lived setup code after a setup restart. This endpoint requires the local CLI proof and is available only while an incomplete setup needs recovery.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      responses:
+        '201': { description: Recovery setup session, content: { application/json: { schema: { $ref: '#/components/schemas/BootstrapSessionResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/setup/github/manifest/callback:
+    get:
+      operationId: completeSetupGitHubManifest
+      description: Consume GitHub's one-time App Manifest callback. The callback state is stored as a hash and the converted app credentials remain server-side.
+      security: [{}]
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } }
+        - { name: state, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 512, writeOnly: true } }
+      responses:
+        '302': { description: Redirect back to the setup Console with a non-sensitive result marker }
+  /v1/setup/cloudflare/oauth/callback:
+    get:
+      operationId: completeSetupCloudflareOAuth
+      description: Consume Cloudflare's one-time OAuth callback. The access and refresh tokens remain server-side.
+      security: [{}]
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } }
+        - { name: state, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 512, writeOnly: true } }
+      responses:
+        '302': { description: Redirect back to the setup Console with a non-sensitive result marker }
+  /v1/setup/preflight:
+    get:
+      operationId: getSetupPreflight
+      description: Check the setup service's database, Redis, storage, and Docker prerequisites.
+      security: [{ setupCookie: [] }]
+      responses:
+        '200': { description: Prerequisite checks, content: { application/json: { schema: { $ref: '#/components/schemas/SetupPreflightResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/setup/config:
+    put:
+      operationId: saveSetupConfig
+      description: Save the reviewed instance, networking, database, Redis, and storage choices. Secret values are write-only and are encrypted in the setup state.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupConfigRequest' } } } }
+      responses:
+        '200': { description: Saved public setup state, content: { application/json: { schema: { $ref: '#/components/schemas/SetupState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /v1/setup/github/manifest/start:
+    post:
+      operationId: startSetupGitHubManifest
+      description: Create a short-lived GitHub App Manifest URL using the current HTTPS setup origin.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      responses:
+        '200': { description: GitHub App Manifest URL, content: { application/json: { schema: { $ref: '#/components/schemas/SetupGitHubManifestResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/setup/github/manual:
+    post:
+      operationId: saveSetupGitHubManual
+      description: Save manually created GitHub App credentials. All credential fields are write-only and are encrypted in the setup state.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupGitHubManualRequest' } } } }
+      responses:
+        '200': { description: Saved public setup state, content: { application/json: { schema: { $ref: '#/components/schemas/SetupState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /v1/setup/cloudflare/oauth/start:
+    post:
+      operationId: startSetupCloudflareOAuth
+      description: Create a short-lived Cloudflare OAuth authorization URL with account and DNS permissions needed for a named tunnel.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      responses:
+        '200': { description: Cloudflare OAuth URL, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareOAuthResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/setup/cloudflare/accounts:
+    get:
+      operationId: listSetupCloudflareAccounts
+      security: [{ setupCookie: [] }]
+      responses:
+        '200': { description: Cloudflare accounts, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareAccountsResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/cloudflare/zones:
+    get:
+      operationId: listSetupCloudflareZones
+      security: [{ setupCookie: [] }]
+      parameters: [{ name: account_id, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 128 } }]
+      responses:
+        '200': { description: Cloudflare zones, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareZonesResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/cloudflare/token:
+    post:
+      operationId: saveSetupCloudflareToken
+      description: Validate and save a scoped Cloudflare API token. The token is write-only and encrypted in the setup state.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareTokenRequest' } } } }
+      responses:
+        '200': { description: Saved public setup state, content: { application/json: { schema: { $ref: '#/components/schemas/SetupState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/cloudflare/tunnel:
+    post:
+      operationId: createSetupCloudflareTunnel
+      description: Create or resume a named Cloudflare Tunnel, configure ingress to the internal proxy, and create the proxied DNS CNAME.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareTunnelRequest' } } } }
+      responses:
+        '200': { description: Saved public setup state, content: { application/json: { schema: { $ref: '#/components/schemas/SetupState' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/cloudflare/status:
+    get:
+      operationId: getSetupCloudflareStatus
+      security: [{ setupCookie: [] }]
+      responses:
+        '200': { description: Named tunnel status, content: { application/json: { schema: { $ref: '#/components/schemas/SetupCloudflareStatusResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/infrastructure/database/test:
+    post:
+      operationId: testSetupDatabase
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupDatabaseTestRequest' } } } }
+      responses:
+        '200': { description: Database is reachable, content: { application/json: { schema: { $ref: '#/components/schemas/SetupTestResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/infrastructure/redis/test:
+    post:
+      operationId: testSetupRedis
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupRedisTestRequest' } } } }
+      responses:
+        '200': { description: Redis is reachable, content: { application/json: { schema: { $ref: '#/components/schemas/SetupTestResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/infrastructure/storage/test:
+    post:
+      operationId: testSetupStorage
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SetupStorageTestRequest' } } } }
+      responses:
+        '200': { description: Storage is reachable, content: { application/json: { schema: { $ref: '#/components/schemas/SetupTestResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /v1/setup/handoff-token:
+    get:
+      operationId: issueSetupHandoffToken
+      security: [{ setupCookie: [] }]
+      responses:
+        '200': { description: Rotated single-use production handoff token, content: { application/json: { schema: { $ref: '#/components/schemas/SetupHandoffTokenResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/setup/install:
+    post:
+      operationId: startSetupInstall
+      description: Start or resume the idempotent production handoff. Progress is available through the SSE endpoint and failures remain repairable.
+      security: [{ setupCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false } } } }
+      responses:
+        '202': { description: Production handoff started or already running, content: { application/json: { schema: { $ref: '#/components/schemas/SetupInstallResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/setup/install/events:
+    get:
+      operationId: streamSetupInstallEvents
+      description: Stream a setup snapshot and install progress as Server-Sent Events. Reconnecting clients can use the latest snapshot to recover after a dropped connection.
+      security: [{ setupCookie: [] }]
+      responses:
+        '200': { description: Server-Sent setup progress, content: { text/event-stream: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/setup/handoff:
+    post:
+      operationId: completeSetupHandoff
+      description: Consume the short-lived setup handoff in a POST body, set the production HttpOnly session cookie, and redirect to the production dashboard. The handoff is never accepted in a query string.
+      security: [{}]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/SetupHandoffRequest' } }
+          application/x-www-form-urlencoded: { schema: { $ref: '#/components/schemas/SetupHandoffForm' } }
+      responses:
+        '303': { description: Production session cookie set and browser redirected to the dashboard }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/account/registrations:
     post:
       operationId: registerAccount
@@ -2087,6 +2333,7 @@ paths:
 components:
   securitySchemes:
     sessionCookie: { type: apiKey, in: cookie, name: stealth_session }
+    setupCookie: { type: apiKey, in: cookie, name: stealth_setup, description: Short-lived opaque HttpOnly setup session cookie. The cookie payload is encrypted server-side and is never returned in JSON. }
     bootstrapCLIProof: { type: apiKey, in: header, name: X-Stealth-Bootstrap-Proof, description: Derived proof sent only by the local CLI to mint a temporary first-owner setup session. Never send the installation key itself. }
     projectAppCookie: { type: apiKey, in: cookie, name: stealth_app_<project-id-without-hyphens>, description: Project-specific opaque HttpOnly cookie. The actual name is derived from the path projectID; it is never the Console stealth_session cookie. }
     projectApiKey: { type: apiKey, in: header, name: X-Stealth-Key, description: Project-bound server-to-server secret. Supported scopes include users, databases, storage, functions, sites, webhooks, realtime.read, and messaging read/write pairs; never send this header through the Console browser bridge. }
@@ -2122,6 +2369,7 @@ components:
     DeploymentID: { name: deploymentID, in: path, required: true, schema: { type: string, format: uuid } }
     ExecutionID: { name: executionID, in: path, required: true, schema: { type: string, format: uuid } }
     BootstrapCLIProof: { name: X-Stealth-Bootstrap-Proof, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$' } }
+    SetupCSRF: { name: X-Stealth-Setup, in: header, required: true, description: Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied., schema: { type: string, const: '1' } }
     RowCursor: { name: cursor, in: query, description: Opaque cursor returned by a previous row page; use it unchanged, schema: { type: string, minLength: 1, maxLength: 512 } }
     FilterJSON: { name: filter, in: query, description: 'JSON object of equality filters, for example {"status":"active"}. Each filtered column must have a real key index.', schema: { type: string, maxLength: 4096 } }
     OrderBy: { name: order_by, in: query, description: Declared required column key or id. Non-system columns must have a real key index., schema: { type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]{0,119}$' } }
@@ -2154,11 +2402,38 @@ components:
     StartGitHubDeviceRequest: { type: object, additionalProperties: false, required: [authorization_session_id, setup_code], properties: { authorization_session_id: { type: string, format: uuid, writeOnly: true }, setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', writeOnly: true } } }
     GitHubDeviceResponse: { type: object, additionalProperties: false, required: [authorization_session_id, user_code, verification_uri, expires_at, interval_seconds], properties: { authorization_session_id: { type: string, format: uuid }, user_code: { type: string, minLength: 1, maxLength: 64 }, verification_uri: { type: string, format: uri, const: 'https://github.com/login/device' }, expires_at: { type: string, format: date-time }, interval_seconds: { type: integer, minimum: 1, maximum: 300 } } }
     PollGitHubDeviceRequest: { type: object, additionalProperties: false, required: [authorization_session_id], properties: { authorization_session_id: { type: string, format: uuid, writeOnly: true } } }
-    GitHubPollResponse: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [pending, complete] }, retry_after_seconds: { type: integer, minimum: 1, maximum: 300 }, account: { $ref: '#/components/schemas/Account' } } }
+    GitHubPollResponse: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [pending, complete] }, retry_after_seconds: { type: integer, minimum: 1, maximum: 300 }, account: { $ref: '#/components/schemas/Account' }, handoff_token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true, description: Setup-mode-only in-memory handoff credential; it must be posted to the final production origin and never stored. } } }
     BootstrapAdoptionAccount: { type: object, additionalProperties: false, required: [id, created_at], properties: { id: { type: string, format: uuid }, email: { type: [string, 'null'], format: email }, provider: { type: [string, 'null'], enum: [github, null] }, provider_login: { type: [string, 'null'] }, created_at: { type: string, format: date-time } } }
     BootstrapAdoptionAccountsResponse: { type: object, additionalProperties: false, required: [accounts], properties: { accounts: { type: array, items: { $ref: '#/components/schemas/BootstrapAdoptionAccount' } } } }
     AdoptInstanceOwnerRequest: { type: object, additionalProperties: false, required: [account_id], properties: { account_id: { type: string, format: uuid } } }
     AdoptInstanceOwnerResponse: { type: object, additionalProperties: false, required: [status, account_id], properties: { status: { type: string, const: adopted }, account_id: { type: string, format: uuid } } }
+    SetupStatusResponse: { type: object, additionalProperties: false, required: [setup_required, ready, state], properties: { setup_required: { type: boolean }, ready: { type: boolean }, state: { $ref: '#/components/schemas/SetupState' } } }
+    SetupState: { type: object, additionalProperties: false, required: [version, phase, draft, github, cloudflare, updated_at], properties: { version: { type: integer, minimum: 1 }, phase: { type: string, enum: [collecting, installing, complete, failed, handoff] }, step: { type: string, maxLength: 120 }, error_code: { type: string, maxLength: 120 }, error_message: { type: string, maxLength: 240 }, draft: { $ref: '#/components/schemas/SetupDraft' }, github: { $ref: '#/components/schemas/SetupGitHubState' }, cloudflare: { $ref: '#/components/schemas/SetupCloudflareState' }, updated_at: { type: string, format: date-time }, last_event_id: { type: integer, format: int64, minimum: 0 } } }
+    SetupDraft: { type: object, additionalProperties: false, properties: { instance_name: { type: string, maxLength: 120 }, public_url: { type: string, format: uri }, network_mode: { type: string, enum: [cloudflare_tunnel, public_ip, reverse_proxy, local_only] }, hostname: { type: string, maxLength: 253 }, cloudflare_account_id: { type: string, maxLength: 128 }, cloudflare_zone_id: { type: string, maxLength: 128 }, cloudflare_tunnel_id: { type: string, maxLength: 128 }, cloudflare_record_id: { type: string, maxLength: 128 }, database_mode: { type: string, enum: [bundled, external] }, database_tested: { type: boolean }, redis_mode: { type: string, enum: [bundled, external] }, redis_tested: { type: boolean }, storage_mode: { type: string, enum: [local, s3] }, storage_tested: { type: boolean }, storage_s3_endpoint: { type: string, format: uri, writeOnly: true }, storage_s3_region: { type: string, writeOnly: true }, storage_s3_bucket: { type: string, writeOnly: true }, storage_s3_use_ssl: { type: boolean, writeOnly: true }, storage_s3_path_style: { type: boolean, writeOnly: true }, storage_s3_prefix: { type: string, writeOnly: true } } }
+    SetupGitHubState: { type: object, additionalProperties: false, properties: { mode: { type: string, enum: [manifest, manual] }, client_id: { type: string, maxLength: 160 }, connected: { type: boolean }, authorization_session: { type: string, format: uuid }, manifest_expires_at: { type: string, format: date-time } } }
+    SetupCloudflareState: { type: object, additionalProperties: false, properties: { mode: { type: string, enum: [oauth, api_token] }, connected: { type: boolean }, expires_at: { type: string, format: date-time }, token_valid: { type: boolean } } }
+    SetupConfigRequest: { type: object, additionalProperties: false, required: [instance_name, network_mode, database_mode, redis_mode, storage_mode], properties: { instance_name: { type: string, minLength: 1, maxLength: 120 }, public_url: { type: string, format: uri }, network_mode: { type: string, enum: [cloudflare_tunnel, public_ip, reverse_proxy, local_only] }, hostname: { type: string, maxLength: 253 }, database_mode: { type: string, enum: [bundled, external] }, database_url: { type: string, format: uri, maxLength: 2048, writeOnly: true }, redis_mode: { type: string, enum: [bundled, external] }, redis_url: { type: string, format: uri, maxLength: 2048, writeOnly: true }, storage_mode: { type: string, enum: [local, s3] }, storage_s3_endpoint: { type: string, format: uri, maxLength: 2048, writeOnly: true }, storage_s3_region: { type: string, maxLength: 120, writeOnly: true }, storage_s3_bucket: { type: string, minLength: 3, maxLength: 63, writeOnly: true }, storage_s3_access_key: { type: string, maxLength: 512, writeOnly: true }, storage_s3_secret_key: { type: string, maxLength: 512, writeOnly: true }, storage_s3_use_ssl: { type: boolean, writeOnly: true }, storage_s3_path_style: { type: boolean, writeOnly: true }, storage_s3_prefix: { type: string, maxLength: 512, writeOnly: true } } }
+    SetupGitHubManifestResponse: { type: object, additionalProperties: false, required: [manifest_url, expires_at], properties: { manifest_url: { type: string, format: uri }, expires_at: { type: string, format: date-time } } }
+    SetupGitHubManualRequest: { type: object, additionalProperties: false, required: [client_id, client_secret, private_key], properties: { client_id: { type: string, minLength: 1, maxLength: 160 }, client_secret: { type: string, minLength: 1, maxLength: 512, writeOnly: true }, private_key: { type: string, minLength: 1, maxLength: 32768, writeOnly: true }, webhook_secret: { type: string, maxLength: 512, writeOnly: true } } }
+    SetupCloudflareOAuthResponse: { type: object, additionalProperties: false, required: [authorization_url, expires_at], properties: { authorization_url: { type: string, format: uri }, expires_at: { type: string, format: date-time } } }
+    SetupCloudflareTokenRequest: { type: object, additionalProperties: false, required: [api_token], properties: { api_token: { type: string, minLength: 1, maxLength: 4096, writeOnly: true } } }
+    SetupCloudflareTunnelRequest: { type: object, additionalProperties: false, required: [account_id, zone_id, hostname], properties: { account_id: { type: string, minLength: 1, maxLength: 128 }, zone_id: { type: string, minLength: 1, maxLength: 128 }, hostname: { type: string, minLength: 4, maxLength: 253 }, name: { type: string, maxLength: 120 } } }
+    SetupCloudflareAccount: { type: object, additionalProperties: false, required: [id, name], properties: { id: { type: string, maxLength: 128 }, name: { type: string, maxLength: 255 }, created_on: { type: string } } }
+    SetupCloudflareZone: { type: object, additionalProperties: false, required: [id, name], properties: { id: { type: string, maxLength: 128 }, name: { type: string, maxLength: 253 }, status: { type: string } } }
+    SetupCloudflareAccountsResponse: { type: object, additionalProperties: false, required: [accounts], properties: { accounts: { type: array, items: { $ref: '#/components/schemas/SetupCloudflareAccount' } } } }
+    SetupCloudflareZonesResponse: { type: object, additionalProperties: false, required: [zones], properties: { zones: { type: array, items: { $ref: '#/components/schemas/SetupCloudflareZone' } } } }
+    SetupCloudflareStatusResponse: { type: object, additionalProperties: false, required: [tunnel_id, status, healthy, connections], properties: { tunnel_id: { type: string, maxLength: 128 }, status: { type: string, maxLength: 80 }, healthy: { type: boolean }, connections: { type: integer, minimum: 0 } } }
+    SetupDatabaseTestRequest: { type: object, additionalProperties: false, properties: { url: { type: string, format: uri, maxLength: 2048, writeOnly: true } } }
+    SetupRedisTestRequest: { type: object, additionalProperties: false, properties: { url: { type: string, format: uri, maxLength: 2048, writeOnly: true } } }
+    SetupStorageTestRequest: { type: object, additionalProperties: false, properties: { endpoint: { type: string, format: uri, maxLength: 2048, writeOnly: true }, region: { type: string, maxLength: 120, writeOnly: true }, bucket: { type: string, maxLength: 63, writeOnly: true }, access_key: { type: string, maxLength: 512, writeOnly: true }, secret_key: { type: string, maxLength: 512, writeOnly: true }, use_ssl: { type: boolean, writeOnly: true }, path_style: { type: boolean, writeOnly: true } } }
+    SetupTestResponse: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, const: ok } } }
+    SetupQuickTunnelRequest: { type: object, additionalProperties: false, required: [container_name, url], properties: { container_name: { type: string, pattern: '^stealth-onboarding-[A-Za-z0-9._-]+$' }, url: { type: string, format: uri, pattern: '^https://[^/]+\.trycloudflare\.com$' } } }
+    SetupPreflightResponse: { type: object, additionalProperties: false, required: [checks], properties: { checks: { type: array, items: { $ref: '#/components/schemas/SetupCheck' } } } }
+    SetupCheck: { type: object, additionalProperties: false, required: [name, status, detail, required], properties: { name: { type: string }, status: { type: string, enum: [pass, warn, fail] }, detail: { type: string }, required: { type: boolean } } }
+    SetupInstallResponse: { type: object, additionalProperties: false, required: [status, state], properties: { status: { type: string, enum: [installing] }, state: { $ref: '#/components/schemas/SetupState' } } }
+    SetupHandoffRequest: { type: object, additionalProperties: false, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }
+    SetupHandoffForm: { type: object, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }
+    SetupHandoffTokenResponse: { type: object, additionalProperties: false, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }
     RegisterRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, minLength: 12, maxLength: 256, writeOnly: true }, organization_name: { type: string, minLength: 2, maxLength: 120 } } }
     LoginRequest: { type: object, additionalProperties: false, required: [email, password], properties: { email: { type: string, format: email }, password: { type: string, writeOnly: true } } }
     AuthVerificationRequest: { type: object, additionalProperties: false, description: Empty JSON object by default; url is optional and must be the exact configured auth route (relative or on an allowlisted origin) without a query or fragment. The emailed link is rebuilt from trusted server configuration., properties: { url: { type: string, format: uri, maxLength: 2048 } } }

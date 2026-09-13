@@ -41,28 +41,23 @@ Release contains the versioned CLI archive and `checksums.txt`.
 
 ## Installer flow
 
-`stealth install` is an interactive Bubble Tea/Lip Gloss terminal flow:
+`stealth install` performs the local system checks, generates private setup
+configuration, downloads the versioned Compose assets, and starts the setup
+Compose project. The setup project contains the setup API, setup Console,
+setup proxy, PostgreSQL, and Redis. It does not collect provider credentials in
+the terminal. The browser wizard owns the reviewed configuration and calls the
+same reusable Go install engine that the CLI uses.
 
-1. system checks;
-2. instance URL;
-3. bundled PostgreSQL, Redis, and local object storage review;
-4. local/existing reverse proxy review;
-5. GitHub App Client ID for first-owner Device Flow;
-6. configuration review;
-7. secret generation, image pull, migration, startup, and bounded HTTP health
-   verification;
-8. first-run Instance Owner onboarding.
+The setup image is the only setup service allowed to mount the host Docker
+socket. It writes the final production files through the host installation
+mount, starts and verifies the production stack, and is then removed. The
+production API image does not receive the Docker socket.
 
-The installer requires Docker and Docker Compose. It does not silently run a
-third-party Docker installation script. The current stable release uses bundled
-infrastructure and the existing local storage volume. External S3-compatible
-storage remains an operator configuration documented by the production
-deployment guide.
-
-After a fresh installation is healthy, the CLI starts first-run Instance Owner
-onboarding. The owner is an instance-level role, separate from organization
-membership and organization ownership; it does not implicitly grant access to
-every organization or project.
+See the [browser setup guide](web-setup.md) for the complete wizard, provider
+connection, external infrastructure, and recovery behavior. The owner is an
+instance-level role, separate from organization membership and organization
+ownership; it does not implicitly grant access to every organization or
+project.
 
 The default installation directory is `~/.stealth`. Set
 `STEALTH_INSTALL_DIR` to an absolute writable directory when a different
@@ -72,25 +67,26 @@ location is required. The CLI writes:
 ~/.stealth/
 ├── config.env                 # generated secrets, mode 0600
 ├── compose.production.yaml
+├── compose.setup.yaml
 ├── console/deploy/nginx.conf
 ├── VERSION
 └── state/
 ```
 
-`config.env` contains two first-owner settings:
+`config.env` contains the local setup proof and the release settings:
 
 - `BOOTSTRAP_CLI_KEY`, a private 32-byte key used only to authenticate the
   local CLI and encrypt short-lived GitHub Device Flow state;
-- `GITHUB_APP_CLIENT_ID`, the Client ID of a GitHub App with Device Flow
-  enabled.
+- `GITHUB_APP_CLIENT_ID`, which is empty during browser setup and is filled
+  from the server-owned GitHub App connection before production handoff.
 
 Keep both values with the rest of `config.env`. The bootstrap key is never
 printed or sent in the setup URL. `FUNCTIONS_SECRET_KEY` is a separate security
 domain and is never used as a bootstrap-key fallback.
 
 The Compose and proxy files are downloaded from the same versioned Git tag as
-the CLI. The config pins API, worker, migration, and Console images to the
-same GHCR release tag.
+the CLI. The config pins API, setup, worker, migration, and Console images to
+the same GHCR release tag.
 
 An existing `config.env` or `VERSION` is never replaced by a normal reinstall.
 The command refuses to proceed and leaves volumes untouched. After a partial
@@ -142,11 +138,10 @@ for coordinated platform changes.
 
 ## First-run Instance Owner setup
 
-On a new installation, `stealth install` waits for PostgreSQL, Redis,
-migrations, API, worker, Console, and the proxy to become healthy before it
-creates a setup session. The CLI then displays a one-time code in the terminal
-and, when the Docker network is available, starts an immutable-digest-pinned
-`cloudflare/cloudflared:2026.9.0` Quick Tunnel to the local proxy:
+On a new installation, `stealth install` starts the separate setup Compose
+project and displays a one-time code plus an immutable-digest-pinned
+`cloudflare/cloudflared:2026.9.0` Quick Tunnel when the Docker network is
+available:
 
 ```text
 https://random-name.trycloudflare.com/setup
@@ -155,14 +150,14 @@ STEALTH-XXXX-XXXX-XXXX
 
 The code has 60 bits of cryptographic entropy, expires after 15 minutes, is
 rate-limited, is stored by the API only as a SHA-256 hash, and is invalidated
-after the first successful owner creation. On `/setup`, enter the code first;
-only then does the page enable **Continue with GitHub**. GitHub's Device Flow
-user code is shown in the browser and the GitHub verification page opens at
-`https://github.com/login/device`. The random TryCloudflare hostname is never
-used as a GitHub OAuth callback. Neither the setup code nor GitHub's
-`device_code` or access token is placed in a URL, browser storage, or logs.
-If a Quick Tunnel cannot be started, the CLI leaves the installation intact
-and shows the local setup URL instead.
+after the first successful owner creation. Open the URL and complete the
+[browser setup wizard](web-setup.md). The wizard connects GitHub, selects and
+tests infrastructure, creates the named production Cloudflare Tunnel, and
+streams the shared install engine's progress. The random TryCloudflare
+hostname is never used as a GitHub OAuth callback. Neither the setup code nor
+GitHub's `device_code` or access token is placed in a URL, browser storage, or
+logs. If a Quick Tunnel cannot be started, the CLI leaves the installation
+intact and shows the local setup URL instead.
 
 The cloudflared image pin is defined in `internal/cli/setup.go` so it can be
 reviewed and updated as one change. It currently pins the multi-architecture
@@ -253,9 +248,9 @@ removed automatically.
 
 Secrets are generated with `crypto/rand`, written only to `config.env` with
 mode `0600`, and are not printed or passed as command-line arguments. The
-bootstrap verifies release archives before executing them. If a piped shell
-does not have a controlling `/dev/tty`, it stops with a clear error instead of
-hanging for input. `NO_COLOR` and `TERM=dumb` produce readable plain output.
+bootstrap verifies release archives before executing them. It does not require
+a controlling `/dev/tty` because fresh setup choices are completed in the
+browser; `NO_COLOR` and `TERM=dumb` produce readable plain output.
 
 The CLI release artifacts are:
 

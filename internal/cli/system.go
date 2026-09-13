@@ -43,15 +43,35 @@ func (a *App) systemChecks(ctx context.Context, installRoot string) []SystemChec
 	} else {
 		checks = append(checks, SystemCheck{Name: "Disk space", Detail: formatBytes(free) + " free", OK: free > 0, Required: false})
 	}
-	portsRequired := !installationExists(newInstallLayout(installRoot))
-	for _, port := range []struct {
+	layout := newInstallLayout(installRoot)
+	setupMode := false
+	if installationExists(layout) {
+		if values, err := readEnvFile(layout.EnvFile); err == nil {
+			setupMode = strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true")
+		}
+	} else {
+		setupMode = true
+	}
+	portsRequired := !installationExists(layout)
+	portSet := []struct {
 		name string
 		port string
 	}{
 		{"API port", "18080"},
 		{"Console port", "13000"},
 		{"Proxy port", "8080"},
-	} {
+	}
+	if setupMode {
+		portSet = []struct {
+			name string
+			port string
+		}{
+			{"Setup API port", "18081"},
+			{"Setup Console port", "13001"},
+			{"Setup proxy port", "8081"},
+		}
+	}
+	for _, port := range portSet {
 		available := portAvailable(port.port)
 		detail := "available"
 		if !available {

@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
 type ServiceStatus struct {
@@ -45,7 +46,11 @@ func (status ServiceStatus) Display() string {
 }
 
 func (a *App) composeArgs(layout InstallLayout, args ...string) []string {
-	result := []string{"compose", "--env-file", layout.EnvFile, "-f", layout.ComposeFile}
+	composeFile := layout.ComposeFile
+	if values, err := readEnvFile(layout.EnvFile); err == nil && strings.EqualFold(values["SETUP_MODE"], "true") && layout.SetupComposeFile != "" {
+		composeFile = layout.SetupComposeFile
+	}
+	result := []string{"compose", "--env-file", layout.EnvFile, "-f", composeFile}
 	return append(result, args...)
 }
 
@@ -110,7 +115,15 @@ type composeStatusJSON struct {
 }
 
 func anyServiceUnhealthy(statuses map[string]ServiceStatus) bool {
-	for _, service := range []string{"api", "worker", "console", "postgres", "redis", "proxy"} {
+	return anyRequiredServiceUnhealthy(statuses, false)
+}
+
+func anyRequiredServiceUnhealthy(statuses map[string]ServiceStatus, setup bool) bool {
+	services := []string{"api", "worker", "console", "postgres", "redis", "proxy"}
+	if setup {
+		services = []string{"postgres", "redis", "setup", "setup-console", "setup-proxy"}
+	}
+	for _, service := range services {
 		if !statuses[service].Healthy() {
 			return true
 		}
@@ -132,6 +145,12 @@ func displayServiceName(service string) string {
 		return "Redis"
 	case "proxy":
 		return "Proxy"
+	case "setup":
+		return "Setup API"
+	case "setup-console":
+		return "Setup Console"
+	case "setup-proxy":
+		return "Setup Proxy"
 	case "migrate":
 		return "Migration"
 	default:
@@ -208,92 +227,35 @@ func (a *App) waitForInstallation(ctx context.Context, plan InstallPlan) error {
 }
 
 func (a *App) installStep(ctx context.Context, plan InstallPlan, step int) error {
-	switch step {
-	case installStepConfiguration:
-		return a.prepareInstallation(ctx, plan)
-	case installStepPull:
-		return a.runCompose(ctx, plan.Layout, "pull")
-	case installStepDependencies:
-		return a.runCompose(ctx, plan.Layout, "up", "-d", "postgres", "redis")
-	case installStepMigration:
-		return a.runCompose(ctx, plan.Layout, "up", "migrate")
-	case installStepServices:
-		return a.runCompose(ctx, plan.Layout, "up", "-d", "api", "worker", "console", "proxy")
-	case installStepVerify:
-		return a.waitForInstallation(ctx, plan)
-	default:
-		return fmt.Errorf("unknown install step %d", step)
-	}
+	return a.installEngine().RunStep(ctx, plan, installengine.Step(step))
 }
 
 const (
-	installStepConfiguration = iota
-	installStepPull
-	installStepDependencies
-	installStepMigration
-	installStepServices
-	installStepVerify
+	installStepConfiguration = int(installengine.StepConfiguration)
+	installStepPull          = int(installengine.StepPull)
+	installStepDependencies  = int(installengine.StepDependencies)
+	installStepMigration     = int(installengine.StepMigration)
+	installStepServices      = int(installengine.StepServices)
+	installStepVerify        = int(installengine.StepVerify)
 )
 
-var installStepNames = []string{
-	"Configuration and secrets",
-	"Release images",
-	"PostgreSQL and Redis",
-	"Database migrations",
-	"API, Worker, Console, and Proxy",
-	"Health and readiness verification",
-}
+var installStepNames = installengine.StepNames
 
 func (a *App) prepareInstallation(ctx context.Context, plan InstallPlan) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	return a.installEngine().Prepare(ctx, plan)
+}
+
+func (a *App) installEngine() *installengine.Engine {
+	output := io.Discard
+	if a.verbose {
+		output = a.errOut
 	}
-	if err := os.MkdirAll(plan.Layout.Root, 0700); err != nil {
-		return fmt.Errorf("create installation directory: %w", err)
-	}
-	if err := os.Chmod(plan.Layout.Root, 0700); err != nil {
-		return fmt.Errorf("protect installation directory: %w", err)
-	}
-	if err := os.MkdirAll(plan.Layout.StateDir, 0700); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
-	}
-	if !plan.Existing {
-		config, err := generateConfig(plan)
-		if err != nil {
-			return fmt.Errorf("generate configuration: %w", err)
-		}
-		if err := writePrivateFile(plan.Layout.EnvFile, config); err != nil {
-			return fmt.Errorf("write configuration: %w", err)
-		}
-	} else if !fileIsPrivate(plan.Layout.EnvFile) {
-		return fmt.Errorf("existing configuration permissions are too broad; expected mode 0600")
-	}
-	if !regularFile(plan.Layout.ComposeFile) {
-		compose, err := a.fetchAsset(ctx, a.rawAssetURL(plan.Version, "compose.production.yaml"))
-		if err != nil {
-			return fmt.Errorf("download production Compose file: %w", err)
-		}
-		if !bytes.Contains(compose, []byte("services:")) {
-			return fmt.Errorf("downloaded Compose file is invalid")
-		}
-		if err := writeAtomic(plan.Layout.ComposeFile, compose, 0644); err != nil {
-			return fmt.Errorf("write production Compose file: %w", err)
-		}
-	}
-	if !regularFile(plan.Layout.ProxyFile) {
-		proxy, err := a.fetchAsset(ctx, a.rawAssetURL(plan.Version, "console/deploy/nginx.conf"))
-		if err != nil {
-			return fmt.Errorf("download proxy configuration: %w", err)
-		}
-		if !bytes.Contains(proxy, []byte("server {")) {
-			return fmt.Errorf("downloaded proxy configuration is invalid")
-		}
-		if err := writeAtomic(plan.Layout.ProxyFile, proxy, 0644); err != nil {
-			return fmt.Errorf("write proxy configuration: %w", err)
-		}
-	}
-	if err := writeAtomic(plan.Layout.VersionFile, []byte(plan.Version+"\n"), 0644); err != nil {
-		return fmt.Errorf("write version file: %w", err)
-	}
-	return nil
+	return installengine.New(installengine.Options{
+		Runner:       a.runner,
+		HTTPClient:   a.httpClient,
+		AssetBaseURL: a.assetBase,
+		Output:       output,
+		PollAttempts: a.pollAttempts,
+		PollInterval: a.pollInterval,
+	})
 }

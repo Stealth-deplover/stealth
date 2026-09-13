@@ -2,6 +2,8 @@
 
 Stealth releases are coordinated application releases. Use the same version
 for `stealth-api`, `stealth-worker`, `stealth-migrate`, and `stealth-console`.
+The `stealth-setup` image is only needed for a fresh browser installation or
+setup repair.
 The current deployment does not promise rolling upgrades between incompatible
 API/worker/schema versions.
 
@@ -29,8 +31,9 @@ worker, migration, Console, PostgreSQL, Redis, or proxy changes.
    and configuration changes.
 2. Verify PostgreSQL and object-storage backups and record where the restore
    artifacts are stored. See [`backup-restore.md`](backup-restore.md).
-3. Update all four image variables in `.env.production` to the same immutable
-   release tag or digest.
+3. Update all production image variables in `.env.production` to the same
+   immutable release tag or digest. Keep the setup image on the same release
+   when fresh browser setup or repair may be used.
 4. Pull the images and validate the rendered Compose file.
 5. Stop or coordinate workers if the release notes require a quiet queue.
 6. Start PostgreSQL/Redis if needed, then run the one-shot migration command.
@@ -75,5 +78,5 @@ and object storage from verified backups before starting the older release.
 Do not claim a database rollback merely because an older image is available.
 
 If the migration has not changed schema compatibility and the issue is limited
-to application code, pin all four images back to the previous release, run the
-smoke checks, and inspect worker leases before resuming traffic.
+to application code, pin the production images back to the previous release,
+run the smoke checks, and inspect worker leases before resuming traffic.

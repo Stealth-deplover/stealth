@@ -6,25 +6,25 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
-type InstallLayout struct {
-	Root        string
-	EnvFile     string
-	ComposeFile string
-	ProxyFile   string
-	VersionFile string
-	StateDir    string
-}
+type InstallLayout = installengine.Layout
 
 func newInstallLayout(root string) InstallLayout {
+	layout, err := installengine.NewLayout(root)
+	if err == nil {
+		return layout
+	}
 	return InstallLayout{
-		Root:        root,
-		EnvFile:     filepath.Join(root, "config.env"),
-		ComposeFile: filepath.Join(root, "compose.production.yaml"),
-		ProxyFile:   filepath.Join(root, "console", "deploy", "nginx.conf"),
-		VersionFile: filepath.Join(root, "VERSION"),
-		StateDir:    filepath.Join(root, "state"),
+		Root:             root,
+		EnvFile:          filepath.Join(root, "config.env"),
+		ComposeFile:      filepath.Join(root, "compose.production.yaml"),
+		SetupComposeFile: filepath.Join(root, "compose.setup.yaml"),
+		ProxyFile:        filepath.Join(root, "console", "deploy", "nginx.conf"),
+		VersionFile:      filepath.Join(root, "VERSION"),
+		StateDir:         filepath.Join(root, "state"),
 	}
 }
 

@@ -149,16 +149,26 @@ bundled single PostgreSQL, Redis, or local storage services.
 
 ## First-run onboarding
 
-`stealth install` starts first-run onboarding only after the local stack passes
-its health and readiness checks. The CLI requests a single-use setup session,
-displays a 15-minute setup code, and starts a temporary,
-digest-pinned `cloudflare/cloudflared:2026.9.0` Quick Tunnel to the bundled
-proxy when possible. The Console setup page is `/setup` on that temporary URL.
-The operator enters the Stealth setup code first; the page then starts the
-server-owned GitHub App Device Flow. The API stores only a hash of the Stealth
-code and encrypts the short-lived GitHub `device_code` with the dedicated
-bootstrap key. GitHub access tokens are used only for the server-side `/user`
-lookup and are discarded, never returned to the browser or persisted.
+Fresh `stealth install` starts a separate setup Compose project after local
+Docker checks. It contains only the setup API, setup Console, setup proxy,
+PostgreSQL, and Redis. The CLI requests a single-use setup session, displays a
+15-minute setup code, and starts a temporary, digest-pinned
+`cloudflare/cloudflared:2026.9.0` Quick Tunnel to the setup proxy when
+possible. The Console setup page is `/setup` on that temporary URL. The
+browser wizard reviews the public URL, GitHub App, networking, database,
+Redis, storage, and final production tunnel settings before invoking the
+shared Go install engine.
+
+The setup image is the only setup service with the host Docker socket. It
+starts and verifies the final production Compose project through that socket,
+then the setup API removes the setup API, Console, and proxy. Production API
+and worker services do not receive the socket from the setup project.
+
+The operator enters the Stealth setup code first. The API stores only a hash of
+the code and encrypts provider credentials and short-lived OAuth state with
+the configured Functions secret. GitHub access tokens are used only for the
+server-side `/user` lookup and are discarded, never returned to the browser or
+persisted.
 
 The GitHub Device Flow is used specifically because the random
 `*.trycloudflare.com` hostname is not a Stealth-controlled OAuth callback
@@ -169,10 +179,12 @@ maintainers should update the version and digest together after verifying the
 official Cloudflare image manifest.
 
 Quick Tunnels are for temporary onboarding only. They are not production
-ingress, have no production SLA, and are stopped and removed as soon as owner
-creation completes. If the tunnel cannot be started, use the local setup URL
-shown by the CLI. Canceling the CLI preserves the installation and allows
-`stealth setup` to resume while bootstrap remains unsealed.
+ingress, have no production SLA, and are stopped and removed after production
+verification. If the tunnel cannot be started, use the local setup URL shown
+by the CLI. Canceling the CLI preserves the installation and allows
+`stealth setup` to resume while bootstrap remains unsealed. See the [browser
+setup guide](web-setup.md) for wizard stages, external infrastructure tests,
+idempotent retry, and final session handoff.
 
 The first Instance Owner is an instance-level role and is not automatically a
 member of every organization. On upgrade, migration does not expose `/setup`
@@ -185,7 +197,7 @@ organization membership.
 ## Release and upgrade
 
 Release tags use SemVer, for example `v0.1.0`. The release workflow publishes
-API, worker, migration, and Console images with both the version tag and a
+API, setup, worker, migration, and Console images with both the version tag and a
 commit tag (`sha-<short sha>`), then creates a GitHub Release. Pin the version
 tag (or a digest) in `.env.production`; do not mix `api:v1.2.0` with
 `worker:latest`.

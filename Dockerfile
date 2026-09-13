@@ -33,6 +33,19 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget 
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/stealth-api"]
 
+# The setup image is intentionally a separate target. It is the only API
+# image allowed to see the host Docker socket, and the setup Compose file runs
+# it as root so it can hand the finalized files back to the host-mounted
+# installation root. Production uses the api target above.
+FROM runtime-base AS setup
+RUN apk add --no-cache docker-cli
+COPY --from=build /out/stealth-api /usr/local/bin/stealth-api
+USER root
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/stealth-api"]
+
 FROM runtime-base AS worker
 RUN apk add --no-cache docker-cli
 COPY --from=build /out/stealth-worker /usr/local/bin/stealth-worker

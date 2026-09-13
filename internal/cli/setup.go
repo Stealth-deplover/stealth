@@ -18,12 +18,16 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
+	"github.com/Stealth-deplover/stealth/internal/setupstate"
 )
 
 const (
@@ -66,6 +70,11 @@ type bootstrapSessionPayload struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+type setupQuickTunnelPayload struct {
+	ContainerName string `json:"container_name"`
+	URL           string `json:"url"`
+}
+
 type setupPreparedMessage struct {
 	session       bootstrapSessionPayload
 	localURL      string
@@ -74,6 +83,188 @@ type setupPreparedMessage struct {
 	warning       string
 	complete      bool
 	err           error
+}
+
+// runWebBootstrap starts only the setup Compose project. It deliberately does
+// not ask for provider credentials in the terminal; the browser owns the
+// reviewed configuration, while the CLI remains responsible for local Docker
+// capability checks and the short-lived access tunnel.
+func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout InstallLayout, version string, existing bool) int {
+	if !checksPass(checks) {
+		fmt.Fprintf(a.errOut, "system requirements are not satisfied: %s\n", failedCheckSummary(checks))
+		return 1
+	}
+	gid, err := dockerSocketGID("/var/run/docker.sock")
+	if err != nil {
+		fmt.Fprintf(a.errOut, "Docker socket is not accessible: %v\n", err)
+		return 1
+	}
+	configContents := ""
+	if !existing {
+		configContents, err = installengine.GenerateConfig(installengine.ConfigOptions{
+			Version:     version,
+			PublicURL:   "http://127.0.0.1:8081",
+			DockerGID:   gid,
+			Setup:       true,
+			InstallRoot: layout.Root,
+		})
+		if err != nil {
+			fmt.Fprintf(a.errOut, "could not prepare setup configuration: %v\n", err)
+			return 1
+		}
+	}
+	plan := InstallPlan{
+		Layout:             layout,
+		Version:            version,
+		PublicURL:          "http://127.0.0.1:8081",
+		DockerGID:          gid,
+		Setup:              true,
+		ConfigContents:     configContents,
+		InternalAPIURL:     "http://127.0.0.1:18081",
+		InternalConsoleURL: "http://127.0.0.1:13001",
+		InternalProxyURL:   "http://127.0.0.1:8081",
+		Existing:           existing,
+	}
+	if err := a.installEngine().Install(ctx, plan, nil); err != nil {
+		fmt.Fprintf(a.errOut, "could not start the setup service: %v\n", err)
+		fmt.Fprintln(a.errOut, "Configuration was preserved; run `stealth install --repair` or `stealth doctor` for diagnostics.")
+		return 1
+	}
+	fmt.Fprintln(a.out, "✓ System requirements checked")
+	fmt.Fprintln(a.out, "✓ Setup service started")
+	values, err := readEnvFile(layout.EnvFile)
+	if err != nil {
+		fmt.Fprintf(a.errOut, "could not read setup configuration: %v\n", err)
+		return 1
+	}
+	key, err := bootstrapCLIKey(values)
+	if err != nil {
+		fmt.Fprintln(a.errOut, err)
+		return 1
+	}
+	setupPorts := setupPortsFromConfig(values)
+	apiURL := "http://127.0.0.1:" + setupPorts.API
+	status, err := a.bootstrapStatus(ctx, apiURL+"/v1/bootstrap/status")
+	if err != nil {
+		fmt.Fprintf(a.errOut, "could not read first-run setup state: %v\n", err)
+		return 1
+	}
+	state, stateErr := a.loadSetupState(values)
+	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		fmt.Fprintf(a.errOut, "could not read browser setup state: %v\n", stateErr)
+		return 1
+	}
+	if !status.SetupRequired && stateErr == nil && state.Phase == setupstate.PhaseComplete {
+		fmt.Fprintln(a.out, "Instance setup has already been completed.")
+		return 0
+	}
+	var session bootstrapSessionPayload
+	if status.SetupRequired {
+		session, err = a.createBootstrapSession(ctx, apiURL+"/v1/bootstrap/sessions", key)
+	} else {
+		session, err = a.recoverSetupSession(ctx, apiURL+"/v1/setup/recovery", key)
+	}
+	if err != nil {
+		fmt.Fprintf(a.errOut, "could not create a setup session: %v\n", err)
+		return 1
+	}
+	if previousName := a.previousSetupTunnel(values); previousName != "" {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupErr := a.closeQuickTunnel(cleanupContext, layout, previousName)
+		cleanupCancel()
+		if cleanupErr != nil {
+			fmt.Fprintf(a.errOut, "could not clean up the previous temporary setup tunnel: %v\n", cleanupErr)
+			return 1
+		}
+	}
+	containerName := newSetupContainerName()
+	network := strings.TrimSpace(values["STEALTH_NETWORK_NAME"])
+	if network == "" {
+		network = quickTunnelNetwork
+	}
+	quickURL, tunnelErr := a.startQuickTunnelTo(ctx, layout, network, containerName, "http://setup-proxy:80")
+	if tunnelErr != nil {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = a.closeQuickTunnel(cleanupContext, layout, containerName)
+		cleanupCancel()
+		fmt.Fprintf(a.errOut, "could not start the temporary setup tunnel: %v\n", tunnelErr)
+		fmt.Fprintln(a.errOut, "The setup service remains available on the local host at http://127.0.0.1:8081/setup.")
+		return 1
+	}
+	if err := a.registerQuickTunnel(ctx, apiURL+"/v1/setup/quick-tunnel", key, containerName, quickURL); err != nil {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = a.closeQuickTunnel(cleanupContext, layout, containerName)
+		cleanupCancel()
+		fmt.Fprintf(a.errOut, "could not register the temporary setup tunnel: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(a.out, "✓ Temporary setup tunnel started")
+	fmt.Fprintf(a.out, "\nOpen %s/setup\n", quickURL)
+	fmt.Fprintf(a.out, "Setup code: %s\n", session.SetupCode)
+	fmt.Fprintf(a.out, "Expires: %s (15 minutes)\n", session.ExpiresAt.UTC().Format(time.RFC3339))
+	fmt.Fprintln(a.out, "Complete setup in the browser. The temporary tunnel closes after the named production tunnel is verified.")
+	return 0
+}
+
+func (a *App) loadSetupState(values map[string]string) (setupstate.State, error) {
+	store, err := a.setupStateStore(values)
+	if err != nil {
+		return setupstate.State{}, err
+	}
+	return store.Load(context.Background())
+}
+
+func (a *App) setupStateStore(values map[string]string) (*setupstate.FileStore, error) {
+	statePath := strings.TrimSpace(values["STEALTH_SETUP_STATE_FILE"])
+	if statePath == "" {
+		statePath = filepath.Join(strings.TrimRight(a.valueOrInstallRoot(values), "/"), "state", "setup-state.enc")
+	}
+	key, err := decodeConfigSecret(values["FUNCTIONS_SECRET_KEY"])
+	if err != nil {
+		return nil, err
+	}
+	cipher, err := functionsecret.New(key)
+	if err != nil {
+		return nil, err
+	}
+	return setupstate.NewFileStore(statePath, cipher)
+}
+
+func (a *App) previousSetupTunnel(values map[string]string) string {
+	store, err := a.setupStateStore(values)
+	if err != nil {
+		return ""
+	}
+	state, err := store.Load(context.Background())
+	if err != nil || !isQuickTunnelContainerName(state.QuickTunnel) {
+		return ""
+	}
+	return state.QuickTunnel
+}
+
+func (a *App) valueOrInstallRoot(values map[string]string) string {
+	if root := strings.TrimSpace(values["STEALTH_INSTALL_ROOT"]); root != "" {
+		return root
+	}
+	if a != nil && a.homeDir != "" {
+		return filepath.Join(a.homeDir, defaultHomeName)
+	}
+	return ""
+}
+
+func decodeConfigSecret(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("secret is empty")
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		key, err = base64.RawURLEncoding.DecodeString(raw)
+	}
+	if err != nil || len(key) != functionsecret.KeySize {
+		return nil, errors.New("secret is invalid")
+	}
+	return key, nil
 }
 
 func (a *App) runSetup(args []string) int {
@@ -97,9 +288,9 @@ func (a *App) runSetup(args []string) int {
 		fmt.Fprintln(a.errOut, "setup does not accept positional arguments")
 		return 2
 	}
-	if !a.hasInteractiveTerminal() {
-		fmt.Fprintln(a.errOut, "First-run owner setup requires an interactive TTY.")
-		fmt.Fprintln(a.errOut, "Run `stealth setup` from a terminal; the installation was left unchanged.")
+	if *adoptOwner && !a.hasInteractiveTerminal() {
+		fmt.Fprintln(a.errOut, "Owner adoption requires an interactive TTY.")
+		fmt.Fprintln(a.errOut, "Run `stealth setup --adopt-owner` from a terminal; the installation was left unchanged.")
 		return 1
 	}
 	ctx, stop := signalContext()
@@ -204,6 +395,30 @@ func (a *App) runSetupWithContext(ctx context.Context) int {
 	if err != nil {
 		fmt.Fprintf(a.errOut, "could not read installation configuration: %v\n", err)
 		return 1
+	}
+	if strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true") {
+		version := readVersion(layout)
+		if version == "" {
+			version, err = imageVersion(values["STEALTH_API_IMAGE"])
+			if err != nil {
+				fmt.Fprintf(a.errOut, "could not determine setup release version: %v\n", err)
+				return 1
+			}
+		}
+		return a.runWebBootstrap(ctx, a.systemChecks(ctx, layout.Root), layout, version, true)
+	}
+	if statePath := strings.TrimSpace(values["STEALTH_SETUP_STATE_FILE"]); statePath != "" && installengine.FileExists(statePath) {
+		if state, stateErr := a.loadSetupState(values); stateErr == nil && state.InstallRunID != "" && state.Phase != setupstate.PhaseComplete {
+			version := readVersion(layout)
+			if version == "" {
+				version, err = imageVersion(values["STEALTH_API_IMAGE"])
+				if err != nil {
+					fmt.Fprintf(a.errOut, "could not determine setup release version: %v\n", err)
+					return 1
+				}
+			}
+			return a.runWebBootstrap(ctx, a.systemChecks(ctx, layout.Root), layout, version, true)
+		}
 	}
 	ports := portsFromConfig(values)
 	apiURL := "http://127.0.0.1:" + ports.API
@@ -382,6 +597,30 @@ func (a *App) createBootstrapSession(ctx context.Context, endpoint string, key [
 	return payload, nil
 }
 
+func (a *App) recoverSetupSession(ctx context.Context, endpoint string, key []byte) (bootstrapSessionPayload, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
+	if err != nil {
+		return bootstrapSessionPayload{}, err
+	}
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(key))
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return bootstrapSessionPayload{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return bootstrapSessionPayload{}, &bootstrapHTTPError{status: response.StatusCode}
+	}
+	var payload bootstrapSessionPayload
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload); err != nil {
+		return bootstrapSessionPayload{}, fmt.Errorf("decode setup recovery session: %w", err)
+	}
+	if !bootstrap.ValidCode(payload.SetupCode) || !payload.ExpiresAt.After(time.Now().UTC()) {
+		return bootstrapSessionPayload{}, fmt.Errorf("setup API returned an invalid recovery session")
+	}
+	return payload, nil
+}
+
 func bootstrapCLIKey(values map[string]string) ([]byte, error) {
 	raw := strings.TrimSpace(values["BOOTSTRAP_CLI_KEY"])
 	if raw == "" {
@@ -403,10 +642,17 @@ func isBootstrapComplete(err error) bool {
 }
 
 func (a *App) startQuickTunnel(ctx context.Context, layout InstallLayout, network, containerName string) (string, error) {
+	return a.startQuickTunnelTo(ctx, layout, network, containerName, "http://proxy:80")
+}
+
+func (a *App) startQuickTunnelTo(ctx context.Context, layout InstallLayout, network, containerName, target string) (string, error) {
 	if !isQuickTunnelContainerName(containerName) {
 		return "", fmt.Errorf("temporary tunnel container name is invalid")
 	}
-	if _, err := a.runner.Output(ctx, layout.Root, "docker", "run", "--detach", "--name", containerName, "--network", network, "--pull=missing", quickTunnelCloudflaredImage, "tunnel", "--no-autoupdate", "--url", "http://proxy:80"); err != nil {
+	if !safeDockerName(network) || target != "http://proxy:80" && target != "http://setup-proxy:80" {
+		return "", fmt.Errorf("temporary tunnel target is invalid")
+	}
+	if _, err := a.runner.Output(ctx, layout.Root, "docker", "run", "--detach", "--name", containerName, "--network", network, "--pull=missing", quickTunnelCloudflaredImage, "tunnel", "--no-autoupdate", "--url", target); err != nil {
 		return containerName, fmt.Errorf("start temporary onboarding tunnel: %w", err)
 	}
 	for attempt := 0; attempt < positiveAttempts(a.pollAttempts); attempt++ {
@@ -426,6 +672,28 @@ func (a *App) startQuickTunnel(ctx context.Context, layout InstallLayout, networ
 		}
 	}
 	return containerName, fmt.Errorf("temporary onboarding tunnel did not publish a TryCloudflare URL in time")
+}
+
+func (a *App) registerQuickTunnel(ctx context.Context, endpoint string, key []byte, containerName, tunnelURL string) error {
+	body, err := json.Marshal(setupQuickTunnelPayload{ContainerName: containerName, URL: tunnelURL})
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(key))
+	response, err := a.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &bootstrapHTTPError{status: response.StatusCode}
+	}
+	return nil
 }
 
 func positiveAttempts(value int) int {

@@ -1,0 +1,224 @@
+package installengine
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+)
+
+type recordedCommand struct {
+	name string
+	args []string
+}
+
+type fakeRunner struct {
+	mu    sync.Mutex
+	calls []recordedCommand
+	err   error
+}
+
+func (r *fakeRunner) Run(_ context.Context, _ string, _, _ io.Writer, name string, args ...string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
+	return r.err
+}
+
+func (r *fakeRunner) Output(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
+	return nil, r.err
+}
+
+func (r *fakeRunner) snapshot() []recordedCommand {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]recordedCommand, len(r.calls))
+	copy(result, r.calls)
+	return result
+}
+
+func writeEngineFixture(t *testing.T, setup bool) Layout {
+	t.Helper()
+	layout, err := NewLayout(filepath.Join(t.TempDir(), "stealth"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(layout.ProxyFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://127.0.0.1:8080\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if setup {
+		if err := WriteAtomic(layout.SetupComposeFile, []byte("services:\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := WriteAtomic(layout.ProxyFile, []byte("server {\n}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return layout
+}
+
+func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
+	layout := writeEngineFixture(t, true)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner, PollAttempts: 1})
+	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, Setup: true}
+
+	for _, step := range []Step{StepPull, StepDependencies, StepMigration, StepServices} {
+		if err := engine.RunStep(context.Background(), plan, step); err != nil {
+			t.Fatalf("RunStep(%d): %v", step, err)
+		}
+	}
+	calls := runner.snapshot()
+	if len(calls) != 4 {
+		t.Fatalf("recorded calls = %#v, want 4", calls)
+	}
+	for _, call := range calls {
+		if call.name != "docker" || !containsPair(call.args, "-f", layout.SetupComposeFile) {
+			t.Fatalf("setup call = %#v, want setup Compose file", call)
+		}
+		if contains(call.args, "worker") {
+			t.Fatalf("setup call unexpectedly mentions worker: %#v", call)
+		}
+	}
+	if got := calls[3].args; !equalArgs(got[len(got)-3:], []string{"setup", "setup-console", "setup-proxy"}) {
+		t.Fatalf("setup services = %#v", got)
+	}
+}
+
+func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner})
+	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, ExternalDatabase: true, ExternalRedis: true}
+
+	if err := engine.RunStep(context.Background(), plan, StepDependencies); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RunStep(context.Background(), plan, StepMigration); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("recorded calls = %#v, want migration and services only", calls)
+	}
+	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[0])
+	}
+	if !contains(calls[1].args, "--no-deps") || contains(calls[1].args, "postgres") || contains(calls[1].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[1])
+	}
+}
+
+func TestInstallLockRejectsConcurrentOperation(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	lock, err := acquireLock(layout.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	engine := New(Options{Runner: &fakeRunner{}})
+	err = engine.Install(context.Background(), Plan{Layout: layout, Existing: true}, nil)
+	if err == nil || !strings.Contains(err.Error(), "another installation operation") {
+		t.Fatalf("concurrent Install error = %v", err)
+	}
+}
+
+func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		switch r.URL.Path {
+		case "/v1.2.3/compose.production.yaml", "/v1.2.3/compose.setup.yaml":
+			_, _ = io.WriteString(w, "services:\n  setup:\n    image: example\n")
+		case "/v1.2.3/console/deploy/nginx.conf":
+			_, _ = io.WriteString(w, "server {\n}")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	layout, err := NewLayout(filepath.Join(t.TempDir(), "stealth"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := GenerateConfig(ConfigOptions{Version: "v1.2.3", PublicURL: "http://127.0.0.1:8081", Setup: true, InstallRoot: layout.Root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(Options{AssetBaseURL: server.URL, PollAttempts: 1})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", Setup: true, ConfigContents: config}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{layout.EnvFile, layout.ComposeFile, layout.SetupComposeFile, layout.ProxyFile, layout.VersionFile} {
+		if !FileExists(path) {
+			t.Fatalf("prepared asset %s is missing", path)
+		}
+	}
+	if !FileIsPrivate(layout.EnvFile) {
+		t.Fatal("generated setup config is not private")
+	}
+	version, err := os.ReadFile(layout.VersionFile)
+	if err != nil || string(version) != "v1.2.3\n" {
+		t.Fatalf("VERSION = %q, %v", version, err)
+	}
+}
+
+func TestWaitChecksInternalAndPublicEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	layout := writeEngineFixture(t, false)
+	engine := New(Options{HTTPClient: server.Client(), PollAttempts: 1})
+	plan := Plan{Layout: layout, InternalAPIURL: server.URL, InternalConsoleURL: server.URL, InternalProxyURL: server.URL, PublicURL: server.URL, VerifyPublicURL: true}
+	if err := engine.Wait(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPair(values []string, first, second string) bool {
+	for index := 0; index+1 < len(values); index++ {
+		if values[index] == first && values[index+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
+func equalArgs(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
