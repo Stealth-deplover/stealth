@@ -328,7 +328,7 @@ func uninstallModeName(mode uninstallMode) string {
 	case uninstallConfiguration:
 		return "Remove services + local runtime files"
 	case uninstallPurge:
-		return "PURGE — permanently delete instance data"
+		return "PURGE: permanently delete instance data"
 	default:
 		return "Unknown"
 	}

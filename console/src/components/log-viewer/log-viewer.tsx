@@ -140,7 +140,7 @@ function LogBody({
   return (
     <CardContent className="p-0">
       <div
-        className="scrollbar-thin max-h-[32rem] overflow-y-auto bg-stealth-bg p-4 font-mono text-xs leading-6"
+        className="scrollbar-thin max-h-[32rem] overflow-x-hidden overflow-y-auto bg-stealth-bg p-4 font-mono text-xs leading-6"
         aria-live="polite"
       >
         {error ? (
@@ -157,7 +157,7 @@ function LogBody({
               <span className={getLogLevelClass(line.level)}>
                 {line.level.padEnd(5, " ")}
               </span>
-              <span className="whitespace-pre-wrap text-slate-300">
+              <span className="min-w-0 flex-1 break-words whitespace-pre-wrap text-slate-300">
                 {line.message}
               </span>
             </div>

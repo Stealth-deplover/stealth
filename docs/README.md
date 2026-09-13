@@ -4,15 +4,15 @@ This index links the repository’s existing guides. The root [README](../README
 
 ## Getting Started
 
-- [CLI and installer](cli.md) — installation flow, operator commands, and release artifacts.
-- [Production deployment](production-deployment.md) — the supported Docker Compose baseline.
+- [CLI and installer](cli.md): installation flow, operator commands, and release artifacts.
+- [Production deployment](production-deployment.md): the supported Docker Compose baseline.
 
 ## Architecture and API
 
-- [Architecture overview](../README.md#architecture) — Console, API, storage, queues, and workers.
-- [OpenAPI contract](../openapi/openapi.yaml) — source of truth for Console requests.
-- [Backend production-readiness contract](backend-production-readiness.md) — durable work, operational controls, and known guarantees.
-- [Realtime event infrastructure](realtime.md) — outbox, SSE, Redis, and delivery behavior.
+- [Architecture overview](../README.md#architecture): Console, API, storage, queues, and workers.
+- [OpenAPI contract](../openapi/openapi.yaml): source of truth for Console requests.
+- [Backend production-readiness contract](backend-production-readiness.md): durable work, operational controls, and known guarantees.
+- [Realtime event infrastructure](realtime.md): outbox, SSE, Redis, and delivery behavior.
 
 ## Configuration and Self Hosting
 
