@@ -6,6 +6,7 @@ import { useFunctions, useSites } from "@/api/queries";
 import { CursorPaginationControls } from "@/components/cursor-pagination-controls";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
@@ -34,6 +35,7 @@ export function LogsView({
         }}
       />
     );
+  if (functions.isLoading || sites.isLoading) return <LoadingState rows={4} />;
   return (
     <>
       <PageHeader

@@ -21,6 +21,8 @@ over decorative copy.
 - Use a dark neutral background with slightly lighter grouped surfaces.
 - Use cyan as the primary action and focus accent.
 - Use violet, green, amber, red, and blue only for distinct semantic states.
+- Use resource and connection icons to explain operational meaning; avoid
+  decorative glyphs that do not identify the state or action.
 - Use system sans for interface text and monospace for IDs, URLs, and logs.
 - Keep motion subtle and useful. Respect `prefers-reduced-motion`.
 
