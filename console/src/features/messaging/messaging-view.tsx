@@ -49,7 +49,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Providers on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {providers.data?.providers.length ?? "—"}
+              {providers.data?.providers.length ?? "Not available"}
             </p>
             <p className="mt-2 text-xs text-slate-600">
               Encrypted credentials are never returned.
@@ -73,7 +73,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Topics on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {topics.data?.topics.length ?? "—"}
+              {topics.data?.topics.length ?? "Not available"}
             </p>
             <CursorPaginationControls
               {...{
@@ -93,7 +93,7 @@ export function MessagingView({ projectId }: { projectId: string }) {
           <CardContent className="p-5">
             <p className="text-xs text-slate-500">Messages on this page</p>
             <p className="mt-2 text-2xl font-semibold text-white">
-              {messages.data?.messages.length ?? "—"}
+              {messages.data?.messages.length ?? "Not available"}
             </p>
             <p className="mt-2 text-xs text-slate-600">
               Metadata only; content remains encrypted.

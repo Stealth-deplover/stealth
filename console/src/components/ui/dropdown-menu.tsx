@@ -29,7 +29,7 @@ export const DropdownMenuItem = ({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item>) => (
   <DropdownMenuPrimitive.Item
     className={cn(
-      "flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-slate-300 outline-none hover:bg-white/[0.07] hover:text-white",
+      "flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-slate-300 outline-none hover:bg-white/[0.07] hover:text-white data-[highlighted]:bg-cyan-300/10 data-[highlighted]:text-white data-[highlighted]:ring-2 data-[highlighted]:ring-inset data-[highlighted]:ring-cyan-300/40",
       className,
     )}
     {...props}

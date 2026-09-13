@@ -90,6 +90,6 @@ describe("typed row data", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.textContent).toContain('"nested"');
     expect(displayRowValue(0)).toBe("0");
-    expect(displayRowValue(undefined)).toBe("—");
+    expect(displayRowValue(undefined)).toBe("Not available");
   });
 });

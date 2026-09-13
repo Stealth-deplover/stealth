@@ -14,6 +14,10 @@
   --color-stealth-warning: #f2c66d;
   --color-stealth-danger: #f28b9d;
   --color-stealth-info: #91b7ff;
+  /* Secondary text must remain readable on every dark surface. */
+  --color-slate-500: #a1adbc;
+  --color-slate-600: #8d98a9;
+  --color-slate-700: #7d8ca0;
 }
 
 :root {
@@ -39,13 +43,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(
-      circle at 75% -15%,
-      rgba(114, 228, 220, 0.07),
-      transparent 30rem
-    ),
-    var(--background);
+  background: var(--background);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
@@ -70,13 +68,6 @@ select:focus-visible {
 
 ::selection {
   background: rgba(114, 228, 220, 0.26);
-}
-
-.grid-noise {
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 32px 32px;
 }
 
 .scrollbar-thin {

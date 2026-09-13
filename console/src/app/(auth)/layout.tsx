@@ -4,7 +4,6 @@ export default function AuthLayout({
   return (
     <main className="grid min-h-screen bg-stealth-bg lg:grid-cols-[1.05fr_.95fr]">
       <section className="relative hidden overflow-hidden border-r border-stealth-border p-12 lg:flex lg:flex-col lg:justify-between">
-        <div className="absolute inset-0 grid-noise opacity-50" />
         <div className="relative">
           <div className="flex items-center gap-2.5">
             <span className="flex size-9 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-300/10 font-black text-cyan-200">

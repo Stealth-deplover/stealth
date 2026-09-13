@@ -104,7 +104,7 @@ export function DataTable<T>({
                     {header.isPlaceholder ? null : header.column.getCanSort() ? (
                       <button
                         type="button"
-                        className="rounded-sm text-left hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
+                        className="min-h-11 rounded-sm text-left hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         {label}
@@ -171,7 +171,7 @@ export function DataTable<T>({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!table.getCanPreviousPage()}
               onClick={() => table.previousPage()}
             >
@@ -182,7 +182,7 @@ export function DataTable<T>({
             </span>
             <button
               type="button"
-              className="rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!table.getCanNextPage()}
               onClick={() => table.nextPage()}
             >

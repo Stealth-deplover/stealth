@@ -118,7 +118,7 @@ export function APIKeysView({
             className="block max-w-sm truncate text-xs text-slate-400"
             title={scopes}
           >
-            {scopes || "—"}
+            {scopes || "Not available"}
           </span>
         );
       },

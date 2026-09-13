@@ -19,10 +19,10 @@ const buttonVariants = cva(
           "bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white",
       },
       size: {
-        default: "h-9 px-3.5",
-        sm: "h-8 rounded-md px-2.5 text-xs",
+        default: "min-h-11 px-3.5",
+        sm: "min-h-11 rounded-md px-2.5 text-xs",
         lg: "h-11 px-5",
-        icon: "size-9",
+        icon: "size-11",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

@@ -49,7 +49,8 @@ export function BucketObjectBrowser({
       header: "Name",
       cell: ({ row }) => (
         <button
-          className="block max-w-64 truncate text-left font-medium text-white hover:text-cyan-200"
+          type="button"
+          className="block min-h-11 max-w-64 truncate text-left font-medium text-white hover:text-cyan-200"
           title={row.original.name}
           onClick={() => onSelectObject(row.original.id)}
         >

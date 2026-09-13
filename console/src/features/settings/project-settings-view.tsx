@@ -48,7 +48,7 @@ export function ProjectSettingsView({ projectId }: { projectId: string }) {
                       <CopyButton
                         value={project.data.project.id}
                         label="Copy project ID"
-                        className="size-6 shrink-0 text-slate-600 hover:text-slate-200"
+                        className="shrink-0 text-slate-600 hover:text-slate-200"
                       />
                     ) : null}
                   </dd>

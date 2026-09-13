@@ -213,7 +213,7 @@ export function FunctionDetailView({
               new Date(row.original.finished_at).valueOf() -
                 new Date(row.original.started_at).valueOf(),
             )
-          : "—",
+          : "Not available",
     },
     {
       accessorKey: "created_at",
@@ -348,7 +348,7 @@ export function FunctionDetailView({
                 <div>
                   <dt className="text-xs text-slate-600">Commands</dt>
                   <dd className="mt-1 font-mono text-sm text-slate-300">
-                    {fn.commands || "—"}
+                    {fn.commands || "Not available"}
                   </dd>
                 </div>
                 <div>

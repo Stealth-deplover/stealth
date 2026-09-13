@@ -54,7 +54,7 @@ function SelectorItem({
       onClick={onClick}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
+        "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
         selected && "bg-cyan-300/10",
       )}
     >
