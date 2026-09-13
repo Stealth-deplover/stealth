@@ -54,7 +54,9 @@ export function useDeleteProjectUser(projectId: string, userId: string) {
       queryClient.removeQueries({
         queryKey: queryKeys.projectUser(projectId, userId),
       });
-      void applyCacheChanges(queryClient, [{ kind: "project-user", projectId }]);
+      void applyCacheChanges(queryClient, [
+        { kind: "project-user", projectId },
+      ]);
     },
   });
 }

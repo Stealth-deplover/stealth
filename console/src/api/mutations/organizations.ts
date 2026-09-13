@@ -1,10 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, unwrap } from "@/api/client";
-import {
-  applyCacheChanges,
-  type CacheChange,
-} from "@/api/cache-coherence";
+import { applyCacheChanges, type CacheChange } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 import { isSlug, toSlug } from "@/lib/utils";
 

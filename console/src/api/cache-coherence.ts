@@ -277,11 +277,7 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
     case "database-table-schema":
       addKey(
         keys,
-        queryKeys.columns(
-          change.projectId,
-          change.databaseId,
-          change.tableId,
-        ),
+        queryKeys.columns(change.projectId, change.databaseId, change.tableId),
       );
       addKey(
         keys,
@@ -306,18 +302,12 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
 
     case "database-backup":
       if (change.restore) {
-        addKey(
-          keys,
-          queryKeys.rowsScope(change.projectId, change.databaseId),
-        );
+        addKey(keys, queryKeys.rowsScope(change.projectId, change.databaseId));
         addKey(
           keys,
           queryKeys.rowDatabaseScope(change.projectId, change.databaseId),
         );
-        addKey(
-          keys,
-          queryKeys.tableScope(change.projectId, change.databaseId),
-        );
+        addKey(keys, queryKeys.tableScope(change.projectId, change.databaseId));
         addKey(
           keys,
           queryKeys.columnsScope(change.projectId, change.databaseId),

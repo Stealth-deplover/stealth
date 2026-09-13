@@ -85,8 +85,7 @@ export function useConfirmAccountVerification() {
   return useMutation({
     mutationFn: async (body: components["schemas"]["AuthTokenRequest"]) =>
       unwrap(await api.PUT("/v1/account/verification", { body })),
-    onSuccess: () =>
-      applyCacheChanges(queryClient, [{ kind: "account" }]),
+    onSuccess: () => applyCacheChanges(queryClient, [{ kind: "account" }]),
   });
 }
 

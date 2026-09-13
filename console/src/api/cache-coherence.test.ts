@@ -38,11 +38,7 @@ describe("cache coherence", () => {
         includeOrganizations: true,
         includeBootstrapStatus: true,
       }),
-    ).toEqual([
-      ["account"],
-      ["organizations"],
-      ["bootstrap-status"],
-    ]);
+    ).toEqual([["account"], ["organizations"], ["bootstrap-status"]]);
   });
 
   it("keeps database restore invalidation policy in one module", () => {

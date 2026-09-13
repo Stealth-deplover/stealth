@@ -21,9 +21,7 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
-import {
-  formatAPIKeyScope,
-} from "@/features/integrations/integration-values";
+import { formatAPIKeyScope } from "@/features/integrations/integration-values";
 import { getApiKeyStatus } from "@/features/api-keys/api-key-status";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
