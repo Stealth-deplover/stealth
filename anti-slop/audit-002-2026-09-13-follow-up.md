@@ -73,7 +73,15 @@ intact.
 
 ## Delivery evidence
 
-The product changes are ready for the branch CI rerun. Local full Playwright
-execution remains environment-limited because Chromium cannot start without
-`libatk-1.0.so.0`; the previous GitHub CI run passed the complete E2E suite on
-the parent commit. The new commit must be checked by GitHub CI before merge.
+The product changes passed the branch CI rerun on commit
+`a6daa55c1ee256b091b966036d7a8f32fc0fca76`:
+
+- PR CI run `34729987386`: backend, Console, installer, Compose, Docker build,
+  and Playwright E2E checks passed.
+- Push CI run `34729985269`: passed.
+- CodeQL run `34729987363`: Go and JavaScript/TypeScript analysis passed.
+- GitHub Code Scanning reports zero open alerts; alert #13 remains `fixed`.
+
+Local full Playwright execution remains environment-limited because Chromium
+cannot start without `libatk-1.0.so.0`; the CI E2E job provides the successful
+click-through evidence for this commit.
