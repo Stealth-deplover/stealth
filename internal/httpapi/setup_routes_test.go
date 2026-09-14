@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +55,73 @@ type setupGitHubOAuthFake struct {
 	exchangeErr error
 	userErr     error
 	exchanges   int
+}
+
+type setupUpdateProbeStore struct {
+	setupstate.Store
+	updates chan struct{}
+}
+
+func (s *setupUpdateProbeStore) Update(ctx context.Context, mutate func(*setupstate.State) error) (setupstate.State, error) {
+	select {
+	case s.updates <- struct{}{}:
+	default:
+	}
+	return s.Store.Update(ctx, mutate)
+}
+
+type gatedSetupCloudflareClient struct {
+	zonesStarted chan struct{}
+	releaseZones chan struct{}
+	once         sync.Once
+}
+
+func (c *gatedSetupCloudflareClient) ListAccounts(context.Context) ([]cloudflare.Account, error) {
+	return nil, nil
+}
+
+func (c *gatedSetupCloudflareClient) ListZones(ctx context.Context, _ string) ([]cloudflare.Zone, error) {
+	c.once.Do(func() { close(c.zonesStarted) })
+	select {
+	case <-c.releaseZones:
+		return []cloudflare.Zone{{ID: "zone-a", Name: "example.test"}}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*gatedSetupCloudflareClient) ListTunnels(context.Context, string, string) ([]cloudflare.Tunnel, error) {
+	return nil, nil
+}
+
+func (*gatedSetupCloudflareClient) CreateTunnel(_ context.Context, _, name string) (cloudflare.Tunnel, error) {
+	return cloudflare.Tunnel{ID: "tunnel-a", Name: name}, nil
+}
+
+func (*gatedSetupCloudflareClient) ConfigureTunnel(context.Context, string, string, []cloudflare.IngressRule) error {
+	return nil
+}
+
+func (*gatedSetupCloudflareClient) ListDNSRecords(context.Context, string, string) ([]cloudflare.DNSRecord, error) {
+	return nil, nil
+}
+
+func (*gatedSetupCloudflareClient) CreateDNSRecord(_ context.Context, _ string, record cloudflare.DNSRecord) (cloudflare.DNSRecord, error) {
+	record.ID = "record-a"
+	return record, nil
+}
+
+func (*gatedSetupCloudflareClient) UpdateDNSRecord(_ context.Context, _, recordID string, record cloudflare.DNSRecord) (cloudflare.DNSRecord, error) {
+	record.ID = recordID
+	return record, nil
+}
+
+func (*gatedSetupCloudflareClient) TunnelStatus(context.Context, string, string) (cloudflare.TunnelStatus, error) {
+	return cloudflare.TunnelStatus{Status: "healthy"}, nil
+}
+
+func (*gatedSetupCloudflareClient) TunnelToken(context.Context, string, string) (string, error) {
+	return "tunnel-token", nil
 }
 
 func (f *setupGitHubOAuthFake) ExchangeAuthorizationCode(context.Context, string, string, string, string, string) (githubauth.OAuthToken, error) {
@@ -377,6 +445,121 @@ func TestCloudflareOAuthIsExplicitlyInactive(t *testing.T) {
 	server.setupCloudflareOAuthCallback(callback, httptest.NewRequest(http.MethodGet, "/v1/setup/cloudflare/oauth/callback?code=secret-code&state=secret-state", nil))
 	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "cloudflare=oauth-inactive") {
 		t.Fatalf("inactive OAuth callback = %d, headers=%#v", callback.Code, callback.Header())
+	}
+}
+
+func TestSetupConfigRejectsCloudflareBindingChange(t *testing.T) {
+	root := t.TempDir()
+	cipher, err := functionsecret.New(bytes.Repeat([]byte{0x64}, functionsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Draft.Hostname = "stealth.old.example.test"
+	state.Draft.PublicURL = "https://stealth.old.example.test"
+	state.Draft.NetworkMode = "cloudflare_tunnel"
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-a", ZoneID: "zone-a", Hostname: "stealth.old.example.test",
+		TunnelName: "stealth-prod", TunnelID: "tunnel-a", RecordID: "record-a",
+	}
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{setupState: store}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/v1/setup/config", strings.NewReader(`{"instance_name":"Stealth","public_url":"https://stealth.new.example.test","network_mode":"cloudflare_tunnel","hostname":"stealth.new.example.test","database_mode":"bundled","redis_mode":"bundled","storage_mode":"local"}`))
+	request.Header.Set("Content-Type", "application/json")
+	server.saveSetupConfig(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "cloudflare_tunnel_reconfiguration_required") || !strings.Contains(recorder.Body.String(), "stealth.old.example.test") {
+		t.Fatalf("stale binding config response = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Draft.Hostname != "stealth.old.example.test" || state.Cloudflare.Binding.TunnelID != "tunnel-a" {
+		t.Fatalf("rejected config changed state: draft=%#v binding=%#v", state.Draft, state.Cloudflare.Binding)
+	}
+}
+
+func TestCloudflareProvisioningSerializesSetupConfigMutation(t *testing.T) {
+	root := t.TempDir()
+	cipher, err := functionsecret.New(bytes.Repeat([]byte{0x66}, functionsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseStore, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.TokenValid = true
+	state.SetSecret("cloudflare_access_token", "scoped-token")
+	if err := baseStore.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	store := &setupUpdateProbeStore{Store: baseStore, updates: make(chan struct{}, 16)}
+	client := &gatedSetupCloudflareClient{zonesStarted: make(chan struct{}), releaseZones: make(chan struct{})}
+	server := &Server{
+		setupState: store,
+		logger:     slog.Default(),
+		cloudflareFactory: func(string) (cloudflare.Client, error) {
+			return client, nil
+		},
+	}
+
+	provisionDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/setup/cloudflare/tunnel", strings.NewReader(`{"account_id":"account-a","zone_id":"zone-a","hostname":"stealth.old.example.test","name":"stealth-prod"}`))
+		request.Header.Set("Content-Type", "application/json")
+		server.createCloudflareTunnel(recorder, request)
+		provisionDone <- recorder
+	}()
+	select {
+	case <-client.zonesStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Cloudflare provisioning did not reach the gated zone lookup")
+	}
+
+	configDone := make(chan *httptest.ResponseRecorder, 1)
+	configStarted := make(chan struct{})
+	go func() {
+		close(configStarted)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/v1/setup/config", strings.NewReader(`{"instance_name":"Stealth","public_url":"https://stealth.new.example.test","network_mode":"cloudflare_tunnel","hostname":"stealth.new.example.test","database_mode":"bundled","redis_mode":"bundled","storage_mode":"local"}`))
+		request.Header.Set("Content-Type", "application/json")
+		server.saveSetupConfig(recorder, request)
+		configDone <- recorder
+	}()
+	<-configStarted
+	select {
+	case <-store.updates:
+		t.Fatal("setup configuration reached the store while Cloudflare provisioning was in progress")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(client.releaseZones)
+
+	provisionResponse := <-provisionDone
+	configResponse := <-configDone
+	if provisionResponse.Code != http.StatusOK {
+		t.Fatalf("Cloudflare provisioning = %d: %s", provisionResponse.Code, provisionResponse.Body.String())
+	}
+	if configResponse.Code != http.StatusConflict || !strings.Contains(configResponse.Body.String(), "cloudflare_tunnel_reconfiguration_required") {
+		t.Fatalf("concurrent setup configuration = %d: %s", configResponse.Code, configResponse.Body.String())
+	}
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Draft.Hostname != "stealth.old.example.test" || state.Cloudflare.Binding.Hostname != "stealth.old.example.test" || state.Cloudflare.Binding.TunnelID != "tunnel-a" {
+		t.Fatalf("concurrent mutation left inconsistent state: draft=%#v binding=%#v", state.Draft, state.Cloudflare.Binding)
 	}
 }
 

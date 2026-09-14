@@ -3,6 +3,7 @@ package cloudflare
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
@@ -131,8 +132,8 @@ func TestProvisionReconcilesTunnelAfterTunnelIDStateFailure(t *testing.T) {
 	if client.createTunnelCall != 1 {
 		t.Fatalf("retry created duplicate tunnel; calls = %d", client.createTunnelCall)
 	}
-	if state.Draft.CloudflareTunnelID != "tunnel-1" || state.Draft.CloudflareRecordID != "record-1" {
-		t.Fatalf("reconciled state = %#v", state.Draft)
+	if state.Cloudflare.Binding.TunnelID != "tunnel-1" || state.Cloudflare.Binding.RecordID != "record-1" {
+		t.Fatalf("reconciled binding = %#v", state.Cloudflare.Binding)
 	}
 }
 
@@ -179,5 +180,50 @@ func TestProvisionRejectsExistingNonCNAMEAtDashboardHostname(t *testing.T) {
 	_, err := Provision(context.Background(), store, client, ProvisionRequest{AccountID: "account-1", ZoneID: "zone-1", Hostname: "app.example.test", Name: "stealth-test"})
 	if !errors.Is(err, ErrConflict) || client.createRecordCall != 0 {
 		t.Fatalf("existing non-CNAME result = %v, create calls = %d", err, client.createRecordCall)
+	}
+}
+
+func TestProvisionRejectsCloudflareBindingSelectorChanges(t *testing.T) {
+	tests := []struct {
+		name      string
+		accountID string
+		zoneID    string
+		hostname  string
+		field     string
+	}{
+		{name: "account", accountID: "account-b", zoneID: "zone-a", hostname: "app.example.test", field: "Cloudflare account"},
+		{name: "zone", accountID: "account-a", zoneID: "zone-b", hostname: "app.example.test", field: "Cloudflare zone"},
+		{name: "hostname", accountID: "account-a", zoneID: "zone-a", hostname: "new.example.test", field: "production hostname"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newProvisioningStore(t)
+			state, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Draft.Hostname = "app.example.test"
+			state.Cloudflare.Binding = setupstate.CloudflareBinding{
+				AccountID: "account-a", ZoneID: "zone-a", Hostname: "app.example.test",
+				TunnelName: "stealth-test", TunnelID: "tunnel-a", RecordID: "record-a",
+			}
+			if err := store.Save(context.Background(), state); err != nil {
+				t.Fatal(err)
+			}
+			client := &provisioningClient{zones: []Zone{{ID: "zone-a", Name: "example.test"}, {ID: "zone-b", Name: "example.test"}}}
+			_, err = Provision(context.Background(), store, client, ProvisionRequest{
+				AccountID: test.accountID,
+				ZoneID:    test.zoneID,
+				Hostname:  test.hostname,
+				Name:      "stealth-test",
+			})
+			var bindingConflict *setupstate.CloudflareBindingConflict
+			if !errors.Is(err, ErrConflict) || !errors.As(err, &bindingConflict) || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("binding change error = %v", err)
+			}
+			if client.createTunnelCall != 0 || client.createRecordCall != 0 {
+				t.Fatalf("binding change caused provider writes: tunnel=%d record=%d", client.createTunnelCall, client.createRecordCall)
+			}
+		})
 	}
 }

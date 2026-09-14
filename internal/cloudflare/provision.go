@@ -40,11 +40,14 @@ func (e *ProvisionError) Error() string {
 	return fmt.Sprintf("Cloudflare %s: %v", e.Stage, e.Err)
 }
 
-func (e *ProvisionError) Unwrap() error {
+func (e *ProvisionError) Unwrap() []error {
 	if e == nil {
 		return nil
 	}
-	return e.Kind
+	if e.Err == nil {
+		return []error{e.Kind}
+	}
+	return []error{e.Kind, e.Err}
 }
 
 func provisioningError(kind error, stage string, err error) error {
@@ -66,14 +69,6 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 	if err != nil {
 		return setupstate.State{}, provisioningError(ErrInvalidRequest, "input", err)
 	}
-	zones, err := client.ListZones(ctx, normalized.AccountID)
-	if err != nil {
-		return setupstate.State{}, provisioningError(ErrProvider, "zones", err)
-	}
-	if !zoneContainsHostname(zones, normalized.ZoneID, normalized.Hostname) {
-		return setupstate.State{}, provisioningError(ErrInvalidRequest, "zone", errors.New("hostname is not inside the selected Cloudflare zone"))
-	}
-
 	state, err := store.Load(ctx)
 	if err != nil {
 		return setupstate.State{}, provisioningError(ErrState, "load", err)
@@ -84,20 +79,28 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 	if err := validateBinding(state, normalized); err != nil {
 		return setupstate.State{}, provisioningError(ErrConflict, "binding", err)
 	}
+	zones, err := client.ListZones(ctx, normalized.AccountID)
+	if err != nil {
+		return setupstate.State{}, provisioningError(ErrProvider, "zones", err)
+	}
+	if !zoneContainsHostname(zones, normalized.ZoneID, normalized.Hostname) {
+		return setupstate.State{}, provisioningError(ErrInvalidRequest, "zone", errors.New("hostname is not inside the selected Cloudflare zone"))
+	}
 
-	tunnelName := strings.TrimSpace(state.Draft.CloudflareTunnelName)
+	binding := state.EffectiveCloudflareBinding()
+	tunnelName := binding.TunnelName
 	hadIntent := tunnelName != ""
-	if tunnelName == "" && strings.TrimSpace(state.Draft.CloudflareTunnelID) == "" {
+	if tunnelName == "" && binding.TunnelID == "" {
 		tunnelName = normalized.Name
 		if tunnelName == "" {
 			tunnelName = "stealth-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 		}
 	}
-	if tunnelName == "" && state.Draft.CloudflareTunnelID == "" {
+	if tunnelName == "" && binding.TunnelID == "" {
 		return setupstate.State{}, provisioningError(ErrInvalidRequest, "input", errors.New("tunnel name is required"))
 	}
 
-	tunnelID := strings.TrimSpace(state.Draft.CloudflareTunnelID)
+	tunnelID := binding.TunnelID
 	if tunnelID == "" {
 		if !hadIntent {
 			tunnels, listErr := client.ListTunnels(ctx, normalized.AccountID, tunnelName)
@@ -116,8 +119,9 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 			// concurrent adapter between the initial load and this call. Use the
 			// durable values returned by that update instead of the local random
 			// candidate, and reconcile the reserved resource below.
-			tunnelName = strings.TrimSpace(state.Draft.CloudflareTunnelName)
-			tunnelID = strings.TrimSpace(state.Draft.CloudflareTunnelID)
+			binding = state.EffectiveCloudflareBinding()
+			tunnelName = binding.TunnelName
+			tunnelID = binding.TunnelID
 			hadIntent = tunnelName != ""
 			if tunnelID == "" && hadIntent {
 				tunnels, listErr := client.ListTunnels(ctx, normalized.AccountID, tunnelName)
@@ -155,7 +159,7 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 				return setupstate.State{}, provisioningError(ErrProvider, "tunnel create", errors.New("Cloudflare returned an empty tunnel ID"))
 			}
 		}
-		if state.Draft.CloudflareTunnelID == "" {
+		if state.EffectiveCloudflareBinding().TunnelID == "" {
 			state, err = saveTunnelID(ctx, store, normalized, tunnelName, tunnelID)
 			if err != nil {
 				return setupstate.State{}, err
@@ -196,17 +200,21 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 		if err := validateBinding(*state, normalized); err != nil {
 			return provisioningError(ErrConflict, "state", err)
 		}
-		if state.Draft.CloudflareTunnelID != "" && state.Draft.CloudflareTunnelID != tunnelID {
+		currentBinding := state.EffectiveCloudflareBinding()
+		if currentBinding.TunnelID != "" && currentBinding.TunnelID != tunnelID {
 			return provisioningError(ErrConflict, "state", errors.New("another Cloudflare tunnel was saved during provisioning"))
 		}
-		state.Draft.CloudflareAccountID = normalized.AccountID
-		state.Draft.CloudflareZoneID = normalized.ZoneID
-		state.Draft.CloudflareTunnelID = tunnelID
-		state.Draft.CloudflareTunnelName = tunnelName
-		state.Draft.CloudflareRecordID = recordID
 		state.Draft.Hostname = normalized.Hostname
 		state.Draft.PublicURL = "https://" + normalized.Hostname
 		state.Draft.NetworkMode = "cloudflare_tunnel"
+		state.Cloudflare.Binding = setupstate.CloudflareBinding{
+			AccountID:  normalized.AccountID,
+			ZoneID:     normalized.ZoneID,
+			Hostname:   normalized.Hostname,
+			TunnelName: tunnelName,
+			TunnelID:   tunnelID,
+			RecordID:   recordID,
+		}
 		state.Cloudflare.Connected = true
 		state.Cloudflare.TokenValid = true
 		return nil
@@ -245,19 +253,17 @@ func setupComplete(state setupstate.State) bool {
 }
 
 func validateBinding(state setupstate.State, request ProvisionRequest) error {
-	if value := strings.TrimSpace(state.Draft.CloudflareAccountID); value != "" && value != request.AccountID {
-		return errors.New("the saved Cloudflare tunnel is bound to a different account")
+	if !state.Cloudflare.Binding.IsZero() {
+		if err := state.Cloudflare.Binding.ValidateDraft(state.Draft); err != nil {
+			return err
+		}
 	}
-	if value := strings.TrimSpace(state.Draft.CloudflareZoneID); value != "" && value != request.ZoneID {
-		return errors.New("the saved Cloudflare tunnel is bound to a different zone")
-	}
-	if value := strings.TrimSpace(state.Draft.Hostname); value != "" && value != request.Hostname {
-		return errors.New("the saved Cloudflare tunnel is bound to a different hostname")
-	}
-	if value := strings.TrimSpace(state.Draft.CloudflareTunnelName); value != "" && strings.TrimSpace(request.Name) != "" && value != strings.TrimSpace(request.Name) {
-		return errors.New("the saved Cloudflare tunnel has a different name")
-	}
-	return nil
+	return state.EffectiveCloudflareBinding().ValidateRequest(setupstate.CloudflareBinding{
+		AccountID:  request.AccountID,
+		ZoneID:     request.ZoneID,
+		Hostname:   request.Hostname,
+		TunnelName: request.Name,
+	})
 }
 
 func saveIntent(ctx context.Context, store setupstate.Store, request ProvisionRequest, name string) (setupstate.State, error) {
@@ -268,27 +274,25 @@ func saveIntent(ctx context.Context, store setupstate.Store, request ProvisionRe
 		if err := validateBinding(*state, request); err != nil {
 			return provisioningError(ErrConflict, "state", err)
 		}
-		if strings.TrimSpace(state.Draft.CloudflareTunnelName) != "" || strings.TrimSpace(state.Draft.CloudflareTunnelID) != "" {
+		if state.EffectiveCloudflareBinding().HasIntent() {
 			// A competing request may have reserved or created the tunnel after
 			// the caller's initial load. Preserve that durable intent/ID and let
 			// the caller reconcile it rather than replacing it with a new name.
-			if state.Draft.CloudflareAccountID == "" {
-				state.Draft.CloudflareAccountID = request.AccountID
-			}
-			if state.Draft.CloudflareZoneID == "" {
-				state.Draft.CloudflareZoneID = request.ZoneID
-			}
 			if state.Draft.Hostname == "" {
 				state.Draft.Hostname = request.Hostname
 			}
 			if state.Draft.PublicURL == "" {
 				state.Draft.PublicURL = "https://" + request.Hostname
 			}
+			state.Cloudflare.Binding = state.EffectiveCloudflareBinding()
 			return nil
 		}
-		state.Draft.CloudflareAccountID = request.AccountID
-		state.Draft.CloudflareZoneID = request.ZoneID
-		state.Draft.CloudflareTunnelName = name
+		state.Cloudflare.Binding = setupstate.CloudflareBinding{
+			AccountID:  request.AccountID,
+			ZoneID:     request.ZoneID,
+			Hostname:   request.Hostname,
+			TunnelName: name,
+		}
 		state.Draft.Hostname = request.Hostname
 		state.Draft.PublicURL = "https://" + request.Hostname
 		return nil
@@ -307,11 +311,17 @@ func saveTunnelID(ctx context.Context, store setupstate.Store, request Provision
 		if err := validateBinding(*state, request); err != nil {
 			return provisioningError(ErrConflict, "state", err)
 		}
-		if state.Draft.CloudflareTunnelID != "" && state.Draft.CloudflareTunnelID != tunnelID {
+		currentBinding := state.EffectiveCloudflareBinding()
+		if currentBinding.TunnelID != "" && currentBinding.TunnelID != tunnelID {
 			return provisioningError(ErrConflict, "state", errors.New("another Cloudflare tunnel was saved during provisioning"))
 		}
-		state.Draft.CloudflareTunnelID = tunnelID
-		state.Draft.CloudflareTunnelName = name
+		binding := state.EffectiveCloudflareBinding()
+		binding.AccountID = request.AccountID
+		binding.ZoneID = request.ZoneID
+		binding.Hostname = request.Hostname
+		binding.TunnelName = name
+		binding.TunnelID = tunnelID
+		state.Cloudflare.Binding = binding
 		return nil
 	})
 	if err != nil {

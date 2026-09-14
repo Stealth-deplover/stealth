@@ -159,6 +159,35 @@ func TestFileStoreMigratesLegacyDraftCredentials(t *testing.T) {
 	}
 }
 
+func TestFileStoreMigratesLegacyCloudflareBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.enc")
+	cipher := testCipher(t)
+	store, err := NewFileStore(path, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"version":2,"phase":"collecting","draft":{"hostname":"stealth.example.test","cloudflare_account_id":"account-a","cloudflare_zone_id":"zone-a","cloudflare_tunnel_id":"tunnel-a","cloudflare_tunnel_name":"stealth-prod","cloudflare_record_id":"record-a"}}`)
+	ciphertext, err := cipher.Encrypt(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, ciphertext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := CloudflareBinding{AccountID: "account-a", ZoneID: "zone-a", Hostname: "stealth.example.test", TunnelName: "stealth-prod", TunnelID: "tunnel-a", RecordID: "record-a"}
+	if state.Cloudflare.Binding != want {
+		t.Fatalf("migrated Cloudflare binding = %#v, want %#v", state.Cloudflare.Binding, want)
+	}
+	if public := state.Public(); public.Draft.CloudflareTunnelID != "tunnel-a" || public.Draft.CloudflareRecordID != "record-a" {
+		t.Fatalf("migrated public Cloudflare projection = %#v", public.Draft)
+	}
+}
+
 func TestPublicProjectionOmitsRawCredentialFields(t *testing.T) {
 	state := NewState()
 	state.SetSetupCredentials(SetupCredentials{

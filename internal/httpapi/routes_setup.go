@@ -179,6 +179,8 @@ func (s *Server) saveSetupConfig(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
 	if s.setupState == nil {
 		writeError(w, http.StatusServiceUnavailable, "setup_unavailable", "setup state is not available")
 		return
@@ -187,6 +189,11 @@ func (s *Server) saveSetupConfig(w http.ResponseWriter, r *http.Request) {
 		return setupconfig.Apply(state, request)
 	})
 	if err != nil {
+		var bindingConflict *setupstate.CloudflareBindingConflict
+		if errors.As(err, &bindingConflict) {
+			writeError(w, http.StatusConflict, "cloudflare_tunnel_reconfiguration_required", bindingConflict.Error())
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
@@ -607,7 +614,12 @@ func (s *Server) createCloudflareTunnel(w http.ResponseWriter, r *http.Request) 
 		case errors.Is(err, cloudflare.ErrInvalidRequest):
 			writeError(w, http.StatusUnprocessableEntity, "validation_error", "Cloudflare account, zone, and hostname are invalid")
 		case errors.Is(err, cloudflare.ErrConflict):
-			writeError(w, http.StatusConflict, "cloudflare_tunnel_conflict", "the saved Cloudflare tunnel conflicts with the requested account, zone, hostname, or provider resource")
+			var bindingConflict *setupstate.CloudflareBindingConflict
+			if provisioningErr != nil && errors.As(provisioningErr.Err, &bindingConflict) {
+				writeError(w, http.StatusConflict, "cloudflare_tunnel_reconfiguration_required", bindingConflict.Error())
+			} else {
+				writeError(w, http.StatusConflict, "cloudflare_tunnel_conflict", "the saved Cloudflare tunnel conflicts with the requested account, zone, hostname, or provider resource")
+			}
 		case errors.Is(err, cloudflare.ErrState):
 			writeError(w, http.StatusConflict, "setup_state_conflict", "Cloudflare setup state could not be saved")
 		case errors.Is(err, cloudflare.ErrProvider):
@@ -632,7 +644,17 @@ func (s *Server) cloudflareTunnelStatus(w http.ResponseWriter, r *http.Request) 
 		internalError(s, w, err)
 		return
 	}
-	if state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareTunnelID == "" {
+	binding := state.EffectiveCloudflareBinding()
+	if err := state.Cloudflare.Binding.ValidateDraft(state.Draft); err != nil {
+		var bindingConflict *setupstate.CloudflareBindingConflict
+		if errors.As(err, &bindingConflict) {
+			writeError(w, http.StatusConflict, "cloudflare_tunnel_reconfiguration_required", bindingConflict.Error())
+		} else {
+			writeError(w, http.StatusConflict, "setup_state_conflict", "Cloudflare tunnel state is inconsistent")
+		}
+		return
+	}
+	if binding.AccountID == "" || binding.TunnelID == "" {
 		writeError(w, http.StatusConflict, "cloudflare_tunnel_missing", "create the named tunnel before checking status")
 		return
 	}
@@ -641,7 +663,7 @@ func (s *Server) cloudflareTunnelStatus(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusConflict, "cloudflare_not_connected", "connect Cloudflare before checking tunnel status")
 		return
 	}
-	status, err := client.TunnelStatus(r.Context(), state.Draft.CloudflareAccountID, state.Draft.CloudflareTunnelID)
+	status, err := client.TunnelStatus(r.Context(), binding.AccountID, binding.TunnelID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "cloudflare_unavailable", "Cloudflare tunnel status is unavailable")
 		return
@@ -650,7 +672,7 @@ func (s *Server) cloudflareTunnelStatus(w http.ResponseWriter, r *http.Request) 
 		state.Cloudflare.TokenValid = true
 		return nil
 	})
-	writeJSON(w, http.StatusOK, setupCloudflareStatusResponse{TunnelID: state.Draft.CloudflareTunnelID, Status: status.Status, Healthy: cloudflare.StatusIsHealthy(status), Connections: status.Connections})
+	writeJSON(w, http.StatusOK, setupCloudflareStatusResponse{TunnelID: binding.TunnelID, Status: status.Status, Healthy: cloudflare.StatusIsHealthy(status), Connections: status.Connections})
 }
 
 func (s *Server) cloudflareClient(ctx context.Context) (cloudflare.Client, error) {
@@ -1047,7 +1069,11 @@ func (s *Server) waitForCloudflareTunnelHealth(ctx context.Context) error {
 	if err != nil {
 		return errors.New("Cloudflare Tunnel health could not be verified")
 	}
-	if state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareTunnelID == "" {
+	binding := state.EffectiveCloudflareBinding()
+	if err := state.Cloudflare.Binding.ValidateDraft(state.Draft); err != nil {
+		return errors.New("Cloudflare Tunnel state is inconsistent")
+	}
+	if binding.AccountID == "" || binding.TunnelID == "" {
 		return errors.New("Cloudflare Tunnel identifiers are missing")
 	}
 	client, err := s.cloudflareClient(ctx)
@@ -1057,7 +1083,7 @@ func (s *Server) waitForCloudflareTunnelHealth(ctx context.Context) error {
 	healthContext, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	for {
-		status, statusErr := client.TunnelStatus(healthContext, state.Draft.CloudflareAccountID, state.Draft.CloudflareTunnelID)
+		status, statusErr := client.TunnelStatus(healthContext, binding.AccountID, binding.TunnelID)
 		if statusErr == nil && cloudflare.StatusIsHealthy(status) {
 			return nil
 		}

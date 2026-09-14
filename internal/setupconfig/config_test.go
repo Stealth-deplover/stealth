@@ -1,6 +1,7 @@
 package setupconfig
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -75,6 +76,34 @@ func TestApplyRejectsCompletedState(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsCloudflareHostnameChangeAfterBinding(t *testing.T) {
+	state := setupstate.NewState()
+	state.Draft.PublicURL = "https://stealth.old.example.test"
+	state.Draft.NetworkMode = "cloudflare_tunnel"
+	state.Draft.Hostname = "stealth.old.example.test"
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-a", ZoneID: "zone-a", Hostname: "stealth.old.example.test",
+		TunnelName: "stealth-prod", TunnelID: "tunnel-a", RecordID: "record-a",
+	}
+
+	err := Apply(&state, Request{
+		InstanceName: "Stealth",
+		PublicURL:    "https://stealth.new.example.test",
+		NetworkMode:  "cloudflare_tunnel",
+		Hostname:     "stealth.new.example.test",
+		DatabaseMode: "bundled",
+		RedisMode:    "bundled",
+		StorageMode:  "local",
+	})
+	var bindingConflict *setupstate.CloudflareBindingConflict
+	if !errors.As(err, &bindingConflict) || !strings.Contains(err.Error(), "stealth.old.example.test") {
+		t.Fatalf("hostname mutation error = %v, want binding conflict for old hostname", err)
+	}
+	if state.Draft.Hostname != "stealth.old.example.test" || state.Cloudflare.Binding.TunnelID != "tunnel-a" {
+		t.Fatalf("rejected mutation changed state: draft=%#v binding=%#v", state.Draft, state.Cloudflare.Binding)
+	}
+}
+
 func TestValidateInstallableCloudflareSetupRequiresVerifiedAPIToken(t *testing.T) {
 	state := setupstate.NewState()
 	state.GitHub.Connected = true
@@ -82,10 +111,10 @@ func TestValidateInstallableCloudflareSetupRequiresVerifiedAPIToken(t *testing.T
 	state.Draft.PublicURL = "https://console.example.test"
 	state.Draft.NetworkMode = "cloudflare_tunnel"
 	state.Draft.Hostname = "console.example.test"
-	state.Draft.CloudflareAccountID = "account-1"
-	state.Draft.CloudflareZoneID = "zone-1"
-	state.Draft.CloudflareTunnelID = "tunnel-1"
-	state.Draft.CloudflareRecordID = "record-1"
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-1", ZoneID: "zone-1", Hostname: "console.example.test",
+		TunnelName: "stealth-test", TunnelID: "tunnel-1", RecordID: "record-1",
+	}
 	state.SetSecret("cloudflare_access_token", "api-token")
 	state.SetSecret("cloudflare_tunnel_token", "tunnel-token")
 
@@ -97,6 +126,28 @@ func TestValidateInstallableCloudflareSetupRequiresVerifiedAPIToken(t *testing.T
 	state.Cloudflare.TokenValid = true
 	if err := ValidateInstallableSetup(state); err != nil {
 		t.Fatalf("verified Cloudflare setup error = %v", err)
+	}
+}
+
+func TestValidateInstallableSetupRejectsStaleCloudflareBinding(t *testing.T) {
+	state := setupstate.NewState()
+	state.GitHub.Connected = true
+	state.GitHub.ClientID = "Iv1.setup-client"
+	state.Draft.PublicURL = "https://stealth.new.example.test"
+	state.Draft.NetworkMode = "cloudflare_tunnel"
+	state.Draft.Hostname = "stealth.new.example.test"
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.TokenValid = true
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-a", ZoneID: "zone-a", Hostname: "stealth.old.example.test",
+		TunnelName: "stealth-prod", TunnelID: "tunnel-a", RecordID: "record-a",
+	}
+	state.SetSecret("cloudflare_access_token", "api-token")
+	state.SetSecret("cloudflare_tunnel_token", "tunnel-token")
+
+	if err := ValidateInstallableSetup(state); err == nil || !strings.Contains(err.Error(), "stealth.old.example.test") {
+		t.Fatalf("stale Cloudflare binding error = %v", err)
 	}
 }
 

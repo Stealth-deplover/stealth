@@ -36,27 +36,22 @@ const (
 // Draft contains setup choices that can safely be represented by the public
 // setup-state projection. Credential material belongs in SetupCredentials.
 type Draft struct {
-	InstanceName         string `json:"instance_name,omitempty"`
-	PublicURL            string `json:"public_url,omitempty"`
-	NetworkMode          string `json:"network_mode,omitempty"`
-	Hostname             string `json:"hostname,omitempty"`
-	CloudflareAccountID  string `json:"cloudflare_account_id,omitempty"`
-	CloudflareZoneID     string `json:"cloudflare_zone_id,omitempty"`
-	CloudflareTunnelID   string `json:"cloudflare_tunnel_id,omitempty"`
-	CloudflareTunnelName string `json:"cloudflare_tunnel_name,omitempty"`
-	CloudflareRecordID   string `json:"cloudflare_record_id,omitempty"`
-	DatabaseMode         string `json:"database_mode,omitempty"`
-	DatabaseTested       bool   `json:"database_tested,omitempty"`
-	RedisMode            string `json:"redis_mode,omitempty"`
-	RedisTested          bool   `json:"redis_tested,omitempty"`
-	StorageMode          string `json:"storage_mode,omitempty"`
-	StorageTested        bool   `json:"storage_tested,omitempty"`
-	StorageS3Endpoint    string `json:"storage_s3_endpoint,omitempty"`
-	StorageS3Region      string `json:"storage_s3_region,omitempty"`
-	StorageS3Bucket      string `json:"storage_s3_bucket,omitempty"`
-	StorageS3UseSSL      bool   `json:"storage_s3_use_ssl"`
-	StorageS3PathStyle   bool   `json:"storage_s3_path_style"`
-	StorageS3Prefix      string `json:"storage_s3_prefix,omitempty"`
+	InstanceName       string `json:"instance_name,omitempty"`
+	PublicURL          string `json:"public_url,omitempty"`
+	NetworkMode        string `json:"network_mode,omitempty"`
+	Hostname           string `json:"hostname,omitempty"`
+	DatabaseMode       string `json:"database_mode,omitempty"`
+	DatabaseTested     bool   `json:"database_tested,omitempty"`
+	RedisMode          string `json:"redis_mode,omitempty"`
+	RedisTested        bool   `json:"redis_tested,omitempty"`
+	StorageMode        string `json:"storage_mode,omitempty"`
+	StorageTested      bool   `json:"storage_tested,omitempty"`
+	StorageS3Endpoint  string `json:"storage_s3_endpoint,omitempty"`
+	StorageS3Region    string `json:"storage_s3_region,omitempty"`
+	StorageS3Bucket    string `json:"storage_s3_bucket,omitempty"`
+	StorageS3UseSSL    bool   `json:"storage_s3_use_ssl"`
+	StorageS3PathStyle bool   `json:"storage_s3_path_style"`
+	StorageS3Prefix    string `json:"storage_s3_prefix,omitempty"`
 }
 
 // SetupCredentials is the single in-memory view of setup credentials. The
@@ -80,12 +75,13 @@ type GitHubState struct {
 }
 
 type CloudflareState struct {
-	Mode           string    `json:"mode,omitempty"`
-	Connected      bool      `json:"connected,omitempty"`
-	ExpiresAt      time.Time `json:"expires_at,omitempty"`
-	TokenValid     bool      `json:"token_valid,omitempty"`
-	OAuthStateHash string    `json:"oauth_state_hash,omitempty"`
-	OAuthExpiresAt time.Time `json:"oauth_expires_at,omitempty"`
+	Mode           string            `json:"mode,omitempty"`
+	Connected      bool              `json:"connected,omitempty"`
+	ExpiresAt      time.Time         `json:"expires_at,omitempty"`
+	TokenValid     bool              `json:"token_valid,omitempty"`
+	Binding        CloudflareBinding `json:"binding,omitempty"`
+	OAuthStateHash string            `json:"oauth_state_hash,omitempty"`
+	OAuthExpiresAt time.Time         `json:"oauth_expires_at,omitempty"`
 }
 
 // State is encrypted in its entirety when persisted. Secrets are available to
@@ -190,6 +186,7 @@ func NewState() State {
 }
 
 func (s State) Public() PublicState {
+	binding := s.EffectiveCloudflareBinding()
 	return PublicState{
 		Version:      s.Version,
 		Phase:        s.Phase,
@@ -199,8 +196,8 @@ func (s State) Public() PublicState {
 		Draft: PublicDraft{
 			InstanceName: s.Draft.InstanceName, PublicURL: s.Draft.PublicURL,
 			NetworkMode: s.Draft.NetworkMode, Hostname: s.Draft.Hostname,
-			CloudflareAccountID: s.Draft.CloudflareAccountID, CloudflareZoneID: s.Draft.CloudflareZoneID,
-			CloudflareTunnelID: s.Draft.CloudflareTunnelID, CloudflareTunnelName: s.Draft.CloudflareTunnelName, CloudflareRecordID: s.Draft.CloudflareRecordID,
+			CloudflareAccountID: binding.AccountID, CloudflareZoneID: binding.ZoneID,
+			CloudflareTunnelID: binding.TunnelID, CloudflareTunnelName: binding.TunnelName, CloudflareRecordID: binding.RecordID,
 			DatabaseMode: s.Draft.DatabaseMode, DatabaseTested: s.Draft.DatabaseTested,
 			RedisMode: s.Draft.RedisMode, RedisTested: s.Draft.RedisTested,
 			StorageMode: s.Draft.StorageMode, StorageTested: s.Draft.StorageTested,
@@ -252,10 +249,15 @@ type FileStore struct {
 // is deliberately separate from Draft so new state cannot accidentally gain a
 // second credential source again.
 type legacyDraft struct {
-	DatabaseURL        string `json:"database_url,omitempty"`
-	RedisURL           string `json:"redis_url,omitempty"`
-	StorageS3AccessKey string `json:"storage_s3_access_key,omitempty"`
-	StorageS3SecretKey string `json:"storage_s3_secret_key,omitempty"`
+	DatabaseURL          string `json:"database_url,omitempty"`
+	RedisURL             string `json:"redis_url,omitempty"`
+	StorageS3AccessKey   string `json:"storage_s3_access_key,omitempty"`
+	StorageS3SecretKey   string `json:"storage_s3_secret_key,omitempty"`
+	CloudflareAccountID  string `json:"cloudflare_account_id,omitempty"`
+	CloudflareZoneID     string `json:"cloudflare_zone_id,omitempty"`
+	CloudflareTunnelID   string `json:"cloudflare_tunnel_id,omitempty"`
+	CloudflareTunnelName string `json:"cloudflare_tunnel_name,omitempty"`
+	CloudflareRecordID   string `json:"cloudflare_record_id,omitempty"`
 }
 
 type legacyState struct {
@@ -384,6 +386,13 @@ func migrateState(state *State, legacy legacyState) error {
 		credentials.StorageS3SecretKey = legacy.Draft.StorageS3SecretKey
 	}
 	state.SetSetupCredentials(credentials)
+	if state.Cloudflare.Binding.IsZero() {
+		binding := cloudflareBindingFromLegacyDraft(legacy.Draft)
+		binding.Hostname = canonicalHostname(state.Draft.Hostname)
+		if binding.HasIntent() {
+			state.Cloudflare.Binding = binding
+		}
+	}
 	state.Version = stateVersion
 	return nil
 }
@@ -482,8 +491,8 @@ func ValidateState(state State) error {
 	if len(state.Step) > 120 || strings.ContainsAny(state.Step, "\x00\r\n") {
 		return errors.New("setup state step is invalid")
 	}
-	if len(state.Draft.CloudflareTunnelName) > 120 || strings.ContainsAny(state.Draft.CloudflareTunnelName, "\x00\r\n") {
-		return errors.New("setup state Cloudflare tunnel name is invalid")
+	if err := state.Cloudflare.Binding.Validate(); err != nil {
+		return err
 	}
 	if len(state.SetupSessionID) > 64 || strings.ContainsAny(state.SetupSessionID, "\x00\r\n") || len(state.SetupCodeHash) > 128 || strings.ContainsAny(state.SetupCodeHash, "\x00\r\n") {
 		return errors.New("setup bootstrap claim is invalid")

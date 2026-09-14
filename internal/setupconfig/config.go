@@ -157,6 +157,9 @@ func Apply(state *setupstate.State, request Request) error {
 	if storageMode == "s3" && !ValidS3Settings(storageEndpoint, storageRegion, storageBucket, storageAccessKey, storageSecretKey) {
 		return errors.New("S3-compatible storage settings are incomplete or invalid")
 	}
+	if err := validateCloudflareMutation(*state, networkMode, hostname); err != nil {
+		return err
+	}
 
 	databaseChanged := state.Draft.DatabaseMode != databaseMode || credentials.DatabaseURL != databaseURL
 	redisChanged := state.Draft.RedisMode != redisMode || credentials.RedisURL != redisURL
@@ -202,6 +205,25 @@ func Apply(state *setupstate.State, request Request) error {
 	state.ErrorCode = ""
 	state.ErrorMessage = ""
 	return nil
+}
+
+func validateCloudflareMutation(state setupstate.State, networkMode, hostname string) error {
+	binding := state.EffectiveCloudflareBinding()
+	if !binding.HasIntent() {
+		return nil
+	}
+	if networkMode != "cloudflare_tunnel" {
+		return &setupstate.CloudflareBindingConflict{Existing: binding, Field: "network"}
+	}
+	// Account and zone are selected by the Cloudflare provisioning request, not
+	// by this general config endpoint. Keep them fixed here and compare the
+	// hostname through the same canonical binding helper used by provisioning.
+	return binding.ValidateRequest(setupstate.CloudflareBinding{
+		AccountID:  binding.AccountID,
+		ZoneID:     binding.ZoneID,
+		Hostname:   hostname,
+		TunnelName: binding.TunnelName,
+	})
 }
 
 // ValidNetworkMode reports whether value is a supported production ingress.
@@ -251,7 +273,11 @@ func ValidateInstallableSetup(state setupstate.State) error {
 		if state.Cloudflare.Mode != "api_token" || !state.Cloudflare.Connected || !state.Cloudflare.TokenValid {
 			return errors.New("verify a scoped Cloudflare API token before installing")
 		}
-		if state.Draft.Hostname == "" || state.Draft.CloudflareAccountID == "" || state.Draft.CloudflareZoneID == "" || state.Draft.CloudflareTunnelID == "" || state.Draft.CloudflareRecordID == "" || state.Secret("cloudflare_access_token") == "" || state.Secret("cloudflare_tunnel_token") == "" {
+		binding := state.EffectiveCloudflareBinding()
+		if err := state.Cloudflare.Binding.ValidateDraft(state.Draft); err != nil {
+			return err
+		}
+		if binding.Hostname == "" || binding.AccountID == "" || binding.ZoneID == "" || binding.TunnelID == "" || binding.RecordID == "" || state.Secret("cloudflare_access_token") == "" || state.Secret("cloudflare_tunnel_token") == "" {
 			return errors.New("finish Cloudflare tunnel and DNS setup before installing")
 		}
 	}
