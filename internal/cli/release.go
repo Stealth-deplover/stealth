@@ -8,19 +8,18 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
-var releaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
-
 func validateReleaseVersion(version string) error {
-	if !releaseVersionPattern.MatchString(strings.TrimSpace(version)) {
-		return fmt.Errorf("release version %q must match vMAJOR.MINOR.PATCH", version)
-	}
-	return nil
+	return installengine.ValidateReleaseVersion(version)
+}
+
+func validateStableReleaseVersion(version string) error {
+	return installengine.ValidateStableReleaseVersion(version)
 }
 
 func (a *App) resolveReleaseVersion(override string) (string, error) {

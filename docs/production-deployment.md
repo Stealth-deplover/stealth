@@ -74,11 +74,10 @@ Required production values:
   encryption of short-lived GitHub browser-authorization state. It is never
   reused as a Functions secret, and `FUNCTIONS_SECRET_KEY` is never accepted
   as a fallback.
-- `GITHUB_APP_CLIENT_ID`, only for an existing/manual production bootstrap
-  that uses the retained legacy Device Flow endpoint. Fresh browser setup
-  creates a private GitHub App through the Manifest flow, configures its HTTPS
-  callback URL, and stores the resulting App identifier server-side; it does
-  not ask the operator to enable Device Flow.
+- `GITHUB_APP_CLIENT_ID`, for an existing/manual production App configuration.
+  Fresh browser setup creates a private GitHub App through the Manifest flow,
+  configures its HTTPS callback URL, and stores the resulting App identifier
+  server-side; it does not ask the operator to enable Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
   Docker-backed function runner is enabled.

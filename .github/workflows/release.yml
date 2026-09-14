@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Stable release tag to publish from (for a controlled rerun)
+        description: Stable or numbered RC tag to publish from (for a controlled rerun)
         required: true
         type: string
 
@@ -42,8 +42,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must match vMAJOR.MINOR.PATCH" >&2
+          if [[ ! "$RELEASE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "Release tags must match vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N" >&2
             exit 1
           fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
@@ -447,7 +447,46 @@ jobs:
         shell: bash
         run: |
           notes_file="$RUNNER_TEMP/release-notes.md"
-          cat > "$notes_file" <<EOF
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            cat > "$notes_file" <<EOF
+          # Stealth $RELEASE_VERSION
+
+          This is a release candidate for testing and is not yet recommended as the stable production release.
+
+          ## Browser-based setup
+
+          - Bootstrap from the VPS terminal and continue installation in the browser.
+          - Use a secure one-time setup session with structured, resumable installation progress.
+          - Start with a temporary Cloudflare Quick Tunnel and hand off to verified production ingress.
+
+          ## GitHub onboarding
+
+          - Create the GitHub App through the Manifest flow.
+          - Authenticate the first Instance Owner in the browser with state and PKCE protections.
+          - The recommended path does not require a manually supplied GitHub App Client ID.
+
+          ## Cloudflare integration
+
+          - Connect with a scoped Cloudflare API Token.
+          - Discover the account and accessible zone, then provision the Named Tunnel and DNS automatically.
+          - Verify the production hostname before shutting down the temporary Quick Tunnel.
+
+          ## Installer architecture
+
+          - Reuse the installation engine for setup and repair.
+          - Run improved preflight checks and preserve Cloudflare binding consistency during retries and reconfiguration attempts.
+          - Publish coordinated API, setup, worker, migration, and standalone Console images plus verified Linux CLI archives.
+
+          ## Known limitations
+
+          - Cloudflare OAuth remains inactive; the supported setup path is the scoped API Token flow.
+          - A fresh external VPS validation with real GitHub and Cloudflare accounts is still required before stable promotion.
+          - Rolling mixed API/worker/schema versions are not guaranteed compatible; external provider side effects remain at-least-once.
+
+          This release is marked as a pre-release. It must not be treated as the stable/latest production release.
+          EOF
+          else
+            cat > "$notes_file" <<EOF
           ## Highlights
 
           - Published coordinated API, setup, worker, migration, and standalone Console images for $RELEASE_VERSION.
@@ -475,7 +514,12 @@ jobs:
 
           - Rolling mixed API/worker/schema versions are not guaranteed compatible; external provider side effects remain at-least-once.
           EOF
-          gh release create "$RELEASE_VERSION" \
+          fi
+          release_flags=()
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            release_flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$RELEASE_VERSION" "${release_flags[@]}" \
             --title "Stealth $RELEASE_VERSION" \
             --notes-file "$notes_file" \
             dist/stealth_Linux_x86_64.tar.gz \
@@ -513,7 +557,8 @@ jobs:
           install_dir="$RUNNER_TEMP/stealth-bin"
           mkdir -p "$install_dir"
           status=0
-          STEALTH_BIN_DIR="$install_dir" sh "$RUNNER_TEMP/bootstrap.sh" >"$RUNNER_TEMP/bootstrap.log" 2>&1 || status=$?
+          STEALTH_BIN_DIR="$install_dir" STEALTH_VERSION="$RELEASE_VERSION" \
+            sh "$RUNNER_TEMP/bootstrap.sh" >"$RUNNER_TEMP/bootstrap.log" 2>&1 || status=$?
           if [ "$status" -ne 0 ]; then
             grep -Eq '([Ii]nteractive setup requires a TTY)' "$RUNNER_TEMP/bootstrap.log" || {
               cat "$RUNNER_TEMP/bootstrap.log"

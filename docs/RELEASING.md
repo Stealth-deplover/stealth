@@ -2,7 +2,9 @@
 
 Use this checklist for each public release. The release workflow is
 `.github/workflows/release.yml`; it accepts stable tags matching
-`vMAJOR.MINOR.PATCH` and rejects prerelease tags.
+`vMAJOR.MINOR.PATCH` and numbered RC tags matching
+`vMAJOR.MINOR.PATCH-rc.N`. RC tags are published as GitHub pre-releases.
+Automatic bootstrap resolution and `stealth update` remain stable-only.
 
 ## Repository and CI
 
@@ -31,7 +33,10 @@ Use this checklist for each public release. The release workflow is
 
 ## Tag and release artifacts
 
-- [ ] Confirm the release version is a stable `vMAJOR.MINOR.PATCH` tag.
+- [ ] Confirm the release version is either a stable `vMAJOR.MINOR.PATCH` tag
+      or an explicitly numbered RC tag such as `v0.3.0-rc.1`.
+- [ ] For an RC, confirm the release notes say that it is for testing and that
+      the GitHub Release will be marked **Pre-release**, not latest stable.
 - [ ] Create and push the tag only from the reviewed release commit:
 
   ```bash
@@ -51,15 +56,24 @@ Use this checklist for each public release. The release workflow is
 ## Clean-host validation
 
 The release workflow's `Release installer smoke` job runs on a fresh
-`ubuntu-latest` runner after publication. It validates latest-release
-resolution, archive download, mandatory checksum verification, CLI execution,
-and the release-tagged Compose configuration. It intentionally stops at the
-non-interactive TTY handoff and does not run a full production stack.
+`ubuntu-latest` runner after publication. It explicitly pins the published
+release tag, validates archive download, mandatory checksum verification, CLI
+execution, and the release-tagged Compose configuration. It intentionally
+stops at the non-interactive TTY handoff and does not run a full production
+stack.
 
 - [ ] On a clean Linux amd64 host, run the published bootstrap entrypoint:
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scripts/bootstrap.sh | sh
+  ```
+
+  For an RC, use the explicit testing path so a normal stable install cannot
+  follow the pre-release:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scripts/bootstrap.sh -o bootstrap.sh
+  STEALTH_VERSION=v0.3.0-rc.1 sh bootstrap.sh
   ```
 
   On an interactive terminal, the bootstrap hands off to `stealth install`.
@@ -93,8 +107,8 @@ non-interactive TTY handoff and does not run a full production stack.
 - [ ] Verify the guided `stealth setup` flow on a temporary installation; do
       not use a production instance during release validation.
 - [ ] Verify `stealth update` against the published stable archive and
-      `checksums.txt`; record that it updates only the CLI, while the guided
-      uninstall flow is covered by its safe-mode and purge tests.
+      `checksums.txt`; record that it updates only the CLI and never selects an
+      RC automatically. Use an explicit version pin to test an RC archive.
 - [ ] Record that the bundled single-host deployment does not claim HA or
   exactly-once external side effects.
 - [ ] Record that Agent provider execution remains queue-only by default.

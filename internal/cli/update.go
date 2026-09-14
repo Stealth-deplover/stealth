@@ -159,7 +159,7 @@ func compareUint64(left, right uint64) int {
 }
 
 func parseSemanticVersion(version string) (semanticVersion, error) {
-	if err := validateReleaseVersion(version); err != nil {
+	if err := validateStableReleaseVersion(version); err != nil {
 		return semanticVersion{}, err
 	}
 	parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
@@ -207,7 +207,7 @@ func (a *App) latestStableRelease(ctx context.Context) (githubRelease, error) {
 	if strings.TrimSpace(release.TagName) != release.TagName {
 		return githubRelease{}, fmt.Errorf("latest GitHub release has invalid tag %q", release.TagName)
 	}
-	if err := validateReleaseVersion(release.TagName); err != nil {
+	if err := validateStableReleaseVersion(release.TagName); err != nil {
 		return githubRelease{}, fmt.Errorf("latest GitHub release has invalid tag: %w", err)
 	}
 	return release, nil

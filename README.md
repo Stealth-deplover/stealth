@@ -144,9 +144,12 @@ managed-service availability.
 
 ## Releases
 
-Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
-coordinated GHCR images for API, setup, worker, migration, and Console plus Linux
-amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
+Tags use `vMAJOR.MINOR.PATCH` for stable releases or
+`vMAJOR.MINOR.PATCH-rc.N` for explicitly numbered release candidates. The
+release workflow publishes coordinated GHCR images for API, setup, worker,
+migration, and Console plus Linux amd64/arm64 CLI archives and `checksums.txt`
+after production smoke checks. Release candidates are pre-releases; the
+unpinned installer and `stealth update` remain stable-only.
 The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
 is documented with [Release engineering](docs/release.md), the [release
 checklist](docs/RELEASING.md), and [Upgrade and rollback](docs/upgrade.md). The

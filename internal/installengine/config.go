@@ -6,9 +6,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
+)
+
+var (
+	releaseVersionPattern       = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?$`)
+	stableReleaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 // ConfigOptions describes the non-secret choices made before the production
@@ -184,26 +190,26 @@ func validImageReference(value string) bool {
 	return true
 }
 
-func validateVersion(value string) error {
-	value = strings.TrimSpace(value)
-	if len(value) < 6 || value[0] != 'v' {
-		return errorsf("release version must match vMAJOR.MINOR.PATCH")
-	}
-	parts := strings.Split(strings.TrimPrefix(value, "v"), ".")
-	if len(parts) != 3 {
-		return errorsf("release version must match vMAJOR.MINOR.PATCH")
-	}
-	for _, part := range parts {
-		if part == "" {
-			return errorsf("release version must match vMAJOR.MINOR.PATCH")
-		}
-		for _, character := range part {
-			if character < '0' || character > '9' {
-				return errorsf("release version must match vMAJOR.MINOR.PATCH")
-			}
-		}
+// ValidateReleaseVersion accepts stable releases and explicitly numbered RCs.
+// The release workflow and explicit installer version pin use the same format.
+func ValidateReleaseVersion(value string) error {
+	if !releaseVersionPattern.MatchString(strings.TrimSpace(value)) {
+		return errorsf("release version %q must match vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N", value)
 	}
 	return nil
+}
+
+// ValidateStableReleaseVersion deliberately excludes prereleases. It is used
+// by the automatic update path so a normal installation never follows an RC.
+func ValidateStableReleaseVersion(value string) error {
+	if !stableReleaseVersionPattern.MatchString(strings.TrimSpace(value)) {
+		return errorsf("stable release version %q must match vMAJOR.MINOR.PATCH", value)
+	}
+	return nil
+}
+
+func validateVersion(value string) error {
+	return ValidateReleaseVersion(value)
 }
 
 func validatePublicURL(raw string) (string, error) {

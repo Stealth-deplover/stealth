@@ -99,6 +99,37 @@ func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 	}
 }
 
+func TestGenerateConfigAcceptsReleaseCandidateVersion(t *testing.T) {
+	config, err := GenerateConfig(ConfigOptions{
+		Version:           "v0.3.0-rc.1",
+		PublicURL:         "https://console.example.test",
+		GitHubAppClientID: "Iv1.test-client-id",
+		DockerGID:         42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(config, "STEALTH_API_IMAGE=ghcr.io/stealth-deplover/stealth-api:v0.3.0-rc.1") {
+		t.Fatal("generated config did not retain the RC version in image tags")
+	}
+}
+
+func TestReleaseVersionValidationKeepsAutomaticUpdatesStableOnly(t *testing.T) {
+	for _, version := range []string{"v1.2.3", "v0.3.0-rc.1"} {
+		if err := ValidateReleaseVersion(version); err != nil {
+			t.Fatalf("ValidateReleaseVersion(%q): %v", version, err)
+		}
+	}
+	if err := ValidateStableReleaseVersion("v0.3.0-rc.1"); err == nil {
+		t.Fatal("stable release validation accepted an RC")
+	}
+	for _, version := range []string{"v1.2.3-beta.1", "v1.2", "1.2.3"} {
+		if err := ValidateReleaseVersion(version); err == nil {
+			t.Fatalf("ValidateReleaseVersion(%q) accepted an invalid version", version)
+		}
+	}
+}
+
 func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
 	layout := writeEngineFixture(t, false)
 	runner := &fakeRunner{}

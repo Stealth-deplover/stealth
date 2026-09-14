@@ -34,6 +34,14 @@ STEALTH_VERSION=v0.2.2 \
   sh bootstrap.sh
 ```
 
+To test a release candidate, pin it explicitly; the unpinned bootstrap path
+and `stealth update` never select prereleases automatically:
+
+```bash
+STEALTH_VERSION=v0.3.0-rc.1 \
+  sh bootstrap.sh
+```
+
 This is a repository distribution URL, not a separate product endpoint. It
 will continue to follow a future default-branch rename without a branch name
 in documentation. The script will not complete until a matching GitHub
