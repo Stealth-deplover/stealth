@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -48,6 +49,28 @@ func (setupManifestFake) ConvertManifest(context.Context, string) (githubauth.Ap
 	}, nil
 }
 
+type setupGitHubOAuthFake struct {
+	user        githubauth.User
+	exchangeErr error
+	userErr     error
+	exchanges   int
+}
+
+func (f *setupGitHubOAuthFake) ExchangeAuthorizationCode(context.Context, string, string, string, string, string) (githubauth.OAuthToken, error) {
+	f.exchanges++
+	if f.exchangeErr != nil {
+		return githubauth.OAuthToken{}, f.exchangeErr
+	}
+	return githubauth.OAuthToken{AccessToken: "server-only-github-token"}, nil
+}
+
+func (f *setupGitHubOAuthFake) GetUser(context.Context, string) (githubauth.User, error) {
+	if f.userErr != nil {
+		return githubauth.User{}, f.userErr
+	}
+	return f.user, nil
+}
+
 func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) {
 	root := t.TempDir()
 	functionKey := bytes.Repeat([]byte{0x53}, functionsecret.KeySize)
@@ -67,6 +90,7 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 		bootstrapStoreFake: bootstrapStoreFake{status: repository.BootstrapStatus{SetupRequired: true}},
 		verification:       repository.BootstrapVerification{ID: verificationID, ExpiresAt: time.Now().UTC().Add(15 * time.Minute)},
 	}
+	githubOAuth := &setupGitHubOAuthFake{user: githubauth.User{ID: 424242, Login: "stealth-owner", Email: "owner@example.test", Name: "Stealth Owner", AvatarURL: "https://avatars.githubusercontent.com/u/424242"}}
 	installRoot := filepath.Join(root, "install")
 	configValue := config.Config{
 		SetupMode:             true,
@@ -84,6 +108,7 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 		BootstrapStore: bootstrapFake,
 		SetupState:     store,
 		GitHubManifest: setupManifestFake{},
+		GitHubOAuth:    githubOAuth,
 	})
 
 	register := httptest.NewRecorder()
@@ -132,6 +157,7 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	}
 	var manifestPayload struct {
 		ManifestURL string `json:"manifest_url"`
+		Manifest    string `json:"manifest"`
 	}
 	if err := json.Unmarshal(manifestResponse.Body.Bytes(), &manifestPayload); err != nil {
 		t.Fatal(err)
@@ -140,12 +166,41 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if manifestURL.Query().Get("manifest") != "" || manifestURL.Query().Get("state") == "" || manifestPayload.Manifest == "" {
+		t.Fatalf("manifest response is not a POST form payload: %#v", manifestPayload)
+	}
+	var registeredManifest githubauth.AppManifest
+	if err := json.Unmarshal([]byte(manifestPayload.Manifest), &registeredManifest); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(registeredManifest.Name, "Stealth Setup ") || len(registeredManifest.DefaultEvents) != 0 || registeredManifest.RedirectURL != "https://silent-moon.trycloudflare.com/v1/setup/github/manifest/callback" {
+		t.Fatalf("unexpected GitHub App manifest: %#v", registeredManifest)
+	}
 	callback := httptest.NewRecorder()
 	callbackRequest := httptest.NewRequest(http.MethodGet, "https://silent-moon.trycloudflare.com/v1/setup/github/manifest/callback?code=temporary-code&state="+url.QueryEscape(manifestURL.Query().Get("state")), nil)
 	callbackRequest.Host = "silent-moon.trycloudflare.com"
 	handler.ServeHTTP(callback, callbackRequest)
-	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "github=connected") {
+	authorizationLocation := callback.Header().Get("Location")
+	authorizationURL, err := url.Parse(authorizationLocation)
+	if callback.Code != http.StatusFound || authorizationURL.Host != "github.com" || authorizationURL.Path != "/login/oauth/authorize" {
 		t.Fatalf("manifest callback = %d, headers=%#v", callback.Code, callback.Header())
+	}
+	if authorizationURL.Query().Get("client_id") != "Iv1.setup-client" || authorizationURL.Query().Get("redirect_uri") != "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/callback" || authorizationURL.Query().Get("code_challenge_method") != "S256" || authorizationURL.Query().Get("code_challenge") == "" {
+		t.Fatalf("manifest callback did not start browser authorization: %s", authorizationLocation)
+	}
+
+	authorizeCallback := httptest.NewRecorder()
+	authorizeRequest := httptest.NewRequest(http.MethodGet, "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/callback?code=oauth-code&state="+url.QueryEscape(authorizationURL.Query().Get("state")), nil)
+	authorizeRequest.Host = "silent-moon.trycloudflare.com"
+	handler.ServeHTTP(authorizeCallback, authorizeRequest)
+	if authorizeCallback.Code != http.StatusFound || !strings.Contains(authorizeCallback.Header().Get("Location"), "github=connected") {
+		t.Fatalf("GitHub authorization callback = %d, headers=%#v", authorizeCallback.Code, authorizeCallback.Header())
+	}
+
+	repeatedAuthorizationCallback := httptest.NewRecorder()
+	handler.ServeHTTP(repeatedAuthorizationCallback, authorizeRequest)
+	if repeatedAuthorizationCallback.Code != http.StatusFound || !strings.Contains(repeatedAuthorizationCallback.Header().Get("Location"), "github=error") || githubOAuth.exchanges != 1 {
+		t.Fatalf("GitHub authorization callback replay = %d, headers=%#v exchanges=%d", repeatedAuthorizationCallback.Code, repeatedAuthorizationCallback.Header(), githubOAuth.exchanges)
 	}
 
 	repeatedCallback := httptest.NewRecorder()
@@ -173,6 +228,129 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	if state.Secret("github_client_secret") != "github-client-secret" || state.Secret("github_private_key") == "" {
 		t.Fatalf("provider credentials were not persisted in encrypted state: %#v", state)
 	}
+	if state.Secret("github_oauth_code_verifier") != "" || state.GitHub.AuthorizationStateHash != "" {
+		t.Fatalf("GitHub OAuth verifier/state was not consumed: %#v", state.GitHub)
+	}
+}
+
+func TestGitHubAuthorizationRejectsInvalidCallbackState(t *testing.T) {
+	store, server, request := newGitHubAuthorizationTestServer(t, nil)
+	authorizationURL, _, err := server.beginGitHubAuthorization(context.Background(), request, "Iv1.setup-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := httptest.NewRecorder()
+	callbackRequest := httptest.NewRequest(http.MethodGet, "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/callback?code=oauth-code&state=tampered", nil)
+	callbackRequest.Host = "silent-moon.trycloudflare.com"
+	server.setupGitHubAuthorizationCallback(callback, callbackRequest)
+	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "github=error") {
+		t.Fatalf("invalid GitHub callback state = %d, headers=%#v", callback.Code, callback.Header())
+	}
+	if server.githubOAuth.(*setupGitHubOAuthFake).exchanges != 0 {
+		t.Fatal("invalid GitHub callback state reached token exchange")
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GitHub.AuthorizationStateHash == "" || state.Secret("github_oauth_code_verifier") == "" || parsed.Query().Get("state") == "" {
+		t.Fatal("invalid callback consumed the valid authorization state")
+	}
+}
+
+func TestGitHubAuthorizationFailureConsumesStateWithoutLeakingProviderData(t *testing.T) {
+	store, server, request := newGitHubAuthorizationTestServer(t, errors.New("provider rejected oauth-code"))
+	authorizationURL, _, err := server.beginGitHubAuthorization(context.Background(), request, "Iv1.setup-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := httptest.NewRecorder()
+	callbackRequest := httptest.NewRequest(http.MethodGet, "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/callback?code=oauth-code&state="+url.QueryEscape(parsed.Query().Get("state")), nil)
+	callbackRequest.Host = "silent-moon.trycloudflare.com"
+	server.setupGitHubAuthorizationCallback(callback, callbackRequest)
+	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "github=error") || strings.Contains(callback.Header().Get("Location"), "oauth-code") {
+		t.Fatalf("GitHub authorization failure = %d, headers=%#v", callback.Code, callback.Header())
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GitHub.AuthorizationStateHash != "" || state.Secret("github_oauth_code_verifier") != "" {
+		t.Fatalf("failed authorization did not consume one-time state: %#v", state.GitHub)
+	}
+}
+
+func TestGitHubAuthorizationIdentityFailureConsumesState(t *testing.T) {
+	store, server, request := newGitHubAuthorizationTestServer(t, nil)
+	server.githubOAuth.(*setupGitHubOAuthFake).userErr = errors.New("GitHub user lookup failed")
+	authorizationURL, _, err := server.beginGitHubAuthorization(context.Background(), request, "Iv1.setup-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(authorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := httptest.NewRecorder()
+	callbackRequest := httptest.NewRequest(http.MethodGet, "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/callback?code=oauth-code&state="+url.QueryEscape(parsed.Query().Get("state")), nil)
+	callbackRequest.Host = "silent-moon.trycloudflare.com"
+	server.setupGitHubAuthorizationCallback(callback, callbackRequest)
+	if callback.Code != http.StatusFound || !strings.Contains(callback.Header().Get("Location"), "github=error") {
+		t.Fatalf("GitHub identity failure = %d, headers=%#v", callback.Code, callback.Header())
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GitHub.AuthorizationStateHash != "" || state.Secret("github_oauth_code_verifier") != "" {
+		t.Fatalf("identity failure did not consume one-time state: %#v", state.GitHub)
+	}
+}
+
+func TestSetupModeDoesNotStartGitHubDeviceFlow(t *testing.T) {
+	server := &Server{config: config.Config{SetupMode: true}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/bootstrap/github/device", strings.NewReader(`{"authorization_session_id":"00000000-0000-0000-0000-000000000000","setup_code":"STEALTH-ABCD-2345-EFGH"}`))
+	request.Header.Set("Content-Type", "application/json")
+	server.startGitHubDeviceFlow(recorder, request)
+	if recorder.Code != http.StatusGone || !strings.Contains(recorder.Body.String(), "github_device_flow_inactive") {
+		t.Fatalf("setup-mode Device Flow response = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func newGitHubAuthorizationTestServer(t *testing.T, exchangeErr error) (setupstate.Store, *Server, *http.Request) {
+	t.Helper()
+	root := t.TempDir()
+	cipher, err := functionsecret.New(bytes.Repeat([]byte{0x68}, functionsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.SetupSessionID = uuid.Must(uuid.NewV7()).String()
+	state.SetupCodeHash = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, 32))
+	state.SetupExpiresAt = time.Now().UTC().Add(15 * time.Minute)
+	state.GitHub.Connected = true
+	state.GitHub.ClientID = "Iv1.setup-client"
+	state.SetSecret("github_client_secret", "github-client-secret")
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{config: config.Config{SetupMode: true}, setupState: store, githubOAuth: &setupGitHubOAuthFake{exchangeErr: exchangeErr}, logger: slog.Default()}
+	request := httptest.NewRequest(http.MethodPost, "https://silent-moon.trycloudflare.com/v1/setup/github/authorize/start", nil)
+	request.Host = "silent-moon.trycloudflare.com"
+	return store, server, request
 }
 
 func authenticatedSetupRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, method, target, body string) *httptest.ResponseRecorder {

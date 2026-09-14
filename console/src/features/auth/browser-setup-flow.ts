@@ -6,17 +6,16 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { apiUrl } from "@/api/client";
 import {
-  usePollGitHubDeviceFlow,
   useSaveSetupCloudflareToken,
   useSaveSetupConfig,
   useSaveSetupGitHubManual,
+  useStartSetupGitHubAuthorization,
   useStartSetupGitHubManifest,
   useStartSetupInstall,
   useTestSetupDatabase,
   useTestSetupRedis,
   useTestSetupStorage,
   useVerifyBootstrapCode,
-  useStartGitHubDeviceFlow,
   useIssueSetupHandoffToken,
   useCreateSetupCloudflareTunnel,
 } from "@/api/mutations";
@@ -26,7 +25,6 @@ import {
   useSetupPreflight,
   useSetupStatus,
 } from "@/api/queries";
-import type { components } from "@/api/generated/schema";
 import {
   configFromState,
   configSchema,
@@ -72,14 +70,6 @@ export function useBrowserSetupFlow() {
   const [providerMode, setProviderMode] = useState<"manifest" | "manual">(
     "manifest",
   );
-  const [device, setDevice] =
-    useState<components["schemas"]["GitHubDeviceResponse"]>();
-  const [authorizationSessionID, setAuthorizationSessionID] = useState("");
-  const [pollDelay, setPollDelay] = useState(5_000);
-  const [pollError, setPollError] = useState<unknown>();
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
-    "idle",
-  );
   const [cloudflareToken, setCloudflareToken] = useState("");
   const [cloudflareAccountID, setCloudflareAccountID] = useState<string | null>(
     null,
@@ -92,13 +82,11 @@ export function useBrowserSetupFlow() {
   const [notice, setNotice] = useState("");
   const hydrated = useRef(false);
   const callbackHandled = useRef("");
-  const pollDevice = usePollGitHubDeviceFlow();
-  const pollRef = useRef(pollDevice.mutateAsync);
   const handoffSubmitted = useRef(false);
   const verifyCode = useVerifyBootstrapCode();
-  const startDevice = useStartGitHubDeviceFlow();
   const saveConfig = useSaveSetupConfig();
   const startManifest = useStartSetupGitHubManifest();
+  const startAuthorization = useStartSetupGitHubAuthorization();
   const saveManual = useSaveSetupGitHubManual();
   const saveCloudflareToken = useSaveSetupCloudflareToken();
   const createCloudflareTunnel = useCreateSetupCloudflareTunnel();
@@ -158,13 +146,8 @@ export function useBrowserSetupFlow() {
       : step;
 
   useEffect(() => {
-    pollRef.current = pollDevice.mutateAsync;
-  }, [pollDevice.mutateAsync]);
-
-  useEffect(() => {
     if (!state || hydrated.current) return;
     configForm.reset(configFromState(state));
-    setAuthorizationSessionID(state.github.authorization_session ?? "");
     setCloudflareAccountID(state.draft.cloudflare_account_id ?? "");
     setCloudflareZoneID(state.draft.cloudflare_zone_id ?? "");
     setSetupVerified(Boolean(state.github.authorization_session));
@@ -290,7 +273,6 @@ export function useBrowserSetupFlow() {
       const result = await verifyCode.mutateAsync({ setup_code: parsed.data });
       if (!result) return;
       setSetupCode(parsed.data);
-      setAuthorizationSessionID(result.authorization_session_id);
       setSetupVerified(true);
       await preflight.refetch();
     } catch (error) {
@@ -298,81 +280,18 @@ export function useBrowserSetupFlow() {
     }
   };
 
-  const beginDeviceFlow = async () => {
-    const parsed = setupCodeSchema.safeParse(setupCode);
-    if (!parsed.success) {
-      setActionError(
-        new Error("Enter the setup code again to confirm the first owner."),
-      );
-      return;
-    }
+  const authorizeGitHubOwner = async () => {
     setActionError(undefined);
     try {
-      let sessionID = authorizationSessionID;
-      if (!sessionID) {
-        const verified = await verifyCode.mutateAsync({
-          setup_code: parsed.data,
-        });
-        if (!verified) return;
-        sessionID = verified.authorization_session_id;
-        setAuthorizationSessionID(sessionID);
-        setSetupVerified(true);
+      const result = await startAuthorization.mutateAsync();
+      if (!result?.authorization_url) {
+        throw new Error("GitHub authorization URL was not returned.");
       }
-      const result = await startDevice.mutateAsync({
-        authorization_session_id: sessionID,
-        setup_code: parsed.data,
-      });
-      if (!result) return;
-      setDevice(result);
-      setPollDelay(Math.max(1, result.interval_seconds) * 1_000);
-      setPollError(undefined);
-      setCopyState("idle");
+      window.location.assign(result.authorization_url);
     } catch (error) {
       setActionError(error);
     }
   };
-
-  useEffect(() => {
-    if (!device || !authorizationSessionID) return;
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      if (new Date(device.expires_at).getTime() <= Date.now()) {
-        setPollError(
-          new Error("GitHub authorization expired. Start it again."),
-        );
-        setDevice(undefined);
-        return;
-      }
-      try {
-        const result = await pollRef.current({
-          authorization_session_id: authorizationSessionID,
-        });
-        if (cancelled || !result) return;
-        if (result.status === "complete") {
-          let ticket = result.handoff_token ?? "";
-          if (!ticket) {
-            const handoff = await issueHandoff.mutateAsync();
-            ticket = handoff?.token ?? "";
-          }
-          setHandoffToken(ticket);
-          setDevice(undefined);
-          setNotice("GitHub verified. The Instance Owner is ready.");
-          await setupStatus.refetch();
-          return;
-        }
-        setPollError(undefined);
-        setPollDelay(Math.max(1, result.retry_after_seconds ?? 5) * 1_000);
-      } catch (error) {
-        if (cancelled) return;
-        setPollError(error);
-        setPollDelay(5_000);
-      }
-    }, pollDelay);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [authorizationSessionID, device, issueHandoff, pollDelay, setupStatus]);
 
   const saveManualGitHub = manualForm.handleSubmit(async (values) => {
     setActionError(undefined);
@@ -552,6 +471,7 @@ export function useBrowserSetupFlow() {
     saveManual.isPending ||
     saveCloudflareToken.isPending ||
     createCloudflareTunnel.isPending ||
+    startAuthorization.isPending ||
     startInstall.isPending ||
     issueHandoff.isPending;
 
@@ -566,13 +486,10 @@ export function useBrowserSetupFlow() {
     cloudflareConnected,
     cloudflareToken,
     configForm,
-    copyState,
     createCloudflareTunnel,
     continueCloudflareSetup,
     dataReady,
     databaseMode,
-    device,
-    beginDeviceFlow,
     handoffReady,
     handoffToken,
     installPhase,
@@ -587,7 +504,6 @@ export function useBrowserSetupFlow() {
     persistConfig,
     preflight,
     providerMode,
-    pollError,
     redisMode,
     retryProductionInstall,
     saveConfig,
@@ -601,7 +517,8 @@ export function useBrowserSetupFlow() {
     setupCode,
     setupStatus,
     setupVerified,
-    startDevice,
+    authorizeGitHubOwner,
+    startAuthorization,
     startManifest,
     storageMode,
     storageReady,
@@ -621,8 +538,6 @@ export function useBrowserSetupFlow() {
     setCloudflareAccountID,
     setCloudflareToken,
     setCloudflareZoneID,
-    setCopyState,
-    setDevice,
     setProviderMode,
     setSetupCode,
     startProductionInstall,

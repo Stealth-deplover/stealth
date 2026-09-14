@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   CircleAlert,
   Cloud,
-  Copy,
   Database,
   ExternalLink,
   Github,
@@ -25,7 +24,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { ApiError } from "@/api/client";
-import type { components } from "@/api/generated/schema";
 import { errorMessage } from "@/components/feedback/error-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +57,27 @@ function safeError(error: unknown) {
     }
   }
   return errorMessage(error);
+}
+
+export function submitGitHubManifest(actionURL: string, manifest: string) {
+  const target = new URL(actionURL);
+  if (
+    target.origin !== "https://github.com" ||
+    target.pathname !== "/settings/apps/new"
+  ) {
+    throw new Error("GitHub returned an invalid App Manifest destination.");
+  }
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = target.toString();
+  form.hidden = true;
+  const field = document.createElement("input");
+  field.type = "hidden";
+  field.name = "manifest";
+  field.value = manifest;
+  form.appendChild(field);
+  document.body.appendChild(form);
+  form.submit();
 }
 
 function BrandMark() {
@@ -313,7 +332,7 @@ export function BrowserSetupView() {
     accounts,
     actionError,
     activeStep,
-    beginDeviceFlow,
+    authorizeGitHubOwner,
     callbackError,
     callbackNotice,
     checks,
@@ -321,12 +340,10 @@ export function BrowserSetupView() {
     cloudflareConnected,
     cloudflareToken,
     configForm,
-    copyState,
     createCloudflareTunnel,
     continueCloudflareSetup,
     dataReady,
     databaseMode,
-    device,
     handoffReady,
     handoffToken,
     installPhase,
@@ -339,7 +356,6 @@ export function BrowserSetupView() {
     notice,
     ownerConfirmed,
     persistConfig,
-    pollError,
     preflight,
     providerMode,
     retryProductionInstall,
@@ -358,11 +374,9 @@ export function BrowserSetupView() {
     setCloudflareAccountID,
     setCloudflareToken,
     setCloudflareZoneID,
-    setCopyState,
-    setDevice,
     setProviderMode,
     setSetupCode,
-    startDevice,
+    startAuthorization,
     startManifest,
     startProductionInstall,
     state,
@@ -743,9 +757,9 @@ export function BrowserSetupView() {
                             Create a private GitHub App
                           </p>
                           <p className="mt-1 text-xs leading-5 text-slate-500">
-                            GitHub opens its own registration page and returns
-                            the App credentials to this setup service through a
-                            one-time callback.
+                            GitHub opens its registration page, then returns the
+                            App credentials and opens a second browser
+                            authorization step for the first owner.
                           </p>
                         </div>
                       </div>
@@ -754,11 +768,17 @@ export function BrowserSetupView() {
                         onClick={() =>
                           void startManifest
                             .mutateAsync()
-                            .then(
-                              (result) =>
-                                result?.manifest_url &&
-                                window.location.assign(result.manifest_url),
-                            )
+                            .then((result) => {
+                              if (!result?.manifest_url || !result.manifest) {
+                                throw new Error(
+                                  "GitHub App Manifest data was not returned.",
+                                );
+                              }
+                              submitGitHubManifest(
+                                result.manifest_url,
+                                result.manifest,
+                              );
+                            })
                             .catch(setActionError)
                         }
                         disabled={startManifest.isPending}
@@ -770,7 +790,7 @@ export function BrowserSetupView() {
                         )}
                         {startManifest.isPending
                           ? "Opening GitHub"
-                          : "Continue with GitHub"}
+                          : "Create App and authorize owner"}
                       </Button>
                     </div>
                   ) : (
@@ -853,57 +873,39 @@ export function BrowserSetupView() {
                         </p>
                       </div>
                     </div>
-                  ) : device ? (
-                    <DeviceFlow
-                      device={device}
-                      copyState={copyState}
-                      onCopy={async () => {
-                        try {
-                          await navigator.clipboard.writeText(device.user_code);
-                          setCopyState("copied");
-                        } catch {
-                          setCopyState("failed");
-                        }
-                      }}
-                      pollError={pollError}
-                      onCancel={() => setDevice(undefined)}
-                    />
                   ) : (
                     <div className="rounded-xl border border-stealth-border p-5">
                       <p className="text-sm font-medium text-white">
-                        Confirm first-owner identity
+                        Authorize the first owner in GitHub
                       </p>
                       <p className="mt-1 text-xs leading-5 text-slate-500">
-                        The server will show a GitHub device code. No password
-                        is created for the Instance Owner.
+                        Stealth will open GitHub&apos;s browser authorization
+                        page. After approval, the callback creates the first
+                        Instance Owner. No password or device code is required.
                       </p>
-                      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
-                        <div className="flex-1 space-y-2">
-                          <Label htmlFor="owner-setup-code">Setup code</Label>
-                          <Input
-                            id="owner-setup-code"
-                            value={setupCode}
-                            onChange={(event) =>
-                              setSetupCode(event.target.value.toUpperCase())
-                            }
-                            autoComplete="one-time-code"
-                            spellCheck={false}
-                          />
-                        </div>
-                        <Button
-                          onClick={() => void beginDeviceFlow()}
-                          disabled={
-                            startDevice.isPending || verifyCode.isPending
-                          }
-                        >
-                          {startDevice.isPending || verifyCode.isPending ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Github className="size-4" />
-                          )}
-                          Connect GitHub identity
-                        </Button>
-                      </div>
+                      {state.github.mode === "manual" ? (
+                        <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2.5 text-xs leading-5 text-amber-100">
+                          Manual Apps must have the exact HTTPS callback URL
+                          <code className="mx-1 break-all text-amber-200">
+                            /v1/setup/github/authorize/callback
+                          </code>
+                          registered in GitHub App settings.
+                        </p>
+                      ) : null}
+                      <Button
+                        className="mt-5"
+                        onClick={() => void authorizeGitHubOwner()}
+                        disabled={startAuthorization.isPending}
+                      >
+                        {startAuthorization.isPending ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Github className="size-4" />
+                        )}
+                        {startAuthorization.isPending
+                          ? "Opening GitHub"
+                          : "Authorize owner in GitHub"}
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -1678,81 +1680,5 @@ function DependencySection({
         </div>
       ) : null}
     </section>
-  );
-}
-
-function DeviceFlow({
-  device,
-  copyState,
-  onCopy,
-  pollError,
-  onCancel,
-}: {
-  device: components["schemas"]["GitHubDeviceResponse"];
-  copyState: "idle" | "copied" | "failed";
-  onCopy: () => void;
-  pollError: unknown;
-  onCancel: () => void;
-}) {
-  return (
-    <div
-      className="space-y-5 rounded-xl border border-stealth-border p-5"
-      aria-live="polite"
-    >
-      <div className="text-center">
-        <p className="text-sm text-slate-400">Enter this code on GitHub</p>
-        <p className="mt-3 font-mono text-2xl font-semibold tracking-[0.2em] text-violet-100">
-          {device.user_code}
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="mt-4"
-          onClick={onCopy}
-        >
-          {copyState === "copied" ? (
-            <Check className="size-4" />
-          ) : (
-            <Copy className="size-4" />
-          )}
-          {copyState === "copied" ? "Copied" : "Copy code"}
-        </Button>
-        {copyState === "failed" ? (
-          <p className="mt-2 text-xs text-amber-200">
-            Copy was unavailable. Select the code manually.
-          </p>
-        ) : null}
-      </div>
-      <Button asChild className="w-full">
-        <a
-          href={device.verification_uri}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <ExternalLink className="size-4" /> Open GitHub
-        </a>
-      </Button>
-      <p className="text-center text-sm text-slate-400" role="status">
-        <Loader2 className="mr-1 inline size-4 animate-spin text-cyan-300" />{" "}
-        Waiting for GitHub authorization
-      </p>
-      {pollError ? (
-        <p
-          className="rounded-lg border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2.5 text-xs leading-5 text-amber-100"
-          role="alert"
-        >
-          {safeError(pollError)} Retrying safely.
-        </p>
-      ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        className="w-full"
-        onClick={onCancel}
-      >
-        Cancel GitHub authorization
-      </Button>
-    </div>
   );
 }

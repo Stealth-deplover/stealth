@@ -17,6 +17,7 @@ func TestManifestURLEncodesShortLivedStateWithoutCredentials(t *testing.T) {
 		Description:   "Stealth developer control plane",
 		URL:           "https://setup.example.test/",
 		RedirectURL:   "https://setup.example.test/v1/setup/github/manifest/callback",
+		CallbackURLs:  []string{"https://setup.example.test/v1/setup/github/authorize/callback"},
 		Public:        false,
 		DefaultEvents: []string{"installation"},
 		DefaultPerms:  map[string]string{"metadata": "read"},
@@ -37,11 +38,25 @@ func TestManifestURLEncodesShortLivedStateWithoutCredentials(t *testing.T) {
 	if err := json.Unmarshal([]byte(parsed.Query().Get("manifest")), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.DefaultPerms["metadata"] != "read" || decoded.Public {
+	if decoded.DefaultPerms["metadata"] != "read" || decoded.Public || len(decoded.CallbackURLs) != 1 || decoded.CallbackURLs[0] != "https://setup.example.test/v1/setup/github/authorize/callback" {
 		t.Fatalf("decoded manifest = %#v", decoded)
 	}
 	if strings.Contains(manifestURL, "client_secret") {
 		t.Fatal("manifest URL contains a credential field")
+	}
+}
+
+func TestDefaultAppNameIsUniqueAndEditableLength(t *testing.T) {
+	first, err := DefaultAppName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := DefaultAppName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !strings.HasPrefix(first, "Stealth Setup ") || len(first) > 34 || len(second) > 34 {
+		t.Fatalf("default app names = %q, %q", first, second)
 	}
 }
 
@@ -70,7 +85,41 @@ func TestManifestURLRejectsInvalidCallbackConfiguration(t *testing.T) {
 	if _, err := ManifestURL(base, "state"); err == nil {
 		t.Fatal("ManifestURL accepted an HTTP callback")
 	}
+	base = AppManifest{Name: "Stealth", RedirectURL: "https://setup.example.test/callback", CallbackURLs: []string{"http://setup.example.test/oauth"}}
+	if _, err := ManifestURL(base, "state"); err == nil {
+		t.Fatal("ManifestURL accepted an HTTP OAuth callback")
+	}
 	if !ValidClientID("Iv1.client-id_123") || ValidClientID("client id") {
 		t.Fatal("ValidClientID validation is incorrect")
+	}
+}
+
+func TestManifestFormUsesDocumentedPOSTShape(t *testing.T) {
+	manifest := AppManifest{
+		Name:          "Stealth Setup",
+		Description:   "Stealth developer control plane",
+		URL:           "https://setup.example.test/",
+		RedirectURL:   "https://setup.example.test/v1/setup/github/manifest/callback",
+		CallbackURLs:  []string{"https://setup.example.test/v1/setup/github/authorize/callback"},
+		DefaultEvents: []string{},
+		DefaultPerms:  map[string]string{"contents": "read"},
+	}
+	actionURL, payload, err := ManifestForm(manifest, "short-lived-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(actionURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.Path != "/settings/apps/new" || parsed.Query().Get("state") != "short-lived-state" || parsed.Query().Get("manifest") != "" {
+		t.Fatalf("unexpected manifest action URL: %s", actionURL)
+	}
+	var decoded AppManifest
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RedirectURL != manifest.RedirectURL || len(decoded.CallbackURLs) != 1 || decoded.DefaultEvents == nil {
+		t.Fatalf("manifest payload did not round-trip: %#v", decoded)
 	}
 }

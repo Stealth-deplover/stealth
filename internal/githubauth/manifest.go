@@ -3,6 +3,8 @@ package githubauth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ type AppManifest struct {
 	Description   string            `json:"description"`
 	URL           string            `json:"url"`
 	RedirectURL   string            `json:"redirect_url"`
+	CallbackURLs  []string          `json:"callback_urls,omitempty"`
 	Public        bool              `json:"public"`
 	DefaultEvents []string          `json:"default_events"`
 	DefaultPerms  map[string]string `json:"default_permissions"`
@@ -96,21 +99,60 @@ func (c *HTTPManifestClient) ConvertManifest(ctx context.Context, code string) (
 }
 
 func ManifestURL(manifest AppManifest, state string) (string, error) {
-	if !validRedirectURL(manifest.RedirectURL) || !validRedirectURL(manifest.URL) || (manifest.SetupURL != "" && !validRedirectURL(manifest.SetupURL)) || strings.TrimSpace(manifest.Name) == "" || len(manifest.Name) > 34 || strings.TrimSpace(state) == "" || len(state) > 512 || strings.ContainsAny(state, "\x00\r\n") {
-		return "", errors.New("GitHub manifest settings are invalid")
-	}
-	if len(manifest.Description) > 512 || strings.ContainsAny(manifest.Name+manifest.Description, "\x00\r\n") {
-		return "", errors.New("GitHub manifest settings are invalid")
-	}
-	contents, err := json.Marshal(manifest)
+	contents, err := validateAndEncodeManifest(manifest, state)
 	if err != nil {
-		return "", fmt.Errorf("encode GitHub app manifest: %w", err)
+		return "", err
 	}
 	values := url.Values{}
 	values.Set("manifest", string(contents))
 	values.Set("redirect_url", manifest.RedirectURL)
 	values.Set("state", state)
 	return "https://github.com/settings/apps/new?" + values.Encode(), nil
+}
+
+// ManifestForm returns the action URL and JSON payload for GitHub's App
+// Manifest registration form. GitHub documents this flow as a POST with the
+// JSON manifest in a form field; the payload contains no provider secret and
+// is intended to be submitted by the browser.
+func ManifestForm(manifest AppManifest, state string) (string, string, error) {
+	contents, err := validateAndEncodeManifest(manifest, state)
+	if err != nil {
+		return "", "", err
+	}
+	values := url.Values{}
+	values.Set("state", state)
+	return "https://github.com/settings/apps/new?" + values.Encode(), string(contents), nil
+}
+
+func validateAndEncodeManifest(manifest AppManifest, state string) ([]byte, error) {
+	if !validRedirectURL(manifest.RedirectURL) || !validRedirectURL(manifest.URL) || (manifest.SetupURL != "" && !validRedirectURL(manifest.SetupURL)) || len(manifest.CallbackURLs) > 10 || strings.TrimSpace(manifest.Name) == "" || len(manifest.Name) > 34 || strings.TrimSpace(state) == "" || len(state) > 512 || strings.ContainsAny(state, "\x00\r\n") {
+		return nil, errors.New("GitHub manifest settings are invalid")
+	}
+	for _, callbackURL := range manifest.CallbackURLs {
+		if !validRedirectURL(callbackURL) {
+			return nil, errors.New("GitHub manifest settings are invalid")
+		}
+	}
+	if len(manifest.Description) > 512 || strings.ContainsAny(manifest.Name+manifest.Description, "\x00\r\n") {
+		return nil, errors.New("GitHub manifest settings are invalid")
+	}
+	contents, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, fmt.Errorf("encode GitHub app manifest: %w", err)
+	}
+	return contents, nil
+}
+
+// DefaultAppName returns a short, editable GitHub App name that avoids
+// collisions when several installations are bootstrapped at the same time.
+// GitHub presents this value in the Manifest registration form and lets the
+// registering user change it before creating the App.
+func DefaultAppName() (string, error) {
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("generate GitHub App name: %w", err)
+	}
+	return "Stealth Setup " + strings.ToUpper(hex.EncodeToString(suffix)), nil
 }
 
 func validRedirectURL(raw string) bool {

@@ -31,8 +31,9 @@ The setup Console walks through these stages:
 
 1. Welcome and host checks.
 2. Instance name and public URL.
-3. GitHub App connection, using the GitHub Manifest flow when available or
-   manual App credentials as a fallback.
+3. GitHub App connection, using the GitHub Manifest flow by default or manual
+   App credentials as a fallback, followed by browser authorization of the
+   first owner.
 4. Networking, using a scoped Cloudflare API token for a named production
    tunnel or one of the local/reverse-proxy modes.
 5. Database and Redis selection. Bundled services are the default; external
@@ -55,9 +56,26 @@ Cloudflare Tunnel, then redirects to the dashboard.
 GitHub App Manifest registration returns App credentials to the server
 callback. The setup API stores credentials in encrypted setup state and never
 returns them to the Console. The Manifest state is random, hashed at rest,
-single-use, and expires quickly. The final owner identity still uses the
-server-side GitHub Device Flow; its device code and access token do not enter
-the URL, browser storage, or logs.
+single-use, and expires quickly. It includes the exact setup HTTPS callback for
+the next step. After conversion, Stealth starts GitHub's browser Web
+Application Flow with a second one-time state and PKCE challenge. The callback
+exchanges the code server-side, looks up `/user`, establishes the first
+Instance Owner, and discards the access token. No Device Flow setting, device
+code, client secret, or access token enters the browser UI, URL storage, or
+logs. If a user cancels or the exchange fails, the one-time state is consumed
+and the wizard offers a fresh browser authorization attempt.
+
+The browser submits the non-secret JSON manifest in a `POST` form field to
+GitHub's documented Manifest endpoint. The per-installation manifest includes
+the exact HTTPS callback URL and requests no webhook events because the setup
+service does not consume GitHub App webhooks.
+
+The default App name is `Stealth Setup <random-suffix>` to avoid collisions;
+GitHub lets the registering user edit that name before creating the App. A
+manually entered App must have the exact HTTPS callback
+`/v1/setup/github/authorize/callback` registered for the setup host. The
+legacy Device Flow API remains only for compatibility with existing
+non-browser callers and is not used by this wizard.
 
 Cloudflare setup is token-first. The Console shows an API Token field and a
 `Verify Token` action. The setup API validates the token by discovering the

@@ -197,6 +197,10 @@ func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if s.config.SetupMode {
+		writeBootstrapError(w, http.StatusGone, "github_device_flow_inactive", "browser setup uses GitHub web authorization; Device Flow is not enabled for this setup service")
+		return
+	}
 	sessionID, sessionErr := uuid.Parse(strings.TrimSpace(req.AuthorizationSessionID))
 	if !s.allowBootstrapAttempt(w, r, bootstrapSessionRateLimitDimension(req.AuthorizationSessionID)) {
 		return
@@ -393,42 +397,8 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 			writeBootstrapError(w, http.StatusBadGateway, "github_identity_unavailable", "GitHub identity could not be verified")
 			return
 		}
-		input, identityErr := githubOwnerInput(user, flow)
-		if identityErr != nil {
-			if !s.updateGitHubDeviceFlow(w, r, sessionID, "failed", flow.Interval, time.Now().UTC().Add(flow.Interval)) {
-				return
-			}
-			writeBootstrapError(w, http.StatusBadGateway, "github_invalid_identity", "GitHub returned an invalid identity")
-			return
-		}
-		token, tokenHash, tokenErr := auth.NewSessionToken()
-		if tokenErr != nil {
-			internalError(s, w, tokenErr)
-			return
-		}
-		input.TokenHash = tokenHash
-		input.SessionExpiresAt = time.Now().UTC().Add(s.config.SessionTTL)
-		handoffToken := ""
-		if s.config.SetupMode && s.setupHandoff != nil {
-			handoffToken, _, tokenErr = auth.NewSessionToken()
-			if tokenErr != nil {
-				internalError(s, w, tokenErr)
-				return
-			}
-			handoffExpiresAt := time.Now().UTC().Add(bootstrap.CodeLifetime)
-			if handoffExpiresAt.After(input.SessionExpiresAt) {
-				handoffExpiresAt = input.SessionExpiresAt
-			}
-			if err := s.setupHandoff.Save(r.Context(), handoffToken, token, handoffExpiresAt); err != nil {
-				internalError(s, w, err)
-				return
-			}
-		}
-		account, ownerErr := s.bootstrap.CreateGitHubInstanceOwner(r.Context(), input)
+		owner, ownerErr := s.createGitHubInstanceOwner(r.Context(), flow, user)
 		if ownerErr != nil {
-			if handoffToken != "" {
-				_ = s.setupHandoff.Discard(r.Context())
-			}
 			switch {
 			case errors.Is(ownerErr, repository.ErrBootstrapSealed):
 				writeBootstrapError(w, http.StatusGone, "bootstrap_complete", "instance setup has already been completed")
@@ -439,18 +409,66 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				writeBootstrapError(w, http.StatusConflict, "github_identity_conflict", "that GitHub identity cannot be used for this installation")
+			case errors.Is(ownerErr, errInvalidGitHubIdentity):
+				if !s.updateGitHubDeviceFlow(w, r, sessionID, "failed", flow.Interval, time.Now().UTC().Add(flow.Interval)) {
+					return
+				}
+				writeBootstrapError(w, http.StatusBadGateway, "github_invalid_identity", "GitHub returned an invalid identity")
 			default:
 				internalError(s, w, ownerErr)
 			}
 			return
 		}
 		if !s.config.SetupMode {
-			s.setSessionCookie(w, token)
+			s.setSessionCookie(w, owner.SessionToken)
 		}
-		writeBootstrapJSON(w, http.StatusCreated, pollGitHubDeviceResponse{Status: "complete", Account: &account, HandoffToken: handoffToken})
+		writeBootstrapJSON(w, http.StatusCreated, pollGitHubDeviceResponse{Status: "complete", Account: &owner.Account, HandoffToken: owner.HandoffToken})
 		return
 	}
 	writeBootstrapError(w, http.StatusBadGateway, "github_invalid_response", "GitHub returned an invalid authorization response")
+}
+
+var errInvalidGitHubIdentity = errors.New("invalid GitHub identity")
+
+type githubOwnerResult struct {
+	Account      domain.Account
+	SessionToken string
+	HandoffToken string
+}
+
+func (s *Server) createGitHubInstanceOwner(ctx context.Context, flow repository.GitHubDeviceFlow, user githubauth.User) (githubOwnerResult, error) {
+	input, err := githubOwnerInput(user, flow)
+	if err != nil {
+		return githubOwnerResult{}, fmt.Errorf("%w: %v", errInvalidGitHubIdentity, err)
+	}
+	token, tokenHash, err := auth.NewSessionToken()
+	if err != nil {
+		return githubOwnerResult{}, err
+	}
+	input.TokenHash = tokenHash
+	input.SessionExpiresAt = time.Now().UTC().Add(s.config.SessionTTL)
+	handoffToken := ""
+	if s.config.SetupMode && s.setupHandoff != nil {
+		handoffToken, _, err = auth.NewSessionToken()
+		if err != nil {
+			return githubOwnerResult{}, err
+		}
+		handoffExpiresAt := time.Now().UTC().Add(bootstrap.CodeLifetime)
+		if handoffExpiresAt.After(input.SessionExpiresAt) {
+			handoffExpiresAt = input.SessionExpiresAt
+		}
+		if err := s.setupHandoff.Save(ctx, handoffToken, token, handoffExpiresAt); err != nil {
+			return githubOwnerResult{}, err
+		}
+	}
+	account, err := s.bootstrap.CreateGitHubInstanceOwner(ctx, input)
+	if err != nil {
+		if handoffToken != "" {
+			_ = s.setupHandoff.Discard(ctx)
+		}
+		return githubOwnerResult{}, err
+	}
+	return githubOwnerResult{Account: account, SessionToken: token, HandoffToken: handoffToken}, nil
 }
 
 func (s *Server) listBootstrapAdoptionAccounts(w http.ResponseWriter, r *http.Request) {

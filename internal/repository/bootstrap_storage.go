@@ -104,7 +104,9 @@ func (r *BootstrapRepository) BootstrapStatus(ctx context.Context) (BootstrapSta
 }
 
 // VerifyBootstrapCode checks the operator-provided code and returns only the
-// opaque database session ID needed for the subsequent GitHub Device Flow.
+// opaque database session ID needed for subsequent GitHub first-owner
+// authorization. The legacy Device Flow persistence uses the same bootstrap
+// session record for compatibility.
 // The setup code itself never leaves this request boundary in a response.
 func (r *BootstrapRepository) VerifyBootstrapCode(ctx context.Context, codeHash []byte) (BootstrapVerification, error) {
 	if len(codeHash) != 32 {

@@ -339,7 +339,7 @@ func validRequestHost(host string) bool {
 
 func compareStateHash(expected, supplied string) bool {
 	expectedBytes, expectedErr := base64.RawURLEncoding.DecodeString(strings.TrimSpace(expected))
-	suppliedBytes, suppliedErr := base64.RawURLEncoding.DecodeString(setupstate.HashManifestState(strings.TrimSpace(supplied)))
+	suppliedBytes, suppliedErr := base64.RawURLEncoding.DecodeString(setupstate.HashCallbackState(strings.TrimSpace(supplied)))
 	return expectedErr == nil && suppliedErr == nil && subtle.ConstantTimeCompare(expectedBytes, suppliedBytes) == 1
 }
 

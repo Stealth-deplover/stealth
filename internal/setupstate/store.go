@@ -68,12 +68,14 @@ type SetupCredentials struct {
 }
 
 type GitHubState struct {
-	Mode                 string    `json:"mode,omitempty"`
-	ClientID             string    `json:"client_id,omitempty"`
-	ManifestStateHash    string    `json:"manifest_state_hash,omitempty"`
-	ManifestExpiresAt    time.Time `json:"manifest_expires_at,omitempty"`
-	Connected            bool      `json:"connected,omitempty"`
-	AuthorizationSession string    `json:"authorization_session,omitempty"`
+	Mode                   string    `json:"mode,omitempty"`
+	ClientID               string    `json:"client_id,omitempty"`
+	ManifestStateHash      string    `json:"manifest_state_hash,omitempty"`
+	ManifestExpiresAt      time.Time `json:"manifest_expires_at,omitempty"`
+	AuthorizationStateHash string    `json:"authorization_state_hash,omitempty"`
+	AuthorizationExpiresAt time.Time `json:"authorization_expires_at,omitempty"`
+	Connected              bool      `json:"connected,omitempty"`
+	AuthorizationSession   string    `json:"authorization_session,omitempty"`
 }
 
 type CloudflareState struct {
@@ -426,10 +428,10 @@ func (s *FileStore) saveLocked(state State) error {
 	return os.Chmod(s.path, 0o600)
 }
 
-func NewManifestState() (plain string, hash string, expiresAt time.Time, err error) {
+func NewCallbackState(purpose string) (plain string, hash string, expiresAt time.Time, err error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("generate GitHub manifest state: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("generate %s state: %w", purpose, err)
 	}
 	plain = base64.RawURLEncoding.EncodeToString(bytes)
 	// The raw state is returned only to the redirect URL. Callers should persist
@@ -440,8 +442,24 @@ func NewManifestState() (plain string, hash string, expiresAt time.Time, err err
 	return plain, hash, time.Now().UTC().Add(10 * time.Minute), nil
 }
 
-func HashManifestState(value string) string {
+func NewManifestState() (plain string, hash string, expiresAt time.Time, err error) {
+	return NewCallbackState("GitHub manifest")
+}
+
+func NewOAuthState() (plain string, hash string, expiresAt time.Time, err error) {
+	return NewCallbackState("GitHub OAuth")
+}
+
+func HashCallbackState(value string) string {
 	return base64.RawURLEncoding.EncodeToString(sha256Bytes([]byte(strings.TrimSpace(value))))
+}
+
+func HashManifestState(value string) string {
+	return HashCallbackState(value)
+}
+
+func HashOAuthState(value string) string {
+	return HashCallbackState(value)
 }
 
 func ValidateState(state State) error {

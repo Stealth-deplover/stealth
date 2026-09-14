@@ -51,6 +51,7 @@ type Server struct {
 	realtimeBroker    *realtime.Broker
 	authEmailSender   mailer.AuthSender
 	githubClient      githubauth.Client
+	githubOAuth       githubauth.OAuthClient
 	githubFlowMu      sync.Mutex
 	setupState        setupstate.Store
 	setupHandoff      setuphandoff.Store
@@ -77,6 +78,7 @@ type Dependencies struct {
 	EmailSender       mailer.Sender
 	RealtimeBroker    *realtime.Broker
 	GitHubClient      githubauth.Client
+	GitHubOAuth       githubauth.OAuthClient
 	BootstrapStore    repository.BootstrapStore
 	SetupState        setupstate.Store
 	SetupHandoff      setuphandoff.Store
@@ -113,6 +115,12 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	authEmailSender := mailer.NewAuthSender(deps.EmailSender)
 	if deps.GitHubClient == nil {
 		deps.GitHubClient = githubauth.NewClient(nil)
+	}
+	githubOAuth := deps.GitHubOAuth
+	if githubOAuth == nil {
+		if oauthClient, ok := deps.GitHubClient.(githubauth.OAuthClient); ok {
+			githubOAuth = oauthClient
+		}
 	}
 	bootstrapStore := deps.BootstrapStore
 	if bootstrapStore == nil && repo != nil {
@@ -206,7 +214,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 			return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
 		}
 	}
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, setupState: setupStateStore, setupHandoff: setupHandoffStore, setupEngine: setupEngine, setupRunner: installRunner, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, setupEvents: newSetupEventHub()}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, setupEngine: setupEngine, setupRunner: installRunner, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, setupEvents: newSetupEventHub()}
 	if cfg.SetupMode && setupStateStore != nil {
 		go s.resumeSetupLifecycle()
 	}

@@ -78,7 +78,7 @@ location is required. The CLI writes:
 `config.env` contains the local setup proof and the release settings:
 
 - `BOOTSTRAP_CLI_KEY`, a private 32-byte key used only to authenticate the
-  local CLI and encrypt short-lived GitHub Device Flow state;
+  local CLI and encrypt short-lived GitHub browser authorization state;
 - `GITHUB_APP_CLIENT_ID`, which is empty during browser setup and is filled
   from the server-owned GitHub App connection before production handoff.
 
@@ -153,13 +153,15 @@ STEALTH-XXXX-XXXX-XXXX
 The code has 60 bits of cryptographic entropy, expires after 15 minutes, is
 rate-limited, is stored by the API only as a SHA-256 hash, and is invalidated
 after the first successful owner creation. Open the URL and complete the
-[browser setup wizard](web-setup.md). The wizard connects GitHub, selects and
-tests infrastructure, creates the named production Cloudflare Tunnel, and
-streams the shared install engine's progress. The random TryCloudflare
-hostname is never used as a GitHub OAuth callback. Neither the setup code nor
-GitHub's `device_code` or access token is placed in a URL, browser storage, or
-logs. If a Quick Tunnel cannot be started, the CLI leaves the installation
-intact and shows the local setup URL instead.
+[browser setup wizard](web-setup.md). The wizard connects GitHub through the
+Manifest plus browser Web Application Flow, selects and tests infrastructure,
+creates the named production Cloudflare Tunnel, and streams the shared install
+engine's progress. The random TryCloudflare hostname is used only as the
+short-lived setup callback configured in the per-installation Manifest; it is
+never used as a redirect for a shared OAuth client. Neither the setup code,
+GitHub authorization code, PKCE verifier, nor access token is placed in
+browser storage or logs. If a Quick Tunnel cannot be started, the CLI leaves
+the installation intact and shows the local setup URL instead.
 
 The cloudflared image pin is defined in `internal/cli/setup.go` so it can be
 reviewed and updated as one change. It currently pins the multi-architecture

@@ -71,13 +71,14 @@ Required production values:
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
 - `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
   dedicated local-CLI proof key for first-run Instance Owner onboarding and
-  encryption of short-lived GitHub Device Flow state. It is never reused as a
-  Functions secret, and `FUNCTIONS_SECRET_KEY` is never accepted as a fallback.
-- `GITHUB_APP_CLIENT_ID`, from a GitHub App configured with **Enable Device
-  Flow**. The App needs only the minimum identity permissions required by the
-  selected GitHub account; do not grant repository write or organization-admin
-  access. A client secret and a TryCloudflare callback URL are not required for
-  this Device Flow.
+  encryption of short-lived GitHub browser-authorization state. It is never
+  reused as a Functions secret, and `FUNCTIONS_SECRET_KEY` is never accepted
+  as a fallback.
+- `GITHUB_APP_CLIENT_ID`, only for an existing/manual production bootstrap
+  that uses the retained legacy Device Flow endpoint. Fresh browser setup
+  creates a private GitHub App through the Manifest flow, configures its HTTPS
+  callback URL, and stores the resulting App identifier server-side; it does
+  not ask the operator to enable Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
   Docker-backed function runner is enabled.
@@ -167,10 +168,12 @@ production worker intentionally retains it for the existing Docker-backed
 function and site runner and runs non-root with the configured `DOCKER_GID`.
 
 The operator enters the Stealth setup code first. The API stores only a hash of
-the code and encrypts provider credentials and short-lived OAuth state with
-the configured Functions secret. GitHub access tokens are used only for the
-server-side `/user` lookup and are discarded, never returned to the browser or
-persisted.
+the code and encrypts provider credentials, short-lived OAuth state, and the
+PKCE verifier with the configured Functions secret. GitHub App Manifest
+registration returns credentials to the server callback, which immediately
+starts GitHub's browser Web Application Flow for the first owner. GitHub
+access tokens are used only for the server-side `/user` lookup and are
+discarded, never returned to the browser or persisted.
 
 Cloudflare setup uses a scoped API token, not a Global API Key. The Console
 verifies the token, discovers accounts and domains, and sends the selected
@@ -186,7 +189,9 @@ Cloudflare OAuth remains experimental and inactive. The setup Console does
 not offer it, the inactive endpoint never builds an authorization redirect,
 and a random `*.trycloudflare.com` hostname is neither a Stealth-controlled
 OAuth callback domain nor a valid redirect for a shared Cloudflare OAuth
-client. The browser opens GitHub's fixed device verification URL instead.
+client. GitHub's browser callback is configured by the Manifest itself; a
+random setup hostname is never used as a redirect for a shared official OAuth
+client.
 The current image reference uses the multi-architecture manifest digest
 `sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9`;
 maintainers should update the version and digest together after verifying the

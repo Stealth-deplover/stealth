@@ -113,7 +113,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Start the GitHub App Device Flow after the local Stealth setup code has been verified. The GitHub device_code remains server-side and is never returned. */
+        /**
+         * @deprecated
+         * @description Legacy compatibility endpoint for existing non-browser callers. The active browser setup wizard uses GitHub Web Application Flow because Device Flow must be enabled separately in GitHub App settings.
+         */
         post: operations["startBootstrapGitHubDeviceFlow"];
         delete?: never;
         options?: never;
@@ -130,7 +133,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Poll the server-owned GitHub Device Flow. The API respects GitHub's polling interval and creates a normal Stealth session only after verifying the GitHub identity. */
+        /**
+         * @deprecated
+         * @description Legacy compatibility endpoint for existing non-browser callers. The active browser setup wizard uses the one-time GitHub web authorization callback instead.
+         */
         post: operations["pollBootstrapGitHubDeviceFlow"];
         delete?: never;
         options?: never;
@@ -230,8 +236,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Consume GitHub's one-time App Manifest callback. The callback state is stored as a hash and the converted app credentials remain server-side. */
+        /** @description Consume GitHub's one-time App Manifest callback, persist the converted credentials server-side, and redirect into the browser owner-authorization flow. */
         get: operations["completeSetupGitHubManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/authorize/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Consume the one-time GitHub web authorization callback. State and PKCE verification are server-side; the short-lived user token is used only for the server-side identity lookup. */
+        get: operations["completeSetupGitHubAuthorization"];
         put?: never;
         post?: never;
         delete?: never;
@@ -300,8 +323,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Create a short-lived GitHub App Manifest URL using the current HTTPS setup origin. */
+        /** @description Create a short-lived GitHub App Manifest POST action and non-secret JSON payload using the current HTTPS setup origin. */
         post: operations["startSetupGitHubManifest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/authorize/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a short-lived GitHub web authorization URL for the connected App. The setup service stores state and the PKCE verifier encrypted server-side. */
+        post: operations["startSetupGitHubAuthorization"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2582,6 +2622,7 @@ export interface components {
             storage_s3_path_style?: boolean;
             storage_s3_prefix?: string;
         };
+        /** @description The connected App identifier and setup authorization session are public projections; client secrets, OAuth state, and PKCE verifiers remain encrypted server-side. */
         SetupGitHubState: {
             /** @enum {string} */
             mode?: SetupGitHubStateMode;
@@ -2629,8 +2670,19 @@ export interface components {
             storage_s3_prefix?: string;
         };
         SetupGitHubManifestResponse: {
-            /** Format: uri */
+            /**
+             * Format: uri
+             * @description GitHub's POST action URL
+             */
             manifest_url: string;
+            /** @description Non-secret JSON manifest submitted by the browser */
+            manifest: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        SetupGitHubAuthorizationResponse: {
+            /** Format: uri */
+            authorization_url: string;
             /** Format: date-time */
             expires_at: string;
         };
@@ -5059,7 +5111,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description GitHub user code for browser authorization */
+            /** @description Legacy GitHub Device Flow user code for non-browser compatibility */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -5259,6 +5311,28 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Redirect to GitHub browser authorization or back to the setup Console with a non-sensitive result marker */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completeSetupGitHubAuthorization: {
+        parameters: {
+            query: {
+                code?: string;
+                state: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
             /** @description Redirect back to the setup Console with a non-sensitive result marker */
             302: {
                 headers: {
@@ -5354,7 +5428,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description GitHub App Manifest URL */
+            /** @description GitHub App Manifest POST action and payload */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5365,6 +5439,34 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    startSetupGitHubAuthorization: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GitHub browser authorization URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupGitHubAuthorizationResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
             503: components["responses"]["ServiceUnavailable"];
         };

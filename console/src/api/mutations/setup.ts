@@ -41,6 +41,13 @@ export function useStartSetupGitHubManifest() {
   });
 }
 
+export function useStartSetupGitHubAuthorization() {
+  return useMutation({
+    mutationFn: async () =>
+      unwrap(await api.POST("/v1/setup/github/authorize/start", setupMutation)),
+  });
+}
+
 export function useSaveSetupGitHubManual() {
   const queryClient = useQueryClient();
   return useMutation({
