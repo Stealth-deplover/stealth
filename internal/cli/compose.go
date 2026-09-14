@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
@@ -180,50 +179,7 @@ func httpStatusDetail(status int, err error) string {
 }
 
 func (a *App) waitForInstallation(ctx context.Context, plan InstallPlan) error {
-	maxWait := time.Duration(a.pollAttempts)*a.pollInterval + 30*time.Second
-	waitContext, cancel := context.WithTimeout(ctx, maxWait)
-	defer cancel()
-	ports := portsFromConfig(map[string]string{
-		"API_HOST_PORT":     "18080",
-		"CONSOLE_HOST_PORT": "13000",
-		"PROXY_HTTP_PORT":   "8080",
-	})
-	if values, err := readEnvFile(plan.Layout.EnvFile); err == nil {
-		ports = portsFromConfig(values)
-	}
-	endpoints := []string{
-		"http://127.0.0.1:" + ports.API + "/healthz",
-		"http://127.0.0.1:" + ports.API + "/readyz",
-		"http://127.0.0.1:" + ports.API + "/version",
-		"http://127.0.0.1:" + ports.Console + "/",
-		"http://127.0.0.1:" + ports.Proxy + "/",
-	}
-	for attempt := 0; attempt < a.pollAttempts; attempt++ {
-		if err := waitContext.Err(); err != nil {
-			return err
-		}
-		allReady := true
-		for _, endpoint := range endpoints {
-			status, err := a.httpStatus(waitContext, endpoint)
-			if err != nil || status < 200 || status >= 300 {
-				allReady = false
-				break
-			}
-		}
-		if allReady {
-			return nil
-		}
-		if attempt+1 < a.pollAttempts {
-			timer := time.NewTimer(a.pollInterval)
-			select {
-			case <-waitContext.Done():
-				timer.Stop()
-				return waitContext.Err()
-			case <-timer.C:
-			}
-		}
-	}
-	return fmt.Errorf("services did not become ready after %d checks", a.pollAttempts)
+	return a.installEngine().Wait(ctx, plan)
 }
 
 func (a *App) installStep(ctx context.Context, plan InstallPlan, step int) error {

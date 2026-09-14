@@ -5,21 +5,17 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/Stealth-deplover/stealth/internal/auth"
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
-	"github.com/Stealth-deplover/stealth/internal/validate"
 	"github.com/google/uuid"
 )
 
@@ -397,7 +393,7 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 			writeBootstrapError(w, http.StatusBadGateway, "github_identity_unavailable", "GitHub identity could not be verified")
 			return
 		}
-		owner, ownerErr := s.createGitHubInstanceOwner(r.Context(), flow, user)
+		owner, ownerErr := s.createGitHubInstanceOwner(r.Context(), bootstrap.GitHubAuthorization{SessionID: flow.ID, CodeHash: flow.CodeHash}, user)
 		if ownerErr != nil {
 			switch {
 			case errors.Is(ownerErr, repository.ErrBootstrapSealed):
@@ -428,47 +424,18 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	writeBootstrapError(w, http.StatusBadGateway, "github_invalid_response", "GitHub returned an invalid authorization response")
 }
 
-var errInvalidGitHubIdentity = errors.New("invalid GitHub identity")
+var errInvalidGitHubIdentity = bootstrap.ErrInvalidGitHubIdentity
 
-type githubOwnerResult struct {
-	Account      domain.Account
-	SessionToken string
-	HandoffToken string
-}
+type githubOwnerResult = bootstrap.OwnerResult
 
-func (s *Server) createGitHubInstanceOwner(ctx context.Context, flow repository.GitHubDeviceFlow, user githubauth.User) (githubOwnerResult, error) {
-	input, err := githubOwnerInput(user, flow)
-	if err != nil {
-		return githubOwnerResult{}, fmt.Errorf("%w: %v", errInvalidGitHubIdentity, err)
+func (s *Server) createGitHubInstanceOwner(ctx context.Context, authorization bootstrap.GitHubAuthorization, user githubauth.User) (githubOwnerResult, error) {
+	creator := bootstrap.OwnerCreator{
+		Store:      s.bootstrap,
+		Handoff:    s.setupHandoff,
+		SetupMode:  s.config.SetupMode,
+		SessionTTL: s.config.SessionTTL,
 	}
-	token, tokenHash, err := auth.NewSessionToken()
-	if err != nil {
-		return githubOwnerResult{}, err
-	}
-	input.TokenHash = tokenHash
-	input.SessionExpiresAt = time.Now().UTC().Add(s.config.SessionTTL)
-	handoffToken := ""
-	if s.config.SetupMode && s.setupHandoff != nil {
-		handoffToken, _, err = auth.NewSessionToken()
-		if err != nil {
-			return githubOwnerResult{}, err
-		}
-		handoffExpiresAt := time.Now().UTC().Add(bootstrap.CodeLifetime)
-		if handoffExpiresAt.After(input.SessionExpiresAt) {
-			handoffExpiresAt = input.SessionExpiresAt
-		}
-		if err := s.setupHandoff.Save(ctx, handoffToken, token, handoffExpiresAt); err != nil {
-			return githubOwnerResult{}, err
-		}
-	}
-	account, err := s.bootstrap.CreateGitHubInstanceOwner(ctx, input)
-	if err != nil {
-		if handoffToken != "" {
-			_ = s.setupHandoff.Discard(ctx)
-		}
-		return githubOwnerResult{}, err
-	}
-	return githubOwnerResult{Account: account, SessionToken: token, HandoffToken: handoffToken}, nil
+	return creator.CreateGitHubInstanceOwner(ctx, authorization, user)
 }
 
 func (s *Server) listBootstrapAdoptionAccounts(w http.ResponseWriter, r *http.Request) {
@@ -515,49 +482,7 @@ func (s *Server) adoptBootstrapOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 func githubOwnerInput(user githubauth.User, flow repository.GitHubDeviceFlow) (repository.GitHubOwnerInput, error) {
-	login := strings.TrimSpace(user.Login)
-	if user.ID <= 0 || login == "" || len(login) > 120 || strings.ContainsAny(login, "\x00\r\n") {
-		return repository.GitHubOwnerInput{}, errors.New("invalid GitHub identity")
-	}
-	providerEmail := strings.TrimSpace(user.Email)
-	if len(providerEmail) > 320 {
-		providerEmail = ""
-	}
-	if providerEmail != "" {
-		if normalized, err := validate.Email(providerEmail); err == nil {
-			providerEmail = normalized
-		} else {
-			providerEmail = ""
-		}
-	}
-	displayName := strings.TrimSpace(user.Name)
-	if displayName == "" {
-		displayName = login
-	}
-	avatarURL := strings.TrimSpace(user.AvatarURL)
-	if len(displayName) > 240 || strings.ContainsAny(displayName, "\x00\r\n") || len(avatarURL) > 2048 || strings.ContainsAny(avatarURL, "\x00\r\n") {
-		return repository.GitHubOwnerInput{}, errors.New("invalid GitHub identity metadata")
-	}
-	if avatarURL != "" {
-		parsedAvatarURL, err := url.Parse(avatarURL)
-		// GitHub commonly appends a cache/version query (for example, ?v=4)
-		// to avatar URLs. It is display metadata, not a redirect target, so
-		// keep safe HTTPS URLs while rejecting credentials and fragments.
-		if err != nil || parsedAvatarURL.Scheme != "https" || parsedAvatarURL.Host == "" || parsedAvatarURL.User != nil || parsedAvatarURL.Fragment != "" {
-			return repository.GitHubOwnerInput{}, errors.New("invalid GitHub avatar URL")
-		}
-	}
-	return repository.GitHubOwnerInput{
-		BootstrapSessionID: flow.ID,
-		BootstrapCodeHash:  flow.CodeHash,
-		AccountID:          uuid.Must(uuid.NewV7()),
-		SessionID:          uuid.Must(uuid.NewV7()),
-		ProviderUserID:     fmt.Sprintf("%d", user.ID),
-		ProviderLogin:      login,
-		ProviderEmail:      providerEmail,
-		DisplayName:        displayName,
-		AvatarURL:          avatarURL,
-	}, nil
+	return bootstrap.GitHubOwnerInput(user, bootstrap.GitHubAuthorization{SessionID: flow.ID, CodeHash: flow.CodeHash})
 }
 
 func (s *Server) verifyBootstrapCLI(w http.ResponseWriter, r *http.Request) bool {

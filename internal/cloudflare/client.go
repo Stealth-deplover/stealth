@@ -96,9 +96,12 @@ func (s *TunnelStatus) UnmarshalJSON(contents []byte) error {
 type Client interface {
 	ListAccounts(context.Context) ([]Account, error)
 	ListZones(context.Context, string) ([]Zone, error)
+	ListTunnels(context.Context, string, string) ([]Tunnel, error)
 	CreateTunnel(context.Context, string, string) (Tunnel, error)
 	ConfigureTunnel(context.Context, string, string, []IngressRule) error
+	ListDNSRecords(context.Context, string, string) ([]DNSRecord, error)
 	CreateDNSRecord(context.Context, string, DNSRecord) (DNSRecord, error)
+	UpdateDNSRecord(context.Context, string, string, DNSRecord) (DNSRecord, error)
 	TunnelStatus(context.Context, string, string) (TunnelStatus, error)
 	TunnelToken(context.Context, string, string) (string, error)
 }
@@ -140,7 +143,7 @@ func (c *APIClient) ListAccounts(ctx context.Context) ([]Account, error) {
 			return nil, err
 		}
 		accounts = append(accounts, result.Result...)
-		if pageInfoDone(page, len(result.Result), result.ResultInfo) {
+		if pageInfoDone(page, len(result.Result), result.ResultInfo, 50) {
 			return accounts, nil
 		}
 	}
@@ -163,7 +166,7 @@ func (c *APIClient) ListZones(ctx context.Context, accountID string) ([]Zone, er
 			return nil, err
 		}
 		zones = append(zones, result.Result...)
-		if pageInfoDone(page, len(result.Result), result.ResultInfo) {
+		if pageInfoDone(page, len(result.Result), result.ResultInfo, 50) {
 			return zones, nil
 		}
 	}
@@ -172,10 +175,58 @@ func (c *APIClient) ListZones(ctx context.Context, accountID string) ([]Zone, er
 
 type pageInfo struct {
 	TotalPages int `json:"total_pages"`
+	TotalCount int `json:"total_count"`
+	PerPage    int `json:"per_page"`
 }
 
-func pageInfoDone(page, resultCount int, info pageInfo) bool {
-	return resultCount == 0 || info.TotalPages == 0 || page >= info.TotalPages
+func pageInfoDone(page, resultCount int, info pageInfo, requestedPerPage int) bool {
+	if resultCount == 0 {
+		return true
+	}
+	if info.TotalPages > 0 {
+		return page >= info.TotalPages
+	}
+	perPage := info.PerPage
+	if perPage <= 0 {
+		perPage = requestedPerPage
+	}
+	if info.TotalCount > 0 {
+		return page*perPage >= info.TotalCount
+	}
+	return resultCount < perPage
+}
+
+func (c *APIClient) ListTunnels(ctx context.Context, accountID, name string) ([]Tunnel, error) {
+	accountID, err := safeID(accountID, "account")
+	if err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if len(name) > 120 || strings.ContainsAny(name, "\x00\r\n") {
+		return nil, errors.New("tunnel name is invalid")
+	}
+	tunnels := make([]Tunnel, 0)
+	for page := 1; page <= maxListPages; page++ {
+		values := url.Values{}
+		values.Set("is_deleted", "false")
+		values.Set("per_page", "100")
+		values.Set("page", strconv.Itoa(page))
+		if name != "" {
+			values.Set("name", name)
+		}
+		var result struct {
+			Result     []Tunnel `json:"result"`
+			ResultInfo pageInfo `json:"result_info"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/accounts/"+accountID+"/cfd_tunnel?"+values.Encode(), nil, &result); err != nil {
+			return nil, err
+		}
+		tunnels = append(tunnels, result.Result...)
+		if pageInfoDone(page, len(result.Result), result.ResultInfo, 100) {
+			return tunnels, nil
+		}
+	}
+	return nil, errors.New("Cloudflare returned too many tunnel pages")
 }
 
 func (c *APIClient) CreateTunnel(ctx context.Context, accountID, name string) (Tunnel, error) {
@@ -226,14 +277,9 @@ func (c *APIClient) CreateDNSRecord(ctx context.Context, zoneID string, record D
 	if err != nil {
 		return DNSRecord{}, err
 	}
-	record.Type = strings.ToUpper(strings.TrimSpace(record.Type))
-	record.Name = strings.TrimSpace(record.Name)
-	record.Content = strings.TrimSpace(record.Content)
-	if record.Type != "CNAME" || record.Name == "" || record.Content == "" || len(record.Name) > 253 || len(record.Content) > 253 || strings.ContainsAny(record.Name+record.Content, "\x00\r\n") {
-		return DNSRecord{}, errors.New("DNS record is invalid")
-	}
-	if record.TTL == 0 {
-		record.TTL = 1
+	record, err = normalizeDNSRecord(record)
+	if err != nil {
+		return DNSRecord{}, err
 	}
 	var result struct {
 		Result DNSRecord `json:"result"`
@@ -245,6 +291,74 @@ func (c *APIClient) CreateDNSRecord(ctx context.Context, zoneID string, record D
 		return DNSRecord{}, errors.New("Cloudflare returned an invalid DNS record")
 	}
 	return result.Result, nil
+}
+
+func (c *APIClient) ListDNSRecords(ctx context.Context, zoneID, name string) ([]DNSRecord, error) {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 253 || strings.ContainsAny(name, "\x00\r\n") {
+		return nil, errors.New("DNS record name is invalid")
+	}
+	records := make([]DNSRecord, 0)
+	for page := 1; page <= maxListPages; page++ {
+		values := url.Values{}
+		values.Set("name", name)
+		values.Set("per_page", "100")
+		values.Set("page", strconv.Itoa(page))
+		var result struct {
+			Result     []DNSRecord `json:"result"`
+			ResultInfo pageInfo    `json:"result_info"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records?"+values.Encode(), nil, &result); err != nil {
+			return nil, err
+		}
+		records = append(records, result.Result...)
+		if pageInfoDone(page, len(result.Result), result.ResultInfo, 100) {
+			return records, nil
+		}
+	}
+	return nil, errors.New("Cloudflare returned too many DNS record pages")
+}
+
+func (c *APIClient) UpdateDNSRecord(ctx context.Context, zoneID, recordID string, record DNSRecord) (DNSRecord, error) {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	recordID, err = safeID(recordID, "DNS record")
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	record, err = normalizeDNSRecord(record)
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	var result struct {
+		Result DNSRecord `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPut, "/zones/"+zoneID+"/dns_records/"+recordID, record, &result); err != nil {
+		return DNSRecord{}, err
+	}
+	if strings.TrimSpace(result.Result.ID) == "" {
+		result.Result.ID = recordID
+	}
+	return result.Result, nil
+}
+
+func normalizeDNSRecord(record DNSRecord) (DNSRecord, error) {
+	record.Type = strings.ToUpper(strings.TrimSpace(record.Type))
+	record.Name = strings.TrimSpace(record.Name)
+	record.Content = strings.TrimSpace(record.Content)
+	if record.Type != "CNAME" || record.Name == "" || record.Content == "" || len(record.Name) > 253 || len(record.Content) > 253 || strings.ContainsAny(record.Name+record.Content, "\x00\r\n") {
+		return DNSRecord{}, errors.New("DNS record is invalid")
+	}
+	if record.TTL == 0 {
+		record.TTL = 1
+	}
+	return record, nil
 }
 
 func (c *APIClient) TunnelStatus(ctx context.Context, accountID, tunnelID string) (TunnelStatus, error) {

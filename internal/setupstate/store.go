@@ -36,26 +36,27 @@ const (
 // Draft contains setup choices that can safely be represented by the public
 // setup-state projection. Credential material belongs in SetupCredentials.
 type Draft struct {
-	InstanceName        string `json:"instance_name,omitempty"`
-	PublicURL           string `json:"public_url,omitempty"`
-	NetworkMode         string `json:"network_mode,omitempty"`
-	Hostname            string `json:"hostname,omitempty"`
-	CloudflareAccountID string `json:"cloudflare_account_id,omitempty"`
-	CloudflareZoneID    string `json:"cloudflare_zone_id,omitempty"`
-	CloudflareTunnelID  string `json:"cloudflare_tunnel_id,omitempty"`
-	CloudflareRecordID  string `json:"cloudflare_record_id,omitempty"`
-	DatabaseMode        string `json:"database_mode,omitempty"`
-	DatabaseTested      bool   `json:"database_tested,omitempty"`
-	RedisMode           string `json:"redis_mode,omitempty"`
-	RedisTested         bool   `json:"redis_tested,omitempty"`
-	StorageMode         string `json:"storage_mode,omitempty"`
-	StorageTested       bool   `json:"storage_tested,omitempty"`
-	StorageS3Endpoint   string `json:"storage_s3_endpoint,omitempty"`
-	StorageS3Region     string `json:"storage_s3_region,omitempty"`
-	StorageS3Bucket     string `json:"storage_s3_bucket,omitempty"`
-	StorageS3UseSSL     bool   `json:"storage_s3_use_ssl"`
-	StorageS3PathStyle  bool   `json:"storage_s3_path_style"`
-	StorageS3Prefix     string `json:"storage_s3_prefix,omitempty"`
+	InstanceName         string `json:"instance_name,omitempty"`
+	PublicURL            string `json:"public_url,omitempty"`
+	NetworkMode          string `json:"network_mode,omitempty"`
+	Hostname             string `json:"hostname,omitempty"`
+	CloudflareAccountID  string `json:"cloudflare_account_id,omitempty"`
+	CloudflareZoneID     string `json:"cloudflare_zone_id,omitempty"`
+	CloudflareTunnelID   string `json:"cloudflare_tunnel_id,omitempty"`
+	CloudflareTunnelName string `json:"cloudflare_tunnel_name,omitempty"`
+	CloudflareRecordID   string `json:"cloudflare_record_id,omitempty"`
+	DatabaseMode         string `json:"database_mode,omitempty"`
+	DatabaseTested       bool   `json:"database_tested,omitempty"`
+	RedisMode            string `json:"redis_mode,omitempty"`
+	RedisTested          bool   `json:"redis_tested,omitempty"`
+	StorageMode          string `json:"storage_mode,omitempty"`
+	StorageTested        bool   `json:"storage_tested,omitempty"`
+	StorageS3Endpoint    string `json:"storage_s3_endpoint,omitempty"`
+	StorageS3Region      string `json:"storage_s3_region,omitempty"`
+	StorageS3Bucket      string `json:"storage_s3_bucket,omitempty"`
+	StorageS3UseSSL      bool   `json:"storage_s3_use_ssl"`
+	StorageS3PathStyle   bool   `json:"storage_s3_path_style"`
+	StorageS3Prefix      string `json:"storage_s3_prefix,omitempty"`
 }
 
 // SetupCredentials is the single in-memory view of setup credentials. The
@@ -146,26 +147,27 @@ type PublicState struct {
 }
 
 type PublicDraft struct {
-	InstanceName        string `json:"instance_name,omitempty"`
-	PublicURL           string `json:"public_url,omitempty"`
-	NetworkMode         string `json:"network_mode,omitempty"`
-	Hostname            string `json:"hostname,omitempty"`
-	CloudflareAccountID string `json:"cloudflare_account_id,omitempty"`
-	CloudflareZoneID    string `json:"cloudflare_zone_id,omitempty"`
-	CloudflareTunnelID  string `json:"cloudflare_tunnel_id,omitempty"`
-	CloudflareRecordID  string `json:"cloudflare_record_id,omitempty"`
-	DatabaseMode        string `json:"database_mode,omitempty"`
-	DatabaseTested      bool   `json:"database_tested,omitempty"`
-	RedisMode           string `json:"redis_mode,omitempty"`
-	RedisTested         bool   `json:"redis_tested,omitempty"`
-	StorageMode         string `json:"storage_mode,omitempty"`
-	StorageTested       bool   `json:"storage_tested,omitempty"`
-	StorageS3Endpoint   string `json:"storage_s3_endpoint,omitempty"`
-	StorageS3Region     string `json:"storage_s3_region,omitempty"`
-	StorageS3Bucket     string `json:"storage_s3_bucket,omitempty"`
-	StorageS3UseSSL     bool   `json:"storage_s3_use_ssl"`
-	StorageS3PathStyle  bool   `json:"storage_s3_path_style"`
-	StorageS3Prefix     string `json:"storage_s3_prefix,omitempty"`
+	InstanceName         string `json:"instance_name,omitempty"`
+	PublicURL            string `json:"public_url,omitempty"`
+	NetworkMode          string `json:"network_mode,omitempty"`
+	Hostname             string `json:"hostname,omitempty"`
+	CloudflareAccountID  string `json:"cloudflare_account_id,omitempty"`
+	CloudflareZoneID     string `json:"cloudflare_zone_id,omitempty"`
+	CloudflareTunnelID   string `json:"cloudflare_tunnel_id,omitempty"`
+	CloudflareTunnelName string `json:"cloudflare_tunnel_name,omitempty"`
+	CloudflareRecordID   string `json:"cloudflare_record_id,omitempty"`
+	DatabaseMode         string `json:"database_mode,omitempty"`
+	DatabaseTested       bool   `json:"database_tested,omitempty"`
+	RedisMode            string `json:"redis_mode,omitempty"`
+	RedisTested          bool   `json:"redis_tested,omitempty"`
+	StorageMode          string `json:"storage_mode,omitempty"`
+	StorageTested        bool   `json:"storage_tested,omitempty"`
+	StorageS3Endpoint    string `json:"storage_s3_endpoint,omitempty"`
+	StorageS3Region      string `json:"storage_s3_region,omitempty"`
+	StorageS3Bucket      string `json:"storage_s3_bucket,omitempty"`
+	StorageS3UseSSL      bool   `json:"storage_s3_use_ssl"`
+	StorageS3PathStyle   bool   `json:"storage_s3_path_style"`
+	StorageS3Prefix      string `json:"storage_s3_prefix,omitempty"`
 }
 
 type PublicGitHub struct {
@@ -198,7 +200,7 @@ func (s State) Public() PublicState {
 			InstanceName: s.Draft.InstanceName, PublicURL: s.Draft.PublicURL,
 			NetworkMode: s.Draft.NetworkMode, Hostname: s.Draft.Hostname,
 			CloudflareAccountID: s.Draft.CloudflareAccountID, CloudflareZoneID: s.Draft.CloudflareZoneID,
-			CloudflareTunnelID: s.Draft.CloudflareTunnelID, CloudflareRecordID: s.Draft.CloudflareRecordID,
+			CloudflareTunnelID: s.Draft.CloudflareTunnelID, CloudflareTunnelName: s.Draft.CloudflareTunnelName, CloudflareRecordID: s.Draft.CloudflareRecordID,
 			DatabaseMode: s.Draft.DatabaseMode, DatabaseTested: s.Draft.DatabaseTested,
 			RedisMode: s.Draft.RedisMode, RedisTested: s.Draft.RedisTested,
 			StorageMode: s.Draft.StorageMode, StorageTested: s.Draft.StorageTested,
@@ -479,6 +481,9 @@ func ValidateState(state State) error {
 	}
 	if len(state.Step) > 120 || strings.ContainsAny(state.Step, "\x00\r\n") {
 		return errors.New("setup state step is invalid")
+	}
+	if len(state.Draft.CloudflareTunnelName) > 120 || strings.ContainsAny(state.Draft.CloudflareTunnelName, "\x00\r\n") {
+		return errors.New("setup state Cloudflare tunnel name is invalid")
 	}
 	if len(state.SetupSessionID) > 64 || strings.ContainsAny(state.SetupSessionID, "\x00\r\n") || len(state.SetupCodeHash) > 128 || strings.ContainsAny(state.SetupCodeHash, "\x00\r\n") {
 		return errors.New("setup bootstrap claim is invalid")

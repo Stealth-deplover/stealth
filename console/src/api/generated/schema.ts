@@ -2604,6 +2604,7 @@ export interface components {
             cloudflare_account_id?: string;
             cloudflare_zone_id?: string;
             cloudflare_tunnel_id?: string;
+            cloudflare_tunnel_name?: string;
             cloudflare_record_id?: string;
             /** @enum {string} */
             database_mode?: SetupDraftDatabase_mode;

@@ -61,7 +61,11 @@ type Server struct {
 	cloudflareOAuth   CloudflareOAuthClient
 	cloudflareFactory CloudflareClientFactory
 	setupEvents       *setupEventHub
-	setupMu           sync.Mutex
+	// setupMu serializes setup transitions that can have external provider or
+	// Docker side effects. The durable setup-state store remains the source of
+	// truth, while this process-local guard prevents duplicate browser actions
+	// from racing between a state read and the corresponding provider write.
+	setupMu sync.Mutex
 }
 
 // Dependencies carries the collaborators the console API accepts from the

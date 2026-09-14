@@ -30,6 +30,23 @@ The setup install input module translates that durable state into the shared
 `installengine.Plan` and private production environment, so the HTTP adapter
 does not assemble release inputs itself.
 
+The first-owner authorization module under `internal/bootstrap` owns provider
+identity normalization, session and setup-handoff creation, and the repository
+write. GitHub Web Application Flow and the retained legacy Device Flow are
+provider adapters that supply its small authorization proof; neither flow
+duplicates owner persistence rules in an HTTP handler.
+
+The Cloudflare provisioning module owns provider side effects and durable
+intent/resource-ID reconciliation for named tunnels and DNS. It validates the
+selected zone, refuses conflicting provider records, and makes retries safe
+after a state write fails. The HTTP adapter only decodes the request and maps
+the module's typed errors to transport responses.
+
+The host preflight module owns CPU, memory, free-disk, Docker, Compose, and
+Cloudflare outbound-connectivity checks. CLI and browser setup adapters supply
+the local-substitutable probes and retain their own presentation, so readiness
+definitions do not drift between installation surfaces.
+
 The browser setup flow module owns form state, provider callbacks, install
 progress effects, and handoff actions. Cloudflare setup is token-first: the
 server verifies the scoped token, discovers accounts and zones, provisions the

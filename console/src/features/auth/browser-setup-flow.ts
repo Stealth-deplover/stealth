@@ -318,6 +318,11 @@ export function useBrowserSetupFlow() {
       await setupStatus.refetch();
     } catch (error) {
       setActionError(error);
+    } finally {
+      // React Query keeps mutation variables in memory. Clear the mutation
+      // after the request so the provider token is not retained in the
+      // browser mutation state after this one-shot setup action.
+      saveCloudflareToken.reset();
     }
   };
 

@@ -18,7 +18,6 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/installengine"
-	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupconfig"
 	"github.com/Stealth-deplover/stealth/internal/setupinstall"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
@@ -447,7 +446,7 @@ func (s *Server) setupGitHubAuthorizationCallback(w http.ResponseWriter, r *http
 		http.Redirect(w, r, setupRedirect("/setup?github=error"), http.StatusFound)
 		return
 	}
-	owner, err := s.createGitHubInstanceOwner(r.Context(), repository.GitHubDeviceFlow{ID: sessionID, CodeHash: codeHash}, user)
+	owner, err := s.createGitHubInstanceOwner(r.Context(), bootstrap.GitHubAuthorization{SessionID: sessionID, CodeHash: codeHash}, user)
 	if err != nil {
 		s.logger.Warn("GitHub browser owner creation failed", "error", err)
 		http.Redirect(w, r, setupRedirect("/setup?github=error"), http.StatusFound)
@@ -543,6 +542,8 @@ func (s *Server) saveCloudflareToken(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &request) {
 		return
 	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
 	token := strings.TrimSpace(request.APIToken)
 	if token == "" || len(token) > 4096 || strings.ContainsAny(token, "\x00\r\n") {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "Cloudflare API token is invalid")
@@ -586,116 +587,41 @@ func (s *Server) createCloudflareTunnel(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	accountID := strings.TrimSpace(request.AccountID)
-	zoneID := strings.TrimSpace(request.ZoneID)
-	hostname, err := setupstate.ValidateHostname(request.Hostname)
-	if err != nil || accountID == "" || zoneID == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", "Cloudflare account, zone, and hostname are required")
-		return
-	}
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
 	client, err := s.cloudflareClient(r.Context())
 	if err != nil {
 		writeError(w, http.StatusConflict, "cloudflare_not_connected", "connect Cloudflare before creating a tunnel")
 		return
 	}
-	zones, err := client.ListZones(r.Context(), accountID)
+	state, err := cloudflare.Provision(r.Context(), s.setupState, client, cloudflare.ProvisionRequest{
+		AccountID: request.AccountID,
+		ZoneID:    request.ZoneID,
+		Hostname:  request.Hostname,
+		Name:      request.Name,
+	})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "cloudflare_unavailable", "Cloudflare zones could not be verified")
+		var provisioningErr *cloudflare.ProvisionError
+		_ = errors.As(err, &provisioningErr)
+		switch {
+		case errors.Is(err, cloudflare.ErrInvalidRequest):
+			writeError(w, http.StatusUnprocessableEntity, "validation_error", "Cloudflare account, zone, and hostname are invalid")
+		case errors.Is(err, cloudflare.ErrConflict):
+			writeError(w, http.StatusConflict, "cloudflare_tunnel_conflict", "the saved Cloudflare tunnel conflicts with the requested account, zone, hostname, or provider resource")
+		case errors.Is(err, cloudflare.ErrState):
+			writeError(w, http.StatusConflict, "setup_state_conflict", "Cloudflare setup state could not be saved")
+		case errors.Is(err, cloudflare.ErrProvider):
+			if provisioningErr != nil && strings.HasPrefix(strings.ToLower(provisioningErr.Stage), "dns") {
+				writeError(w, http.StatusBadGateway, "cloudflare_dns_failed", "Cloudflare could not configure the DNS record")
+			} else if provisioningErr != nil && provisioningErr.Stage == "zones" {
+				writeError(w, http.StatusBadGateway, "cloudflare_unavailable", "Cloudflare zones could not be verified")
+			} else {
+				writeError(w, http.StatusBadGateway, "cloudflare_tunnel_failed", "Cloudflare could not provision the named tunnel")
+			}
+		default:
+			internalError(s, w, err)
+		}
 		return
-	}
-	zoneFound := false
-	for _, zone := range zones {
-		if zone.ID == zoneID && (hostname == strings.ToLower(zone.Name) || strings.HasSuffix(hostname, "."+strings.ToLower(strings.TrimSuffix(zone.Name, ".")))) {
-			zoneFound = true
-			break
-		}
-	}
-	if !zoneFound {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", "hostname is not inside the selected Cloudflare zone")
-		return
-	}
-	state, err := s.setupState.Load(r.Context())
-	if err != nil {
-		internalError(s, w, err)
-		return
-	}
-	if state.Draft.CloudflareTunnelID != "" && (state.Draft.CloudflareAccountID != accountID || state.Draft.CloudflareZoneID != zoneID || (state.Draft.Hostname != "" && state.Draft.Hostname != hostname)) {
-		writeError(w, http.StatusConflict, "cloudflare_tunnel_conflict", "the saved Cloudflare tunnel is bound to a different account, zone, or hostname")
-		return
-	}
-	tunnelID := state.Draft.CloudflareTunnelID
-	if tunnelID == "" {
-		name := strings.TrimSpace(request.Name)
-		if name == "" {
-			name = "stealth-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
-		}
-		tunnel, createErr := client.CreateTunnel(r.Context(), accountID, name)
-		if createErr != nil {
-			writeError(w, http.StatusBadGateway, "cloudflare_tunnel_failed", "Cloudflare could not create the named tunnel")
-			return
-		}
-		ingress := []cloudflare.IngressRule{{Hostname: hostname, Service: "http://proxy:80"}, {Service: "http_status:404"}}
-		if err := client.ConfigureTunnel(r.Context(), accountID, tunnel.ID, ingress); err != nil {
-			writeError(w, http.StatusBadGateway, "cloudflare_tunnel_failed", "Cloudflare could not configure the named tunnel")
-			return
-		}
-		tunnelToken, tokenErr := client.TunnelToken(r.Context(), accountID, tunnel.ID)
-		if tokenErr != nil {
-			writeError(w, http.StatusBadGateway, "cloudflare_tunnel_failed", "Cloudflare could not retrieve the named tunnel token")
-			return
-		}
-		state, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-			state.Draft.CloudflareAccountID = accountID
-			state.Draft.CloudflareZoneID = zoneID
-			state.Draft.CloudflareTunnelID = tunnel.ID
-			state.Draft.Hostname = hostname
-			state.Draft.PublicURL = "https://" + hostname
-			state.SetSecret("cloudflare_tunnel_token", tunnelToken)
-			return nil
-		})
-		if err != nil {
-			writeError(w, http.StatusConflict, "setup_state_conflict", "the named tunnel could not be saved")
-			return
-		}
-		tunnelID = tunnel.ID
-	}
-	if state.Secret("cloudflare_tunnel_token") == "" {
-		tunnelToken, tokenErr := client.TunnelToken(r.Context(), accountID, tunnelID)
-		if tokenErr != nil {
-			writeError(w, http.StatusBadGateway, "cloudflare_tunnel_failed", "Cloudflare could not retrieve the named tunnel token")
-			return
-		}
-		state, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-			state.SetSecret("cloudflare_tunnel_token", tunnelToken)
-			return nil
-		})
-		if err != nil {
-			writeError(w, http.StatusConflict, "setup_state_conflict", "the named tunnel token could not be saved")
-			return
-		}
-	}
-	if state.Draft.CloudflareRecordID == "" {
-		record, recordErr := client.CreateDNSRecord(r.Context(), zoneID, cloudflare.DNSRecord{Type: "CNAME", Name: hostname, Content: tunnelID + ".cfargotunnel.com", Proxied: true, TTL: 1})
-		if recordErr != nil {
-			writeError(w, http.StatusBadGateway, "cloudflare_dns_failed", "Cloudflare could not create the DNS record")
-			return
-		}
-		state, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-			state.Draft.CloudflareAccountID = accountID
-			state.Draft.CloudflareZoneID = zoneID
-			state.Draft.CloudflareTunnelID = tunnelID
-			state.Draft.CloudflareRecordID = record.ID
-			state.Draft.Hostname = hostname
-			state.Draft.PublicURL = "https://" + hostname
-			state.Draft.NetworkMode = "cloudflare_tunnel"
-			state.Cloudflare.Connected = true
-			state.Cloudflare.TokenValid = true
-			return nil
-		})
-		if err != nil {
-			writeError(w, http.StatusConflict, "setup_state_conflict", "the Cloudflare DNS record could not be saved")
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, state.Public())
 }
