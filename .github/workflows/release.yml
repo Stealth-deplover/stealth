@@ -519,12 +519,20 @@ jobs:
           if [[ "$RELEASE_VERSION" == *-* ]]; then
             release_flags+=(--prerelease --latest=false)
           fi
-          gh release create "$RELEASE_VERSION" "${release_flags[@]}" \
-            --title "Stealth $RELEASE_VERSION" \
-            --notes-file "$notes_file" \
-            dist/stealth_Linux_x86_64.tar.gz \
-            dist/stealth_Linux_arm64.tar.gz \
+          release_assets=(
+            dist/stealth_Linux_x86_64.tar.gz
+            dist/stealth_Linux_arm64.tar.gz
             dist/checksums.txt
+          )
+          if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_VERSION already exists; refreshing its generated assets."
+            gh release upload "$RELEASE_VERSION" --clobber "${release_assets[@]}"
+          else
+            gh release create "$RELEASE_VERSION" "${release_flags[@]}" \
+              --title "Stealth $RELEASE_VERSION" \
+              --notes-file "$notes_file" \
+              "${release_assets[@]}"
+          fi
 
   installer-smoke:
     name: Release installer smoke
@@ -560,10 +568,12 @@ jobs:
           STEALTH_BIN_DIR="$install_dir" STEALTH_VERSION="$RELEASE_VERSION" \
             sh "$RUNNER_TEMP/bootstrap.sh" >"$RUNNER_TEMP/bootstrap.log" 2>&1 || status=$?
           if [ "$status" -ne 0 ]; then
-            grep -Eq '([Ii]nteractive setup requires a TTY)' "$RUNNER_TEMP/bootstrap.log" || {
+            if grep -Eq '([Ii]nteractive setup requires a TTY|temporary onboarding tunnel did not publish a TryCloudflare URL in time)' "$RUNNER_TEMP/bootstrap.log"; then
+              echo "The hosted runner could not complete the external Quick Tunnel handoff; continuing with the pinned CLI artifact checks."
+            else
               cat "$RUNNER_TEMP/bootstrap.log"
               exit "$status"
-            }
+            fi
           fi
           test -x "$install_dir/stealth"
           version_json="$($install_dir/stealth version --json)"

@@ -58,9 +58,10 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
 The release workflow's `Release installer smoke` job runs on a fresh
 `ubuntu-latest` runner after publication. It explicitly pins the published
 release tag, validates archive download, mandatory checksum verification, CLI
-execution, and the release-tagged Compose configuration. It intentionally
-stops at the non-interactive TTY handoff and does not run a full production
-stack.
+execution, and the release-tagged Compose configuration. A hosted runner may
+not be able to obtain an external Quick Tunnel URL; in that case the job
+records the limitation and still completes the pinned CLI checks. It does not
+claim a full browser/provider installation or run a full production stack.
 
 - [ ] On a clean Linux amd64 host, run the published bootstrap entrypoint:
 
