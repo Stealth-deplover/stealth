@@ -10,12 +10,51 @@ modules.
 
 ## Instance bootstrap capability
 
-The Instance bootstrap capability owns the first-run setup state, GitHub Device
-Flow onboarding, and legacy-installation Instance Owner adoption. The HTTP API
-depends on its narrow `BootstrapStore` interface rather than the full
-repository. The capability preserves the existing transaction and sealing
-invariants: only the verified first-owner flow can seal bootstrap, and an
-existing installation can be adopted only through the explicit legacy path.
+The Instance bootstrap capability owns the first-run setup state, GitHub
+first-owner authorization, and legacy-installation Instance Owner adoption.
+The HTTP API depends on its narrow `BootstrapStore` interface rather than the
+full repository. The capability preserves the existing transaction and
+sealing invariants: only the verified first-owner flow can seal bootstrap, and
+an existing installation can be adopted only through the explicit legacy path.
+
+The setup-state credential seam owns the database URL, Redis URL, and S3 key
+pair needed by the setup flow. These values live only in encrypted
+`State.Secrets`; `Draft` and `PublicState` carry the non-secret choices and
+tested markers. Any state-format change must migrate older encrypted setup
+state before rewriting it.
+
+The setup configuration module is the deep seam between HTTP input and durable
+setup state. It owns normalization, validation, credential fallback, and the
+rules that invalidate a dependency's tested marker after a relevant change.
+The setup install input module translates that durable state into the shared
+`installengine.Plan` and private production environment, so the HTTP adapter
+does not assemble release inputs itself.
+
+The first-owner authorization module under `internal/bootstrap` owns provider
+identity normalization, session and setup-handoff creation, and the repository
+write. GitHub Web Application Flow and the retained legacy Device Flow are
+provider adapters that supply its small authorization proof; neither flow
+duplicates owner persistence rules in an HTTP handler.
+
+The Cloudflare provisioning module owns provider side effects and durable
+intent/resource-ID reconciliation for named tunnels and DNS. It validates the
+selected zone, refuses conflicting provider records, and makes retries safe
+after a state write fails. The HTTP adapter only decodes the request and maps
+the module's typed errors to transport responses.
+
+The host preflight module owns CPU, memory, free-disk, Docker, Compose, and
+Cloudflare outbound-connectivity checks. CLI and browser setup adapters supply
+the local-substitutable probes and retain their own presentation, so readiness
+definitions do not drift between installation surfaces.
+
+The browser setup flow module owns form state, provider callbacks, install
+progress effects, and handoff actions. Cloudflare setup is token-first: the
+server verifies the scoped token, discovers accounts and zones, provisions the
+named tunnel and DNS, and the shared installer starts and verifies the
+production cloudflared service before Quick Tunnel cleanup. The browser setup
+view owns stage rendering and delegates lifecycle transitions to that flow
+module. Cloudflare OAuth remains an explicit inactive experimental seam and is
+not a browser connection path.
 
 ## Console log stream
 

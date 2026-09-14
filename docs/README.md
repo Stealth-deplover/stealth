@@ -5,6 +5,7 @@ This index links the repository’s existing guides. The root [README](../README
 ## Getting Started
 
 - [CLI and installer](cli.md): installation flow, operator commands, and release artifacts.
+- [Browser setup](web-setup.md): the temporary setup Compose flow, wizard stages, provider connections, and recovery behavior.
 - [Production deployment](production-deployment.md): the supported Docker Compose baseline.
 
 ## Architecture and API
@@ -19,6 +20,7 @@ This index links the repository’s existing guides. The root [README](../README
 - [Production configuration and proxy](production-deployment.md#configuration)
 - [Proxy and cookies](production-deployment.md#proxy-and-cookies)
 - [CLI installer flow](cli.md#installer-flow)
+- [Browser setup wizard](web-setup.md)
 - [Console development](../console/README.md#development)
 
 ## Product Areas

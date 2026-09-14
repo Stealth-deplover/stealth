@@ -40,6 +40,10 @@ func main() {
 		logger.Error("bootstrap configuration error", "error", err)
 		os.Exit(1)
 	}
+	if err := cfg.ValidateSetup(); err != nil {
+		logger.Error("setup configuration error", "error", err)
+		os.Exit(1)
+	}
 	if err := cfg.ValidateStorage(); err != nil {
 		logger.Error("storage configuration error", "error", err)
 		os.Exit(1)

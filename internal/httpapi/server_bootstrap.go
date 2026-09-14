@@ -1,21 +1,21 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/Stealth-deplover/stealth/internal/auth"
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/repository"
-	"github.com/Stealth-deplover/stealth/internal/validate"
+	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/google/uuid"
 )
 
@@ -58,6 +58,7 @@ type pollGitHubDeviceResponse struct {
 	Status            string          `json:"status"`
 	RetryAfterSeconds int             `json:"retry_after_seconds,omitempty"`
 	Account           *domain.Account `json:"account,omitempty"`
+	HandoffToken      string          `json:"handoff_token,omitempty"`
 }
 
 type adoptInstanceOwnerRequest struct {
@@ -127,6 +128,20 @@ func (s *Server) verifyBootstrapCode(w http.ResponseWriter, r *http.Request) {
 	}
 	verification, err := s.bootstrap.VerifyBootstrapCode(r.Context(), bootstrap.HashCode(req.SetupCode))
 	if err != nil {
+		if errors.Is(err, repository.ErrBootstrapSealed) && s.config.SetupMode && s.setupState != nil {
+			codeHash := bootstrap.HashCode(req.SetupCode)
+			state, stateErr := s.setupState.Load(r.Context())
+			encodedHash := base64.RawURLEncoding.EncodeToString(codeHash)
+			_, sessionErr := uuid.Parse(state.SetupSessionID)
+			if stateErr == nil && state.Phase != setupstate.PhaseComplete && state.SetupExpiresAt.After(time.Now().UTC()) && sessionErr == nil && subtle.ConstantTimeCompare([]byte(state.SetupCodeHash), []byte(encodedHash)) == 1 {
+				if cookieErr := s.setSetupCookie(w, r, state.SetupSessionID, codeHash, state.SetupExpiresAt); cookieErr != nil {
+					internalError(s, w, cookieErr)
+					return
+				}
+				writeBootstrapJSON(w, http.StatusOK, verifyBootstrapCodeResponse{AuthorizationSessionID: state.SetupSessionID, ExpiresAt: state.SetupExpiresAt})
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, repository.ErrBootstrapSealed):
 			writeBootstrapError(w, http.StatusGone, "bootstrap_complete", "instance setup has already been completed")
@@ -137,12 +152,49 @@ func (s *Server) verifyBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if s.config.SetupMode {
+		if s.setupState == nil {
+			writeBootstrapError(w, http.StatusServiceUnavailable, "setup_unavailable", "browser setup is temporarily unavailable")
+			return
+		}
+		codeHash := bootstrap.HashCode(req.SetupCode)
+		_, claimErr := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+			if state.SetupSessionID != "" || state.SetupCodeHash != "" {
+				return errors.New("setup code already claimed")
+			}
+			state.SetupSessionID = verification.ID.String()
+			state.SetupCodeHash = base64.RawURLEncoding.EncodeToString(codeHash)
+			state.SetupExpiresAt = verification.ExpiresAt
+			state.GitHub.AuthorizationSession = verification.ID.String()
+			return nil
+		})
+		if claimErr != nil {
+			writeBootstrapError(w, http.StatusConflict, "setup_code_used", "this setup code has already been used; request a new code from the local CLI")
+			return
+		}
+		if err := s.setSetupCookie(w, r, verification.ID.String(), codeHash, verification.ExpiresAt); err != nil {
+			_, _ = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+				if state.SetupSessionID == verification.ID.String() && state.SetupCodeHash == base64.RawURLEncoding.EncodeToString(codeHash) {
+					state.SetupSessionID = ""
+					state.SetupCodeHash = ""
+					state.SetupExpiresAt = time.Time{}
+				}
+				return nil
+			})
+			internalError(s, w, err)
+			return
+		}
+	}
 	writeBootstrapJSON(w, http.StatusOK, verifyBootstrapCodeResponse{AuthorizationSessionID: verification.ID.String(), ExpiresAt: verification.ExpiresAt})
 }
 
 func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 	var req startGitHubDeviceRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if s.config.SetupMode {
+		writeBootstrapError(w, http.StatusGone, "github_device_flow_inactive", "browser setup uses GitHub web authorization; Device Flow is not enabled for this setup service")
 		return
 	}
 	sessionID, sessionErr := uuid.Parse(strings.TrimSpace(req.AuthorizationSessionID))
@@ -180,7 +232,12 @@ func (s *Server) startGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 		writeBootstrapError(w, http.StatusUnauthorized, "invalid_bootstrap_session", "setup authorization session is invalid")
 		return
 	}
-	device, err := s.githubClient.RequestDeviceCode(r.Context(), s.config.GitHubAppClientID)
+	githubClientID := s.githubClientID(r.Context())
+	if githubClientID == "" {
+		writeBootstrapError(w, http.StatusServiceUnavailable, "github_not_configured", "GitHub first-owner authentication is not configured")
+		return
+	}
+	device, err := s.githubClient.RequestDeviceCode(r.Context(), githubClientID)
 	if err != nil {
 		s.logger.Warn("GitHub device authorization request failed", "error", err)
 		writeBootstrapError(w, http.StatusBadGateway, "github_unavailable", "GitHub authorization is temporarily unavailable")
@@ -286,7 +343,7 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	result, err := s.githubClient.PollAccessToken(r.Context(), s.config.GitHubAppClientID, deviceCode)
+	result, err := s.githubClient.PollAccessToken(r.Context(), s.githubClientID(r.Context()), deviceCode)
 	if err != nil {
 		if !s.updateGitHubDeviceFlow(w, r, sessionID, "pending", flow.Interval, time.Now().UTC().Add(flow.Interval)) {
 			return
@@ -336,22 +393,7 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 			writeBootstrapError(w, http.StatusBadGateway, "github_identity_unavailable", "GitHub identity could not be verified")
 			return
 		}
-		input, identityErr := githubOwnerInput(user, flow)
-		if identityErr != nil {
-			if !s.updateGitHubDeviceFlow(w, r, sessionID, "failed", flow.Interval, time.Now().UTC().Add(flow.Interval)) {
-				return
-			}
-			writeBootstrapError(w, http.StatusBadGateway, "github_invalid_identity", "GitHub returned an invalid identity")
-			return
-		}
-		token, tokenHash, tokenErr := auth.NewSessionToken()
-		if tokenErr != nil {
-			internalError(s, w, tokenErr)
-			return
-		}
-		input.TokenHash = tokenHash
-		input.SessionExpiresAt = time.Now().UTC().Add(s.config.SessionTTL)
-		account, ownerErr := s.bootstrap.CreateGitHubInstanceOwner(r.Context(), input)
+		owner, ownerErr := s.createGitHubInstanceOwner(r.Context(), bootstrap.GitHubAuthorization{SessionID: flow.ID, CodeHash: flow.CodeHash}, user)
 		if ownerErr != nil {
 			switch {
 			case errors.Is(ownerErr, repository.ErrBootstrapSealed):
@@ -363,16 +405,37 @@ func (s *Server) pollGitHubDeviceFlow(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				writeBootstrapError(w, http.StatusConflict, "github_identity_conflict", "that GitHub identity cannot be used for this installation")
+			case errors.Is(ownerErr, errInvalidGitHubIdentity):
+				if !s.updateGitHubDeviceFlow(w, r, sessionID, "failed", flow.Interval, time.Now().UTC().Add(flow.Interval)) {
+					return
+				}
+				writeBootstrapError(w, http.StatusBadGateway, "github_invalid_identity", "GitHub returned an invalid identity")
 			default:
 				internalError(s, w, ownerErr)
 			}
 			return
 		}
-		s.setSessionCookie(w, token)
-		writeBootstrapJSON(w, http.StatusCreated, pollGitHubDeviceResponse{Status: "complete", Account: &account})
+		if !s.config.SetupMode {
+			s.setSessionCookie(w, owner.SessionToken)
+		}
+		writeBootstrapJSON(w, http.StatusCreated, pollGitHubDeviceResponse{Status: "complete", Account: &owner.Account, HandoffToken: owner.HandoffToken})
 		return
 	}
 	writeBootstrapError(w, http.StatusBadGateway, "github_invalid_response", "GitHub returned an invalid authorization response")
+}
+
+var errInvalidGitHubIdentity = bootstrap.ErrInvalidGitHubIdentity
+
+type githubOwnerResult = bootstrap.OwnerResult
+
+func (s *Server) createGitHubInstanceOwner(ctx context.Context, authorization bootstrap.GitHubAuthorization, user githubauth.User) (githubOwnerResult, error) {
+	creator := bootstrap.OwnerCreator{
+		Store:      s.bootstrap,
+		Handoff:    s.setupHandoff,
+		SetupMode:  s.config.SetupMode,
+		SessionTTL: s.config.SessionTTL,
+	}
+	return creator.CreateGitHubInstanceOwner(ctx, authorization, user)
 }
 
 func (s *Server) listBootstrapAdoptionAccounts(w http.ResponseWriter, r *http.Request) {
@@ -419,49 +482,7 @@ func (s *Server) adoptBootstrapOwner(w http.ResponseWriter, r *http.Request) {
 }
 
 func githubOwnerInput(user githubauth.User, flow repository.GitHubDeviceFlow) (repository.GitHubOwnerInput, error) {
-	login := strings.TrimSpace(user.Login)
-	if user.ID <= 0 || login == "" || len(login) > 120 || strings.ContainsAny(login, "\x00\r\n") {
-		return repository.GitHubOwnerInput{}, errors.New("invalid GitHub identity")
-	}
-	providerEmail := strings.TrimSpace(user.Email)
-	if len(providerEmail) > 320 {
-		providerEmail = ""
-	}
-	if providerEmail != "" {
-		if normalized, err := validate.Email(providerEmail); err == nil {
-			providerEmail = normalized
-		} else {
-			providerEmail = ""
-		}
-	}
-	displayName := strings.TrimSpace(user.Name)
-	if displayName == "" {
-		displayName = login
-	}
-	avatarURL := strings.TrimSpace(user.AvatarURL)
-	if len(displayName) > 240 || strings.ContainsAny(displayName, "\x00\r\n") || len(avatarURL) > 2048 || strings.ContainsAny(avatarURL, "\x00\r\n") {
-		return repository.GitHubOwnerInput{}, errors.New("invalid GitHub identity metadata")
-	}
-	if avatarURL != "" {
-		parsedAvatarURL, err := url.Parse(avatarURL)
-		// GitHub commonly appends a cache/version query (for example, ?v=4)
-		// to avatar URLs. It is display metadata, not a redirect target, so
-		// keep safe HTTPS URLs while rejecting credentials and fragments.
-		if err != nil || parsedAvatarURL.Scheme != "https" || parsedAvatarURL.Host == "" || parsedAvatarURL.User != nil || parsedAvatarURL.Fragment != "" {
-			return repository.GitHubOwnerInput{}, errors.New("invalid GitHub avatar URL")
-		}
-	}
-	return repository.GitHubOwnerInput{
-		BootstrapSessionID: flow.ID,
-		BootstrapCodeHash:  flow.CodeHash,
-		AccountID:          uuid.Must(uuid.NewV7()),
-		SessionID:          uuid.Must(uuid.NewV7()),
-		ProviderUserID:     fmt.Sprintf("%d", user.ID),
-		ProviderLogin:      login,
-		ProviderEmail:      providerEmail,
-		DisplayName:        displayName,
-		AvatarURL:          avatarURL,
-	}, nil
+	return bootstrap.GitHubOwnerInput(user, bootstrap.GitHubAuthorization{SessionID: flow.ID, CodeHash: flow.CodeHash})
 }
 
 func (s *Server) verifyBootstrapCLI(w http.ResponseWriter, r *http.Request) bool {
@@ -481,7 +502,16 @@ func (s *Server) updateGitHubDeviceFlow(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) bootstrapConfigured() bool {
-	return len(s.bootstrapCLIKey()) == 32 && strings.TrimSpace(s.config.GitHubAppClientID) != ""
+	return len(s.bootstrapCLIKey()) == 32 && (s.config.SetupMode || strings.TrimSpace(s.config.GitHubAppClientID) != "")
+}
+
+func (s *Server) githubClientID(ctx context.Context) string {
+	if s.config.SetupMode && s.setupState != nil {
+		if state, err := s.setupState.Load(ctx); err == nil && strings.TrimSpace(state.GitHub.ClientID) != "" {
+			return strings.TrimSpace(state.GitHub.ClientID)
+		}
+	}
+	return strings.TrimSpace(s.config.GitHubAppClientID)
 }
 
 func (s *Server) bootstrapCLIKey() []byte {

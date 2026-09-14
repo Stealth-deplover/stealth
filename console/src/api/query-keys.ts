@@ -1,5 +1,10 @@
 export const queryKeys = {
   bootstrapStatus: ["bootstrap-status"] as const,
+  setupStatus: ["setup-status"] as const,
+  setupPreflight: ["setup-preflight"] as const,
+  setupCloudflareAccounts: ["setup-cloudflare-accounts"] as const,
+  setupCloudflareZones: (accountId: string) =>
+    ["setup-cloudflare-zones", accountId] as const,
   account: ["account"] as const,
   accountSessions: ["account-sessions"] as const,
   organizations: ["organizations"] as const,

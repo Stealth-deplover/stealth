@@ -41,16 +41,14 @@ curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scrip
 ```
 
 The bootstrap verifies the downloaded archive and SHA-256 checksum, then
-starts the interactive `stealth install` flow. To invoke the installed CLI
-directly, run `stealth install`. It generates private configuration and
-secrets, pulls matching API/worker/migration/Console images, applies
-migrations, starts the stack, and checks health and readiness. On a fresh
-instance it then starts the first-run Instance Owner flow: the CLI displays a
-15-minute setup code and a temporary onboarding URL. The browser verifies the
-code, authenticates through the configured GitHub App Device Flow, and creates
-the first owner without a local password form. The Quick Tunnel is closed after
-onboarding and is not production ingress. The default local proxy, Console, and API ports are
-`8080`, `13000`, and `18080` respectively.
+starts `stealth install`. To invoke the installed CLI directly, run
+`stealth install`. On a fresh host it performs local Docker checks, starts the
+temporary setup Compose project, and prints a 15-minute HTTPS setup URL and
+one-time code. The browser wizard then configures GitHub, networking,
+database, Redis, storage, and the production Cloudflare Tunnel before handing
+off to the dashboard. The temporary setup services and Quick Tunnel are
+removed after successful production verification. The default local proxy,
+Console, and API ports are `8080`, `13000`, and `18080` respectively.
 
 See [Production deployment](docs/production-deployment.md) and the
 [CLI guide](docs/cli.md) for the supported self-hosting path.
@@ -147,7 +145,7 @@ managed-service availability.
 ## Releases
 
 Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
-coordinated GHCR images for API, worker, migration, and Console plus Linux
+coordinated GHCR images for API, setup, worker, migration, and Console plus Linux
 amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
 The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
 is documented with [Release engineering](docs/release.md), the [release

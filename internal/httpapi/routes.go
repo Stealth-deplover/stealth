@@ -23,6 +23,11 @@ func (s *Server) routes() http.Handler {
 	r.Get("/metrics", s.metricsHandler)
 	r.Route("/v1", func(r chi.Router) {
 		s.registerBootstrapRoutes(r)
+		if s.config.SetupMode {
+			s.registerSetupRoutes(r)
+			return
+		}
+		r.Post("/setup/handoff", s.completeSetupHandoff)
 		s.registerAccountRoutes(r)
 		s.registerOrganizationRoutes(r)
 		s.registerProjectRoutes(r)
@@ -33,6 +38,9 @@ func (s *Server) routes() http.Handler {
 		s.registerFunctionRoutes(r)
 		s.registerSiteRoutes(r)
 	})
+	if s.config.SetupMode {
+		return r
+	}
 	// A reverse proxy can forward custom-domain traffic to the same API. The
 	// hostname is resolved against verified Site domains; unknown hosts return
 	// 404 and never fall back to an arbitrary project artifact.

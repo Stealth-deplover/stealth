@@ -1,26 +1,17 @@
 package cli
 
 import (
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Stealth-deplover/stealth/internal/githubauth"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
-type InstallPlan struct {
-	Layout            InstallLayout
-	Version           string
-	PublicURL         string
-	GitHubAppClientID string
-	DockerGID         uint32
-	Existing          bool
-}
+type InstallPlan = installengine.Plan
 
 type localPorts struct {
 	API     string
@@ -48,108 +39,15 @@ func validatePublicURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func generateSecretBytes(size int) ([]byte, error) {
-	if size < 1 {
-		return nil, fmt.Errorf("secret size must be positive")
-	}
-	secret := make([]byte, size)
-	if _, err := rand.Read(secret); err != nil {
-		return nil, fmt.Errorf("generate secret: %w", err)
-	}
-	return secret, nil
-}
-
-func generateHexSecret(size int) (string, error) {
-	secret, err := generateSecretBytes(size)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(secret), nil
-}
-
-func generateBase64Secret(size int) (string, error) {
-	secret, err := generateSecretBytes(size)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(secret), nil
-}
-
 func generateConfig(plan InstallPlan) (string, error) {
-	publicURL, err := validatePublicURL(plan.PublicURL)
-	if err != nil {
-		return "", err
-	}
-	if plan.Version == "" {
-		return "", fmt.Errorf("release version is required")
-	}
-	if err := validateReleaseVersion(plan.Version); err != nil {
-		return "", err
-	}
-	githubAppClientID, err := validateGitHubAppClientID(plan.GitHubAppClientID)
-	if err != nil {
-		return "", err
-	}
-	postgresPassword, err := generateHexSecret(24)
-	if err != nil {
-		return "", err
-	}
-	redisPassword, err := generateHexSecret(24)
-	if err != nil {
-		return "", err
-	}
-	functionsKey, err := generateBase64Secret(32)
-	if err != nil {
-		return "", err
-	}
-	bootstrapCLIKey, err := generateBase64Secret(32)
-	if err != nil {
-		return "", err
-	}
-	metricsToken, err := generateHexSecret(32)
-	if err != nil {
-		return "", err
-	}
-	cookieSecure := "false"
-	if strings.EqualFold(mustParseURLScheme(publicURL), "https") {
-		cookieSecure = "true"
-	}
-
-	values := map[string]string{
-		"COMPOSE_PROJECT_NAME":            "stealth",
-		"STEALTH_API_IMAGE":               imageName("stealth-api", plan.Version),
-		"STEALTH_WORKER_IMAGE":            imageName("stealth-worker", plan.Version),
-		"STEALTH_MIGRATE_IMAGE":           imageName("stealth-migrate", plan.Version),
-		"STEALTH_CONSOLE_IMAGE":           imageName("stealth-console", plan.Version),
-		"POSTGRES_DB":                     "stealth",
-		"POSTGRES_USER":                   "stealth",
-		"POSTGRES_PASSWORD":               postgresPassword,
-		"REDIS_PASSWORD":                  redisPassword,
-		"FUNCTIONS_SECRET_KEY":            functionsKey,
-		"BOOTSTRAP_CLI_KEY":               bootstrapCLIKey,
-		"GITHUB_APP_CLIENT_ID":            githubAppClientID,
-		"PUBLIC_APP_URL":                  publicURL,
-		"COOKIE_SECURE":                   cookieSecure,
-		"TRUSTED_PROXY_CIDRS":             "172.30.0.0/24",
-		"STEALTH_NETWORK_SUBNET":          "172.30.0.0/24",
-		"DOCKER_GID":                      strconv.FormatUint(uint64(plan.DockerGID), 10),
-		"METRICS_TOKEN":                   metricsToken,
-		"FUNCTIONS_RUNNER_ENABLED":        "true",
-		"FUNCTIONS_WORKER_ID":             "stealth-worker",
-		"FUNCTIONS_RUNNER_STAGING_VOLUME": "stealth_function_runner_staging",
-		"STORAGE_DRIVER":                  "local",
-		"STORAGE_MAX_FILE_SIZE":           "50MiB",
-		"STORAGE_DEFAULT_QUOTA_BYTES":     "1GiB",
-		"PROJECT_OPERATION_RATE_LIMIT":    "120",
-		"PROJECT_OPERATION_RATE_WINDOW":   "1m",
-		"AUTH_RATE_LIMIT":                 "10",
-		"AUTH_RATE_WINDOW":                "1m",
-		"PROXY_HTTP_BIND":                 "127.0.0.1",
-		"PROXY_HTTP_PORT":                 "8080",
-		"API_HOST_PORT":                   "18080",
-		"CONSOLE_HOST_PORT":               "13000",
-	}
-	return formatEnvFile(values), nil
+	return installengine.GenerateConfig(installengine.ConfigOptions{
+		Version:           plan.Version,
+		PublicURL:         plan.PublicURL,
+		GitHubAppClientID: plan.GitHubAppClientID,
+		DockerGID:         plan.DockerGID,
+		Setup:             plan.Setup,
+		InstallRoot:       plan.Layout.Root,
+	})
 }
 
 func validateGitHubAppClientID(raw string) (string, error) {
@@ -167,64 +65,19 @@ func validateGitHubAppClientID(raw string) (string, error) {
 }
 
 func imageName(name, version string) string {
-	return "ghcr.io/stealth-deplover/" + name + ":" + version
-}
-
-func mustParseURLScheme(raw string) string {
-	parsed, _ := url.Parse(raw)
-	if parsed == nil {
-		return ""
-	}
-	return parsed.Scheme
+	return installengine.ImageName(name, version)
 }
 
 func formatEnvFile(values map[string]string) string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	var builder strings.Builder
-	builder.WriteString("# Generated by Stealth CLI. Keep this file private.\n")
-	for _, key := range keys {
-		builder.WriteString(key)
-		builder.WriteByte('=')
-		builder.WriteString(values[key])
-		builder.WriteByte('\n')
-	}
-	return builder.String()
+	return installengine.FormatEnvFile(values)
 }
 
 func readEnvFile(path string) (map[string]string, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	values := make(map[string]string)
-	for lineNumber, rawLine := range strings.Split(string(contents), "\n") {
-		line := strings.TrimSpace(rawLine)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || !validEnvKey(key) || strings.ContainsAny(value, "\r\n\x00") {
-			return nil, fmt.Errorf("invalid config.env line %d", lineNumber+1)
-		}
-		values[key] = strings.Trim(value, " \t")
-	}
-	return values, nil
+	return installengine.ReadEnvFile(path)
 }
 
 func validEnvKey(value string) bool {
-	if value == "" {
-		return false
-	}
-	for index, char := range value {
-		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' || index == 0 && char >= '0' && char <= '9' {
-			return false
-		}
-	}
-	return true
+	return installengine.ValidEnvKey(value)
 }
 
 func hasRequiredConfig(values map[string]string) bool {
@@ -239,13 +92,18 @@ func hasRequiredConfig(values map[string]string) bool {
 		"REDIS_PASSWORD",
 		"FUNCTIONS_SECRET_KEY",
 		"BOOTSTRAP_CLI_KEY",
-		"GITHUB_APP_CLIENT_ID",
 		"PUBLIC_APP_URL",
 		"DOCKER_GID",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
 			return false
 		}
+	}
+	if !strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true") && strings.TrimSpace(values["GITHUB_APP_CLIENT_ID"]) == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true") && strings.TrimSpace(values["STEALTH_SETUP_IMAGE"]) == "" {
+		return false
 	}
 	return true
 }
@@ -259,7 +117,7 @@ func configCheckDetail(path string, private bool) string {
 
 func validLogService(service string) bool {
 	switch service {
-	case "api", "worker", "console", "proxy", "postgres", "redis", "migrate":
+	case "api", "worker", "console", "proxy", "postgres", "redis", "migrate", "setup", "setup-console", "setup-proxy", "cloudflared":
 		return true
 	default:
 		return false
@@ -274,12 +132,16 @@ func portsFromConfig(values map[string]string) localPorts {
 	}
 }
 
-func portOrDefault(raw, fallback string) string {
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value < 1 || value > 65535 {
-		return fallback
+func setupPortsFromConfig(values map[string]string) localPorts {
+	return localPorts{
+		API:     portOrDefault(values["SETUP_API_HOST_PORT"], "18081"),
+		Console: portOrDefault(values["SETUP_CONSOLE_HOST_PORT"], "13001"),
+		Proxy:   portOrDefault(values["SETUP_PROXY_HTTP_PORT"], "8081"),
 	}
-	return strconv.Itoa(value)
+}
+
+func portOrDefault(raw, fallback string) string {
+	return installengine.PortOrDefault(raw, fallback)
 }
 
 func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
@@ -306,15 +168,21 @@ func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
 	if err := validateReleaseVersion(version); err != nil {
 		return nil, fmt.Errorf("existing release version from %s is invalid: %w", versionSource, err)
 	}
-	githubAppClientID, err := validateGitHubAppClientID(values["GITHUB_APP_CLIENT_ID"])
-	if err != nil {
-		return nil, fmt.Errorf("existing GITHUB_APP_CLIENT_ID is invalid: %w", err)
+	setupMode := strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true")
+	githubAppClientID := strings.TrimSpace(values["GITHUB_APP_CLIENT_ID"])
+	if !setupMode {
+		githubAppClientID, err = validateGitHubAppClientID(githubAppClientID)
+		if err != nil {
+			return nil, fmt.Errorf("existing GITHUB_APP_CLIENT_ID is invalid: %w", err)
+		}
+	} else if githubAppClientID != "" && !githubauth.ValidClientID(githubAppClientID) {
+		return nil, fmt.Errorf("existing GITHUB_APP_CLIENT_ID is invalid")
 	}
 	gid, err := strconv.ParseUint(values["DOCKER_GID"], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("existing DOCKER_GID is invalid")
 	}
-	return &InstallPlan{Layout: layout, Version: version, PublicURL: publicURL, GitHubAppClientID: githubAppClientID, DockerGID: uint32(gid), Existing: true}, nil
+	return &InstallPlan{Layout: layout, Version: version, PublicURL: publicURL, GitHubAppClientID: githubAppClientID, DockerGID: uint32(gid), Existing: true, Setup: setupMode, ExternalDatabase: strings.EqualFold(values["DATABASE_MODE"], "external"), ExternalRedis: strings.EqualFold(values["REDIS_MODE"], "external")}, nil
 }
 
 func imageVersion(image string) (string, error) {
@@ -338,36 +206,9 @@ func imageVersion(image string) (string, error) {
 }
 
 func writePrivateFile(path, contents string) error {
-	return writeAtomic(path, []byte(contents), 0600)
+	return installengine.WritePrivateFile(path, contents)
 }
 
 func writeAtomic(path string, contents []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".stealth-*")
-	if err != nil {
-		return err
-	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(mode); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
+	return installengine.WriteAtomic(path, contents, mode)
 }

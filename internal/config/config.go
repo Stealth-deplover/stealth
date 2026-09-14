@@ -74,7 +74,7 @@ type Config struct {
 	FunctionsDefaultQuotaBytes int64
 	FunctionsSecretKey         []byte
 	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
-	// a first-run setup session and encrypts short-lived GitHub device state.
+	// a first-run setup session and encrypts short-lived GitHub authorization state.
 	// It is a separate security domain from FunctionsSecretKey.
 	BootstrapCLIKey               []byte
 	GitHubAppClientID             string
@@ -113,6 +113,18 @@ type Config struct {
 	// Console. Agent execution remains queue-only until a trusted provider
 	// worker is deployed.
 	AgentProviderCatalog []AgentProviderCatalogItem
+	// SetupMode exposes only the short-lived browser installer routes. The
+	// setup Compose service is allowed to use the Docker socket; production API
+	// containers never enable this mode.
+	SetupMode                   bool
+	InstallRoot                 string
+	SetupStateFile              string
+	SetupHandoffFile            string
+	ProductionComposeFile       string
+	SetupComposeFile            string
+	CloudflareOAuthClientID     string
+	CloudflareOAuthClientSecret string
+	CloudflareAPIBaseURL        string
 }
 
 func Load() (Config, error) {
@@ -156,6 +168,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	setupSettings, err := loadSetupSettings()
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{}
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
@@ -167,6 +183,7 @@ func Load() (Config, error) {
 	transportSettings.apply(&config)
 	storageSettings.apply(&config)
 	tlsSettings.apply(&config)
+	setupSettings.apply(&config)
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
@@ -208,8 +225,27 @@ func (c Config) ValidateBootstrap() error {
 	if len(c.BootstrapCLIKey) != 32 {
 		return fmt.Errorf("BOOTSTRAP_CLI_KEY must be configured as base64-encoded 32 bytes")
 	}
-	if !validGitHubAppClientID(c.GitHubAppClientID) {
+	if !c.SetupMode && !validGitHubAppClientID(c.GitHubAppClientID) {
 		return fmt.Errorf("GITHUB_APP_CLIENT_ID must be configured")
+	}
+	return nil
+}
+
+func (c Config) ValidateSetup() error {
+	if !c.SetupMode {
+		return nil
+	}
+	if strings.TrimSpace(c.InstallRoot) == "" || !filepath.IsAbs(c.InstallRoot) || filepath.Clean(c.InstallRoot) == string(filepath.Separator) {
+		return fmt.Errorf("STEALTH_INSTALL_ROOT must be a valid non-root absolute path in setup mode")
+	}
+	if strings.TrimSpace(c.SetupStateFile) == "" || !filepath.IsAbs(c.SetupStateFile) || filepath.Clean(c.SetupStateFile) == string(filepath.Separator) {
+		return fmt.Errorf("STEALTH_SETUP_STATE_FILE must be a valid non-root absolute path in setup mode")
+	}
+	if strings.TrimSpace(c.ProductionComposeFile) == "" || !filepath.IsAbs(c.ProductionComposeFile) {
+		return fmt.Errorf("STEALTH_PRODUCTION_COMPOSE_FILE must be an absolute path in setup mode")
+	}
+	if strings.TrimSpace(c.SetupComposeFile) == "" || !filepath.IsAbs(c.SetupComposeFile) {
+		return fmt.Errorf("STEALTH_SETUP_COMPOSE_FILE must be an absolute path in setup mode")
 	}
 	return nil
 }

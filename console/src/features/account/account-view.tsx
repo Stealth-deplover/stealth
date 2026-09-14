@@ -165,9 +165,9 @@ export function AccountView() {
           <CardContent>
             {isGitHubIdentity ? (
               <p className="text-sm leading-6 text-slate-400">
-                This account was created through GitHub Device Flow and does not
-                have a local password. Keep the GitHub identity available for
-                future sign-in and recovery work.
+                This account was created through GitHub authorization and does
+                not have a local password. Keep the GitHub identity available
+                for future sign-in and recovery work.
               </p>
             ) : (
               <form onSubmit={submitPassword} className="space-y-4">

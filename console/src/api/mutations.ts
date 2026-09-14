@@ -1,4 +1,5 @@
 export * from "./mutations/auth";
+export * from "./mutations/setup";
 export * from "./mutations/organizations";
 export * from "./mutations/functions";
 export * from "./mutations/sites";

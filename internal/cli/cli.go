@@ -172,12 +172,6 @@ func (a *App) runInstall(args []string) int {
 		fmt.Fprintln(a.errOut, "install does not accept positional arguments")
 		return 2
 	}
-	if !a.hasInteractiveTerminal() {
-		fmt.Fprintln(a.errOut, "Interactive setup requires a TTY.")
-		fmt.Fprintln(a.errOut, "Run `stealth install` from a terminal.")
-		return 1
-	}
-
 	a.verbose = *verbose
 	layout, err := a.layout()
 	if err != nil {
@@ -191,6 +185,14 @@ func (a *App) runInstall(args []string) int {
 		fmt.Fprintln(a.errOut, "Run `stealth doctor` to inspect it, or `stealth install --repair` to verify it safely.")
 		return 1
 	}
+	if existing && *repair && !a.hasInteractiveTerminal() {
+		values, configErr := readEnvFile(layout.EnvFile)
+		setupMode := configErr == nil && strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true")
+		if !setupMode {
+			fmt.Fprintln(a.errOut, "Repair setup requires a TTY so the existing configuration can be reviewed safely.")
+			return 1
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -201,6 +203,9 @@ func (a *App) runInstall(args []string) int {
 			fmt.Fprintf(a.errOut, "existing installation cannot be repaired: %v\n", loadErr)
 			return 1
 		}
+		if plan.Setup {
+			return a.runWebBootstrap(ctx, checks, layout, plan.Version, true)
+		}
 		return a.runInstallerTUI(ctx, checks, plan, true)
 	}
 	version, err := a.resolveReleaseVersion(*versionOverride)
@@ -208,10 +213,7 @@ func (a *App) runInstall(args []string) int {
 		fmt.Fprintf(a.errOut, "cannot determine release version: %v\n", err)
 		return 1
 	}
-	if result := a.runInstallerTUI(ctx, checks, &InstallPlan{Layout: layout, Version: version}, false); result != 0 {
-		return result
-	}
-	return a.runSetupWithContext(ctx)
+	return a.runWebBootstrap(ctx, checks, layout, version, false)
 }
 
 func (a *App) runStatus(args []string) int {
@@ -233,6 +235,7 @@ func (a *App) runStatus(args []string) int {
 		fmt.Fprintf(a.errOut, "could not read configuration: %v\n", err)
 		return 1
 	}
+	setupMode := strings.EqualFold(strings.TrimSpace(config["SETUP_MODE"]), "true")
 	statuses, err := a.composeStatuses(context.Background(), layout)
 	if err != nil {
 		fmt.Fprintf(a.errOut, "could not read Docker service status: %v\n", err)
@@ -240,7 +243,11 @@ func (a *App) runStatus(args []string) int {
 	}
 	fmt.Fprintf(a.out, "Stealth %s\n\n", valueOr(config["VERSION"], readVersion(layout)))
 	fmt.Fprintln(a.out, "SERVICE          STATUS")
-	for _, service := range []string{"api", "worker", "console", "postgres", "redis", "proxy"} {
+	services := []string{"api", "worker", "console", "postgres", "redis", "proxy"}
+	if setupMode {
+		services = []string{"setup", "setup-console", "postgres", "redis", "setup-proxy"}
+	}
+	for _, service := range services {
 		status := statuses[service]
 		if status.Service == "" {
 			status = ServiceStatus{Service: service, State: "not found"}
@@ -250,7 +257,7 @@ func (a *App) runStatus(args []string) int {
 	if publicURL := config["PUBLIC_APP_URL"]; publicURL != "" {
 		fmt.Fprintf(a.out, "\nConsole: %s\n", publicURL)
 	}
-	if anyServiceUnhealthy(statuses) {
+	if anyRequiredServiceUnhealthy(statuses, setupMode) {
 		return 1
 	}
 	return 0
@@ -300,19 +307,30 @@ func (a *App) runDoctor(args []string) int {
 		check("Configuration syntax", false, "could not parse config.env")
 		return boolExit(failed)
 	}
+	setupMode := strings.EqualFold(strings.TrimSpace(config["SETUP_MODE"]), "true")
+	if setupMode {
+		check("Setup Compose file", regularFile(layout.SetupComposeFile), layout.SetupComposeFile)
+	}
 	check("Configuration syntax", hasRequiredConfig(config), "required values are present")
 
 	statuses, statusErr := a.composeStatuses(ctx, layout)
 	if statusErr != nil {
 		check("Docker services", false, "could not query Compose")
 	} else {
-		for _, service := range []string{"postgres", "redis", "api", "worker", "console", "proxy"} {
+		services := []string{"postgres", "redis", "api", "worker", "console", "proxy"}
+		if setupMode {
+			services = []string{"postgres", "redis", "setup", "setup-console", "setup-proxy"}
+		}
+		for _, service := range services {
 			status := statuses[service]
 			check(displayServiceName(service), status.Healthy(), status.Display())
 		}
 	}
 
 	ports := portsFromConfig(config)
+	if setupMode {
+		ports = setupPortsFromConfig(config)
+	}
 	for _, endpoint := range []struct {
 		name string
 		url  string

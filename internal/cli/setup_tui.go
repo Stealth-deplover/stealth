@@ -327,7 +327,7 @@ func (m setupModel) View() string {
 		if m.pollError != nil {
 			builder.WriteString("\n" + warningStyle.Render("! Waiting for the API; retrying automatically") + "\n")
 		}
-		builder.WriteString("\nEnter the setup code on the page, then continue with GitHub to create the first Instance Owner.\n")
+		builder.WriteString("\nEnter the setup code on the page, then authorize the first Instance Owner in GitHub's browser flow.\n")
 		builder.WriteString(m.spinner.View() + " Waiting for GitHub authorization…\n\n")
 		builder.WriteString(renderSubtitle("Ctrl+C cancels safely; data and configuration are preserved."))
 	case setupExpired:

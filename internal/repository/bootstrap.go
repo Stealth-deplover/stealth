@@ -10,7 +10,7 @@ import (
 )
 
 // BootstrapRepository owns the persistence boundary for first-run instance
-// bootstrap, GitHub Device Flow onboarding, and legacy owner adoption.
+// bootstrap, GitHub first-owner onboarding, and legacy owner adoption.
 //
 // Its transaction methods share only package-level audit and error adapters
 // with the rest of persistence, so the setup flow has a clear ownership seam

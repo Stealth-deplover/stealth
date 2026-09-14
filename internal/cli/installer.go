@@ -315,8 +315,8 @@ func renderInstallerView(m installerModel) string {
 		builder.WriteString("Enter to continue · Esc to go back")
 	case installerGitHub:
 		builder.WriteString("GitHub authentication\n\n")
-		builder.WriteString("Stealth uses a GitHub App Device Flow to verify the first Instance Owner.\n")
-		builder.WriteString("Enable Device Flow in the App settings; no TryCloudflare callback URL is needed.\n\n")
+		builder.WriteString("Fresh browser setup uses a GitHub App Manifest and browser authorization.\n")
+		builder.WriteString("This direct installer accepts an existing App identifier for legacy bootstrap compatibility.\n\n")
 		builder.WriteString(m.githubInput.View())
 		builder.WriteString("\n")
 		if m.err != nil {

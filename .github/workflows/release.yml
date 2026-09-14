@@ -88,6 +88,15 @@ jobs:
       - name: Validate production Compose file
         run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
 
+      - name: Validate setup Compose file
+        env:
+          STEALTH_ENV_FILE: .env.production.example
+          STEALTH_INSTALL_ROOT: /tmp/stealth-install
+          STEALTH_SETUP_STATE_FILE: /tmp/stealth-install/state/setup-state.enc
+          STEALTH_PRODUCTION_COMPOSE_FILE: /tmp/stealth-install/compose.production.yaml
+          STEALTH_SETUP_COMPOSE_FILE: /tmp/stealth-install/compose.setup.yaml
+        run: docker compose --env-file .env.production.example -f compose.setup.yaml config --quiet
+
       - name: Validate smoke scripts
         run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh
 
@@ -153,7 +162,7 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.version }}
 
-      - name: Build local API, worker, migration, and Console images
+      - name: Build local API, setup, worker, migration, and Console images
         shell: bash
         run: |
           set -euo pipefail
@@ -162,6 +171,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-api:smoke-$SHORT_SHA" .
+          docker build --target setup \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-setup:smoke-$SHORT_SHA" .
           docker build --target worker \
             --build-arg VERSION="$VERSION" \
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
@@ -347,6 +361,26 @@ jobs:
             org.opencontainers.image.created=${{ env.BUILD_TIME }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
+      - name: Build and push setup image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: setup
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-setup:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-setup:sha-${{ env.SHORT_SHA }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
       - name: Build and push migration image
         uses: docker/build-push-action@v7
         with:
@@ -416,7 +450,7 @@ jobs:
           cat > "$notes_file" <<EOF
           ## Highlights
 
-          - Published coordinated API, worker, migration, and standalone Console images for $RELEASE_VERSION.
+          - Published coordinated API, setup, worker, migration, and standalone Console images for $RELEASE_VERSION.
           - Image tags: \`$RELEASE_VERSION\` and \`sha-$SHORT_SHA\`.
           - Attached verified Linux amd64 and arm64 Stealth CLI archives.
 

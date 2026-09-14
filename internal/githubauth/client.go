@@ -1,10 +1,13 @@
-// Package githubauth contains the narrow GitHub App Device Flow client used
+// Package githubauth contains the narrow GitHub App authorization clients used
 // by first-owner bootstrap. It intentionally exposes no GitHub token to the
-// HTTP or Console layers.
+// Console layer.
 package githubauth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,12 +19,13 @@ import (
 )
 
 const (
-	deviceCodeURL = "https://github.com/login/device/code"
-	tokenURL      = "https://github.com/login/oauth/access_token"
-	userURL       = "https://api.github.com/user"
-	apiVersion    = "2022-11-28"
-	deviceGrant   = "urn:ietf:params:oauth:grant-type:device_code"
-	maxResponse   = 64 << 10
+	authorizationURL = "https://github.com/login/oauth/authorize"
+	deviceCodeURL    = "https://github.com/login/device/code"
+	tokenURL         = "https://github.com/login/oauth/access_token"
+	userURL          = "https://api.github.com/user"
+	apiVersion       = "2022-11-28"
+	deviceGrant      = "urn:ietf:params:oauth:grant-type:device_code"
+	maxResponse      = 64 << 10
 )
 
 // DeviceVerificationURI is a fixed GitHub URL. A temporary TryCloudflare
@@ -51,6 +55,13 @@ type PollResult struct {
 	AccessToken string
 }
 
+type OAuthToken struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	Scope        string `json:"scope"`
+	RefreshToken string `json:"refresh_token"`
+}
+
 type User struct {
 	ID        int64  `json:"id"`
 	Login     string `json:"login"`
@@ -65,6 +76,15 @@ type User struct {
 type Client interface {
 	RequestDeviceCode(ctx context.Context, clientID string) (DeviceAuthorization, error)
 	PollAccessToken(ctx context.Context, clientID, deviceCode string) (PollResult, error)
+	GetUser(ctx context.Context, accessToken string) (User, error)
+}
+
+// OAuthClient is the browser authorization capability used by the setup
+// wizard. It is separate from Client so the legacy Device Flow implementation
+// can remain available to existing non-browser callers without making the
+// setup wizard depend on it.
+type OAuthClient interface {
+	ExchangeAuthorizationCode(ctx context.Context, clientID, clientSecret, code, redirectURI, codeVerifier string) (OAuthToken, error)
 	GetUser(ctx context.Context, accessToken string) (User, error)
 }
 
@@ -85,6 +105,40 @@ func NewClient(client *http.Client) *HTTPClient {
 		TokenURL:   tokenURL,
 		UserURL:    userURL,
 	}
+}
+
+// NewPKCE returns a verifier and its S256 challenge for a browser
+// authorization request. The verifier is intended to remain server-side and
+// must never be sent to the Console.
+func NewPKCE() (verifier, challenge string, err error) {
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", "", fmt.Errorf("generate GitHub PKCE verifier: %w", err)
+	}
+	verifier = base64.RawURLEncoding.EncodeToString(randomBytes)
+	digest := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(digest[:])
+	return verifier, challenge, nil
+}
+
+// AuthorizationURL builds GitHub's web application authorization URL. The
+// caller is responsible for ensuring the redirect URI belongs to the current
+// trusted HTTPS setup origin.
+func AuthorizationURL(clientID, redirectURI, state, codeChallenge string) (string, error) {
+	clientID = strings.TrimSpace(clientID)
+	redirectURI = strings.TrimSpace(redirectURI)
+	state = strings.TrimSpace(state)
+	codeChallenge = strings.TrimSpace(codeChallenge)
+	if !validClientID(clientID) || !validWebRedirectURI(redirectURI) || state == "" || len(state) > 512 || strings.ContainsAny(state, "\x00\r\n") || len(codeChallenge) < 43 || len(codeChallenge) > 128 || strings.ContainsAny(codeChallenge, "\x00\r\n") {
+		return "", errors.New("GitHub web authorization settings are invalid")
+	}
+	values := url.Values{}
+	values.Set("client_id", clientID)
+	values.Set("redirect_uri", redirectURI)
+	values.Set("state", state)
+	values.Set("code_challenge", codeChallenge)
+	values.Set("code_challenge_method", "S256")
+	return authorizationURL + "?" + values.Encode(), nil
 }
 
 type providerError struct {
@@ -179,6 +233,52 @@ func (c *HTTPClient) PollAccessToken(ctx context.Context, clientID, deviceCode s
 	return pollResult(response.Code, response.AccessToken)
 }
 
+func (c *HTTPClient) ExchangeAuthorizationCode(ctx context.Context, clientID, clientSecret, code, redirectURI, codeVerifier string) (OAuthToken, error) {
+	if c == nil || c.HTTPClient == nil {
+		return OAuthToken{}, errors.New("GitHub web authorization client is not configured")
+	}
+	clientID = strings.TrimSpace(clientID)
+	clientSecret = strings.TrimSpace(clientSecret)
+	code = strings.TrimSpace(code)
+	redirectURI = strings.TrimSpace(redirectURI)
+	codeVerifier = strings.TrimSpace(codeVerifier)
+	if !validClientID(clientID) || clientSecret == "" || len(clientSecret) > 512 || strings.ContainsAny(clientSecret, "\x00\r\n") || code == "" || len(code) > 4096 || strings.ContainsAny(code, "\x00\r\n") || !validWebRedirectURI(redirectURI) || len(codeVerifier) < 43 || len(codeVerifier) > 128 || strings.ContainsAny(codeVerifier, "\x00\r\n") {
+		return OAuthToken{}, errors.New("GitHub web authorization is incomplete")
+	}
+	form := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"code_verifier": {codeVerifier},
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return OAuthToken{}, fmt.Errorf("create GitHub web token request: %w", err)
+	}
+	setGitHubHeaders(request)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	var response OAuthToken
+	responseError := providerError{}
+	var envelope struct {
+		OAuthToken
+		providerError
+	}
+	if err := c.doJSON(request, &envelope); err != nil {
+		return OAuthToken{}, err
+	}
+	response = envelope.OAuthToken
+	responseError = envelope.providerError
+	if responseError.Code != "" {
+		return OAuthToken{}, responseError
+	}
+	response.AccessToken = strings.TrimSpace(response.AccessToken)
+	if response.AccessToken == "" || len(response.AccessToken) > 4096 || strings.ContainsAny(response.AccessToken, "\x00\r\n") {
+		return OAuthToken{}, errors.New("GitHub returned an incomplete web authorization token")
+	}
+	return response, nil
+}
+
 func pollResult(code, accessToken string) (PollResult, error) {
 	if accessToken != "" {
 		return PollResult{Status: PollAuthorized, AccessToken: accessToken}, nil
@@ -244,6 +344,11 @@ func setGitHubHeaders(request *http.Request) {
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", apiVersion)
 	request.Header.Set("User-Agent", "stealth-instance-bootstrap")
+}
+
+func validWebRedirectURI(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && !strings.ContainsAny(raw, "\x00\r\n")
 }
 
 func (c *HTTPClient) doJSON(request *http.Request, target any) error {
