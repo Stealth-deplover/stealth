@@ -118,15 +118,19 @@ func (s *Server) setSetupCookie(w http.ResponseWriter, r *http.Request, sessionI
 	if maxAge < 1 {
 		return errors.New("setup cookie has expired")
 	}
+	// The setup page is reachable both through the temporary HTTPS Quick Tunnel
+	// and, as a documented fallback, over plain HTTP on localhost. Mark the
+	// cookie Secure whenever this request's externally visible origin is HTTPS,
+	// so the tunneled cookie cannot travel in clear text while the loopback
+	// fallback still receives a cookie a plain HTTP browser will store. The
+	// canonical COOKIE_SECURE setting can only make this stricter.
+	secure := s.config.CookieSecure || strings.HasPrefix(s.externalOrigin(r), "https://")
 	http.SetCookie(w, &http.Cookie{
 		Name:     setupCookieName,
 		Value:    base64.RawURLEncoding.EncodeToString(ciphertext),
 		Path:     "/",
 		HttpOnly: true,
-		// Setup is served through the temporary HTTPS origin. Keep this
-		// unconditional so missing forwarded headers cannot downgrade the
-		// authentication cookie after a tunnel terminates TLS.
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   maxAge,
 		Expires:  expiresAt,
@@ -287,13 +291,20 @@ func (s *Server) externalOrigin(r *http.Request) string {
 	if s.config.SetupMode && s.setupState != nil {
 		if state, err := s.setupState.Load(r.Context()); err == nil {
 			if raw := strings.TrimSpace(state.Secret("quick_tunnel_url")); raw != "" {
-				if parsed, parseErr := url.Parse(raw); parseErr == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Host, host) {
+				if parsed, parseErr := url.Parse(raw); parseErr == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Hostname(), requestHostname(r)) {
 					scheme = "https"
 				}
 			}
 		}
 	}
-	return scheme + "://" + host
+	// Canonicalize the origin so an upstream that forwards a default port in
+	// Host (for example example.com:443) still matches the browser Origin and
+	// does not leak that port into generated absolute URLs.
+	origin, err := repository.NormalizeCORSOrigin(scheme + "://" + host)
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 func (s *Server) externalURL(r *http.Request, path string) (string, error) {
