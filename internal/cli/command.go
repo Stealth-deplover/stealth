@@ -22,6 +22,15 @@ func (execCommandRunner) Output(ctx context.Context, dir, name string, args ...s
 	return command.Output()
 }
 
+// CombinedOutput captures both stdout and stderr. It exists for log-reading
+// paths where the interesting content may be written to either stream; most
+// callers that need only structured stdout must keep using Output.
+func (execCommandRunner) CombinedOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = dir
+	return command.CombinedOutput()
+}
+
 func (a *App) runCommand(ctx context.Context, dir, name string, args ...string) error {
 	if err := a.runner.Run(ctx, dir, a.out, a.errOut, name, args...); err != nil {
 		return fmt.Errorf("%s %v: %w", name, args, err)

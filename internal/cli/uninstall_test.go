@@ -48,6 +48,10 @@ func (r *uninstallTestRunner) Output(_ context.Context, dir, name string, args .
 	return nil, nil
 }
 
+func (r *uninstallTestRunner) CombinedOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return r.Output(ctx, dir, name, args...)
+}
+
 func containsArgs(args []string, wanted ...string) bool {
 	for _, value := range wanted {
 		found := false
