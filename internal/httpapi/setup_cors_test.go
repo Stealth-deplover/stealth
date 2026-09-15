@@ -164,6 +164,38 @@ func TestSetupCORSPreflight(t *testing.T) {
 	}
 }
 
+// TestSetupCORSPreflightAllowsPUTForSetupConfig covers the browser preflight for
+// the setup configuration mutation, which uses PUT. Both the advertised allow
+// methods and the method gate must include PUT, and a foreign origin must still
+// be denied.
+func TestSetupCORSPreflightAllowsPUTForSetupConfig(t *testing.T) {
+	handler := setupCORSHandler(true)
+	allowed := httptest.NewRequest(http.MethodOptions, "https://real-instance.trycloudflare.com/v1/setup/config", nil)
+	allowed.Header.Set("Origin", "https://real-instance.trycloudflare.com")
+	allowed.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	allowed.Header.Set("Access-Control-Request-Headers", "content-type,x-stealth-setup")
+	allowedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecorder, allowed)
+	if allowedRecorder.Code != http.StatusNoContent {
+		t.Fatalf("setup config PUT preflight = %d, want %d", allowedRecorder.Code, http.StatusNoContent)
+	}
+	if got := allowedRecorder.Header().Get("Access-Control-Allow-Origin"); got != "https://real-instance.trycloudflare.com" {
+		t.Fatalf("setup config PUT allow origin = %q", got)
+	}
+	if methods := allowedRecorder.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(methods, http.MethodPut) {
+		t.Fatalf("setup config PUT allow methods = %q, want PUT", methods)
+	}
+
+	denied := httptest.NewRequest(http.MethodOptions, "https://real-instance.trycloudflare.com/v1/setup/config", nil)
+	denied.Header.Set("Origin", "https://evil.example")
+	denied.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	deniedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecorder, denied)
+	if got := deniedRecorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("foreign setup config PUT preflight was granted allow origin %q", got)
+	}
+}
+
 // TestSetupAuthorizationAllowsQuickTunnelSameOrigin reproduces the real VPS
 // failure end to end: the browser Origin reaches the setup API through the
 // tunnel, verification succeeds, the cookie is emitted, a protected GET

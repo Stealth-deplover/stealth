@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const corsAllowedMethods = "GET, POST, PATCH, DELETE, OPTIONS"
+const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 const corsAllowedHeaders = "Accept, Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Requested-With"
 
 // cors applies a per-project, credentialed origin allowlist. The Console
@@ -138,7 +138,7 @@ func setCORSHeaders(w http.ResponseWriter, origin string, r *http.Request) {
 func corsMethodAllowed(raw string) bool {
 	method := strings.ToUpper(strings.TrimSpace(raw))
 	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete:
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 		return true
 	default:
 		return false
