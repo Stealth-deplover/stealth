@@ -34,6 +34,7 @@ const (
 type CommandRunner interface {
 	Run(ctx context.Context, dir string, stdout, stderr io.Writer, name string, args ...string) error
 	Output(ctx context.Context, dir, name string, args ...string) ([]byte, error)
+	CombinedOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 }
 
 type execCommandRunner struct{}

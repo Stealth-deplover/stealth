@@ -44,6 +44,10 @@ func (runner updateTestRunner) Output(ctx context.Context, _ string, _ string, _
 	return []byte("Stealth " + runner.version + "\nCommit: test\nBuilt: test\n"), nil
 }
 
+func (runner updateTestRunner) CombinedOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return runner.Output(ctx, dir, name, args...)
+}
+
 type updateTestServer struct {
 	server               *httptest.Server
 	mu                   sync.Mutex

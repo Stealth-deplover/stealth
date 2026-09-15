@@ -28,10 +28,11 @@ type commandOutput struct {
 }
 
 type setupRunner struct {
-	mu      sync.Mutex
-	calls   []recordedCommand
-	outputs []commandOutput
-	runErr  error
+	mu              sync.Mutex
+	calls           []recordedCommand
+	outputs         []commandOutput
+	combinedOutputs []commandOutput
+	runErr          error
 }
 
 func (r *setupRunner) Run(_ context.Context, _ string, _, _ io.Writer, name string, args ...string) error {
@@ -50,6 +51,18 @@ func (r *setupRunner) Output(_ context.Context, _ string, name string, args ...s
 	}
 	result := r.outputs[0]
 	r.outputs = r.outputs[1:]
+	return result.value, result.err
+}
+
+func (r *setupRunner) CombinedOutput(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
+	if len(r.combinedOutputs) == 0 {
+		return nil, nil
+	}
+	result := r.combinedOutputs[0]
+	r.combinedOutputs = r.combinedOutputs[1:]
 	return result.value, result.err
 }
 
@@ -81,11 +94,56 @@ func TestParseQuickTunnelURL(t *testing.T) {
 	}
 }
 
+func TestFindQuickTunnelURL(t *testing.T) {
+	tests := []struct {
+		name  string
+		logs  string
+		want  string
+		found bool
+	}{
+		{
+			name:  "url written to stdout",
+			logs:  "INF Requesting new quick Tunnel\nhttps://abc-def.trycloudflare.com\nINF Connected\n",
+			want:  "https://abc-def.trycloudflare.com",
+			found: true,
+		},
+		{
+			name:  "url only visible in combined output",
+			logs:  "INF Requesting new quick Tunnel\nhttps://stderr-only.trycloudflare.com\nINF Connected\n",
+			want:  "https://stderr-only.trycloudflare.com",
+			found: true,
+		},
+		{
+			name:  "noisy logs with inline url",
+			logs:  "INF Starting tunnel\nWRN retrying edge discovery\nINF Your quick Tunnel has been created! url=https://abc.trycloudflare.com\nINF Connected\n",
+			want:  "https://abc.trycloudflare.com",
+			found: true,
+		},
+		{name: "insecure scheme is rejected", logs: "http://abc.trycloudflare.com\n", found: false},
+		{name: "unrelated host is rejected", logs: "https://example.com\n", found: false},
+		{name: "lookalike suffix is rejected", logs: "https://trycloudflare.com.evil.example\n", found: false},
+		{name: "no url present", logs: "INF Starting tunnel\n", found: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, found := findQuickTunnelURL([]byte(test.logs))
+			if found != test.found || got != test.want {
+				t.Fatalf("findQuickTunnelURL() = %q, %v; want %q, %v", got, found, test.want, test.found)
+			}
+		})
+	}
+}
+
 func TestStartQuickTunnelUsesPinnedImageAndOnlyProxyNetwork(t *testing.T) {
-	runner := &setupRunner{outputs: []commandOutput{
-		{value: []byte("container-id\n")},
-		{value: []byte("INF https://silent-moon.trycloudflare.com\n")},
-	}}
+	runner := &setupRunner{
+		outputs: []commandOutput{
+			{value: []byte("container-id\n")},
+			{value: []byte("running\n")},
+		},
+		combinedOutputs: []commandOutput{
+			{value: []byte("INF https://silent-moon.trycloudflare.com\n")},
+		},
+	}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
 	app.runner = runner
 	app.pollAttempts = 2
@@ -110,6 +168,34 @@ func TestStartQuickTunnelUsesPinnedImageAndOnlyProxyNetwork(t *testing.T) {
 	}
 }
 
+// TestStartQuickTunnelDetectsURLFromCombinedLogs reproduces the fresh-install
+// regression where cloudflared wrote the TryCloudflare URL to stderr, so the
+// previous exec.Cmd.Output()-based docker logs read never observed it.
+func TestStartQuickTunnelDetectsURLFromCombinedLogs(t *testing.T) {
+	runner := &setupRunner{
+		outputs: []commandOutput{{value: []byte("container-id\n")}},
+		combinedOutputs: []commandOutput{
+			{value: []byte("INF Requesting new quick Tunnel\nhttps://stderr-only.trycloudflare.com\nINF Connected\n")},
+		},
+	}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.runner = runner
+	app.pollAttempts = 3
+	app.pollInterval = 0
+	layout := newInstallLayout(t.TempDir())
+
+	got, err := app.startQuickTunnel(context.Background(), layout, "stealth_network", "stealth-onboarding-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://stderr-only.trycloudflare.com" {
+		t.Fatalf("tunnel URL = %q, want URL from combined output", got)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("commands = %#v, want only docker run and logs", runner.calls)
+	}
+}
+
 func TestStartQuickTunnelCleansUpAtCallerOnStartupFailure(t *testing.T) {
 	runner := &setupRunner{outputs: []commandOutput{{err: errors.New("docker unavailable")}}}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
@@ -125,12 +211,57 @@ func TestStartQuickTunnelCleansUpAtCallerOnStartupFailure(t *testing.T) {
 	}
 }
 
+// TestStartQuickTunnelReturnsEarlyWhenContainerExits verifies that a crashed
+// cloudflared container is detected immediately instead of waiting for the
+// full startup deadline, and that the collected log excerpt is sanitized.
+func TestStartQuickTunnelReturnsEarlyWhenContainerExits(t *testing.T) {
+	runner := &setupRunner{
+		outputs: []commandOutput{
+			{value: []byte("container-id\n")},
+			{value: []byte("exited\n")},
+		},
+		combinedOutputs: []commandOutput{
+			{value: []byte("WRN failed to connect to the edge\nERR token=super-secret-tunnel-token\n")},
+		},
+	}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.runner = runner
+	app.pollAttempts = 60
+	app.pollInterval = 0
+	layout := newInstallLayout(t.TempDir())
+
+	name, err := app.startQuickTunnel(context.Background(), layout, "stealth_network", "stealth-onboarding-test")
+	if err == nil || !strings.Contains(err.Error(), "exited before publishing a setup URL") {
+		t.Fatalf("startQuickTunnel() = %q, %v; want early-exit error", name, err)
+	}
+	if !strings.Contains(err.Error(), "cloudflared:") {
+		t.Fatalf("early-exit error is missing the log excerpt: %v", err)
+	}
+	if strings.Contains(err.Error(), "super-secret-tunnel-token") {
+		t.Fatalf("early-exit error leaked a tunnel credential: %v", err)
+	}
+	if !strings.Contains(err.Error(), "token=[redacted]") {
+		t.Fatalf("early-exit error did not sanitize the credential: %v", err)
+	}
+	// docker run, one docker logs, and one docker inspect: the deadline must
+	// not be exhausted once the container is known to have exited.
+	if len(runner.calls) != 3 {
+		t.Fatalf("commands = %#v, want immediate exit after run/logs/inspect", runner.calls)
+	}
+}
+
 func TestStartQuickTunnelTimesOutWithoutAURL(t *testing.T) {
-	runner := &setupRunner{outputs: []commandOutput{
-		{value: []byte("container-id\n")},
-		{value: []byte("still starting\n")},
-		{value: []byte("still starting\n")},
-	}}
+	runner := &setupRunner{
+		outputs: []commandOutput{
+			{value: []byte("container-id\n")},
+			{value: []byte("running\n")},
+			{value: []byte("running\n")},
+		},
+		combinedOutputs: []commandOutput{
+			{value: []byte("still starting\n")},
+			{value: []byte("still starting\n")},
+		},
+	}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
 	app.runner = runner
 	app.pollAttempts = 2
@@ -143,6 +274,48 @@ func TestStartQuickTunnelTimesOutWithoutAURL(t *testing.T) {
 	}
 	if name != "stealth-onboarding-test" {
 		t.Fatalf("timeout name = %q, want cleanup handle", name)
+	}
+	if len(runner.calls) != 5 {
+		t.Fatalf("commands = %#v, want a bounded two-iteration poll", runner.calls)
+	}
+}
+
+func TestSanitizeTunnelLogsRedactsSecretsAndBoundsOutput(t *testing.T) {
+	logs := "INF connected\nAuthorization: Bearer abc.def.ghi\npassword=hunter2\napi_key: \"live-key\"\nplain diagnostic line\n"
+	got := sanitizeTunnelLogs([]byte(logs))
+	for _, secret := range []string{"hunter2", "live-key", "abc.def.ghi"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("sanitizeTunnelLogs() leaked %q in %q", secret, got)
+		}
+	}
+	if !strings.Contains(got, "plain diagnostic line") {
+		t.Fatalf("sanitizeTunnelLogs() dropped useful diagnostics: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("sanitizeTunnelLogs() did not mark redactions: %q", got)
+	}
+
+	long := strings.Repeat("noise line\n", 200)
+	bounded := sanitizeTunnelLogs([]byte(long))
+	if lines := strings.Count(bounded, "\n") + 1; lines > maxTunnelLogLines {
+		t.Fatalf("sanitizeTunnelLogs() kept %d lines, want <= %d", lines, maxTunnelLogLines)
+	}
+}
+
+func TestPrintQuickTunnelFallbackExplainsSSHForwarding(t *testing.T) {
+	var output strings.Builder
+	app := NewApp(strings.NewReader(""), io.Discard, &output)
+	app.printQuickTunnelFallback(errors.New("temporary Quick Tunnel exited before publishing a setup URL"))
+	rendered := output.String()
+	for _, want := range []string{
+		"Quick Tunnel could not be started.",
+		"still running securely on the VPS",
+		"ssh -L 8081:127.0.0.1:8081 <user>@<server>",
+		"http://localhost:8081/setup",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("fallback message missing %q:\n%s", want, rendered)
+		}
 	}
 }
 
