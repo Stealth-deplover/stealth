@@ -48,6 +48,10 @@ The API contract is the detailed reference for each product surface. Operational
 - [Backup and restore](backup-restore.md)
 - [Production smoke checks](production-deployment.md#smoke-and-troubleshooting)
 
+## Investigations
+
+- [Setup authorization 403](investigations/2026-09-15-setup-authorization-403.md): first-run browser setup fails after code entry because setup-mode CORS rejects the temporary origin.
+
 ## Project Direction
 
 - [Roadmap and implementation status](../README.md#roadmap)
