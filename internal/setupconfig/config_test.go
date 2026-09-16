@@ -76,6 +76,15 @@ func TestApplyRejectsCompletedState(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsInstallationRequestBeforeWorkerStarts(t *testing.T) {
+	state := setupstate.NewState()
+	state.Phase = setupstate.PhaseInstallRequested
+	state.InstallRunID = "run-1"
+	if err := Apply(&state, Request{}); err == nil || !strings.Contains(err.Error(), "already in progress or complete") {
+		t.Fatalf("requested state error = %v", err)
+	}
+}
+
 func TestApplyRejectsCloudflareHostnameChangeAfterBinding(t *testing.T) {
 	state := setupstate.NewState()
 	state.Draft.PublicURL = "https://stealth.old.example.test"

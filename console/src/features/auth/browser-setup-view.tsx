@@ -1461,7 +1461,9 @@ export function BrowserSetupView() {
                 description={
                   installViewState?.phase === "failed"
                     ? "The production stack is still repairable. Review the safe error below and retry after correcting the underlying issue."
-                    : "The setup service is running the shared install engine. Keep this window open until the production session handoff completes."
+                    : installViewState?.phase === "install_requested"
+                      ? "Your configuration was received. The setup service is preparing the installation."
+                      : "The setup service is running the shared install engine. Keep this window open until the production session handoff completes."
                 }
               />
               <div className="rounded-xl border border-stealth-border p-5">

@@ -197,6 +197,9 @@ func Provision(ctx context.Context, store setupstate.Store, client Client, reque
 		return setupstate.State{}, err
 	}
 	state, err = store.Update(ctx, func(state *setupstate.State) error {
+		if setupComplete(*state) {
+			return provisioningError(ErrConflict, "state", errors.New("installation is already in progress or complete"))
+		}
 		if err := validateBinding(*state, normalized); err != nil {
 			return provisioningError(ErrConflict, "state", err)
 		}
@@ -249,7 +252,7 @@ func normalizeProvisionRequest(request ProvisionRequest) (ProvisionRequest, erro
 }
 
 func setupComplete(state setupstate.State) bool {
-	return state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff
+	return setupstate.InstallationLocked(state)
 }
 
 func validateBinding(state setupstate.State, request ProvisionRequest) error {
@@ -308,6 +311,9 @@ func saveIntent(ctx context.Context, store setupstate.Store, request ProvisionRe
 
 func saveTunnelID(ctx context.Context, store setupstate.Store, request ProvisionRequest, name, tunnelID string) (setupstate.State, error) {
 	state, err := store.Update(ctx, func(state *setupstate.State) error {
+		if setupComplete(*state) {
+			return provisioningError(ErrConflict, "state", errors.New("installation is already in progress or complete"))
+		}
 		if err := validateBinding(*state, request); err != nil {
 			return provisioningError(ErrConflict, "state", err)
 		}
@@ -335,6 +341,9 @@ func saveTunnelID(ctx context.Context, store setupstate.Store, request Provision
 
 func saveTunnelToken(ctx context.Context, store setupstate.Store, token string) (setupstate.State, error) {
 	state, err := store.Update(ctx, func(state *setupstate.State) error {
+		if setupComplete(*state) {
+			return provisioningError(ErrConflict, "state", errors.New("installation is already in progress or complete"))
+		}
 		state.SetSecret("cloudflare_tunnel_token", token)
 		return nil
 	})

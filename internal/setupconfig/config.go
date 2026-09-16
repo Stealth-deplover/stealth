@@ -47,7 +47,7 @@ func Apply(state *setupstate.State, request Request) error {
 	if len(instanceName) > 120 || strings.ContainsAny(instanceName, "\x00\r\n") {
 		return errors.New("instance name is invalid")
 	}
-	if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseHandoff || state.Phase == setupstate.PhaseComplete {
+	if setupstate.InstallationLocked(*state) {
 		return errors.New("installation is already in progress or complete")
 	}
 

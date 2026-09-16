@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -24,13 +25,14 @@ import (
 )
 
 const (
-	PhaseCollecting    = "collecting"
-	PhaseInstalling    = "installing"
-	PhaseComplete      = "complete"
-	PhaseFailed        = "failed"
-	PhaseHandoff       = "handoff"
-	stateVersion       = 2
-	legacyStateVersion = 1
+	PhaseCollecting       = "collecting"
+	PhaseInstallRequested = "install_requested"
+	PhaseInstalling       = "installing"
+	PhaseComplete         = "complete"
+	PhaseFailed           = "failed"
+	PhaseHandoff          = "handoff"
+	stateVersion          = 2
+	legacyStateVersion    = 1
 )
 
 // Draft contains setup choices that can safely be represented by the public
@@ -231,6 +233,75 @@ func (s *State) SetSecret(name, value string) {
 	s.Secrets[name] = value
 }
 
+// InstallationLocked reports whether browser-owned setup mutations must stop.
+// The request phase is persisted before the asynchronous installer starts, so
+// a process restart cannot reopen the configuration window after the operator
+// has committed to installation.
+func InstallationLocked(state State) bool {
+	switch state.Phase {
+	case PhaseInstallRequested, PhaseInstalling, PhaseHandoff, PhaseComplete:
+		return true
+	default:
+		return false
+	}
+}
+
+// InstallationRequested reports whether an installation has been committed
+// for this setup state. InstallRunID remains set after a failed or completed
+// run so repair and recovery can distinguish it from an unrequested draft.
+func InstallationRequested(state State) bool {
+	if state.InstallRunID != "" {
+		return true
+	}
+	switch state.Phase {
+	case PhaseInstallRequested, PhaseInstalling, PhaseHandoff, PhaseComplete:
+		return true
+	default:
+		return false
+	}
+}
+
+// RequestInstallation durably advances a reviewed setup draft into the
+// request phase. Callers must supply a fresh run identifier and persist the
+// surrounding state through Store.Update.
+func RequestInstallation(state *State, runID string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" {
+		return errors.New("installation run identifier is required")
+	}
+	if InstallationLocked(*state) {
+		return errors.New("installation is already in progress or complete")
+	}
+	state.Phase = PhaseInstallRequested
+	state.InstallRunID = strings.TrimSpace(runID)
+	state.ErrorCode = ""
+	state.ErrorMessage = ""
+	return nil
+}
+
+// BeginInstallation claims a previously requested run. It is idempotent for
+// the same run identifier, which lets the setup service recover a request that
+// was persisted immediately before a process restart.
+func BeginInstallation(state *State, runID string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" || state.InstallRunID != strings.TrimSpace(runID) {
+		return errors.New("installation run does not own setup state")
+	}
+	switch state.Phase {
+	case PhaseInstallRequested:
+		state.Phase = PhaseInstalling
+		return nil
+	case PhaseInstalling:
+		return nil
+	default:
+		return errors.New("setup installation is no longer startable")
+	}
+}
+
 type Store interface {
 	Load(context.Context) (State, error)
 	Save(context.Context, State) error
@@ -286,6 +357,11 @@ func (s *FileStore) Load(ctx context.Context) (State, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := s.acquireFileLock()
+	if err != nil {
+		return State{}, err
+	}
+	defer lock.Close()
 	return s.loadLocked(ctx)
 }
 
@@ -295,6 +371,11 @@ func (s *FileStore) Save(ctx context.Context, state State) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := s.acquireFileLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	state.UpdatedAt = time.Now().UTC()
 	state.Version = stateVersion
 	if err := ValidateState(state); err != nil {
@@ -315,6 +396,11 @@ func (s *FileStore) Update(ctx context.Context, mutate func(*State) error) (Stat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lock, err := s.acquireFileLock()
+	if err != nil {
+		return State{}, err
+	}
+	defer lock.Close()
 	state, err := s.loadLocked(ctx)
 	if err != nil {
 		return State{}, err
@@ -366,6 +452,31 @@ func (s *FileStore) loadLocked(ctx context.Context) (State, error) {
 		state.Secrets = make(map[string]string)
 	}
 	return state, nil
+}
+
+// acquireFileLock serializes access between the setup API container and the
+// host CLI. FileStore.mu protects callers within one process, while this
+// advisory lock protects the complete read-modify-write transaction across
+// processes. The state payload itself remains atomically replaced by
+// saveLocked after the lock is held.
+func (s *FileStore) acquireFileLock() (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return nil, fmt.Errorf("create setup state directory: %w", err)
+	}
+	lockPath := s.path + ".lock"
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open setup state lock: %w", err)
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("protect setup state lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock setup state: %w", err)
+	}
+	return file, nil
 }
 
 func migrateState(state *State, legacy legacyState) error {
@@ -481,7 +592,7 @@ func ValidateState(state State) error {
 		return errors.New("setup state phase is required")
 	}
 	switch state.Phase {
-	case PhaseCollecting, PhaseInstalling, PhaseComplete, PhaseFailed, PhaseHandoff:
+	case PhaseCollecting, PhaseInstallRequested, PhaseInstalling, PhaseComplete, PhaseFailed, PhaseHandoff:
 	default:
 		return fmt.Errorf("unsupported setup state phase")
 	}
@@ -496,6 +607,15 @@ func ValidateState(state State) error {
 	}
 	if len(state.SetupSessionID) > 64 || strings.ContainsAny(state.SetupSessionID, "\x00\r\n") || len(state.SetupCodeHash) > 128 || strings.ContainsAny(state.SetupCodeHash, "\x00\r\n") {
 		return errors.New("setup bootstrap claim is invalid")
+	}
+	if len(state.InstallRunID) > 128 || strings.ContainsAny(state.InstallRunID, "\x00\r\n") {
+		return errors.New("setup installation run identifier is invalid")
+	}
+	switch state.Phase {
+	case PhaseInstallRequested, PhaseInstalling, PhaseHandoff:
+		if strings.TrimSpace(state.InstallRunID) == "" {
+			return errors.New("setup installation phase has no run identifier")
+		}
 	}
 	if len(state.Secrets) > 64 {
 		return errors.New("setup state contains too many secrets")

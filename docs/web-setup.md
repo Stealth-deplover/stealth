@@ -1,9 +1,10 @@
 # Browser setup
 
 `stealth install` uses a short-lived browser installer for a fresh host. The
-terminal prepares Docker and starts only the setup Compose project. The browser
-then owns the reviewed configuration and the setup API calls the shared Go
-install engine directly.
+terminal performs the host checks, starts only the setup Compose project, and
+stays attached to the encrypted setup state while the browser runs. The
+browser then owns the reviewed configuration and the setup API calls the
+shared Go install engine directly.
 
 ## Start
 
@@ -18,7 +19,10 @@ The CLI checks Docker, creates the private installation directory, starts the
 setup API, setup Console, setup proxy, PostgreSQL, and Redis, then prints a
 temporary HTTPS setup URL and a one-time setup code. Open the URL in a browser
 on the same operator workstation. If the temporary tunnel cannot be created,
-the CLI leaves the setup service running on its loopback URL.
+the CLI leaves the setup service running on its loopback URL and can continue
+observing the browser flow through an SSH-forwarded local URL. Use
+`stealth install --no-wait` only when a separate supervisor will observe the
+state; the normal command remains alive until setup completes or is stopped.
 
 The setup URL and code expire after 15 minutes. `stealth setup` creates a new
 session when the first-owner flow is still open. `stealth install --repair`
@@ -46,6 +50,10 @@ The setup Console walks through these stages:
 
 The install button is idempotent. A second click returns the existing run,
 and a dropped browser connection can reconnect to the persisted setup state.
+The request is durably marked as `install_requested` before the setup worker
+starts, so the browser cannot continue changing the reviewed configuration
+after that point. The host CLI can restart and resume observing this state
+without requiring the browser to remain open.
 Failed runs remain resumable and preserve the generated configuration and
 provider side effects. A successful setup removes the temporary setup
 services, starts the production API, worker, Console, proxy, and optional

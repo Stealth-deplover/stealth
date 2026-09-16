@@ -56,6 +56,9 @@ type App struct {
 	renameFile          func(string, string) error
 	currentVersion      func() string
 	verbose             bool
+	// waitForSetup overrides whether `stealth install` stays alive to observe
+	// the browser wizard. Nil means decide from the terminal/environment.
+	waitForSetup *bool
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.
@@ -127,7 +130,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Stealth: Developer Cloud Control Plane")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--verbose]")
+	fmt.Fprintln(w, "  stealth install [--version vX.Y.Z] [--repair] [--wait|--no-wait] [--verbose]")
 	fmt.Fprintln(w, "  stealth setup [--adopt-owner]")
 	fmt.Fprintln(w, "  stealth uninstall [--keep-data|--purge] [--yes] [--dry-run]")
 	fmt.Fprintln(w, "  stealth update [--check]")
@@ -166,12 +169,25 @@ func (a *App) runInstall(args []string) int {
 	verbose := fs.Bool("verbose", false, "show Docker command output")
 	repair := fs.Bool("repair", false, "reuse an existing installation without replacing its configuration")
 	versionOverride := fs.String("version", "", "install a specific release version")
+	wait := fs.Bool("wait", false, "wait for browser setup to complete before returning")
+	noWait := fs.Bool("no-wait", false, "return after starting the setup service instead of waiting")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(a.errOut, "install does not accept positional arguments")
 		return 2
+	}
+	if *wait && *noWait {
+		fmt.Fprintln(a.errOut, "install accepts either --wait or --no-wait, not both")
+		return 2
+	}
+	if *wait {
+		value := true
+		a.waitForSetup = &value
+	} else if *noWait {
+		value := false
+		a.waitForSetup = &value
 	}
 	a.verbose = *verbose
 	layout, err := a.layout()

@@ -26,6 +26,12 @@ const (
 	lockFileName     = "install.lock"
 )
 
+// ErrOperationInProgress lets a recovering worker distinguish lock ownership
+// from an installation failure. A worker that loses the race leaves the
+// durable run in installing so the lock owner can continue publishing state;
+// a later process can resume it after a crash releases the OS lock.
+var ErrOperationInProgress = errors.New("another installation operation is already running")
+
 // CommandRunner is the only process boundary the engine needs. The browser
 // service injects the same runner as the CLI, but it never invokes the
 // stealth executable itself.
@@ -467,20 +473,39 @@ func acquireLock(stateDir string) (*os.File, error) {
 	if strings.TrimSpace(stateDir) == "" {
 		return nil, errors.New("installation state directory is required")
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create installation lock directory: %w", err)
+	return AcquireProcessLock(stateDir, lockFileName, "installation")
+}
+
+// AcquireProcessLock takes a non-blocking exclusive advisory lock on
+// stateDir/name and returns the open lock file. Closing the file releases the
+// lock, so a crashed process cannot leave a stale lock behind. Callers use this
+// to guarantee that only one process owns a long-running operation such as a
+// host-side setup orchestration or a production install.
+func AcquireProcessLock(stateDir, name, description string) (*os.File, error) {
+	if strings.TrimSpace(stateDir) == "" {
+		return nil, errors.New("lock directory is required")
 	}
-	lockPath := filepath.Join(stateDir, lockFileName)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, `/\`) {
+		return nil, errors.New("lock name is invalid")
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create %s lock directory: %w", description, err)
+	}
+	lockPath := filepath.Join(stateDir, name)
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("open installation lock: %w", err)
+		return nil, fmt.Errorf("open %s lock: %w", description, err)
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another installation operation is already running")
+			if description == "installation" {
+				return nil, ErrOperationInProgress
+			}
+			return nil, fmt.Errorf("another %s operation is already running", description)
 		}
-		return nil, fmt.Errorf("lock installation: %w", err)
+		return nil, fmt.Errorf("lock %s: %w", description, err)
 	}
 	return file, nil
 }

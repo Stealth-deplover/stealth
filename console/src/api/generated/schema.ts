@@ -540,7 +540,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Start or resume the idempotent production handoff. Progress is available through the SSE endpoint and failures remain repairable. */
+        /** @description Validate and durably request the idempotent production handoff. The setup worker claims the request asynchronously; progress is available through the SSE endpoint and failures remain repairable. */
         post: operations["startSetupInstall"];
         delete?: never;
         options?: never;
@@ -5791,7 +5791,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Production handoff started or already running */
+            /** @description Production handoff accepted or already running */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -11495,6 +11495,7 @@ export enum GitHubPollResponseStatus {
 }
 export enum SetupStatePhase {
     collecting = "collecting",
+    install_requested = "install_requested",
     installing = "installing",
     complete = "complete",
     failed = "failed",
@@ -11550,6 +11551,7 @@ export enum SetupCheckStatus {
     fail = "fail"
 }
 export enum SetupInstallResponseStatus {
+    accepted = "accepted",
     installing = "installing"
 }
 export enum CreateOrganizationMembershipRequestRole {

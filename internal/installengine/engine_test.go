@@ -2,6 +2,7 @@ package installengine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -188,8 +189,25 @@ func TestInstallLockRejectsConcurrentOperation(t *testing.T) {
 
 	engine := New(Options{Runner: &fakeRunner{}})
 	err = engine.Install(context.Background(), Plan{Layout: layout, Existing: true}, nil)
-	if err == nil || !strings.Contains(err.Error(), "another installation operation") {
+	if err == nil || !errors.Is(err, ErrOperationInProgress) || !strings.Contains(err.Error(), "another installation operation") {
 		t.Fatalf("concurrent Install error = %v", err)
+	}
+}
+
+func TestProcessLockRejectsConcurrentSetupOrchestrator(t *testing.T) {
+	stateDir := t.TempDir()
+	first, err := AcquireProcessLock(stateDir, "setup-coordination.lock", "setup orchestration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := AcquireProcessLock(stateDir, "setup-coordination.lock", "setup orchestration")
+	if err == nil {
+		second.Close()
+		t.Fatal("second setup orchestrator acquired the lock")
+	}
+	if !strings.Contains(err.Error(), "another setup orchestration operation") {
+		t.Fatalf("concurrent setup lock error = %v", err)
 	}
 }
 

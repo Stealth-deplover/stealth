@@ -180,4 +180,7 @@ esac
 
 cleanup
 temporary_dir=""
-exec "${bin_dir}/stealth" install
+if [ -t 1 ] && [ -t 2 ]; then
+	exec "${bin_dir}/stealth" install
+fi
+exec "${bin_dir}/stealth" install --no-wait

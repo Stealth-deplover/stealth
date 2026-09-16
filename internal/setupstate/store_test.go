@@ -73,6 +73,52 @@ func TestFileStoreEncryptsStateAndKeepsFilesPrivate(t *testing.T) {
 	}
 }
 
+func TestInstallationRequestPhaseIsDurableAndSingleOwner(t *testing.T) {
+	state := NewState()
+	if InstallationLocked(state) || InstallationRequested(state) {
+		t.Fatal("new setup state is already locked or requested")
+	}
+	if err := RequestInstallation(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != PhaseInstallRequested || state.InstallRunID != "run-1" || !InstallationLocked(state) || !InstallationRequested(state) {
+		t.Fatalf("requested state = %#v", state)
+	}
+	if err := RequestInstallation(&state, "run-2"); err == nil {
+		t.Fatal("second installation request was accepted")
+	}
+	if err := BeginInstallation(&state, "run-2"); err == nil {
+		t.Fatal("different run claimed the installation")
+	}
+	if err := BeginInstallation(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != PhaseInstalling {
+		t.Fatalf("begun state phase = %q, want %q", state.Phase, PhaseInstalling)
+	}
+	if err := BeginInstallation(&state, "run-1"); err != nil {
+		t.Fatalf("idempotent begin failed: %v", err)
+	}
+
+	state.Phase = PhaseFailed
+	if err := RequestInstallation(&state, "run-2"); err != nil {
+		t.Fatalf("failed installation was not repairable: %v", err)
+	}
+	if state.Phase != PhaseInstallRequested || state.InstallRunID != "run-2" {
+		t.Fatalf("repair request state = %#v", state)
+	}
+}
+
+func TestInstallationPhasesRequireRunIdentifier(t *testing.T) {
+	for _, phase := range []string{PhaseInstallRequested, PhaseInstalling, PhaseHandoff} {
+		state := NewState()
+		state.Phase = phase
+		if err := ValidateState(state); err == nil || !strings.Contains(err.Error(), "run identifier") {
+			t.Fatalf("ValidateState(%q) = %v, want missing run identifier error", phase, err)
+		}
+	}
+}
+
 func TestFileStoreUpdateIsAtomicAcrossConcurrentWriters(t *testing.T) {
 	store, err := NewFileStore(filepath.Join(t.TempDir(), "state.enc"), testCipher(t))
 	if err != nil {
@@ -94,6 +140,52 @@ func TestFileStoreUpdateIsAtomicAcrossConcurrentWriters(t *testing.T) {
 	}
 	group.Wait()
 	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastEventID != writers {
+		t.Fatalf("LastEventID = %d, want %d", state.LastEventID, writers)
+	}
+}
+
+func TestFileStoreUpdateIsAtomicAcrossStoreInstances(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.enc")
+	first, err := NewFileStore(path, testCipher(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewFileStore(path, testCipher(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Save(context.Background(), NewState()); err != nil {
+		t.Fatal(err)
+	}
+
+	const writers = 24
+	var group sync.WaitGroup
+	group.Add(writers)
+	for i := 0; i < writers; i++ {
+		store := first
+		if i%2 == 1 {
+			store = second
+		}
+		go func(store *FileStore) {
+			defer group.Done()
+			if _, err := store.Update(context.Background(), func(state *State) error {
+				// Keep the transaction open long enough for independent
+				// FileStore instances to contend on the OS lock.
+				time.Sleep(time.Millisecond)
+				state.LastEventID++
+				return nil
+			}); err != nil {
+				t.Errorf("Update(): %v", err)
+			}
+		}(store)
+	}
+	group.Wait()
+
+	state, err := first.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
