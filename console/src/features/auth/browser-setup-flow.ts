@@ -139,6 +139,7 @@ export function useBrowserSetupFlow() {
       : availableZones[0].id
     : requestedZone;
   const activeStep =
+    state?.phase === "install_requested" ||
     state?.phase === "installing" ||
     state?.phase === "failed" ||
     state?.phase === "handoff"

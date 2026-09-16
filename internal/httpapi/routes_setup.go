@@ -255,7 +255,7 @@ func (s *Server) startGitHubManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
+		if setupstate.InstallationLocked(*state) {
 			return errors.New("installation is already in progress or complete")
 		}
 		state.GitHub.Mode = "manifest"
@@ -282,7 +282,7 @@ func (s *Server) setupGitHubManifestCallback(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
+		if setupstate.InstallationLocked(*state) {
 			return errors.New("installation is already in progress or complete")
 		}
 		if state.GitHub.ManifestExpiresAt.Before(time.Now().UTC()) || !compareStateHash(state.GitHub.ManifestStateHash, providedState) {
@@ -301,6 +301,9 @@ func (s *Server) setupGitHubManifestCallback(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return errors.New("installation is already in progress or complete")
+		}
 		state.GitHub.Mode = "manifest"
 		state.GitHub.ClientID = credentials.ClientID
 		state.GitHub.Connected = true
@@ -364,7 +367,7 @@ func (s *Server) beginGitHubAuthorization(ctx context.Context, r *http.Request, 
 		return "", time.Time{}, err
 	}
 	if _, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
+		if setupstate.InstallationLocked(*state) {
 			return errors.New("installation is already in progress or complete")
 		}
 		if !state.GitHub.Connected || state.GitHub.ClientID != clientID || strings.TrimSpace(state.Secret("github_client_secret")) == "" {
@@ -388,7 +391,7 @@ func (s *Server) setupGitHubAuthorizationCallback(w http.ResponseWriter, r *http
 	}
 	var clientID, clientSecret, codeVerifier, setupSessionID, setupCodeHash string
 	_, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
+		if setupstate.InstallationLocked(*state) {
 			return errors.New("installation is already in progress or complete")
 		}
 		if state.GitHub.AuthorizationExpiresAt.Before(time.Now().UTC()) || !compareStateHash(state.GitHub.AuthorizationStateHash, providedState) {
@@ -479,7 +482,7 @@ func (s *Server) saveGitHubManual(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		if state.Phase == setupstate.PhaseInstalling || state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
+		if setupstate.InstallationLocked(*state) {
 			return errors.New("installation is already in progress or complete")
 		}
 		state.GitHub.Mode = "manual"
@@ -572,6 +575,9 @@ func (s *Server) saveCloudflareToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return errors.New("installation is already in progress or complete")
+		}
 		state.Cloudflare.Mode = "api_token"
 		state.Cloudflare.Connected = true
 		state.Cloudflare.TokenValid = true
@@ -669,6 +675,9 @@ func (s *Server) cloudflareTunnelStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	_, _ = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return nil
+		}
 		state.Cloudflare.TokenValid = true
 		return nil
 	})
@@ -718,6 +727,9 @@ func (s *Server) testSetupDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return errors.New("installation is already in progress or complete")
+		}
 		if state.Draft.DatabaseMode != "external" || state.SetupCredentials().DatabaseURL != databaseURL {
 			return errors.New("test the saved external PostgreSQL URL before installing")
 		}
@@ -755,6 +767,9 @@ func (s *Server) testSetupRedis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return errors.New("installation is already in progress or complete")
+		}
 		if state.Draft.RedisMode != "external" || state.SetupCredentials().RedisURL != redisURL {
 			return errors.New("test the saved external Redis URL before installing")
 		}
@@ -784,6 +799,9 @@ func (s *Server) testSetupStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if setupstate.InstallationLocked(*state) {
+			return errors.New("installation is already in progress or complete")
+		}
 		if state.Draft.StorageMode != "s3" {
 			state.Draft.StorageTested = true
 			return nil
@@ -956,8 +974,12 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	if state.Phase == setupstate.PhaseInstalling {
-		writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: "installing", State: state.Public()})
+	if state.Phase == setupstate.PhaseInstallRequested || state.Phase == setupstate.PhaseInstalling {
+		status := "accepted"
+		if state.Phase == setupstate.PhaseInstalling {
+			status = "installing"
+		}
+		writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: status, State: state.Public()})
 		return
 	}
 	if state.Phase == setupstate.PhaseComplete || state.Phase == setupstate.PhaseHandoff {
@@ -975,11 +997,10 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := uuid.NewString()
 	state, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
-		state.Phase = setupstate.PhaseInstalling
-		state.InstallRunID = runID
+		if err := setupstate.RequestInstallation(state, runID); err != nil {
+			return err
+		}
 		state.Step = installengine.StepNames[installengine.StepConfiguration]
-		state.ErrorCode = ""
-		state.ErrorMessage = ""
 		return nil
 	})
 	if err != nil {
@@ -987,15 +1008,29 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go s.runSetupInstall(runID, plan)
-	writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: "installing", State: state.Public()})
+	writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: "accepted", State: state.Public()})
 }
 
 func (s *Server) runSetupInstall(runID string, plan installengine.Plan) {
 	ctx := context.Background()
+	if _, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
+		if err := setupstate.BeginInstallation(state, runID); err != nil {
+			return err
+		}
+		state.Step = installengine.StepNames[installengine.StepConfiguration]
+		return nil
+	}); err != nil {
+		s.logger.Warn("setup installation request could not be claimed", "run_id", runID, "error", err)
+		return
+	}
 	err := s.setupEngine.Install(ctx, plan, func(event installengine.Event) {
 		s.publishSetupEvent(ctx, event)
 	})
 	if err != nil {
+		if errors.Is(err, installengine.ErrOperationInProgress) {
+			s.logger.Info("setup installation is already owned by another worker", "run_id", runID)
+			return
+		}
 		s.setupState.Update(ctx, func(state *setupstate.State) error {
 			if state.InstallRunID == runID {
 				state.Phase = setupstate.PhaseFailed
@@ -1112,7 +1147,7 @@ func (s *Server) resumeSetupLifecycle() {
 		return
 	}
 	switch state.Phase {
-	case setupstate.PhaseInstalling:
+	case setupstate.PhaseInstallRequested, setupstate.PhaseInstalling:
 		if state.InstallRunID == "" {
 			s.markSetupResumeFailed("setup installation has no durable run identifier")
 			return

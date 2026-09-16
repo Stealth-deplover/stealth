@@ -22,6 +22,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupconfig"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
@@ -299,6 +300,229 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	if state.Secret("github_oauth_code_verifier") != "" || state.GitHub.AuthorizationStateHash != "" {
 		t.Fatalf("GitHub OAuth verifier/state was not consumed: %#v", state.GitHub)
 	}
+}
+
+type gatedSetupInstallRunner struct {
+	mu        sync.Mutex
+	started   chan struct{}
+	release   chan struct{}
+	done      chan struct{}
+	startOnce sync.Once
+	doneOnce  sync.Once
+	runCalls  int
+}
+
+func (r *gatedSetupInstallRunner) Run(ctx context.Context, _ string, _, _ io.Writer, _ string, _ ...string) error {
+	r.mu.Lock()
+	r.runCalls++
+	r.mu.Unlock()
+	r.startOnce.Do(func() { close(r.started) })
+	select {
+	case <-r.release:
+		r.doneOnce.Do(func() { close(r.done) })
+		return errors.New("test installation stopped")
+	case <-ctx.Done():
+		r.doneOnce.Do(func() { close(r.done) })
+		return ctx.Err()
+	}
+}
+
+func (*gatedSetupInstallRunner) Output(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *gatedSetupInstallRunner) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.runCalls
+}
+
+func TestSetupInstallPersistsRequestAndSuppressesDuplicateWorkers(t *testing.T) {
+	root := t.TempDir()
+	functionKey := bytes.Repeat([]byte{0x57}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(functionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := installengine.NewLayout(filepath.Join(root, "install"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WritePrivateFile(layout.EnvFile, "STEALTH_API_IMAGE=ghcr.io/stealth-deplover/stealth-api:v1.2.3\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WriteAtomic(layout.ProxyFile, []byte("server {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "state", "setup-state.enc")
+	store, err := setupstate.NewFileStore(statePath, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Draft.PublicURL = "http://localhost:8081"
+	state.Draft.NetworkMode = "local_only"
+	state.GitHub.Connected = true
+	state.GitHub.ClientID = "Iv1.setup-client"
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &gatedSetupInstallRunner{started: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
+	server := &Server{
+		config:         config.Config{SetupMode: true, InstallRoot: layout.Root},
+		bootstrap:      &bootstrapStoreFake{status: repository.BootstrapStatus{SetupRequired: false}},
+		functionCipher: cipher,
+		setupState:     store,
+		setupEngine:    installengine.New(installengine.Options{Runner: runner, PollAttempts: 1}),
+		setupRunner:    runner,
+		setupEvents:    newSetupEventHub(),
+		logger:         slog.Default(),
+	}
+
+	first := httptest.NewRecorder()
+	firstRequest := httptest.NewRequest(http.MethodPost, "/v1/setup/install", strings.NewReader(`{}`))
+	firstRequest.Header.Set("Content-Type", "application/json")
+	server.startSetupInstall(first, firstRequest)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first install request = %d: %s", first.Code, first.Body.String())
+	}
+	var firstResponse setupInstallResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResponse); err != nil {
+		t.Fatal(err)
+	}
+	if firstResponse.Status != "accepted" || firstResponse.State.Phase != setupstate.PhaseInstallRequested {
+		t.Fatalf("first install response = %#v", firstResponse)
+	}
+	if firstResponse.State.Version == 0 {
+		t.Fatal("accepted response did not include durable setup state")
+	}
+
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("setup worker did not start")
+	}
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != setupstate.PhaseInstalling || state.InstallRunID == "" {
+		t.Fatalf("claimed setup state = %#v", state)
+	}
+	runID := state.InstallRunID
+
+	second := httptest.NewRecorder()
+	secondRequest := httptest.NewRequest(http.MethodPost, "/v1/setup/install", strings.NewReader(`{}`))
+	secondRequest.Header.Set("Content-Type", "application/json")
+	server.startSetupInstall(second, secondRequest)
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("duplicate install request = %d: %s", second.Code, second.Body.String())
+	}
+	var secondResponse setupInstallResponse
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResponse); err != nil {
+		t.Fatal(err)
+	}
+	if secondResponse.Status != "installing" || secondResponse.State.Phase != setupstate.PhaseInstalling || runner.calls() != 1 {
+		t.Fatalf("duplicate install response = %#v, runner calls = %d", secondResponse, runner.calls())
+	}
+
+	close(runner.release)
+	select {
+	case <-runner.done:
+	case <-time.After(time.Second):
+		t.Fatal("setup worker did not finish")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		state, err = store.Load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Phase == setupstate.PhaseFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("setup worker did not publish failure: %#v", state)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if state.InstallRunID != runID || state.ErrorCode != "install_failed" {
+		t.Fatalf("failed setup state = %#v", state)
+	}
+}
+
+func TestSetupInstallWorkerLeavesRunOwnedByLockHolder(t *testing.T) {
+	root := t.TempDir()
+	functionKey := bytes.Repeat([]byte{0x58}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(functionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := installengine.NewLayout(filepath.Join(root, "install"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://localhost:8080\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := installengine.WriteAtomic(layout.ProxyFile, []byte("server {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Phase = setupstate.PhaseInstalling
+	state.InstallRunID = "run-1"
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	runner := &setupInstallProbeRunner{}
+	server := &Server{
+		setupState:  store,
+		setupEngine: installengine.New(installengine.Options{Runner: runner}),
+		logger:      slog.Default(),
+	}
+	lock, err := installengine.AcquireProcessLock(layout.StateDir, "install.lock", "installation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.runSetupInstall("run-1", installengine.Plan{Layout: layout, Existing: true, Version: "v1.2.3"})
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != setupstate.PhaseInstalling || state.InstallRunID != "run-1" {
+		t.Fatalf("lock-holder run was overwritten: %#v", state)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("losing worker invoked Docker: %#v", runner.calls)
+	}
+}
+
+type setupInstallProbeRunner struct {
+	calls []string
+}
+
+func (r *setupInstallProbeRunner) Run(_ context.Context, _ string, _, _ io.Writer, name string, _ ...string) error {
+	r.calls = append(r.calls, name)
+	return nil
+}
+
+func (r *setupInstallProbeRunner) Output(_ context.Context, _ string, name string, _ ...string) ([]byte, error) {
+	r.calls = append(r.calls, name)
+	return nil, nil
 }
 
 func TestGitHubAuthorizationRejectsInvalidCallbackState(t *testing.T) {

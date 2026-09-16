@@ -11,7 +11,10 @@ export function useSetupStatus() {
     retry: false,
     staleTime: 2_000,
     refetchInterval: (query) =>
-      query.state.data?.state.phase === "installing" ? 2_000 : false,
+      query.state.data?.state.phase === "install_requested" ||
+      query.state.data?.state.phase === "installing"
+        ? 2_000
+        : false,
   });
 }
 
