@@ -166,4 +166,4 @@ build without cgo/gcc). Docker/Compose image validation, CodeQL, and a fresh
 VPS test were not available locally. No merge or VPS success claim is made by
 this document.
 
-Remediation PR: to be added after the branch is pushed.
+Remediation PR: [#76 — fix: remediate 2026-09 audit findings](https://github.com/Stealth-deplover/stealth/pull/76)
