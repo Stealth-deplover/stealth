@@ -220,6 +220,31 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	if queuedAgent.Agent.Status != "active" {
 		t.Fatalf("queued run left parent Agent status %q, want active", queuedAgent.Agent.Status)
 	}
+	repo := repository.New(pool)
+	staleRunID := uuid.MustParse(createdRun.Run.ID)
+	projectID := uuid.MustParse(project.Project.ID)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET status='running',started_at=now()-interval '2 minutes',claimed_at=now()-interval '2 minutes',worker_id='stale-agent-worker' WHERE project_id=$1 AND agent_id=$2 AND id=$3`, projectID, uuid.MustParse(created.Agent.ID), staleRunID); err != nil {
+		t.Fatal(err)
+	}
+	if requeued, err := repo.RequeueStaleAgentRuns(ctx, time.Minute); err != nil || requeued != 1 {
+		t.Fatalf("RequeueStaleAgentRuns() = %d, %v; want one recovered run", requeued, err)
+	}
+	var recoveredAgent struct {
+		Agent struct {
+			Status string `json:"status"`
+		} `json:"agent"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID, nil, http.StatusOK, &recoveredAgent)
+	if recoveredAgent.Agent.Status != "active" {
+		t.Fatalf("recovered queued run left parent Agent status %q, want active", recoveredAgent.Agent.Status)
+	}
+	var recoveredEventCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM webhook_events WHERE project_id=$1 AND event_name='agent.run.queued' AND target_id=$2`, projectID, staleRunID).Scan(&recoveredEventCount); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredEventCount != 1 {
+		t.Fatalf("recovered run realtime event count = %d, want 1", recoveredEventCount)
+	}
 	var ownerRuns struct {
 		CanManage bool `json:"can_manage"`
 	}
@@ -249,7 +274,6 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	if err := json.Unmarshal(workerRunBody, &workerRun); err != nil {
 		t.Fatal(err)
 	}
-	repo := repository.New(pool)
 	workerID := "agent-integration-worker"
 	registry := agentrunner.NewRegistry()
 	if err := registry.Register("local", agentrunner.AdapterFunc(func(_ context.Context, job agentrunner.Job) (repository.AgentRunResult, error) {

@@ -33,6 +33,18 @@ describe("realtime query invalidation", () => {
     ]);
     expect(
       realtimeInvalidationKeys("project-1", {
+        type: "agent.run.queued",
+        resource_id: "run-1",
+        payload: { agent_id: "agent-1", status: "queued" },
+      }),
+    ).toEqual([
+      ["agent-runs", "agent-1"],
+      ["agent-run", "agent-1", "run-1"],
+      ["agents", "project-1"],
+      ["agent", "agent-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
         type: "storage_file.create",
         resource_id: "file-1",
         payload: { bucket_id: "bucket-1" },
@@ -65,6 +77,29 @@ describe("realtime query invalidation", () => {
     ).toEqual([
       ["storage", "project-1"],
       ["bucket", "project-1", "bucket-1"],
+    ]);
+  });
+
+  it("maps messaging and webhook secret changes to scoped caches", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "messaging.subscriber.create",
+        resource_id: "subscriber-1",
+        payload: { topic_id: "topic-1" },
+      }),
+    ).toEqual([
+      ["messaging-providers", "project-1"],
+      ["messaging-topics", "project-1"],
+      ["messaging-messages", "project-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "webhook.secret_rotate",
+        resource_id: "webhook-1",
+      }),
+    ).toEqual([
+      ["webhooks", "project-1"],
+      ["webhook", "project-1", "webhook-1"],
     ]);
   });
 
@@ -144,6 +179,11 @@ describe("realtime query invalidation", () => {
         "storage_file.create",
         "storage_file.update",
         "storage_file.delete",
+        "messaging.subscriber.create",
+        "messaging.subscriber.delete",
+        "messaging.message.create",
+        "messaging.message.cancel",
+        "webhook.secret_rotate",
         "site_domain.create",
         "site_domain.delete",
         "site_domain.verify",

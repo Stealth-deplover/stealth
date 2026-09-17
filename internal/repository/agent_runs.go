@@ -579,15 +579,15 @@ func (r *Repository) RequeueStaleAgentRuns(ctx context.Context, maxAge time.Dura
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `UPDATE agent_runs SET status='queued',started_at=NULL,claimed_at=NULL,worker_id=NULL,updated_at=now() WHERE status='running' AND claimed_at IS NOT NULL AND claimed_at < now() - ($1::double precision * interval '1 second') RETURNING agent_id,project_id`, maxAge.Seconds())
+	rows, err := tx.Query(ctx, `UPDATE agent_runs SET status='queued',started_at=NULL,claimed_at=NULL,worker_id=NULL,updated_at=now() WHERE status='running' AND claimed_at IS NOT NULL AND claimed_at < now() - ($1::double precision * interval '1 second') RETURNING id,agent_id,project_id`, maxAge.Seconds())
 	if err != nil {
 		return 0, err
 	}
-	type agentProject struct{ agentID, projectID uuid.UUID }
+	type agentProject struct{ runID, agentID, projectID uuid.UUID }
 	changed := make([]agentProject, 0)
 	for rows.Next() {
 		var value agentProject
-		if err := rows.Scan(&value.agentID, &value.projectID); err != nil {
+		if err := rows.Scan(&value.runID, &value.agentID, &value.projectID); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -605,6 +605,15 @@ func (r *Repository) RequeueStaleAgentRuns(ctx context.Context, maxAge time.Dura
 		}
 		seen[value.agentID] = struct{}{}
 		if err := r.refreshAgentStatusTx(ctx, tx, value.agentID, value.projectID); err != nil {
+			return 0, err
+		}
+	}
+	for _, value := range changed {
+		if err := r.enqueueWebhookEventTx(ctx, tx, value.projectID, "agent.run.queued", "agent_run", value.runID, map[string]any{
+			"agent_id":  value.agentID.String(),
+			"status":    "queued",
+			"recovered": true,
+		}); err != nil {
 			return 0, err
 		}
 	}

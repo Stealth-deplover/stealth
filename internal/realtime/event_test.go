@@ -52,6 +52,7 @@ func TestChannelRejectsNonUUIDProject(t *testing.T) {
 func TestShouldFanoutOnlyIncludesRealtimeConsumerEvents(t *testing.T) {
 	for _, eventType := range []string{
 		"agent.run.running",
+		"agent.run.queued",
 		"function_deployment.updated",
 		"webhook.delivery.updated",
 		"database_row.update",
@@ -65,6 +66,11 @@ func TestShouldFanoutOnlyIncludesRealtimeConsumerEvents(t *testing.T) {
 		"site_domain.verify",
 		"project_api_key.revoke",
 		"project_user.status_change",
+		"messaging.subscriber.create",
+		"messaging.subscriber.delete",
+		"messaging.message.create",
+		"messaging.message.cancel",
+		"webhook.secret_rotate",
 	} {
 		if !ShouldFanout(eventType) {
 			t.Fatalf("ShouldFanout(%q) = false, want true", eventType)

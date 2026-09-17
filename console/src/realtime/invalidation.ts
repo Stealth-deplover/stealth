@@ -28,6 +28,7 @@ function resourceId(event: RealtimeNotification) {
 
 const projectRealtimeEventTypes = [
   "agent.run.accepted",
+  "agent.run.queued",
   "agent.run.running",
   "agent.run.completed",
   "agent.run.failed",
@@ -65,6 +66,11 @@ const projectRealtimeEventTypes = [
   "messaging.topic.update",
   "messaging.topic.delete",
   "messaging.delivery.updated",
+  "messaging.subscriber.create",
+  "messaging.subscriber.delete",
+  "messaging.message.create",
+  "messaging.message.cancel",
+  "webhook.secret_rotate",
   "project.update",
   "project_auth.settings_update",
   "project_api_key.create",
