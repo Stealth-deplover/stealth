@@ -211,8 +211,8 @@ func functionChangedFields(patch FunctionPatch) []string {
 	return fields
 }
 
-// DeleteFunction removes metadata/accounting in one transaction and returns
-// only opaque source/build artifact paths for post-commit filesystem cleanup.
+// DeleteFunction removes metadata/accounting and records durable cleanup jobs
+// for its opaque source/build artifacts in the same transaction.
 func (r *Repository) DeleteFunction(ctx context.Context, projectID, functionID uuid.UUID, actor FunctionActor) ([]string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -247,6 +247,14 @@ func (r *Repository) DeleteFunction(ctx context.Context, projectID, functionID u
 		return nil, err
 	}
 	rows.Close()
+	for _, path := range paths {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupFunctions,
+			Operation: ArtifactCleanupRelative, RelativePath: path,
+		}); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_functions WHERE project_id=$1 AND id=$2`, projectID, functionID); err != nil {
 		return nil, err
 	}
@@ -371,7 +379,12 @@ func (r *Repository) CreateFunctionVariable(ctx context.Context, id, projectID, 
 	if err != nil {
 		return domain.FunctionVariable{}, mapError(err)
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.create", "function_variable", id, map[string]any{"key": input.Key, "kind": kind, "has_value": input.Value != nil}); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.create", "function_variable", id, map[string]any{
+		"function_id": functionID,
+		"key":         input.Key,
+		"kind":        kind,
+		"has_value":   input.Value != nil,
+	}); err != nil {
 		return domain.FunctionVariable{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -447,7 +460,12 @@ func (r *Repository) UpdateFunctionVariable(ctx context.Context, projectID, func
 	if err != nil {
 		return domain.FunctionVariable{}, mapError(err)
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.update", "function_variable", variableID, map[string]any{"changed_fields": functionVariableChangedFields(patch), "key": key, "has_value": value != nil}); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.update", "function_variable", variableID, map[string]any{
+		"function_id":    functionID,
+		"changed_fields": functionVariableChangedFields(patch),
+		"key":            key,
+		"has_value":      value != nil,
+	}); err != nil {
 		return domain.FunctionVariable{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -493,7 +511,9 @@ func (r *Repository) DeleteFunctionVariable(ctx context.Context, projectID, func
 	if command.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.delete", "function_variable", variableID, nil); err != nil {
+	if err := r.auditFunction(ctx, tx, projectID, actor, "function_variable.delete", "function_variable", variableID, map[string]any{
+		"function_id": functionID,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

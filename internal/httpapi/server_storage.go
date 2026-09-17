@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -329,23 +328,13 @@ func (s *Server) deleteStorageBucket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteStorageBucket(r.Context(), projectID, bucketID, managementStorageActorFrom(r))
+	_, err := s.repo.DeleteStorageBucket(r.Context(), projectID, bucketID, managementStorageActorFrom(r))
 	if storageResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.storage == nil {
-		internalError(s, w, errors.New("storage is unavailable"))
-		return
-	}
-	for _, path := range paths {
-		if err := s.storage.RemoveRelative(path); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted storage blob: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -725,20 +714,12 @@ func (s *Server) deleteStorageFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	path, err := s.repo.DeleteStorageFile(r.Context(), projectID, bucketID, fileID, storageActorFrom(r))
+	_, err := s.repo.DeleteStorageFile(r.Context(), projectID, bucketID, fileID, storageActorFrom(r))
 	if storageResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
-		return
-	}
-	if s.storage == nil {
-		internalError(s, w, errors.New("storage is unavailable"))
-		return
-	}
-	if err := s.storage.RemoveRelative(path); err != nil {
-		internalError(s, w, fmt.Errorf("remove deleted storage blob: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

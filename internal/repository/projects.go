@@ -176,6 +176,19 @@ func (r *Repository) DeleteProject(ctx context.Context, projectID, accountID uui
 	}); err != nil {
 		return err
 	}
+	for _, storeKind := range []ArtifactCleanupStoreKind{
+		ArtifactCleanupStorage,
+		ArtifactCleanupFunctions,
+		ArtifactCleanupSiteArchives,
+		ArtifactCleanupSites,
+	} {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: storeKind,
+			Operation: ArtifactCleanupProject, RelativePath: projectID.String(),
+		}); err != nil {
+			return err
+		}
+	}
 	result, err := tx.Exec(ctx, `DELETE FROM projects WHERE id=$1`, projectID)
 	if err != nil {
 		return err

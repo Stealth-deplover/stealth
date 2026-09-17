@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -298,29 +297,13 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteSite(r.Context(), projectID, siteID, siteActorFrom(r))
+	_, err := s.repo.DeleteSite(r.Context(), projectID, siteID, siteActorFrom(r))
 	if siteResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.sites == nil {
-		internalError(s, w, errors.New("site artifact storage is unavailable"))
-		return
-	}
-	for _, pathsItem := range paths {
-		if err := s.sites.RemoveRelative(pathsItem.ArtifactPath); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted site artifact: %w", err))
-			return
-		}
-		if pathsItem.SourcePath != "" && s.siteArchives != nil {
-			if err := s.siteArchives.RemoveRelative(pathsItem.SourcePath); err != nil {
-				internalError(s, w, fmt.Errorf("remove deleted site source: %w", err))
-				return
-			}
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -810,27 +793,13 @@ func (s *Server) deleteSiteDeployment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteSiteDeploymentWithArtifact(r.Context(), projectID, siteID, deploymentID, siteActorFrom(r))
+	_, err := s.repo.DeleteSiteDeploymentWithArtifact(r.Context(), projectID, siteID, deploymentID, siteActorFrom(r))
 	if siteResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.sites == nil {
-		internalError(s, w, errors.New("site artifact storage is unavailable"))
-		return
-	}
-	if err := s.sites.RemoveRelative(paths.ArtifactPath); err != nil {
-		internalError(s, w, fmt.Errorf("remove deleted site artifact: %w", err))
-		return
-	}
-	if paths.SourcePath != "" && s.siteArchives != nil {
-		if err := s.siteArchives.RemoveRelative(paths.SourcePath); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted site source: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

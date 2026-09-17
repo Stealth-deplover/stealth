@@ -15,11 +15,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/sitestore"
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -308,12 +312,54 @@ func TestFunctionsControlPlaneIntegration(t *testing.T) {
 
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodDelete, functionsURL, nil, http.StatusNoContent, writeHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, functionsURL, nil, http.StatusNotFound, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodDelete, functionsURL, nil, http.StatusNotFound, writeHeaders)
 	var auditCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('function.create','function_deployment.create','function_deployment.activate','function.delete')`, registration.Organization.ID).Scan(&auditCount); err != nil {
 		t.Fatal(err)
 	}
 	if auditCount != 4 {
 		t.Fatalf("function audit count = %d, want 4", auditCount)
+	}
+	var cleanupJobs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, project.Project.ID).Scan(&cleanupJobs); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupJobs == 0 {
+		t.Fatal("function deletion did not enqueue durable artifact cleanup")
+	}
+	userStorage, err := storage.New(storageRoot, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functionStorage, err := functionstore.New(filepath.Join(storageRoot, "functions"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteArchiveStorage, err := functionstore.New(filepath.Join(storageRoot, "site-archives"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteStorage, err := sitestore.New(filepath.Join(storageRoot, "sites"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupWorker, err := artifactcleanup.New(functionRepository, artifactcleanup.Stores{
+		Storage:      userStorage,
+		Functions:    functionStorage,
+		SiteArchives: siteArchiveStorage,
+		Sites:        siteStorage,
+	}, "functions-integration-cleanup", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempts := 0; attempts < cleanupJobs+8; attempts++ {
+		processed, runErr := cleanupWorker.RunOnce(ctx)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		if !processed {
+			break
+		}
 	}
 
 	var files []string

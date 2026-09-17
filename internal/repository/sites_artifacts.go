@@ -43,6 +43,20 @@ func (r *Repository) DeleteSiteDeploymentWithArtifact(ctx context.Context, proje
 	if err := r.auditSite(ctx, tx, projectID, actor, "site_deployment.delete", "site_deployment", deploymentID, map[string]any{"version": item.Version, "size_bytes": item.SizeBytes}); err != nil {
 		return SiteStoragePaths{}, err
 	}
+	if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+		ProjectID: projectID, StoreKind: ArtifactCleanupSites,
+		Operation: ArtifactCleanupRelative, RelativePath: artifactPath,
+	}); err != nil {
+		return SiteStoragePaths{}, err
+	}
+	if sourcePath != "" {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupSiteArchives,
+			Operation: ArtifactCleanupRelative, RelativePath: sourcePath,
+		}); err != nil {
+			return SiteStoragePaths{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return SiteStoragePaths{}, err
 	}

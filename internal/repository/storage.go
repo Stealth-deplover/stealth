@@ -426,8 +426,8 @@ func storageBucketChangedFields(patch StorageBucketPatch) []string {
 	return fields
 }
 
-// DeleteStorageBucket removes metadata/accounting in one transaction and
-// returns only UUID-derived relative paths for post-commit filesystem cleanup.
+// DeleteStorageBucket removes metadata/accounting and records durable
+// UUID-derived cleanup jobs in the same transaction.
 func (r *Repository) DeleteStorageBucket(ctx context.Context, projectID, bucketID uuid.UUID, actor StorageActor) ([]string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -461,6 +461,14 @@ func (r *Repository) DeleteStorageBucket(ctx context.Context, projectID, bucketI
 		return nil, err
 	}
 	rows.Close()
+	for _, path := range paths {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
+			Operation: ArtifactCleanupRelative, RelativePath: path,
+		}); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM storage_buckets WHERE project_id=$1 AND id=$2`, projectID, bucketID); err != nil {
 		return nil, err
 	}
@@ -667,7 +675,7 @@ func (r *Repository) UpdateStorageFile(ctx context.Context, projectID, bucketID,
 		changed = append(changed, "delete_permissions")
 	}
 	sort.Strings(changed)
-	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.update", "storage_file", fileID, map[string]any{"changed_fields": changed, "name": name}); err != nil {
+	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.update", "storage_file", fileID, map[string]any{"bucket_id": bucketID.String(), "changed_fields": changed, "name": name}); err != nil {
 		return domain.StorageFile{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -780,7 +788,7 @@ func (r *Repository) CreateStorageFile(ctx context.Context, id, projectID, bucke
 	if _, err := tx.Exec(ctx, `UPDATE storage_buckets SET used_bytes=used_bytes+$3,updated_at=now() WHERE project_id=$1 AND id=$2`, projectID, bucketID, input.SizeBytes); err != nil {
 		return domain.StorageFile{}, err
 	}
-	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.create", "storage_file", id, map[string]any{"name": input.Name, "mime_type": input.MimeType, "size_bytes": input.SizeBytes, "checksum_sha256": input.ChecksumSHA256}); err != nil {
+	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.create", "storage_file", id, map[string]any{"bucket_id": bucketID.String(), "name": input.Name, "mime_type": input.MimeType, "size_bytes": input.SizeBytes, "checksum_sha256": input.ChecksumSHA256}); err != nil {
 		return domain.StorageFile{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -859,7 +867,13 @@ func (r *Repository) DeleteStorageFile(ctx context.Context, projectID, bucketID,
 	if _, err := tx.Exec(ctx, `UPDATE storage_buckets SET used_bytes=GREATEST(0,used_bytes-$3),updated_at=now() WHERE project_id=$1 AND id=$2`, projectID, bucketID, item.SizeBytes); err != nil {
 		return "", err
 	}
-	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.delete", "storage_file", fileID, map[string]any{"name": item.Name, "size_bytes": item.SizeBytes, "checksum_sha256": item.ChecksumSHA256}); err != nil {
+	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.delete", "storage_file", fileID, map[string]any{"bucket_id": bucketID.String(), "name": item.Name, "size_bytes": item.SizeBytes, "checksum_sha256": item.ChecksumSHA256}); err != nil {
+		return "", err
+	}
+	if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+		ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
+		Operation: ArtifactCleanupRelative, RelativePath: path,
+	}); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

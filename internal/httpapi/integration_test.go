@@ -1601,4 +1601,18 @@ func TestProjectDatabasesCoreIntegration(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM accounts WHERE id=$1`, outsiderRegistration.Account.ID)
 	})
 	requestJSON(t, outsider, http.MethodGet, tableURL+"/rows", nil, http.StatusNotFound, nil)
+	var databaseCleanupJobsBefore int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, projectResponse.Project.ID).Scan(&databaseCleanupJobsBefore); err != nil {
+		t.Fatal(err)
+	}
+	requestJSON(t, ownerClient, http.MethodPost, databaseURLPath+"/backups?max_rows=1000", nil, http.StatusCreated, &backupResponse)
+	requestJSON(t, ownerClient, http.MethodDelete, databaseURLPath, nil, http.StatusNoContent, nil)
+	requestJSON(t, ownerClient, http.MethodGet, databaseURLPath, nil, http.StatusNotFound, nil)
+	var databaseCleanupJobsAfter int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, projectResponse.Project.ID).Scan(&databaseCleanupJobsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if databaseCleanupJobsAfter != databaseCleanupJobsBefore+1 {
+		t.Fatalf("database deletion cleanup jobs = %d, want %d", databaseCleanupJobsAfter, databaseCleanupJobsBefore+1)
+	}
 }

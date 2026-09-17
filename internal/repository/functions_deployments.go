@@ -595,9 +595,8 @@ func (r *Repository) DeleteFunctionDeployment(ctx context.Context, projectID, fu
 	return paths[0], nil
 }
 
-// DeleteFunctionDeploymentWithArtifacts removes metadata/accounting in one
-// transaction and returns only opaque source/build paths for post-commit
-// filesystem cleanup.
+// DeleteFunctionDeploymentWithArtifacts removes metadata/accounting and
+// records durable cleanup jobs for its source/build paths in one transaction.
 func (r *Repository) DeleteFunctionDeploymentWithArtifacts(ctx context.Context, projectID, functionID, deploymentID uuid.UUID, actor FunctionActor) ([]string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -630,6 +629,17 @@ func (r *Repository) DeleteFunctionDeploymentWithArtifacts(ctx context.Context, 
 	}
 	if err := r.auditFunction(ctx, tx, projectID, actor, "function_deployment.delete", "function_deployment", deploymentID, map[string]any{"version": item.Version, "size_bytes": item.SizeBytes}); err != nil {
 		return nil, err
+	}
+	for _, artifactPath := range []string{path, buildStorage.BuildPath} {
+		if strings.TrimSpace(artifactPath) == "" {
+			continue
+		}
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupFunctions,
+			Operation: ArtifactCleanupRelative, RelativePath: artifactPath,
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

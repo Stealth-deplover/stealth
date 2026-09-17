@@ -287,20 +287,12 @@ func (s *Server) deleteDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.storageReady || s.storage == nil {
-		writeError(w, http.StatusServiceUnavailable, "storage_unavailable", "database backup storage is unavailable")
-		return
-	}
-	path, err := s.repo.DeleteDatabaseBackup(r.Context(), projectID, databaseID, backupID, databaseActorFrom(r))
+	_, err := s.repo.DeleteDatabaseBackup(r.Context(), projectID, databaseID, backupID, databaseActorFrom(r))
 	if databaseBackupResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
-		return
-	}
-	if err := s.storage.RemoveRelative(path); err != nil {
-		internalError(s, w, fmt.Errorf("remove deleted database backup blob: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

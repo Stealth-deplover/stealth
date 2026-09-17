@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
+	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
@@ -27,6 +28,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/runtime"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/Stealth-deplover/stealth/internal/webhookrunner"
 	"github.com/Stealth-deplover/stealth/internal/workersupervisor"
 )
@@ -97,6 +99,38 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher})
+	var userStorage artifactcleanup.Cleaner
+	if cfg.StorageDriver == "s3" {
+		userStorage, err = storage.NewS3(storage.S3Options{
+			Endpoint:       cfg.StorageS3Endpoint,
+			Region:         cfg.StorageS3Region,
+			Bucket:         cfg.StorageS3Bucket,
+			AccessKey:      cfg.StorageS3AccessKey,
+			SecretKey:      cfg.StorageS3SecretKey,
+			UseSSL:         cfg.StorageS3UseSSL,
+			ForcePathStyle: cfg.StorageS3PathStyle,
+			Prefix:         cfg.StorageS3Prefix,
+			StagingRoot:    cfg.StorageS3StagingRoot,
+		}, cfg.StorageMaxFileSize)
+	} else {
+		userStorage, err = storage.New(cfg.StorageRoot, cfg.StorageMaxFileSize)
+	}
+	if err != nil {
+		logger.Error("user artifact cleanup storage configuration error", "error", err)
+		userStorage = nil
+	}
+	artifactCleanupWorker, err := artifactcleanup.New(repo, artifactcleanup.Stores{
+		Storage:      userStorage,
+		Functions:    store,
+		SiteArchives: siteSourceStore,
+		Sites:        sitePublicStore,
+	}, cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("artifact cleanup worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	artifactCleanupWorker.PollInterval = cfg.FunctionsRunnerPoll
+	artifactCleanupWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	realtimePublisher, err := realtimepublisher.New(repo, realtime.NewBroker(redisClient), cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("realtime publisher configuration error", "error", err)
@@ -138,6 +172,7 @@ func main() {
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		registrations := []workersupervisor.Registration{
+			{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
@@ -191,6 +226,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	registrations := []workersupervisor.Registration{
+		{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 		{Name: "function worker", Runner: worker},
 		{Name: "site worker", Runner: siteWorker},
 		{Name: "realtime publisher", Runner: realtimePublisher},
