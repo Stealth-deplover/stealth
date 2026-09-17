@@ -709,7 +709,18 @@ func (s *Server) uploadFunctionDeployment(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "source filename is invalid")
 		return
 	}
-	if err := s.functions.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupFunctions,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		cleanup()
+		internalError(s, w, err)
+		return
+	}
+	if err := s.functions.Commit(r.Context(), &prepared); err != nil {
 		internalError(s, w, err)
 		return
 	}
@@ -719,13 +730,11 @@ func (s *Server) uploadFunctionDeployment(w http.ResponseWriter, r *http.Request
 	if actor.Kind == repository.FunctionConsoleActor && actor.AccountID != uuid.Nil {
 		createdBy = &actor.AccountID
 	}
-	item, err := s.repo.CreateFunctionDeployment(r.Context(), deploymentID, projectID, functionID, actor, repository.FunctionDeploymentInput{Source: "upload", SourceName: &name, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, SourcePath: prepared.RelativePath, CreatedByAccountID: createdBy, Activate: activate})
+	item, err := s.repo.CreateFunctionDeployment(r.Context(), deploymentID, projectID, functionID, actor, repository.FunctionDeploymentInput{Source: "upload", SourceName: &name, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, SourcePath: prepared.RelativePath, CreatedByAccountID: createdBy, Activate: activate, PublishCleanup: &publishCleanup})
 	if functionResourceError(w, err) {
-		_ = s.functions.RemoveRelative(prepared.RelativePath)
 		return
 	}
 	if err != nil {
-		_ = s.functions.RemoveRelative(prepared.RelativePath)
 		internalError(s, w, err)
 		return
 	}

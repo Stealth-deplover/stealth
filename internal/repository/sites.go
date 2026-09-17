@@ -67,6 +67,7 @@ type SiteDeploymentInput struct {
 	ReservedBytes      int64
 	CreatedByAccountID *uuid.UUID
 	Activate           bool
+	PublishCleanup     *ArtifactCleanupInput
 }
 
 // SiteBuildJob is the worker-only view of a source deployment. Private

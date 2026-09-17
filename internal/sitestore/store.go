@@ -5,6 +5,7 @@
 package sitestore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -328,7 +329,10 @@ func validateDirectoryTree(root *os.Root, relative string) error {
 	return nil
 }
 
-func (s *Store) RemoveRelative(relative string) error {
+func (s *Store) RemoveRelative(ctx context.Context, relative string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	canonical, err := artifactRelativePath(relative)
 	if err != nil {
 		return err
@@ -343,7 +347,10 @@ func (s *Store) RemoveRelative(relative string) error {
 // a project namespace. The namespace is derived from a UUIDv7 and is checked
 // with Lstat before recursive removal so custom-domain serving paths cannot be
 // used to escape the store root.
-func (s *Store) RemoveProject(projectID uuid.UUID) error {
+func (s *Store) RemoveProject(ctx context.Context, projectID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || s.rootDir == nil || projectID == uuid.Nil || projectID.Version() != uuid.Version(7) {
 		return ErrInvalidPath
 	}

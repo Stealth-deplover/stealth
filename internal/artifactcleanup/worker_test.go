@@ -67,12 +67,12 @@ type fakeCleaner struct {
 	err           error
 }
 
-func (f *fakeCleaner) RemoveRelative(path string) error {
+func (f *fakeCleaner) RemoveRelative(_ context.Context, path string) error {
 	f.relativeCalls = append(f.relativeCalls, path)
 	return f.err
 }
 
-func (f *fakeCleaner) RemoveProject(projectID uuid.UUID) error {
+func (f *fakeCleaner) RemoveProject(_ context.Context, projectID uuid.UUID) error {
 	f.projectCalls = append(f.projectCalls, projectID)
 	return f.err
 }

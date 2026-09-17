@@ -546,7 +546,17 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 			internalError(s, w, pathErr)
 			return
 		}
-		if err := s.siteArchives.Commit(&prepared); err != nil {
+		publishCleanup := repository.ArtifactCleanupInput{
+			ProjectID:    projectID,
+			StoreKind:    repository.ArtifactCleanupSiteArchives,
+			Operation:    repository.ArtifactCleanupRelative,
+			RelativePath: prepared.RelativePath,
+		}
+		if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+			internalError(s, w, err)
+			return
+		}
+		if err := s.siteArchives.Commit(r.Context(), &prepared); err != nil {
 			internalError(s, w, err)
 			return
 		}
@@ -570,13 +580,12 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 			ReservedBytes:      s.config.SitesMaxExpandedBytes,
 			CreatedByAccountID: createdBy,
 			Activate:           activate,
+			PublishCleanup:     &publishCleanup,
 		})
 		if siteResourceError(w, err) {
-			_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 			return
 		}
 		if err != nil {
-			_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 			internalError(s, w, err)
 			return
 		}
@@ -619,6 +628,16 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "site archive must contain a regular index.html at its root")
 		return
 	}
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupSites,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: artifactPath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		internalError(s, w, err)
+		return
+	}
 	if err := s.sites.CommitDirectory(staging, artifactPath); err != nil {
 		internalError(s, w, err)
 		return
@@ -629,13 +648,11 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 	if actor.Kind == repository.SiteConsoleActor && actor.AccountID != uuid.Nil {
 		createdBy = &actor.AccountID
 	}
-	item, err := s.repo.CreateSiteDeployment(r.Context(), deploymentID, projectID, siteID, actor, repository.SiteDeploymentInput{Source: "upload", SourceName: &sourceName, SizeBytes: stats.Bytes, ArchiveSizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, ArtifactPath: artifactPath, CreatedByAccountID: createdBy, Activate: activate})
+	item, err := s.repo.CreateSiteDeployment(r.Context(), deploymentID, projectID, siteID, actor, repository.SiteDeploymentInput{Source: "upload", SourceName: &sourceName, SizeBytes: stats.Bytes, ArchiveSizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, ArtifactPath: artifactPath, CreatedByAccountID: createdBy, Activate: activate, PublishCleanup: &publishCleanup})
 	if siteResourceError(w, err) {
-		_ = s.sites.RemoveRelative(artifactPath)
 		return
 	}
 	if err != nil {
-		_ = s.sites.RemoveRelative(artifactPath)
 		internalError(s, w, err)
 		return
 	}
@@ -735,7 +752,17 @@ func (s *Server) createGitSiteDeployment(w http.ResponseWriter, r *http.Request)
 		internalError(s, w, err)
 		return
 	}
-	if err := s.siteArchives.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupSiteArchives,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		internalError(s, w, err)
+		return
+	}
+	if err := s.siteArchives.Commit(r.Context(), &prepared); err != nil {
 		internalError(s, w, err)
 		return
 	}
@@ -762,13 +789,12 @@ func (s *Server) createGitSiteDeployment(w http.ResponseWriter, r *http.Request)
 		ReservedBytes:      s.config.SitesMaxExpandedBytes,
 		CreatedByAccountID: createdBy,
 		Activate:           activate,
+		PublishCleanup:     &publishCleanup,
 	})
 	if siteResourceError(w, err) {
-		_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 		return
 	}
 	if err != nil {
-		_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 		internalError(s, w, err)
 		return
 	}

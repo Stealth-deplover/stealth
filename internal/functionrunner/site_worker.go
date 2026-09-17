@@ -34,7 +34,9 @@ type SiteBuildExecutor interface {
 type SitePersistence interface {
 	RequeueStaleSiteDeployments(context.Context, time.Duration) (int64, error)
 	ClaimNextSiteDeployment(context.Context, string) (repository.SiteBuildJob, error)
+	ReserveArtifactPublishCleanup(context.Context, repository.ArtifactCleanupInput) error
 	CompleteSiteDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64) (domain.SiteDeployment, error)
+	CompleteSiteDeploymentBuildWithCleanup(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64, repository.ArtifactCleanupInput) (domain.SiteDeployment, error)
 	FailSiteDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string) (domain.SiteDeployment, error)
 	AppendSiteBuildLog(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int64, string, string) (domain.SiteBuildLog, error)
 }
@@ -211,7 +213,7 @@ func (w *SiteWorker) buildDeployment(parent context.Context, job repository.Site
 	defer func() { _ = os.RemoveAll(workspace) }()
 	w.emitBuildLog(parent, projectID, siteID, deploymentID, "info", "build started")
 
-	archive, err := w.SourceStore.OpenRelative(job.SourcePath)
+	archive, err := w.SourceStore.OpenRelative(parent, job.SourcePath)
 	if err != nil {
 		return w.failBuild(parent, projectID, siteID, deploymentID, "site source archive is unavailable")
 	}
@@ -290,12 +292,20 @@ func (w *SiteWorker) buildDeployment(parent context.Context, job repository.Site
 		return w.failBuild(parent, projectID, siteID, deploymentID, "site build output must contain a regular index.html at its root")
 	}
 	w.emitBuildLog(parent, projectID, siteID, deploymentID, "info", fmt.Sprintf("build artifact produced (%d files, %d bytes)", outputStats.Files, outputStats.Bytes))
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupSites,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: artifactPath,
+	}
+	if err := w.Store.ReserveArtifactPublishCleanup(parent, publishCleanup); err != nil {
+		return w.failBuild(parent, projectID, siteID, deploymentID, "site build artifact publication could not be reserved")
+	}
 	if err := w.PublicStore.CommitDirectory(artifactStaging, artifactPath); err != nil {
 		return w.failBuild(parent, projectID, siteID, deploymentID, "site build artifact could not be committed")
 	}
 	committed = true
-	if _, err := w.Store.CompleteSiteDeploymentBuild(parent, projectID, siteID, deploymentID, w.WorkerID, checkedBuild.SumHex(), outputStats.Bytes); err != nil {
-		_ = w.PublicStore.RemoveRelative(artifactPath)
+	if _, err := w.Store.CompleteSiteDeploymentBuildWithCleanup(parent, projectID, siteID, deploymentID, w.WorkerID, checkedBuild.SumHex(), outputStats.Bytes, publishCleanup); err != nil {
 		if errors.Is(err, repository.ErrSiteQuotaExceeded) {
 			return w.failBuild(parent, projectID, siteID, deploymentID, "site build artifact exceeds the remaining quota")
 		}

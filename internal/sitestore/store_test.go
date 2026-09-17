@@ -1,6 +1,7 @@
 package sitestore
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -164,7 +165,7 @@ func TestStoreProjectRemovalDoesNotFollowSymlink(t *testing.T) {
 	if err := os.Symlink(outside, projectPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RemoveProject(projectID); !errors.Is(err, ErrInvalidPath) {
+	if err := store.RemoveProject(context.Background(), projectID); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("RemoveProject() error = %v, want ErrInvalidPath", err)
 	}
 	if _, err := os.Stat(sentinel); err != nil {

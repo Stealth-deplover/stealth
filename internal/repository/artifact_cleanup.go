@@ -17,7 +17,15 @@ var (
 	ErrInvalidArtifactCleanup   = errors.New("invalid artifact cleanup job")
 	ErrArtifactCleanupStore     = errors.New("invalid artifact cleanup store")
 	ErrArtifactCleanupOperation = errors.New("invalid artifact cleanup operation")
+	ErrArtifactPublishConflict  = errors.New("artifact publish cleanup reservation already exists")
+	ErrArtifactPublishLost      = errors.New("artifact publish cleanup reservation is no longer available")
 )
+
+// ArtifactPublishReservationAge is deliberately conservative. A reservation
+// is not eligible for the cleanup worker while an upload/build may still be
+// publishing its bytes. The owning metadata transaction removes it before
+// exposing the artifact.
+const ArtifactPublishReservationAge = 24 * time.Hour
 
 type ArtifactCleanupStoreKind string
 
@@ -124,6 +132,81 @@ func queueArtifactCleanupTx(ctx context.Context, tx pgx.Tx, input ArtifactCleanu
 	return err
 }
 
+// ReserveArtifactPublishCleanup records durable cleanup intent before a
+// physical artifact is published. If the process dies before metadata can
+// consume the reservation, RequeueStaleArtifactCleanup eventually promotes it
+// to the normal idempotent cleanup queue.
+func (r *Repository) ReserveArtifactPublishCleanup(ctx context.Context, input ArtifactCleanupInput) error {
+	if input.Operation != ArtifactCleanupRelative {
+		return fmt.Errorf("%w: publish reservations only support relative artifacts", ErrInvalidArtifactCleanup)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := reserveArtifactPublishCleanupTx(ctx, tx, input); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func reserveArtifactPublishCleanupTx(ctx context.Context, tx pgx.Tx, input ArtifactCleanupInput) error {
+	if err := ValidateArtifactCleanupInput(input); err != nil {
+		return err
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("create artifact publish reservation identifier: %w", err)
+	}
+	var reservedID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO artifact_cleanup_jobs (id,project_id,store_kind,operation,relative_path,status)
+		VALUES ($1,$2,$3,$4,$5,'reserved')
+		ON CONFLICT (store_kind,operation,relative_path) DO UPDATE
+		SET updated_at=now()
+		WHERE artifact_cleanup_jobs.status='reserved'
+		RETURNING id`, id, input.ProjectID, input.StoreKind, input.Operation, input.RelativePath).Scan(&reservedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrArtifactPublishConflict
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// finalizeArtifactPublishCleanupTx consumes the reservation in the same
+// metadata transaction that publishes the corresponding row. If recovery has
+// already promoted or claimed the reservation, the metadata transaction is
+// rejected rather than exposing a row whose physical bytes may be removed.
+func finalizeArtifactPublishCleanupTx(ctx context.Context, tx pgx.Tx, input ArtifactCleanupInput) error {
+	if err := ValidateArtifactCleanupInput(input); err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `
+		DELETE FROM artifact_cleanup_jobs
+		WHERE project_id=$1 AND store_kind=$2 AND operation=$3 AND relative_path=$4
+		  AND status='reserved' AND leased_at IS NULL`, input.ProjectID, input.StoreKind, input.Operation, input.RelativePath)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrArtifactPublishLost
+	}
+	return nil
+}
+
+func validatePublishCleanup(input *ArtifactCleanupInput, projectID uuid.UUID, kind ArtifactCleanupStoreKind, relativePath string) error {
+	if input == nil {
+		return nil
+	}
+	if input.ProjectID != projectID || input.StoreKind != kind || input.Operation != ArtifactCleanupRelative || input.RelativePath != relativePath {
+		return fmt.Errorf("%w: publish reservation does not match metadata", ErrInvalidArtifactCleanup)
+	}
+	return nil
+}
+
 // ClaimNextArtifactCleanup leases one due job. SKIP LOCKED allows multiple
 // workers while the lease makes a crashed process recoverable.
 func (r *Repository) ClaimNextArtifactCleanup(ctx context.Context, workerID string, leaseAge time.Duration) (ArtifactCleanupJob, error) {
@@ -178,7 +261,18 @@ func (r *Repository) RequeueStaleArtifactCleanup(ctx context.Context, leaseAge t
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	reservedAge := ArtifactPublishReservationAge
+	if leaseAge > reservedAge {
+		reservedAge = leaseAge
+	}
+	reserved, err := r.pool.Exec(ctx, `
+		UPDATE artifact_cleanup_jobs
+		SET status='pending',available_at=LEAST(available_at,now()),updated_at=now()
+		WHERE status='reserved' AND updated_at < now() - ($1::double precision * interval '1 second')`, reservedAge.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected() + reserved.RowsAffected(), nil
 }
 
 func (r *Repository) CompleteArtifactCleanup(ctx context.Context, jobID uuid.UUID, workerID string) error {

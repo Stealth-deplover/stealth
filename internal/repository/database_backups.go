@@ -222,6 +222,14 @@ func (r *Repository) BuildDatabaseBackup(ctx context.Context, projectID, databas
 }
 
 func (r *Repository) CreateDatabaseBackup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string) (domain.DatabaseBackup, error) {
+	return r.createDatabaseBackup(ctx, id, projectID, databaseID, actor, storagePath, sizeBytes, checksum, nil)
+}
+
+func (r *Repository) CreateDatabaseBackupWithCleanup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string, cleanup ArtifactCleanupInput) (domain.DatabaseBackup, error) {
+	return r.createDatabaseBackup(ctx, id, projectID, databaseID, actor, storagePath, sizeBytes, checksum, &cleanup)
+}
+
+func (r *Repository) createDatabaseBackup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string, cleanup *ArtifactCleanupInput) (domain.DatabaseBackup, error) {
 	if strings.TrimSpace(storagePath) == "" || strings.Contains(storagePath, "..") || sizeBytes < 1 || sizeBytes > DatabaseBackupMaxBytes || len(checksum) != 64 || checksum != strings.ToLower(checksum) {
 		return domain.DatabaseBackup{}, ErrInvalidBackup
 	}
@@ -252,6 +260,14 @@ func (r *Repository) CreateDatabaseBackup(ctx context.Context, id, projectID, da
 		"checksum_sha256": checksum,
 	}); err != nil {
 		return domain.DatabaseBackup{}, err
+	}
+	if err := validatePublishCleanup(cleanup, projectID, ArtifactCleanupStorage, storagePath); err != nil {
+		return domain.DatabaseBackup{}, err
+	}
+	if cleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *cleanup); err != nil {
+			return domain.DatabaseBackup{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.DatabaseBackup{}, err

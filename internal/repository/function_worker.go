@@ -16,7 +16,9 @@ import (
 type FunctionBuildStore interface {
 	ClaimNextFunctionDeployment(context.Context, string) (FunctionBuildJob, error)
 	RequeueStaleFunctionDeployments(context.Context, time.Duration) (int64, error)
+	ReserveArtifactPublishCleanup(context.Context, ArtifactCleanupInput) error
 	CompleteFunctionDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64, string) (domain.FunctionDeployment, error)
+	CompleteFunctionDeploymentBuildWithCleanup(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, int64, string, ArtifactCleanupInput) (domain.FunctionDeployment, error)
 	FailFunctionDeploymentBuild(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string) (domain.FunctionDeployment, error)
 	FunctionRuntimeVariablesForDeployment(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, *functionsecret.Cipher) ([]FunctionRuntimeVariable, error)
 	AppendFunctionBuildLog(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int64, string, string) (domain.FunctionBuildLog, error)

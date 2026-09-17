@@ -142,7 +142,10 @@ func (s *S3Store) BeginUploadWithLimit(ctx context.Context, projectID, bucketID,
 	return s.staging.BeginUploadWithLimit(ctx, projectID, bucketID, fileID, src, declaredType, maxSize)
 }
 
-func (s *S3Store) Commit(file *PreparedFile) error {
+func (s *S3Store) Commit(ctx context.Context, file *PreparedFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || s.client == nil || s.staging == nil || file == nil || file.TempPath == "" || file.RelativePath == "" || file.committed {
 		return ErrInvalidPath
 	}
@@ -150,7 +153,7 @@ func (s *S3Store) Commit(file *PreparedFile) error {
 	if err != nil {
 		return err
 	}
-	if _, statErr := s.client.StatObject(context.Background(), s.bucket, key, minio.StatObjectOptions{}); statErr == nil {
+	if _, statErr := s.client.StatObject(ctx, s.bucket, key, minio.StatObjectOptions{}); statErr == nil {
 		return fmt.Errorf("storage destination already exists: %w", os.ErrExist)
 	} else if !isMissingObject(statErr) {
 		return fmt.Errorf("check S3 destination: %w", statErr)
@@ -159,7 +162,7 @@ func (s *S3Store) Commit(file *PreparedFile) error {
 	if err != nil {
 		return fmt.Errorf("open staged upload: %w", err)
 	}
-	info, putErr := s.client.PutObject(context.Background(), s.bucket, key, input, file.Size, minio.PutObjectOptions{
+	info, putErr := s.client.PutObject(ctx, s.bucket, key, input, file.Size, minio.PutObjectOptions{
 		ContentType:  file.ContentType,
 		UserMetadata: map[string]string{"checksum-sha256": file.Checksum},
 	})
@@ -168,15 +171,15 @@ func (s *S3Store) Commit(file *PreparedFile) error {
 		return fmt.Errorf("publish S3 object: %w", putErr)
 	}
 	if info.Size != file.Size {
-		_ = s.removeObject(context.Background(), key)
+		_ = s.removeObject(ctx, key)
 		return fmt.Errorf("publish S3 object: wrote %d bytes, expected %d", info.Size, file.Size)
 	}
 	if closeErr != nil {
-		_ = s.removeObject(context.Background(), key)
+		_ = s.removeObject(ctx, key)
 		return fmt.Errorf("close staged upload: %w", closeErr)
 	}
 	if err := os.Remove(file.TempPath); err != nil {
-		_ = s.removeObject(context.Background(), key)
+		_ = s.removeObject(ctx, key)
 		return fmt.Errorf("remove staged upload: %w", err)
 	}
 	file.committed = true
@@ -190,15 +193,21 @@ func (s *S3Store) Cleanup(file *PreparedFile) {
 	s.staging.Cleanup(file)
 }
 
-func (s *S3Store) RemoveRelative(relative string) error {
+func (s *S3Store) RemoveRelative(ctx context.Context, relative string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	key, err := s.objectKey(relative)
 	if err != nil {
 		return err
 	}
-	return s.removeObject(context.Background(), key)
+	return s.removeObject(ctx, key)
 }
 
-func (s *S3Store) RemoveProject(projectID uuid.UUID) error {
+func (s *S3Store) RemoveProject(ctx context.Context, projectID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || s.client == nil || projectID == uuid.Nil || projectID.Version() != uuid.Version(7) {
 		return ErrInvalidPath
 	}
@@ -207,7 +216,6 @@ func (s *S3Store) RemoveProject(projectID uuid.UUID) error {
 		return err
 	}
 	prefix += "/"
-	ctx := context.Background()
 	objects := s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
 	for object := range objects {
 		if object.Err != nil {
@@ -220,7 +228,10 @@ func (s *S3Store) RemoveProject(projectID uuid.UUID) error {
 	return nil
 }
 
-func (s *S3Store) OpenRelative(relative string) (ReadSeekCloser, error) {
+func (s *S3Store) OpenRelative(ctx context.Context, relative string) (ReadSeekCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.client == nil || s.staging == nil {
 		return nil, ErrInvalidPath
 	}
@@ -241,7 +252,7 @@ func (s *S3Store) OpenRelative(relative string) (ReadSeekCloser, error) {
 		cleanup()
 		return nil, fmt.Errorf("protect S3 download staging file: %w", err)
 	}
-	object, err := s.client.GetObject(context.Background(), s.bucket, key, minio.GetObjectOptions{})
+	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
 		cleanup()
 		return nil, normalizeObjectError(err)
@@ -256,6 +267,10 @@ func (s *S3Store) OpenRelative(relative string) (ReadSeekCloser, error) {
 	}
 	copied, copyErr := io.Copy(temporary, io.LimitReader(object, readLimit))
 	objectCloseErr := object.Close()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		cleanup()
+		return nil, ctxErr
+	}
 	if copyErr != nil {
 		cleanup()
 		return nil, normalizeObjectError(copyErr)

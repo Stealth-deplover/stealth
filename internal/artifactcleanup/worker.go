@@ -27,8 +27,8 @@ var ErrStoreUnavailable = errors.New("artifact cleanup store is unavailable")
 // can only remove server-derived relative paths or a whole UUID project
 // namespace; it cannot accept arbitrary filesystem commands.
 type Cleaner interface {
-	RemoveRelative(string) error
-	RemoveProject(uuid.UUID) error
+	RemoveRelative(context.Context, string) error
+	RemoveProject(context.Context, uuid.UUID) error
 }
 
 type Stores struct {
@@ -137,7 +137,7 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 	if cleaner == nil {
 		return true, w.retry(ctx, job, ErrStoreUnavailable)
 	}
-	if err := w.remove(cleaner, job); err != nil {
+	if err := w.remove(ctx, cleaner, job); err != nil {
 		return true, w.retry(ctx, job, err)
 	}
 	if err := w.Store.CompleteArtifactCleanup(ctx, job.ID, w.WorkerID); err != nil {
@@ -155,12 +155,12 @@ func (w *Worker) retry(ctx context.Context, job repository.ArtifactCleanupJob, c
 	return cause
 }
 
-func (w *Worker) remove(cleaner Cleaner, job repository.ArtifactCleanupJob) error {
+func (w *Worker) remove(ctx context.Context, cleaner Cleaner, job repository.ArtifactCleanupJob) error {
 	switch job.Operation {
 	case repository.ArtifactCleanupRelative:
-		return cleaner.RemoveRelative(job.RelativePath)
+		return cleaner.RemoveRelative(ctx, job.RelativePath)
 	case repository.ArtifactCleanupProject:
-		return cleaner.RemoveProject(job.ProjectID)
+		return cleaner.RemoveProject(ctx, job.ProjectID)
 	default:
 		return fmt.Errorf("unsupported artifact cleanup operation %q", job.Operation)
 	}

@@ -95,9 +95,10 @@ func (r *Repository) GetFunctionDeployment(ctx context.Context, projectID, funct
 
 // CreateFunctionDeployment reserves per-function quota and assigns a
 // monotonically increasing version while holding the function row lock. The
-// upload is already atomically published by the caller. `Activate` is handled
-// in the same transaction so the new active pointer cannot be observed before
-// its metadata and quota reservation commit.
+// upload is already atomically published by the caller after recording a
+// durable cleanup reservation. `Activate` is handled in the same transaction
+// so the new active pointer cannot be observed before its metadata and quota
+// reservation commit.
 func (r *Repository) CreateFunctionDeployment(ctx context.Context, id, projectID, functionID uuid.UUID, actor FunctionActor, input FunctionDeploymentInput) (domain.FunctionDeployment, error) {
 	if input.SizeBytes < 0 {
 		return domain.FunctionDeployment{}, ErrFunctionArtifactTooLarge
@@ -158,6 +159,14 @@ func (r *Repository) CreateFunctionDeployment(ctx context.Context, id, projectID
 		}
 		item, err = activateFunctionDeploymentTx(ctx, tx, projectID, functionID, id, actor, item)
 		if err != nil {
+			return domain.FunctionDeployment{}, err
+		}
+	}
+	if err := validatePublishCleanup(input.PublishCleanup, projectID, ArtifactCleanupFunctions, input.SourcePath); err != nil {
+		return domain.FunctionDeployment{}, err
+	}
+	if input.PublishCleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *input.PublishCleanup); err != nil {
 			return domain.FunctionDeployment{}, err
 		}
 	}
@@ -398,6 +407,14 @@ func (r *Repository) RequeueStaleFunctionDeployments(ctx context.Context, maxAge
 // CompleteFunctionDeploymentBuild publishes the worker-produced immutable
 // archive and adjusts artifact quota for its final size in one transaction.
 func (r *Repository) CompleteFunctionDeploymentBuild(ctx context.Context, projectID, functionID, deploymentID uuid.UUID, workerID, buildPath string, buildSizeBytes int64, buildChecksumSHA256 string) (domain.FunctionDeployment, error) {
+	return r.completeFunctionDeploymentBuild(ctx, projectID, functionID, deploymentID, workerID, buildPath, buildSizeBytes, buildChecksumSHA256, nil)
+}
+
+func (r *Repository) CompleteFunctionDeploymentBuildWithCleanup(ctx context.Context, projectID, functionID, deploymentID uuid.UUID, workerID, buildPath string, buildSizeBytes int64, buildChecksumSHA256 string, cleanup ArtifactCleanupInput) (domain.FunctionDeployment, error) {
+	return r.completeFunctionDeploymentBuild(ctx, projectID, functionID, deploymentID, workerID, buildPath, buildSizeBytes, buildChecksumSHA256, &cleanup)
+}
+
+func (r *Repository) completeFunctionDeploymentBuild(ctx context.Context, projectID, functionID, deploymentID uuid.UUID, workerID, buildPath string, buildSizeBytes int64, buildChecksumSHA256 string, cleanup *ArtifactCleanupInput) (domain.FunctionDeployment, error) {
 	if !validFunctionWorkerID(workerID) || !validFunctionArtifactPath(buildPath) || buildSizeBytes <= 0 || !validSHA256(buildChecksumSHA256) {
 		return domain.FunctionDeployment{}, ErrInvalidFunctionSettings
 	}
@@ -434,6 +451,14 @@ func (r *Repository) CompleteFunctionDeploymentBuild(ctx context.Context, projec
 	updated, err := scanFunctionDeploymentPublic(tx.QueryRow(ctx, `UPDATE function_deployments SET build_path=$4,build_size_bytes=$5,build_checksum_sha256=$6,build_status='succeeded',build_worker_id=NULL,error_message=NULL,built_at=COALESCE(built_at,now()),updated_at=now() WHERE project_id=$1 AND function_id=$2 AND id=$3 RETURNING `+functionDeploymentProjection, projectID, functionID, deploymentID, buildPath, buildSizeBytes, strings.ToLower(buildChecksumSHA256)))
 	if err != nil {
 		return domain.FunctionDeployment{}, err
+	}
+	if err := validatePublishCleanup(cleanup, projectID, ArtifactCleanupFunctions, buildPath); err != nil {
+		return domain.FunctionDeployment{}, err
+	}
+	if cleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *cleanup); err != nil {
+			return domain.FunctionDeployment{}, err
+		}
 	}
 	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "function_deployment.updated", "function_deployment", deploymentID, map[string]any{"function_id": functionID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
 		return domain.FunctionDeployment{}, err

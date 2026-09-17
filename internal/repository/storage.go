@@ -63,6 +63,7 @@ type StorageFileInput struct {
 	UpdatePermissions    *[]string
 	DeletePermissions    *[]string
 	CreatorProjectUserID *uuid.UUID
+	PublishCleanup       *ArtifactCleanupInput
 }
 
 type StorageFilePatch struct {
@@ -742,8 +743,9 @@ func storageFilePermissions(bucket domain.StorageBucket, actor StorageActor, inp
 }
 
 // CreateStorageFile reserves quota and inserts metadata in one transaction.
-// The caller publishes the blob before invoking this method and removes it if
-// this transaction fails; a failed insert never leaves visible metadata.
+// A publishing caller supplies a durable reservation created before the blob
+// was published; this transaction consumes that reservation before metadata
+// becomes visible.
 func (r *Repository) CreateStorageFile(ctx context.Context, id, projectID, bucketID uuid.UUID, actor StorageActor, input StorageFileInput) (domain.StorageFile, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -790,6 +792,14 @@ func (r *Repository) CreateStorageFile(ctx context.Context, id, projectID, bucke
 	}
 	if err := r.auditStorage(ctx, tx, projectID, actor, "storage_file.create", "storage_file", id, map[string]any{"bucket_id": bucketID.String(), "name": input.Name, "mime_type": input.MimeType, "size_bytes": input.SizeBytes, "checksum_sha256": input.ChecksumSHA256}); err != nil {
 		return domain.StorageFile{}, err
+	}
+	if err := validatePublishCleanup(input.PublishCleanup, projectID, ArtifactCleanupStorage, input.StoragePath); err != nil {
+		return domain.StorageFile{}, err
+	}
+	if input.PublishCleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *input.PublishCleanup); err != nil {
+			return domain.StorageFile{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.StorageFile{}, err

@@ -252,6 +252,22 @@ func (r *Repository) CreateSiteDeployment(ctx context.Context, id, projectID, si
 			return domain.SiteDeployment{}, err
 		}
 	}
+	cleanupKind := ArtifactCleanupSites
+	cleanupPath := input.ArtifactPath
+	if building {
+		cleanupKind = ArtifactCleanupSiteArchives
+		if input.SourcePath != nil {
+			cleanupPath = strings.TrimSpace(*input.SourcePath)
+		}
+	}
+	if err := validatePublishCleanup(input.PublishCleanup, projectID, cleanupKind, cleanupPath); err != nil {
+		return domain.SiteDeployment{}, err
+	}
+	if input.PublishCleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *input.PublishCleanup); err != nil {
+			return domain.SiteDeployment{}, err
+		}
+	}
 	auditData := map[string]any{"site_id": siteID.String(), "version": item.Version, "size_bytes": input.SizeBytes, "archive_size_bytes": input.ArchiveSizeBytes, "checksum_sha256": input.ChecksumSHA256, "activated": input.Activate}
 	if input.Source == "github" || input.Source == "gitlab" {
 		auditData["git_repository"] = strings.TrimSpace(*input.GitRepository)
@@ -432,6 +448,14 @@ func (r *Repository) RequeueStaleSiteDeployments(ctx context.Context, maxAge tim
 // was requested at upload time, the new deployment becomes active in the
 // same transaction as the build result.
 func (r *Repository) CompleteSiteDeploymentBuild(ctx context.Context, projectID, siteID, deploymentID uuid.UUID, workerID, buildChecksumSHA256 string, buildSizeBytes int64) (domain.SiteDeployment, error) {
+	return r.completeSiteDeploymentBuild(ctx, projectID, siteID, deploymentID, workerID, buildChecksumSHA256, buildSizeBytes, nil)
+}
+
+func (r *Repository) CompleteSiteDeploymentBuildWithCleanup(ctx context.Context, projectID, siteID, deploymentID uuid.UUID, workerID, buildChecksumSHA256 string, buildSizeBytes int64, cleanup ArtifactCleanupInput) (domain.SiteDeployment, error) {
+	return r.completeSiteDeploymentBuild(ctx, projectID, siteID, deploymentID, workerID, buildChecksumSHA256, buildSizeBytes, &cleanup)
+}
+
+func (r *Repository) completeSiteDeploymentBuild(ctx context.Context, projectID, siteID, deploymentID uuid.UUID, workerID, buildChecksumSHA256 string, buildSizeBytes int64, cleanup *ArtifactCleanupInput) (domain.SiteDeployment, error) {
 	if !validFunctionWorkerID(workerID) || buildSizeBytes < 0 || !validSiteSHA256(buildChecksumSHA256) {
 		return domain.SiteDeployment{}, ErrInvalidSiteSettings
 	}
@@ -444,7 +468,7 @@ func (r *Repository) CompleteSiteDeploymentBuild(ctx context.Context, projectID,
 	if err != nil {
 		return domain.SiteDeployment{}, err
 	}
-	item, _, _, err := r.siteDeploymentByIDWithPaths(ctx, tx, projectID, siteID, deploymentID, true)
+	item, _, artifactPath, err := r.siteDeploymentByIDWithPaths(ctx, tx, projectID, siteID, deploymentID, true)
 	if err != nil {
 		return domain.SiteDeployment{}, err
 	}
@@ -475,6 +499,14 @@ func (r *Repository) CompleteSiteDeploymentBuild(ctx context.Context, projectID,
 	updated, err := scanSiteDeploymentPublic(tx.QueryRow(ctx, `UPDATE site_deployments SET size_bytes=$4,checksum_sha256=$5,status=$6,build_status='succeeded',build_worker_id=NULL,error_message=NULL,reserved_bytes=0,built_at=COALESCE(built_at,now()),activated_at=CASE WHEN $6='active' THEN COALESCE(activated_at,now()) ELSE activated_at END,activate_requested=false,updated_at=now() WHERE project_id=$1 AND site_id=$2 AND id=$3 RETURNING `+siteDeploymentProjection, projectID, siteID, deploymentID, buildSizeBytes, strings.ToLower(buildChecksumSHA256), status))
 	if err != nil {
 		return domain.SiteDeployment{}, err
+	}
+	if err := validatePublishCleanup(cleanup, projectID, ArtifactCleanupSites, artifactPath); err != nil {
+		return domain.SiteDeployment{}, err
+	}
+	if cleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *cleanup); err != nil {
+			return domain.SiteDeployment{}, err
+		}
 	}
 	if err := r.enqueueWebhookEventTx(ctx, tx, projectID, "site_deployment.updated", "site_deployment", deploymentID, map[string]any{"site_id": siteID.String(), "status": updated.Status, "build_status": updated.BuildStatus}); err != nil {
 		return domain.SiteDeployment{}, err

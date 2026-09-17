@@ -106,18 +106,27 @@ func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	if err := s.storage.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupStorage,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
 		s.storage.Cleanup(&prepared)
 		internalError(s, w, err)
 		return
 	}
-	item, err := s.repo.CreateDatabaseBackup(r.Context(), backupID, projectID, databaseID, databaseActorFrom(r), prepared.RelativePath, prepared.Size, prepared.Checksum)
+	if err := s.storage.Commit(r.Context(), &prepared); err != nil {
+		s.storage.Cleanup(&prepared)
+		internalError(s, w, err)
+		return
+	}
+	item, err := s.repo.CreateDatabaseBackupWithCleanup(r.Context(), backupID, projectID, databaseID, databaseActorFrom(r), prepared.RelativePath, prepared.Size, prepared.Checksum, publishCleanup)
 	if databaseBackupResourceError(w, err) {
-		_ = s.storage.RemoveRelative(prepared.RelativePath)
 		return
 	}
 	if err != nil {
-		_ = s.storage.RemoveRelative(prepared.RelativePath)
 		internalError(s, w, err)
 		return
 	}
@@ -173,7 +182,7 @@ func (s *Server) downloadDatabaseBackup(w http.ResponseWriter, r *http.Request) 
 		internalError(s, w, err)
 		return
 	}
-	blob, err := s.storage.OpenRelative(path)
+	blob, err := s.storage.OpenRelative(r.Context(), path)
 	if errors.Is(err, storage.ErrInvalidPath) || errors.Is(err, io.ErrUnexpectedEOF) {
 		internalError(s, w, errors.New("database backup blob is unavailable"))
 		return
@@ -233,7 +242,7 @@ func (s *Server) restoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	blob, err := s.storage.OpenRelative(path)
+	blob, err := s.storage.OpenRelative(r.Context(), path)
 	if err != nil {
 		internalError(s, w, err)
 		return
