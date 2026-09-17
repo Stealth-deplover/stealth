@@ -39,12 +39,23 @@ func TestShouldWaitForSetupDefaultsToHostCoordination(t *testing.T) {
 		t.Fatal("browser setup should remain attached by default")
 	}
 	t.Setenv("STEALTH_INSTALL_WAIT", "0")
-	if app.shouldWaitForSetup() {
-		t.Fatal("STEALTH_INSTALL_WAIT=0 should opt out of waiting")
+	if !app.shouldWaitForSetup() {
+		t.Fatal("STEALTH_INSTALL_WAIT=0 must not disable the host installer")
 	}
 	t.Setenv("STEALTH_INSTALL_WAIT", "1")
 	if !app.shouldWaitForSetup() {
 		t.Fatal("STEALTH_INSTALL_WAIT=1 should keep waiting")
+	}
+}
+
+func TestNoWaitIsRejectedWithoutAHostSupervisor(t *testing.T) {
+	var errorsOutput strings.Builder
+	app := NewApp(strings.NewReader(""), io.Discard, &errorsOutput)
+	if code := app.run([]string{"install", "--no-wait"}); code != 2 {
+		t.Fatalf("--no-wait exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errorsOutput.String(), "not supported for browser setup") {
+		t.Fatalf("--no-wait guidance = %q", errorsOutput.String())
 	}
 }
 

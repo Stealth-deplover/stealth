@@ -33,6 +33,7 @@ const (
 	PhaseHandoff          = "handoff"
 	stateVersion          = 2
 	legacyStateVersion    = 1
+	sharedStateFileMode   = 0o660
 )
 
 // Draft contains setup choices that can safely be represented by the public
@@ -86,26 +87,37 @@ type CloudflareState struct {
 	OAuthExpiresAt time.Time         `json:"oauth_expires_at,omitempty"`
 }
 
+// HostPreflightCheck is a safe projection of a check performed by the host
+// CLI. It deliberately contains only display data; the setup API never runs
+// host Docker or resource probes itself.
+type HostPreflightCheck struct {
+	Name     string `json:"name"`
+	Detail   string `json:"detail"`
+	OK       bool   `json:"ok"`
+	Required bool   `json:"required"`
+}
+
 // State is encrypted in its entirety when persisted. Secrets are available to
 // the setup module through methods, but the HTTP adapter only serializes the
 // public projection below.
 type State struct {
-	Version        int               `json:"version"`
-	Phase          string            `json:"phase"`
-	Step           string            `json:"step,omitempty"`
-	ErrorCode      string            `json:"error_code,omitempty"`
-	ErrorMessage   string            `json:"error_message,omitempty"`
-	Draft          Draft             `json:"draft"`
-	GitHub         GitHubState       `json:"github"`
-	Cloudflare     CloudflareState   `json:"cloudflare"`
-	Secrets        map[string]string `json:"secrets,omitempty"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	QuickTunnel    string            `json:"quick_tunnel,omitempty"`
-	SetupSessionID string            `json:"setup_session_id,omitempty"`
-	SetupCodeHash  string            `json:"setup_code_hash,omitempty"`
-	SetupExpiresAt time.Time         `json:"setup_expires_at,omitempty"`
-	InstallRunID   string            `json:"install_run_id,omitempty"`
-	LastEventID    uint64            `json:"last_event_id,omitempty"`
+	Version        int                  `json:"version"`
+	Phase          string               `json:"phase"`
+	Step           string               `json:"step,omitempty"`
+	ErrorCode      string               `json:"error_code,omitempty"`
+	ErrorMessage   string               `json:"error_message,omitempty"`
+	Draft          Draft                `json:"draft"`
+	GitHub         GitHubState          `json:"github"`
+	Cloudflare     CloudflareState      `json:"cloudflare"`
+	Secrets        map[string]string    `json:"secrets,omitempty"`
+	UpdatedAt      time.Time            `json:"updated_at"`
+	QuickTunnel    string               `json:"quick_tunnel,omitempty"`
+	SetupSessionID string               `json:"setup_session_id,omitempty"`
+	SetupCodeHash  string               `json:"setup_code_hash,omitempty"`
+	SetupExpiresAt time.Time            `json:"setup_expires_at,omitempty"`
+	InstallRunID   string               `json:"install_run_id,omitempty"`
+	LastEventID    uint64               `json:"last_event_id,omitempty"`
+	HostPreflight  []HostPreflightCheck `json:"host_preflight,omitempty"`
 }
 
 const (
@@ -278,6 +290,7 @@ func RequestInstallation(state *State, runID string) error {
 	state.InstallRunID = strings.TrimSpace(runID)
 	state.ErrorCode = ""
 	state.ErrorMessage = ""
+	state.LastEventID++
 	return nil
 }
 
@@ -300,6 +313,104 @@ func BeginInstallation(state *State, runID string) error {
 	default:
 		return errors.New("setup installation is no longer startable")
 	}
+}
+
+// UpdateInstallationProgress records a host-owned lifecycle milestone. The
+// run identifier check is intentional: a stale repair process must not be able
+// to publish progress for a newer installation request.
+func UpdateInstallationProgress(state *State, runID, step string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" || state.InstallRunID != strings.TrimSpace(runID) {
+		return errors.New("installation run does not own setup state")
+	}
+	if state.Phase != PhaseInstalling && state.Phase != PhaseHandoff {
+		return errors.New("setup installation is not running")
+	}
+	step = strings.TrimSpace(step)
+	if step == "" {
+		return errors.New("installation step is required")
+	}
+	if len(step) > 120 || strings.ContainsAny(step, "\x00\r\n") {
+		return errors.New("installation step is invalid")
+	}
+	state.Step = step
+	state.LastEventID++
+	return nil
+}
+
+// FailInstallation transitions a host-owned run to a durable failure. Error
+// text is supplied by the caller only after it has been reduced to a safe,
+// non-secret message.
+func FailInstallation(state *State, runID, code, message string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" || state.InstallRunID != strings.TrimSpace(runID) {
+		return errors.New("installation run does not own setup state")
+	}
+	if state.Phase != PhaseInstallRequested && state.Phase != PhaseInstalling && state.Phase != PhaseHandoff {
+		return errors.New("setup installation cannot be failed from its current phase")
+	}
+	code = strings.TrimSpace(code)
+	message = strings.TrimSpace(message)
+	if code == "" || len(code) > 80 || strings.ContainsAny(code, "\x00\r\n") {
+		return errors.New("installation error code is invalid")
+	}
+	if len(message) > 240 || strings.ContainsAny(message, "\x00\r\n") {
+		return errors.New("installation error message is invalid")
+	}
+	state.Phase = PhaseFailed
+	state.ErrorCode = code
+	state.ErrorMessage = message
+	state.LastEventID++
+	return nil
+}
+
+// MarkInstallationHandoff publishes production readiness before temporary
+// setup resources are removed. Keeping this transition separate preserves the
+// one-time handoff race window across browser reconnects and CLI restarts.
+func MarkInstallationHandoff(state *State, runID string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" || state.InstallRunID != strings.TrimSpace(runID) {
+		return errors.New("installation run does not own setup state")
+	}
+	if state.Phase != PhaseInstalling && state.Phase != PhaseHandoff {
+		return errors.New("setup installation is not ready for handoff")
+	}
+	state.Phase = PhaseHandoff
+	state.Step = "Handoff"
+	state.ErrorCode = ""
+	state.ErrorMessage = ""
+	state.LastEventID++
+	return nil
+}
+
+// CompleteInstallation closes the setup claim only after the production API
+// has consumed (or expired) the one-time handoff and temporary services have
+// been safely cleaned up.
+func CompleteInstallation(state *State, runID string) error {
+	if state == nil {
+		return errors.New("setup state is required")
+	}
+	if strings.TrimSpace(runID) == "" || state.InstallRunID != strings.TrimSpace(runID) {
+		return errors.New("installation run does not own setup state")
+	}
+	if state.Phase != PhaseHandoff && state.Phase != PhaseComplete {
+		return errors.New("setup installation is not in handoff")
+	}
+	state.Phase = PhaseComplete
+	state.Step = "Complete"
+	state.ErrorCode = ""
+	state.ErrorMessage = ""
+	state.SetupSessionID = ""
+	state.SetupCodeHash = ""
+	state.SetupExpiresAt = time.Time{}
+	state.LastEventID++
+	return nil
 }
 
 type Store interface {
@@ -349,6 +460,25 @@ func NewFileStore(path string, cipher *functionsecret.Cipher) (*FileStore, error
 		return nil, ErrUnavailable
 	}
 	return &FileStore{path: clean, cipher: cipher}, nil
+}
+
+// PrepareShared makes the state directory usable by the host CLI and the root
+// setup container when they run with different UIDs. The host process should
+// call this before starting or resuming the setup Compose project so the
+// directory group is the operator's group and atomic replacements inherit it.
+func (s *FileStore) PrepareShared() error {
+	if s == nil || s.cipher == nil {
+		return ErrUnavailable
+	}
+	directory := filepath.Dir(s.path)
+	mode := os.FileMode(0o770) | os.ModeSetgid
+	if err := os.MkdirAll(directory, mode); err != nil {
+		return fmt.Errorf("create shared setup state directory: %w", err)
+	}
+	if err := os.Chmod(directory, mode); err != nil {
+		return fmt.Errorf("protect shared setup state directory: %w", err)
+	}
+	return nil
 }
 
 func (s *FileStore) Load(ctx context.Context) (State, error) {
@@ -457,18 +587,19 @@ func (s *FileStore) loadLocked(ctx context.Context) (State, error) {
 // acquireFileLock serializes access between the setup API container and the
 // host CLI. FileStore.mu protects callers within one process, while this
 // advisory lock protects the complete read-modify-write transaction across
-// processes. The state payload itself remains atomically replaced by
-// saveLocked after the lock is held.
+// processes. The lock and payload use group-private modes because the host
+// CLI and root setup container may have different UIDs; the prepared state
+// directory's setgid bit preserves its host operator group.
 func (s *FileStore) acquireFileLock() (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return nil, fmt.Errorf("create setup state directory: %w", err)
 	}
 	lockPath := s.path + ".lock"
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, sharedStateFileMode)
 	if err != nil {
 		return nil, fmt.Errorf("open setup state lock: %w", err)
 	}
-	if err := file.Chmod(0o600); err != nil {
+	if err := file.Chmod(sharedStateFileMode); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("protect setup state lock: %w", err)
 	}
@@ -529,7 +660,7 @@ func (s *FileStore) saveLocked(state State) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(0o600); err != nil {
+	if err := temporary.Chmod(sharedStateFileMode); err != nil {
 		_ = temporary.Close()
 		return err
 	}
@@ -547,7 +678,7 @@ func (s *FileStore) saveLocked(state State) error {
 	if err := os.Rename(temporaryName, s.path); err != nil {
 		return fmt.Errorf("commit setup state: %w", err)
 	}
-	return os.Chmod(s.path, 0o600)
+	return os.Chmod(s.path, sharedStateFileMode)
 }
 
 func NewCallbackState(purpose string) (plain string, hash string, expiresAt time.Time, err error) {
@@ -610,6 +741,14 @@ func ValidateState(state State) error {
 	}
 	if len(state.InstallRunID) > 128 || strings.ContainsAny(state.InstallRunID, "\x00\r\n") {
 		return errors.New("setup installation run identifier is invalid")
+	}
+	if len(state.HostPreflight) > 32 {
+		return errors.New("setup state contains too many host preflight checks")
+	}
+	for _, check := range state.HostPreflight {
+		if strings.TrimSpace(check.Name) == "" || len(check.Name) > 80 || strings.ContainsAny(check.Name, "\x00\r\n") || len(check.Detail) > 240 || strings.ContainsAny(check.Detail, "\x00\r\n") {
+			return errors.New("host preflight check is invalid")
+		}
 	}
 	switch state.Phase {
 	case PhaseInstallRequested, PhaseInstalling, PhaseHandoff:

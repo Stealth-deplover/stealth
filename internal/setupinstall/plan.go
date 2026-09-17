@@ -74,19 +74,24 @@ func BuildPlan(state setupstate.State, installRoot string) (installengine.Plan, 
 	if err := installengine.WritePrivateFile(layout.EnvFile, contents); err != nil {
 		return installengine.Plan{}, err
 	}
+	apiPort := installengine.PortOrDefault(base["API_HOST_PORT"], "18080")
+	consolePort := installengine.PortOrDefault(base["CONSOLE_HOST_PORT"], "13000")
+	proxyPort := installengine.PortOrDefault(base["PROXY_HTTP_PORT"], "8080")
 	return installengine.Plan{
-		Layout:             layout,
-		Version:            BaseVersion(base),
-		PublicURL:          state.Draft.PublicURL,
-		GitHubAppClientID:  state.GitHub.ClientID,
-		Existing:           true,
-		ExternalDatabase:   state.Draft.DatabaseMode == "external",
-		ExternalRedis:      state.Draft.RedisMode == "external",
-		Cloudflare:         cloudflareEnabled,
-		VerifyPublicURL:    cloudflareEnabled || state.Draft.NetworkMode == "public_ip",
-		InternalAPIURL:     "http://api:8080",
-		InternalConsoleURL: "http://console:3000",
-		InternalProxyURL:   "http://proxy:80",
+		Layout:            layout,
+		Version:           BaseVersion(base),
+		PublicURL:         state.Draft.PublicURL,
+		GitHubAppClientID: state.GitHub.ClientID,
+		Existing:          true,
+		ExternalDatabase:  state.Draft.DatabaseMode == "external",
+		ExternalRedis:     state.Draft.RedisMode == "external",
+		Cloudflare:        cloudflareEnabled,
+		VerifyPublicURL:   cloudflareEnabled || state.Draft.NetworkMode == "public_ip",
+		// The installer now runs in the host CLI, not on the setup Compose
+		// network. Health checks must therefore use the host-published ports.
+		InternalAPIURL:     "http://127.0.0.1:" + apiPort,
+		InternalConsoleURL: "http://127.0.0.1:" + consolePort,
+		InternalProxyURL:   "http://127.0.0.1:" + proxyPort,
 	}, nil
 }
 

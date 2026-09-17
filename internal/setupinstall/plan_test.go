@@ -47,6 +47,9 @@ func TestBuildPlanRendersReviewedCredentialsAndKeepsExistingValues(t *testing.T)
 	if plan.Version != "v1.2.3" || !plan.Existing || !plan.ExternalDatabase || !plan.ExternalRedis || plan.Cloudflare {
 		t.Fatalf("plan = %#v", plan)
 	}
+	if plan.InternalAPIURL != "http://127.0.0.1:18080" || plan.InternalConsoleURL != "http://127.0.0.1:13000" || plan.InternalProxyURL != "http://127.0.0.1:8080" {
+		t.Fatalf("host health-check URLs = %q, %q, %q", plan.InternalAPIURL, plan.InternalConsoleURL, plan.InternalProxyURL)
+	}
 	values, err := installengine.ReadEnvFile(layout.EnvFile)
 	if err != nil {
 		t.Fatal(err)

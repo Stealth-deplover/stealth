@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -46,6 +47,36 @@ func TestDockerChecksUseOneSharedDefinition(t *testing.T) {
 	}
 	if !strings.Contains(RenderCheck(checks[0]), "27.0") {
 		t.Fatalf("rendered Docker check = %q", RenderCheck(checks[0]))
+	}
+}
+
+func TestHostPreflightReportsUnavailableDockerAndInsufficientResources(t *testing.T) {
+	dockerChecks := DockerChecks(context.Background(), Probes{
+		DockerVersion:   func(context.Context) (string, error) { return "", errors.New("daemon is inaccessible") },
+		ComposeVersion:  func(context.Context) (string, error) { return "", errors.New("compose is missing") },
+		DockerSocketGID: func(string) (uint32, error) { return 0, errors.New("socket is inaccessible") },
+	}, true, true)
+	if len(dockerChecks) != 3 {
+		t.Fatalf("Docker failure checks = %#v", dockerChecks)
+	}
+	for _, check := range dockerChecks {
+		if check.OK || !check.Required {
+			t.Fatalf("Docker failure check = %#v", check)
+		}
+	}
+
+	resourceChecks := ResourceChecks(context.Background(), Probes{
+		CPUCount:    func() int { return RecommendedCPUs - 1 },
+		MemoryBytes: func() (uint64, error) { return RecommendedMemoryBytes - 1, nil },
+		FreeBytes:   func(string) (uint64, error) { return RecommendedDiskBytes - 1, nil },
+	}, ".")
+	if len(resourceChecks) != 3 {
+		t.Fatalf("resource failure checks = %#v", resourceChecks)
+	}
+	for _, check := range resourceChecks {
+		if check.OK {
+			t.Fatalf("resource failure check unexpectedly passed = %#v", check)
+		}
 	}
 }
 

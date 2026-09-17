@@ -78,14 +78,14 @@ func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 	engine := New(Options{Runner: runner, PollAttempts: 1})
 	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, Setup: true}
 
-	for _, step := range []Step{StepPull, StepDependencies, StepMigration, StepServices} {
+	for _, step := range []Step{StepConfiguration, StepPull, StepDependencies, StepMigration, StepServices} {
 		if err := engine.RunStep(context.Background(), plan, step); err != nil {
 			t.Fatalf("RunStep(%d): %v", step, err)
 		}
 	}
 	calls := runner.snapshot()
-	if len(calls) != 4 {
-		t.Fatalf("recorded calls = %#v, want 4", calls)
+	if len(calls) != 5 {
+		t.Fatalf("recorded calls = %#v, want 5", calls)
 	}
 	for _, call := range calls {
 		if call.name != "docker" || !containsPair(call.args, "-f", layout.SetupComposeFile) {
@@ -95,7 +95,10 @@ func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 			t.Fatalf("setup call unexpectedly mentions worker: %#v", call)
 		}
 	}
-	if got := calls[3].args; !equalArgs(got[len(got)-3:], []string{"setup", "setup-console", "setup-proxy"}) {
+	if !equalArgs(calls[0].args[len(calls[0].args)-2:], []string{"config", "--quiet"}) {
+		t.Fatalf("setup Compose validation command = %#v", calls[0])
+	}
+	if got := calls[4].args; !equalArgs(got[len(got)-3:], []string{"setup", "setup-console", "setup-proxy"}) {
 		t.Fatalf("setup services = %#v", got)
 	}
 }
@@ -243,6 +246,13 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 	}
 	if !FileIsPrivate(layout.EnvFile) {
 		t.Fatal("generated setup config is not private")
+	}
+	stateInfo, err := os.Stat(layout.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateInfo.Mode()&os.ModeSetgid == 0 || stateInfo.Mode().Perm() != 0o770 {
+		t.Fatalf("prepared state directory mode = %o, want setgid 770", stateInfo.Mode())
 	}
 	version, err := os.ReadFile(layout.VersionFile)
 	if err != nil || string(version) != "v1.2.3\n" {

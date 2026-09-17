@@ -40,6 +40,15 @@ type Store interface {
 	Discard(context.Context) error
 }
 
+// PendingStore is implemented by the shared-file handoff used by the setup
+// API. The production API only consumes a ticket; the host CLI uses this
+// observation capability to keep the temporary setup services alive until the
+// browser has completed the one-time redirect.
+type PendingStore interface {
+	Store
+	Pending(context.Context) (bool, error)
+}
+
 type FileStore struct {
 	path   string
 	cipher *functionsecret.Cipher
@@ -107,9 +116,9 @@ func (s *FileStore) Consume(ctx context.Context, token string) (string, error) {
 }
 
 // Pending reports whether an unexpired handoff is still waiting for the
-// production API to consume it. It is intentionally a FileStore method rather
-// than part of Store: only the setup-side cleanup watcher needs to observe the
-// shared file, while production only needs the consume operation.
+// production API to consume it. It is intentionally separate from Store:
+// production only needs the consume operation, while the host-side setup
+// orchestrator observes this shared file before removing temporary services.
 func (s *FileStore) Pending(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

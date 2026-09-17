@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -13,10 +12,10 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 )
 
-// setupCoordinationLockName guards the long-lived "stealth install" process
-// that is watching the browser wizard. It is intentionally distinct from the
-// install engine's own lock: in the current stage the setup service still
-// executes the installation, while the host CLI only coordinates and observes.
+// setupCoordinationLockName guards the long-lived host process that watches
+// the browser wizard and executes the requested installation. It is distinct
+// from the install engine's own lock so coordination and execution can recover
+// independently after a process crash.
 const setupCoordinationLockName = "setup-coordination.lock"
 
 // setupProgressSource is the read side of the shared, encrypted setup state.
@@ -63,19 +62,10 @@ func (a *App) waitForSetupAPI(ctx context.Context, endpoint string) error {
 	return lastErr
 }
 
-// shouldWaitForSetup decides whether the host CLI stays alive to observe the
-// browser wizard. An explicit --wait/--no-wait wins, then STEALTH_INSTALL_WAIT;
-// the default is to remain attached to the browser-driven installation.
+// shouldWaitForSetup is intentionally always true. A fresh browser request has
+// no supported worker other than this host process, so allowing it to exit
+// would leave install_requested with no executor.
 func (a *App) shouldWaitForSetup() bool {
-	if a.waitForSetup != nil {
-		return *a.waitForSetup
-	}
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("STEALTH_INSTALL_WAIT"))) {
-	case "1", "true", "yes":
-		return true
-	case "0", "false", "no":
-		return false
-	}
 	return true
 }
 
@@ -99,7 +89,9 @@ func (a *App) orchestrateBrowserSetupLocked(ctx context.Context, layout InstallL
 		fmt.Fprintf(a.errOut, "could not read browser setup state: %v\n", err)
 		return 1
 	}
-	result := a.observeBrowserSetup(ctx, store)
+	result := a.observeBrowserSetupWithInstaller(ctx, store, func(installContext context.Context, state setupstate.State) error {
+		return a.executeHostInstallation(installContext, layout, values, store, state.InstallRunID)
+	})
 	if !result.cancelled {
 		return result.exitCode
 	}
@@ -123,6 +115,15 @@ func (a *App) orchestrateBrowserSetupLocked(ctx context.Context, layout InstallL
 // observeBrowserSetup reports safe, non-secret milestones while the browser
 // wizard runs. It never prints setup codes, cookies, or credentials.
 func (a *App) observeBrowserSetup(ctx context.Context, source setupProgressSource) setupObservationResult {
+	return a.observeBrowserSetupWithInstaller(ctx, source, nil)
+}
+
+// observeBrowserSetupWithInstaller keeps the browser-facing waiting behavior
+// intact while giving the host CLI the execution hook for a durable request.
+// The hook runs synchronously under the host coordination process; progress is
+// persisted by the installer so a browser reconnect never depends on this
+// process-local loop or an in-memory event buffer.
+func (a *App) observeBrowserSetupWithInstaller(ctx context.Context, source setupProgressSource, installer func(context.Context, setupstate.State) error) setupObservationResult {
 	fmt.Fprintln(a.out)
 	fmt.Fprintln(a.out, "Waiting for browser setup to complete...")
 	fmt.Fprintln(a.errOut, "Complete the wizard in your browser. Press Ctrl+C to stop waiting.")
@@ -142,6 +143,9 @@ func (a *App) observeBrowserSetup(ctx context.Context, source setupProgressSourc
 				requested = true
 				fmt.Fprintln(a.out, "✓ Configuration received")
 				fmt.Fprintln(a.out, "Preparing installation...")
+			}
+			if installer != nil && setupInstallationPending(state) && state.InstallRunID != "" {
+				_ = installer(ctx, state)
 			}
 			if state.Phase == setupstate.PhaseInstalling {
 				if step := strings.TrimSpace(state.Step); step != "" && step != lastStep {

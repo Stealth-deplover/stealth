@@ -49,8 +49,8 @@ func TestFileStoreEncryptsStateAndKeepsFilesPrivate(t *testing.T) {
 			t.Fatalf("encrypted state contains plaintext secret %q", secret)
 		}
 	}
-	if mode := fileMode(t, path); mode != 0o600 {
-		t.Fatalf("state file mode = %o, want 600", mode)
+	if mode := fileMode(t, path); mode != 0o660 {
+		t.Fatalf("state file mode = %o, want 660 for cross-UID setup access", mode)
 	}
 	if mode := fileMode(t, filepath.Dir(path)); mode&0o077 != 0 {
 		t.Fatalf("state directory mode = %o, want private", mode)
@@ -70,6 +70,31 @@ func TestFileStoreEncryptsStateAndKeepsFilesPrivate(t *testing.T) {
 		if bytes.Contains(public, []byte(forbidden)) {
 			t.Fatalf("public state contains sensitive value %q: %s", forbidden, public)
 		}
+	}
+}
+
+func TestFileStoreSupportsPreparedSharedStateDirectory(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(directory, "setup-state.enc")
+	store, err := NewFileStore(path, testCipher(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PrepareShared(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), NewState()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSetgid == 0 || info.Mode().Perm() != 0o770 {
+		t.Fatalf("shared state directory mode = %o, want setgid 770", info.Mode())
+	}
+	if stateMode, lockMode := fileMode(t, path), fileMode(t, path+".lock"); stateMode != 0o660 || lockMode != 0o660 {
+		t.Fatalf("shared state files have modes state=%o lock=%o, want 660", stateMode, lockMode)
 	}
 }
 
@@ -116,6 +141,49 @@ func TestInstallationPhasesRequireRunIdentifier(t *testing.T) {
 		if err := ValidateState(state); err == nil || !strings.Contains(err.Error(), "run identifier") {
 			t.Fatalf("ValidateState(%q) = %v, want missing run identifier error", phase, err)
 		}
+	}
+}
+
+func TestHostLifecycleRejectsStaleWriterAndPreservesHandoffOrder(t *testing.T) {
+	state := NewState()
+	if err := RequestInstallation(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginInstallation(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateInstallationProgress(&state, "run-2", "Release images"); err == nil {
+		t.Fatal("stale run updated installation progress")
+	}
+	if err := UpdateInstallationProgress(&state, "run-1", "Release images"); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkInstallationHandoff(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != PhaseHandoff || state.Step != "Handoff" {
+		t.Fatalf("handoff state = %#v", state)
+	}
+	if err := CompleteInstallation(&state, "run-2"); err == nil {
+		t.Fatal("stale run completed installation")
+	}
+	if err := CompleteInstallation(&state, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != PhaseComplete || state.SetupSessionID != "" || state.SetupCodeHash != "" {
+		t.Fatalf("complete state = %#v", state)
+	}
+}
+
+func TestHostPreflightProjectionIsValidatedAsDurableState(t *testing.T) {
+	state := NewState()
+	state.HostPreflight = []HostPreflightCheck{{Name: "Docker", Detail: "host daemon ready", OK: true, Required: true}}
+	if err := ValidateState(state); err != nil {
+		t.Fatal(err)
+	}
+	state.HostPreflight[0].Detail = strings.Repeat("x", 241)
+	if err := ValidateState(state); err == nil {
+		t.Fatal("oversized host preflight detail was accepted")
 	}
 }
 
