@@ -49,7 +49,7 @@ export function AgentRunsView({
   const router = useRouter();
   const runsNavigation = useCursorPagination("runs_cursor");
   const runs = useAgentRuns(agentId, { cursor: runsNavigation.cursor });
-  const create = useCreateAgentRun(agentId);
+  const create = useCreateAgentRun(projectId, agentId);
   const [prompt, setPrompt] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
@@ -228,7 +228,7 @@ export function AgentRunDetailView({
   runId: string;
 }) {
   const query = useAgentRun(agentId, runId);
-  const cancel = useCancelAgentRun(agentId, runId);
+  const cancel = useCancelAgentRun(projectId, agentId, runId);
   const run = query.data?.run;
   const logSource = useMemo(
     () =>

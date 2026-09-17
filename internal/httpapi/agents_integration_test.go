@@ -211,6 +211,15 @@ func TestProjectAgentsControlPlaneIntegration(t *testing.T) {
 	if createdRun.Run.ID == "" || createdRun.Run.AgentID != created.Agent.ID || createdRun.Run.ProjectID != project.Project.ID || createdRun.Run.Prompt == "" || createdRun.Run.Status != "queued" || createdRun.Run.Steps == nil || createdRun.Run.Changes == nil || !createdRun.CanManage {
 		t.Fatalf("unexpected run response: %s", runBody)
 	}
+	var queuedAgent struct {
+		Agent struct {
+			Status string `json:"status"`
+		} `json:"agent"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, httpServer.URL+"/v1/agents/"+created.Agent.ID, nil, http.StatusOK, &queuedAgent)
+	if queuedAgent.Agent.Status != "active" {
+		t.Fatalf("queued run left parent Agent status %q, want active", queuedAgent.Agent.Status)
+	}
 	var ownerRuns struct {
 		CanManage bool `json:"can_manage"`
 	}

@@ -47,7 +47,7 @@ export function useDeleteAgent(projectId: string, agentId: string) {
   });
 }
 
-export function useCreateAgentRun(agentId: string) {
+export function useCreateAgentRun(projectId: string, agentId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: components["schemas"]["CreateAgentRunRequest"]) =>
@@ -58,11 +58,23 @@ export function useCreateAgentRun(agentId: string) {
         }),
       ),
     onSuccess: () =>
-      applyCacheChanges(queryClient, [{ kind: "agent-run", agentId }]),
+      applyCacheChanges(queryClient, [
+        {
+          kind: "agent-run",
+          projectId,
+          agentId,
+          includeAgent: true,
+          includeAgentDetail: true,
+        },
+      ]),
   });
 }
 
-export function useCancelAgentRun(agentId: string, runId: string) {
+export function useCancelAgentRun(
+  projectId: string,
+  agentId: string,
+  runId: string,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () =>
@@ -75,8 +87,10 @@ export function useCancelAgentRun(agentId: string, runId: string) {
       applyCacheChanges(queryClient, [
         {
           kind: "agent-run",
+          projectId,
           agentId,
           runId,
+          includeAgent: true,
           includeAgentDetail: true,
         },
       ]),

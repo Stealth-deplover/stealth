@@ -284,6 +284,9 @@ func (r *Repository) CreateAgentRun(ctx context.Context, id, accountID, agentID 
 	if err != nil {
 		return domain.AgentRun{}, mapError(err)
 	}
+	if err := r.refreshAgentStatusTx(ctx, tx, agentID, projectID); err != nil {
+		return domain.AgentRun{}, err
+	}
 	orgID, err := projectOrganizationIDValue(ctx, tx, projectID)
 	if err != nil {
 		return domain.AgentRun{}, err
