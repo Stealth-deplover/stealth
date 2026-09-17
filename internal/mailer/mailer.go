@@ -1,19 +1,23 @@
-// Package mailer contains the small delivery boundary used by Auth. Keeping
-// this interface separate from the HTTP handlers lets deployments use their
-// own SMTP relay (or a provider adapter) without ever persisting email
-// secrets or recovery tokens in the API process.
+// Package mailer contains the delivery boundary used by authentication and
+// project messaging. Authentication flows use AuthMessage/AuthSender so their
+// body is always produced by a fixed Stealth-owned template; the generic
+// Message/Sender pair remains for explicit user-authored project messages.
 package mailer
 
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/smtp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Stealth-deplover/stealth/internal/config"
 )
@@ -53,9 +57,11 @@ type DisabledSender struct{}
 
 func (DisabledSender) Send(context.Context, Message) error { return ErrDisabled }
 
-// LogSender deliberately includes the link so a developer can exercise the
-// flow without an SMTP server. Select it explicitly with EMAIL_DELIVERY_MODE
-// and keep it disabled in production.
+// LogSender deliberately logs only delivery metadata so a developer can
+// exercise the flow without an SMTP server. Message bodies can contain reset
+// links, verification tokens, or other confidential content and are never
+// written to logs. Select this mode explicitly with EMAIL_DELIVERY_MODE and
+// keep it disabled in production.
 type LogSender struct{ Logger *slog.Logger }
 
 func (s LogSender) Send(_ context.Context, message Message) error {
@@ -63,7 +69,7 @@ func (s LogSender) Send(_ context.Context, message Message) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Warn("auth email delivery in log mode", "to", message.To, "subject", message.Subject, "body", message.TextBody)
+	logger.Warn("auth email delivery in log mode", "recipient_count", 1)
 	return nil
 }
 
@@ -92,6 +98,10 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 		return err
 	}
 	if err := validHeaderValue(s.From, "sender"); err != nil {
+		return err
+	}
+	normalizedBody, err := normalizeTextBody(message.TextBody)
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(message.To) == "" {
@@ -147,14 +157,21 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	if err != nil {
 		return fmt.Errorf("open smtp message: %w", err)
 	}
-	body := "From: " + s.From + "\r\n" +
-		"To: " + message.To + "\r\n" +
-		"Subject: " + message.Subject + "\r\n" +
+	// The SMTP envelope above already carries the recipient. Do not copy the
+	// request-derived address into the message headers. The subject is encoded
+	// as a MIME encoded-word after validation so it cannot become a header
+	// continuation or a second header.
+	encodedSubject := mime.QEncoding.Encode("UTF-8", message.Subject)
+	headers := "From: " + s.From + "\r\n" +
+		"Subject: " + encodedSubject + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-		strings.ReplaceAll(strings.ReplaceAll(message.TextBody, "\r\n", "\n"), "\n", "\r\n") + "\r\n"
-	if _, err := writer.Write([]byte(body)); err != nil {
+		"Content-Transfer-Encoding: base64\r\n\r\n"
+	if _, err := io.WriteString(writer, headers); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("write smtp headers: %w", err)
+	}
+	if err := writeBase64Body(writer, normalizedBody+"\r\n"); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write smtp message: %w", err)
 	}
@@ -167,11 +184,41 @@ func (s *SMTP) Send(ctx context.Context, message Message) error {
 	return nil
 }
 
+func writeBase64Body(writer io.Writer, body string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	const lineLength = 76
+	for len(encoded) > 0 {
+		end := lineLength
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		if _, err := io.WriteString(writer, encoded[:end]+"\r\n"); err != nil {
+			return err
+		}
+		encoded = encoded[end:]
+	}
+	return nil
+}
+
 func validHeaderValue(value, field string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("smtp %s contains a newline", field)
 	}
+	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return fmt.Errorf("smtp %s contains a control character", field)
+	}
 	return nil
+}
+
+func normalizeTextBody(value string) (string, error) {
+	if strings.IndexFunc(value, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\r' && r != '\n' && r != '\t'
+	}) >= 0 {
+		return "", fmt.Errorf("smtp body contains an unexpected control character")
+	}
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	return strings.ReplaceAll(value, "\n", "\r\n"), nil
 }
 
 func isLocalHost(host string) bool {

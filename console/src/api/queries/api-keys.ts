@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 
@@ -12,12 +12,12 @@ export function useProjectAPIKeys(
   return useQuery({
     queryKey: [...queryKeys.apiKeys(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/api-keys", {
-          params: { path: { projectID: projectId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/api-keys", {
+        params: { path: { projectID: projectId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -29,11 +29,11 @@ export function useProjectAPIKey(
   return useQuery({
     queryKey: queryKeys.apiKey(projectId ?? "", keyId ?? ""),
     enabled: Boolean(projectId && keyId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/api-keys/{keyID}", {
-          params: { path: { projectID: projectId!, keyID: keyId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/api-keys/{keyID}", {
+        params: { path: { projectID: projectId!, keyID: keyId! } },
+        signal,
+      }),
+    ),
   });
 }

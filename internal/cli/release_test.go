@@ -32,8 +32,11 @@ func TestResolveReleaseVersionOverride(t *testing.T) {
 	if err != nil || version != "v2.4.6" {
 		t.Fatalf("resolveReleaseVersion = %q, %v", version, err)
 	}
-	if _, err := app.resolveReleaseVersion("v2.4.6-rc.1"); err == nil {
-		t.Fatal("pre-release version was accepted")
+	if version, err := app.resolveReleaseVersion("v2.4.6-rc.1"); err != nil || version != "v2.4.6-rc.1" {
+		t.Fatalf("resolveReleaseVersion RC = %q, %v", version, err)
+	}
+	if _, err := app.resolveReleaseVersion("v2.4.6-beta.1"); err == nil {
+		t.Fatal("unsupported pre-release version was accepted")
 	}
 }
 

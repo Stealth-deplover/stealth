@@ -70,6 +70,129 @@ func TestExtractZipRejectsTraversalAndSymlink(t *testing.T) {
 	}
 }
 
+func TestSafeArchiveEntryPathRejectsTraversalVariants(t *testing.T) {
+	tests := []struct {
+		name      string
+		want      string
+		wantError bool
+	}{
+		{name: "nested safe file", want: "nested/dir/app.js"},
+		{name: "explicit current directory", want: "nested/app.js"},
+		{name: "parent directory", want: "", wantError: true},
+		{name: "multiple parent directories", want: "", wantError: true},
+		{name: "absolute Unix path", want: "", wantError: true},
+		{name: "Windows drive path", want: "", wantError: true},
+		{name: "Windows drive relative path", want: "", wantError: true},
+		{name: "Windows backslash traversal", want: "", wantError: true},
+		{name: "empty path component", want: "", wantError: true},
+	}
+	inputs := []string{
+		"nested/dir/app.js",
+		"./nested/app.js",
+		"../escape",
+		"../../escape",
+		"/etc/passwd",
+		"C:/Windows/System32/config/SAM",
+		"C:escape",
+		`..\escape`,
+		"nested//app.js",
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, _, err := safeArchiveEntryPath(inputs[index])
+			if test.wantError {
+				if !errors.Is(err, ErrArchiveTraversal) {
+					t.Fatalf("safeArchiveEntryPath(%q) error = %v, want ErrArchiveTraversal", inputs[index], err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("safeArchiveEntryPath(%q) = %q, %v; want %q", inputs[index], got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestExtractRejectsPreExistingSymlinkParent(t *testing.T) {
+	destination := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(destination, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	part, err := writer.Create("escape/nested/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, "must not escape"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(context.Background(), &archive, "source.zip", destination, ArchiveLimits{}); !errors.Is(err, ErrArchiveEntry) {
+		t.Fatalf("Extract() error = %v, want ErrArchiveEntry", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "nested", "file.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive wrote through pre-existing symlink: %v", err)
+	}
+}
+
+func TestExtractTrustedRejectsSymlinkFollowedByChild(t *testing.T) {
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	if err := writer.WriteHeader(&tar.Header{Name: "link", Linkname: "safe", Typeflag: tar.TypeSymlink, Mode: 0o777}); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("must not follow link")
+	if err := writer.WriteHeader(&tar.Header{Name: "link/child.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	if _, err := ExtractTrusted(context.Background(), &archive, "build.tar", destination, ArchiveLimits{}); !errors.Is(err, ErrArchiveEntry) {
+		t.Fatalf("ExtractTrusted() error = %v, want ErrArchiveEntry", err)
+	}
+	if info, err := os.Lstat(filepath.Join(destination, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("trusted extraction did not retain only the rejected symlink entry: info=%v err=%v", info, err)
+	}
+}
+
+func TestExtractRejectsSymlinkDestinationRoot(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	destination := filepath.Join(base, "destination")
+	if err := os.Symlink(outside, destination); err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	part, err := writer.Create("index.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(part, "must not write"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(context.Background(), &archive, "source.zip", destination, ArchiveLimits{}); !errors.Is(err, ErrArchiveTraversal) {
+		t.Fatalf("Extract() error = %v, want ErrArchiveTraversal", err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("archive wrote %d entries through destination symlink", len(entries))
+	}
+}
+
 func TestExtractTarGzipBoundsExpandedBytes(t *testing.T) {
 	var compressed bytes.Buffer
 	gzipWriter := gzip.NewWriter(&compressed)

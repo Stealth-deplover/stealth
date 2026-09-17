@@ -2,8 +2,9 @@
 
 import { Command, FolderKanban, Search, Waypoints } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useOrganizations, useProjects } from "@/api/queries";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +12,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { organizationProjectsPath, projectPath } from "@/lib/console-routes";
 
 type PaletteCommand = {
   label: string;
@@ -22,89 +25,104 @@ type PaletteCommand = {
 
 export function CommandPalette() {
   const router = useRouter();
-  const pathname = usePathname();
-  const organizations = useOrganizations();
+  const { organizationId, projectId } = useConsoleRouteContext();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
-  const segments = pathname.split("/").filter(Boolean);
-  const organizationId =
-    segments[0] === "organizations" ? segments[1] : undefined;
-  const projectId =
-    organizationId && segments[2] === "projects" ? segments[3] : undefined;
-  const projects = useProjects(organizationId);
-  const base = projectId
-    ? `/organizations/${organizationId}/projects/${projectId}`
-    : organizationId
-      ? `/organizations/${organizationId}`
-      : "/organizations";
+  const organizations = useOrganizations(undefined, { enabled: open });
+  const projects = useProjects(organizationId, undefined, { enabled: open });
+  const dynamicLoading =
+    organizations.isPending || (Boolean(organizationId) && projects.isPending);
+  const dynamicError =
+    organizations.error ?? (organizationId ? projects.error : null);
+
+  const retryDynamic = () => {
+    if (organizations.error) void organizations.refetch();
+    if (organizationId && projects.error) void projects.refetch();
+  };
 
   const commands = useMemo<PaletteCommand[]>(() => {
-    const navigation: PaletteCommand[] = [
-      {
-        label: "Project overview",
-        hint: "View current project",
-        href: base,
-        kind: "navigation",
-      },
-      {
-        label: "Services canvas",
-        hint: "Map supported resources",
-        href: `${base}/services`,
-        kind: "navigation",
-      },
-      {
-        label: "Deployments",
-        hint: "Inspect resource deployments",
-        href: `${base}/deployments`,
-        kind: "navigation",
-      },
-      {
-        label: "Functions",
-        hint: "Run backend code",
-        href: `${base}/functions`,
-        kind: "navigation",
-      },
-      {
-        label: "Databases",
-        hint: "Browse schema and rows",
-        href: `${base}/databases`,
-        kind: "navigation",
-      },
-      {
-        label: "Storage",
-        hint: "Explore buckets and files",
-        href: `${base}/storage`,
-        kind: "navigation",
-      },
-      {
-        label: "Logs",
-        hint: "Open contextual log viewer",
-        href: `${base}/observability/logs`,
-        kind: "navigation",
-      },
-      {
-        label: "Traces",
-        hint: "Inspect durable root requests",
-        href: `${base}/observability/traces`,
-        kind: "navigation",
-      },
-      {
-        label: "Settings",
-        hint: "Project configuration",
-        href: `${base}/settings/project`,
-        kind: "navigation",
-      },
-    ].filter(
-      (command) => Boolean(projectId) && command.href.startsWith(base),
-    ) as PaletteCommand[];
+    const navigation: PaletteCommand[] =
+      organizationId && projectId
+        ? [
+            {
+              label: "Project overview",
+              hint: "View current project",
+              href: projectPath(organizationId, projectId),
+              kind: "navigation",
+            },
+            {
+              label: "Services canvas",
+              hint: "Map supported resources",
+              href: projectPath(organizationId, projectId, "services"),
+              kind: "navigation",
+            },
+            {
+              label: "Deployments",
+              hint: "Inspect resource deployments",
+              href: projectPath(organizationId, projectId, "deployments"),
+              kind: "navigation",
+            },
+            {
+              label: "Functions",
+              hint: "Run backend code",
+              href: projectPath(organizationId, projectId, "functions"),
+              kind: "navigation",
+            },
+            {
+              label: "Databases",
+              hint: "Browse schema and rows",
+              href: projectPath(organizationId, projectId, "databases"),
+              kind: "navigation",
+            },
+            {
+              label: "Storage",
+              hint: "Explore buckets and files",
+              href: projectPath(organizationId, projectId, "storage"),
+              kind: "navigation",
+            },
+            {
+              label: "Logs",
+              hint: "Open contextual log viewer",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "observability",
+                "logs",
+              ),
+              kind: "navigation",
+            },
+            {
+              label: "Traces",
+              hint: "Inspect durable root requests",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "observability",
+                "traces",
+              ),
+              kind: "navigation",
+            },
+            {
+              label: "Settings",
+              hint: "Project configuration",
+              href: projectPath(
+                organizationId,
+                projectId,
+                "settings",
+                "project",
+              ),
+              kind: "navigation",
+            },
+          ]
+        : [];
     const workspaceCommands: PaletteCommand[] = (
       organizations.data?.organizations ?? []
     ).map((organization) => ({
       label: `Switch organization · ${organization.name}`,
       hint: organization.slug,
-      href: `/organizations/${organization.id}/projects`,
+      href: organizationProjectsPath(organization.id),
       kind: "organization" as const,
     }));
     const projectCommands: PaletteCommand[] = (
@@ -112,7 +130,7 @@ export function CommandPalette() {
     ).map((project) => ({
       label: `Switch project · ${project.name}`,
       hint: "Project",
-      href: `/organizations/${project.organization_id}/projects/${project.id}`,
+      href: projectPath(project.organization_id, project.id),
       kind: "project" as const,
     }));
     const searchTerm = query.trim().toLowerCase();
@@ -122,7 +140,7 @@ export function CommandPalette() {
         `${command.label} ${command.hint}`.toLowerCase().includes(searchTerm),
     );
   }, [
-    base,
+    organizationId,
     organizations.data?.organizations,
     projectId,
     projects.data?.projects,
@@ -152,7 +170,7 @@ export function CommandPalette() {
     setActiveIndex(0);
   };
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (!commands.length) return;
+    if (!commands.length || !(event.target instanceof HTMLInputElement)) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((index) => (index + 1) % commands.length);
@@ -186,13 +204,16 @@ export function CommandPalette() {
           </DialogDescription>
         </DialogHeader>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" />
+          <Search
+            className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ash"
+            aria-hidden="true"
+          />
           <Input
             autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search the console…"
-            className="h-11 border-transparent bg-black/20 pl-9 text-sm focus:border-cyan-300/40"
+            className="h-11 border-transparent bg-void pl-9 text-sm focus:border-acid-lime/40"
             role="combobox"
             aria-controls="console-command-list"
             aria-expanded="true"
@@ -203,6 +224,26 @@ export function CommandPalette() {
             }
           />
         </div>
+        {dynamicLoading ? (
+          <div
+            className="mt-2 rounded-lg border border-acid-lime/15 bg-acid-lime/[0.04] px-3 py-2 text-xs text-mist"
+            role="status"
+            aria-live="polite"
+          >
+            Loading workspace navigation…
+          </div>
+        ) : null}
+        {dynamicError ? (
+          <div
+            className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-300/20 bg-rose-400/[0.04] px-3 py-2 text-xs text-rose-200"
+            role="alert"
+          >
+            <span>Could not load workspace navigation.</span>
+            <Button variant="outline" size="sm" onClick={retryDynamic}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
         <div
           id="console-command-list"
           className="mt-2 max-h-80 overflow-y-auto"
@@ -225,9 +266,9 @@ export function CommandPalette() {
                   close();
                   router.push(command.href);
                 }}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left ${index === selectedIndex ? "bg-cyan-300/10" : "hover:bg-white/[0.06]"}`}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition-colors duration-150 ${index === selectedIndex ? "bg-acid-lime/10" : "hover:bg-white/[0.06]"}`}
               >
-                <span className="flex size-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400">
+                <span className="flex size-8 items-center justify-center rounded-md border border-graphite bg-white/[0.03] text-fog">
                   {command.kind === "project" ? (
                     <FolderKanban className="size-4" />
                   ) : command.kind === "organization" ? (
@@ -237,25 +278,23 @@ export function CommandPalette() {
                   )}
                 </span>
                 <span className="flex-1">
-                  <span className="block text-sm font-medium text-slate-100">
+                  <span className="block text-sm font-medium text-mist">
                     {command.label}
                   </span>
-                  <span className="block text-xs text-slate-500">
-                    {command.hint}
-                  </span>
+                  <span className="block text-xs text-fog">{command.hint}</span>
                 </span>
-                <span className="text-[10px] text-slate-600">↵</span>
+                <span className="font-mono text-[10px] text-fog">↵</span>
               </button>
             ))
-          ) : (
+          ) : dynamicLoading || dynamicError ? null : (
             <p className="px-3 py-8 text-center text-sm text-slate-500">
               No matching command.
             </p>
           )}
         </div>
-        <div className="mt-2 flex items-center justify-between border-t border-stealth-border px-3 pt-3 text-[10px] text-slate-600">
+        <div className="mt-2 flex items-center justify-between border-t border-graphite px-3 pt-3 text-[10px] text-fog">
           <span>↑↓ navigate · Enter open</span>
-          <span className="rounded border border-stealth-border px-1.5 py-0.5">
+          <span className="rounded-sm border border-graphite px-1.5 py-0.5 font-mono">
             Esc
           </span>
         </div>

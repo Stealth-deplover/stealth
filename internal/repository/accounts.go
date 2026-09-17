@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -23,6 +24,9 @@ func (r *Repository) Signup(ctx context.Context, input SignupInput) (domain.Acco
 		return domain.Account{}, domain.Organization{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err := requireBootstrapSealedTx(ctx, tx); err != nil {
+		return domain.Account{}, domain.Organization{}, err
+	}
 	account := domain.Account{ID: input.AccountID.String(), Email: input.Email, EmailVerified: false}
 	organization := domain.Organization{ID: input.OrganizationID.String(), Name: input.OrganizationName, Slug: input.OrganizationSlug}
 	if err := tx.QueryRow(ctx, `INSERT INTO accounts (id,email,password_hash) VALUES ($1,$2,$3) RETURNING created_at`, input.AccountID, input.Email, input.PasswordHash).Scan(&account.CreatedAt); err != nil {
@@ -55,20 +59,74 @@ func (r *Repository) Signup(ctx context.Context, input SignupInput) (domain.Acco
 func (r *Repository) AccountBySession(ctx context.Context, tokenHash []byte) (domain.Account, uuid.UUID, error) {
 	var account domain.Account
 	var sessionID uuid.UUID
-	err := r.pool.QueryRow(ctx, `SELECT a.id,a.email,a.email_verified,a.created_at,s.id FROM sessions s JOIN accounts a ON a.id=s.account_id WHERE s.token_hash=$1 AND s.expires_at > now()`, tokenHash).Scan(&account.ID, &account.Email, &account.EmailVerified, &account.CreatedAt, &sessionID)
+	var email, instanceRole, provider, providerUserID, providerLogin, displayName, avatarURL sql.NullString
+	err := r.pool.QueryRow(ctx, `
+		SELECT a.id,a.email,a.email_verified,ir.role,
+		       ai.provider,ai.provider_user_id,ai.provider_login,ai.display_name,ai.avatar_url,
+		       a.created_at,s.id
+		FROM sessions s
+		JOIN accounts a ON a.id=s.account_id
+		LEFT JOIN instance_roles ir ON ir.account_id=a.id
+		LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github'
+		WHERE s.token_hash=$1 AND s.expires_at > now()`, tokenHash).Scan(
+		&account.ID, &email, &account.EmailVerified, &instanceRole,
+		&provider, &providerUserID, &providerLogin, &displayName, &avatarURL,
+		&account.CreatedAt, &sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Account{}, uuid.Nil, ErrNotFound
 	}
+	if email.Valid {
+		account.Email = email.String
+	}
+	if instanceRole.Valid {
+		account.InstanceRole = instanceRole.String
+	}
+	populateGitHubIdentity(&account, provider, providerUserID, providerLogin, displayName, avatarURL)
 	return account, sessionID, err
 }
 func (r *Repository) AccountPassword(ctx context.Context, email string) (uuid.UUID, string, error) {
 	var id uuid.UUID
-	var hash string
+	var hash sql.NullString
 	err := r.pool.QueryRow(ctx, `SELECT id,password_hash FROM accounts WHERE email=$1`, email).Scan(&id, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, "", ErrNotFound
 	}
-	return id, hash, err
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	// GitHub-only first owners intentionally have no local password. Treat
+	// password login for those accounts like an unknown credential rather than
+	// surfacing a database NULL-scan error or inventing a password hash.
+	if !hash.Valid {
+		return uuid.Nil, "", ErrNotFound
+	}
+	return id, hash.String, nil
+}
+
+func populateGitHubIdentity(account *domain.Account, provider, providerUserID, providerLogin, displayName, avatarURL sql.NullString) {
+	if provider.Valid {
+		account.Provider = provider.String
+	}
+	if providerUserID.Valid {
+		account.ProviderUserID = providerUserID.String
+	}
+	if providerLogin.Valid {
+		account.ProviderLogin = providerLogin.String
+	}
+	if displayName.Valid {
+		account.DisplayName = displayName.String
+	}
+	if avatarURL.Valid {
+		account.AvatarURL = avatarURL.String
+	}
+}
+
+func nullableStringPointer(value sql.NullString) *string {
+	if !value.Valid {
+		return nil
+	}
+	result := value.String
+	return &result
 }
 
 func (r *Repository) UpdateAccountPassword(ctx context.Context, accountID, currentSessionID uuid.UUID, passwordHash string) (int64, error) {

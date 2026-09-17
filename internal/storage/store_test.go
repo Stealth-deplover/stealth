@@ -85,13 +85,13 @@ func TestBeginUploadCommitAndOpenUsesUUIDPathAndChecksum(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(prepared.RelativePath))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("destination before commit stat error = %v, want not exist", err)
 	}
-	if err := store.Commit(&prepared); err != nil {
+	if err := store.Commit(context.Background(), &prepared); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Commit(&prepared); !errors.Is(err, ErrInvalidPath) {
+	if err := store.Commit(context.Background(), &prepared); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("second Commit error = %v, want ErrInvalidPath", err)
 	}
-	file, err := store.OpenRelative(prepared.RelativePath)
+	file, err := store.OpenRelative(context.Background(), prepared.RelativePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,10 +100,10 @@ func TestBeginUploadCommitAndOpenUsesUUIDPathAndChecksum(t *testing.T) {
 	if err != nil || closeErr != nil || string(got) != string(content) {
 		t.Fatalf("opened content = %q, read error = %v, close error = %v", got, err, closeErr)
 	}
-	if err := store.RemoveRelative(prepared.RelativePath); err != nil {
+	if err := store.RemoveRelative(context.Background(), prepared.RelativePath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.OpenRelative(prepared.RelativePath); !errors.Is(err, os.ErrNotExist) {
+	if _, err := store.OpenRelative(context.Background(), prepared.RelativePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("open after removal error = %v, want not exist", err)
 	}
 }
@@ -143,10 +143,10 @@ func TestBeginUploadHonorsCanceledContextAndRejectsTraversal(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled BeginUpload error = %v, want context.Canceled", err)
 	}
-	if _, err := store.OpenRelative("../outside"); !errors.Is(err, ErrInvalidPath) {
+	if _, err := store.OpenRelative(context.Background(), "../outside"); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("traversal OpenRelative error = %v, want ErrInvalidPath", err)
 	}
-	if err := store.RemoveRelative(filepath.Join(store.Root(), "outside")); !errors.Is(err, ErrInvalidPath) {
+	if err := store.RemoveRelative(context.Background(), filepath.Join(store.Root(), "outside")); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("absolute RemoveRelative error = %v, want ErrInvalidPath", err)
 	}
 }
@@ -179,5 +179,44 @@ func TestNewS3ValidatesConfigurationAndUsesBoundedStaging(t *testing.T) {
 		if _, err := NewS3(invalid, 1024); err == nil {
 			t.Fatalf("NewS3(%+v) succeeded for invalid configuration", invalid)
 		}
+	}
+}
+
+func TestS3OperationsHonorCanceledContext(t *testing.T) {
+	store, err := NewS3(S3Options{
+		Endpoint:    "http://127.0.0.1:1",
+		Bucket:      "stealth-files",
+		AccessKey:   "access",
+		SecretKey:   "secret",
+		StagingRoot: t.TempDir(),
+	}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := uuid.Must(uuid.NewV7())
+	relative := filepath.ToSlash(filepath.Join(projectID.String(), uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String()))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	prepared := PreparedFile{TempPath: filepath.Join(t.TempDir(), "staged"), RelativePath: relative, Size: 1}
+	operations := []struct {
+		name string
+		call func() error
+	}{
+		{name: "commit", call: func() error { return store.Commit(ctx, &prepared) }},
+		{name: "remove", call: func() error { return store.RemoveRelative(ctx, relative) }},
+		{name: "open", call: func() error {
+			file, openErr := store.OpenRelative(ctx, relative)
+			if file != nil {
+				_ = file.Close()
+			}
+			return openErr
+		}},
+	}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			if err := operation.call(); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled S3 %s error = %v, want context.Canceled", operation.name, err)
+			}
+		})
 	}
 }

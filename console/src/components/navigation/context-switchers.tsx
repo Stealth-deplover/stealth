@@ -2,11 +2,11 @@
 
 import {
   Check,
+  Cable,
   ChevronsUpDown,
   FolderKanban,
   Plus,
   Search,
-  Sparkles,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -18,6 +18,8 @@ import {
 } from "@/api/queries";
 import type { Organization, Project } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +30,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
+import {
+  organizationProjectsPath,
+  organizationsPath,
+  projectPath,
+} from "@/lib/console-routes";
 import { cn, getInitials } from "@/lib/utils";
 
 function SelectorItem({
@@ -49,11 +56,11 @@ function SelectorItem({
       onClick={onClick}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
-        selected && "bg-cyan-300/10",
+        "flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.06]",
+        selected && "bg-acid-lime/10",
       )}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-xs text-cyan-200">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-graphite bg-void text-xs text-mist">
         {icon}
       </span>
       <span className="min-w-0 flex-1">
@@ -67,7 +74,7 @@ function SelectorItem({
         ) : null}
       </span>
       {selected ? (
-        <Check className="size-4 text-cyan-300" aria-label="Selected" />
+        <Check className="size-4 text-acid-lime" aria-label="Selected" />
       ) : null}
     </button>
   );
@@ -75,10 +82,12 @@ function SelectorItem({
 
 export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const router = useRouter();
-  const { data, isLoading } = useOrganizations();
-  const selectedOrganization = useOrganization(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const { data, error, isLoading, refetch } = useOrganizations(undefined, {
+    enabled: open,
+  });
+  const selectedOrganization = useOrganization(currentId);
   const organizations = useMemo(() => {
     const items = data?.organizations ?? [];
     const selected = selectedOrganization.data;
@@ -102,23 +111,23 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
   const navigate = (organization: Organization) => {
     setOpen(false);
     setSearch("");
-    router.push(`/organizations/${organization.id}/projects`);
+    router.push(organizationProjectsPath(organization.id));
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
           variant="ghost"
-          className="h-10 max-w-[7.5rem] justify-start px-2.5 sm:max-w-52"
+          className="max-w-[7.5rem] justify-start px-2.5 sm:max-w-52"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-cyan-300/10 text-[10px] font-semibold text-cyan-200">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-acid-lime/10 text-[10px] font-semibold text-acid-lime">
             {getInitials(current?.name ?? "S")}
           </span>
           <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-xs font-semibold text-white">
+            <span className="block truncate text-xs font-semibold text-paper">
               {current?.name ?? "Organizations"}
             </span>
-            <span className="block truncate text-[10px] text-slate-500">
+            <span className="block truncate text-[10px] text-fog">
               Workspace
             </span>
           </span>
@@ -144,9 +153,13 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
         </div>
         <div className="max-h-72 space-y-1 overflow-y-auto">
           {isLoading ? (
-            <p className="px-3 py-4 text-sm text-slate-500">
-              Loading organizations…
-            </p>
+            <LoadingState rows={2} />
+          ) : error ? (
+            <ErrorState
+              title="Could not load organizations"
+              error={error}
+              retry={() => refetch()}
+            />
           ) : filtered.length ? (
             filtered.map((organization) => (
               <SelectorItem
@@ -169,7 +182,7 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
           className="mt-4 w-full"
           onClick={() => {
             setOpen(false);
-            router.push("/organizations");
+            router.push(organizationsPath());
           }}
         >
           <Plus className="size-4" /> Create organization
@@ -187,10 +200,14 @@ export function ProjectSwitcher({
   currentId?: string;
 }) {
   const router = useRouter();
-  const { data } = useProjects(organizationId);
-  const selectedProject = useProject(currentId);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const { data, error, isLoading, refetch } = useProjects(
+    organizationId,
+    undefined,
+    { enabled: open },
+  );
+  const selectedProject = useProject(currentId);
   const projects = useMemo(() => {
     const items = data?.projects ?? [];
     const selected = selectedProject.data?.project;
@@ -211,27 +228,23 @@ export function ProjectSwitcher({
   const navigate = (project: Project) => {
     setOpen(false);
     setSearch("");
-    router.push(
-      `/organizations/${project.organization_id}/projects/${project.id}`,
-    );
+    router.push(projectPath(project.organization_id, project.id));
   };
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
           variant="ghost"
-          className="h-10 max-w-[7.5rem] justify-start border-l border-stealth-border pl-3 pr-2.5 sm:max-w-60"
+          className="max-w-[7.5rem] justify-start border-l border-stealth-border pl-3 pr-2.5 sm:max-w-60"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-violet-300/10 text-violet-200">
             <FolderKanban className="size-3.5" />
           </span>
           <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-xs font-semibold text-white">
+            <span className="block truncate text-xs font-semibold text-paper">
               {current?.name ?? "Select project"}
             </span>
-            <span className="block truncate text-[10px] text-slate-500">
-              Project
-            </span>
+            <span className="block truncate text-[10px] text-fog">Project</span>
           </span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-slate-500" />
         </Button>
@@ -254,7 +267,15 @@ export function ProjectSwitcher({
           />
         </div>
         <div className="max-h-72 space-y-1 overflow-y-auto">
-          {filtered.length ? (
+          {isLoading ? (
+            <LoadingState rows={2} />
+          ) : error ? (
+            <ErrorState
+              title="Could not load projects"
+              error={error}
+              retry={() => refetch()}
+            />
+          ) : filtered.length ? (
             filtered.map((project) => (
               <SelectorItem
                 key={project.id}
@@ -271,13 +292,13 @@ export function ProjectSwitcher({
             </p>
           )}
         </div>
-        {data?.can_manage === true ? (
+        {data?.can_manage === true && organizationId ? (
           <Button
             variant="outline"
             className="mt-4 w-full"
             onClick={() => {
               setOpen(false);
-              router.push(`/organizations/${organizationId}/projects`);
+              router.push(organizationProjectsPath(organizationId));
             }}
           >
             <Plus className="size-4" /> Create project
@@ -291,7 +312,8 @@ export function ProjectSwitcher({
 export function ContextBadge({ projectId }: { projectId?: string }) {
   return projectId ? (
     <span className="hidden items-center gap-1.5 text-[11px] text-slate-500 md:flex">
-      <Sparkles className="size-3 text-cyan-300" /> Live API context
+      <Cable className="size-3 text-acid-lime" aria-hidden="true" /> Live API
+      context
     </span>
   ) : null;
 }

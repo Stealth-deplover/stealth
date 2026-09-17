@@ -69,6 +69,15 @@ Required production values:
   `STEALTH_CONSOLE_IMAGE`, all on the same immutable release tag.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
+- `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
+  dedicated local-CLI proof key for first-run Instance Owner onboarding and
+  encryption of short-lived GitHub browser-authorization state. It is never
+  reused as a Functions secret, and `FUNCTIONS_SECRET_KEY` is never accepted
+  as a fallback.
+- `GITHUB_APP_CLIENT_ID`, for an existing/manual production App configuration.
+  Fresh browser setup creates a private GitHub App through the Manifest flow,
+  configures its HTTPS callback URL, and stores the resulting App identifier
+  server-side; it does not ask the operator to enable Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
   Docker-backed function runner is enabled.
@@ -138,10 +147,78 @@ For serious production installations, managed PostgreSQL and an
 S3-compatible object store are recommended. Stealth does not claim HA for the
 bundled single PostgreSQL, Redis, or local storage services.
 
+## First-run onboarding
+
+Fresh `stealth install` starts a separate setup Compose project after host
+Docker and Docker Compose checks. It contains only the setup API, setup
+Console, setup proxy, PostgreSQL, and Redis. The CLI requests a single-use
+setup session, displays a 15-minute setup code, and starts a temporary,
+digest-pinned `cloudflare/cloudflared:2026.9.0` Quick Tunnel to the setup proxy
+when possible. The Console setup page is `/setup` on that temporary URL. The
+browser wizard reviews the public URL, GitHub App, networking, database, Redis,
+storage, and final production tunnel settings before persisting
+`install_requested`.
+
+The host CLI is the production installer. It reloads and validates the
+finalized state, claims the InstallRunID under the installer lock, invokes the
+shared Go install engine, runs host Docker Compose and production health
+checks, waits for the one-time handoff, and removes the temporary setup API,
+Console, and proxy. The setup image has no `/var/run/docker.sock`, Docker CLI,
+or Compose plugin. The production API and Console images do not receive the
+socket. The production worker intentionally retains it for the existing
+Docker-backed function and site runner and runs non-root with the configured
+`DOCKER_GID`.
+
+The operator enters the Stealth setup code first. The API stores only a hash of
+the code and encrypts provider credentials, short-lived OAuth state, and the
+PKCE verifier with the configured Functions secret. GitHub App Manifest
+registration returns credentials to the server callback, which immediately
+starts GitHub's browser Web Application Flow for the first owner. GitHub
+access tokens are used only for the server-side `/user` lookup and are
+discarded, never returned to the browser or persisted.
+
+Cloudflare setup uses a scoped API token, not a Global API Key. The Console
+verifies the token, discovers accounts and domains, and sends the selected
+account, domain, and dashboard hostname to the setup API. The API creates and
+configures the named tunnel and proxied DNS record, and writes the private
+cloudflared token file. The host CLI starts the production tunnel, verifies
+tunnel health and the production hostname, and removes the Quick Tunnel only
+after those checks pass. The minimum custom-token permissions are Account:
+Cloudflare Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS
+Edit, scoped to the resources used by the installation.
+
+Cloudflare OAuth remains experimental and inactive. The setup Console does
+not offer it, the inactive endpoint never builds an authorization redirect,
+and a random `*.trycloudflare.com` hostname is neither a Stealth-controlled
+OAuth callback domain nor a valid redirect for a shared Cloudflare OAuth
+client. GitHub's browser callback is configured by the Manifest itself; a
+random setup hostname is never used as a redirect for a shared official OAuth
+client.
+The current image reference uses the multi-architecture manifest digest
+`sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9`;
+maintainers should update the version and digest together after verifying the
+official Cloudflare image manifest.
+
+Quick Tunnels are for temporary onboarding only. They are not production
+ingress, have no production SLA, and are stopped and removed after production
+verification. If the tunnel cannot be started, use the local setup URL shown
+by the CLI. Canceling the CLI preserves the installation and allows
+`stealth setup` to resume while bootstrap remains unsealed. See the [browser
+setup guide](web-setup.md) for wizard stages, external infrastructure tests,
+idempotent retry, and final session handoff.
+
+The first Instance Owner is an instance-level role and is not automatically a
+member of every organization. On upgrade, migration does not expose `/setup`
+for an existing database and does not automatically choose an account. It
+marks the installation as `legacy_installation`; the local operator can run
+`stealth setup --adopt-owner`, review the account list, and type the exact
+`ADOPT <account-id>` confirmation. Adoption is audited and does not alter
+organization membership.
+
 ## Release and upgrade
 
 Release tags use SemVer, for example `v0.1.0`. The release workflow publishes
-API, worker, migration, and Console images with both the version tag and a
+API, setup, worker, migration, and Console images with both the version tag and a
 commit tag (`sha-<short sha>`), then creates a GitHub Release. Pin the version
 tag (or a digest) in `.env.production`; do not mix `api:v1.2.0` with
 `worker:latest`.

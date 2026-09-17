@@ -29,11 +29,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { formatDate, formatRelative } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-import {
-  parseCommaSeparatedValues,
-  webhookDeliveryStatusLabel,
-} from "@/features/integrations/integration-values";
+import { webhookDeliveryStatusLabel } from "@/features/integrations/integration-values";
 import { BackLink } from "@/features/resources/detail-shared";
+import {
+  webhookFields,
+  webhookUpdatePayload,
+  type WebhookFormValues,
+} from "@/features/webhooks/webhook-form";
 
 export function WebhookDetailView({
   organizationId,
@@ -129,7 +131,7 @@ export function WebhookDetailView({
           className="block max-w-xs truncate text-xs text-rose-200/80"
           title={row.original.last_error ?? undefined}
         >
-          {row.original.last_error ?? "—"}
+          {row.original.last_error ?? "Not available"}
         </span>
       ),
     },
@@ -138,13 +140,8 @@ export function WebhookDetailView({
   const secretResult = (result: unknown) =>
     result as components["schemas"]["WebhookSecretResponse"] | undefined;
 
-  const handleUpdate = async (values: Record<string, string>) => {
-    await update.mutateAsync({
-      name: values.name.trim(),
-      url: values.url.trim(),
-      events: parseCommaSeparatedValues(values.events),
-      enabled: values.enabled === "true",
-    });
+  const handleUpdate = async (values: WebhookFormValues) => {
+    await update.mutateAsync(webhookUpdatePayload(values));
     toast.success("Webhook settings updated");
   };
 
@@ -166,42 +163,18 @@ export function WebhookDetailView({
             <StatusBadge status={current.enabled ? "active" : "inactive"} />
             {canManage ? (
               <>
-                <CreateDialog
+                <CreateDialog<WebhookFormValues>
                   triggerLabel="Edit settings"
                   submitLabel="Save changes"
                   pendingLabel="Saving changes…"
                   title="Edit webhook settings"
                   description="The Go API validates the HTTPS endpoint and event names before saving."
-                  fields={[
-                    {
-                      name: "name",
-                      label: "Name",
-                      defaultValue: current.name,
-                    },
-                    {
-                      name: "url",
-                      label: "HTTPS URL",
-                      type: "url",
-                      defaultValue: current.url,
-                    },
-                    {
-                      name: "events",
-                      label: "Events",
-                      required: false,
-                      defaultValue: current.events.join(", "),
-                      help: "Comma-separated event names, or * for all.",
-                    },
-                    {
-                      name: "enabled",
-                      label: "State",
-                      type: "select",
-                      defaultValue: current.enabled ? "true" : "false",
-                      options: [
-                        { value: "true", label: "Enabled" },
-                        { value: "false", label: "Disabled" },
-                      ],
-                    },
-                  ]}
+                  fields={webhookFields({
+                    name: current.name,
+                    url: current.url,
+                    events: current.events.join(", "),
+                    enabled: current.enabled ? "true" : "false",
+                  })}
                   pending={update.isPending}
                   onSubmit={handleUpdate}
                 />
@@ -274,14 +247,14 @@ export function WebhookDetailView({
                 <CopyButton
                   value={current.url}
                   label="Copy webhook URL"
-                  className="size-6 shrink-0 text-slate-600 hover:text-slate-200"
+                  className="shrink-0 text-slate-600 hover:text-slate-200"
                 />
               </dd>
             </div>
             <div>
               <dt className="text-xs text-slate-600">Events</dt>
               <dd className="mt-1 font-mono text-xs text-slate-300">
-                {current.events.join(", ") || "—"}
+                {current.events.join(", ") || "Not available"}
               </dd>
             </div>
             <div>

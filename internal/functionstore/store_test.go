@@ -37,13 +37,13 @@ func TestStoreUsesOpaqueUUIDPathsAndStreamsBytes(t *testing.T) {
 	if artifact.Size != int64(len(payload)) {
 		t.Fatalf("size = %d, want %d", artifact.Size, len(payload))
 	}
-	if err := store.Commit(&artifact); err != nil {
+	if err := store.Commit(context.Background(), &artifact); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(artifact.TempPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temporary upload still exists: %v", err)
 	}
-	file, err := store.OpenRelative(artifact.RelativePath)
+	file, err := store.OpenRelative(context.Background(), artifact.RelativePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestStoreUsesOpaqueUUIDPathsAndStreamsBytes(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("stored bytes = %q, want %q", got, payload)
 	}
-	if err := store.RemoveRelative("../outside"); !errors.Is(err, ErrInvalidPath) {
+	if err := store.RemoveRelative(context.Background(), "../outside"); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("traversal remove error = %v, want ErrInvalidPath", err)
 	}
 }
@@ -110,11 +110,11 @@ func TestStoreConcurrentUploads(t *testing.T) {
 				errCh <- beginErr
 				return
 			}
-			if err := store.Commit(&artifact); err != nil {
+			if err := store.Commit(context.Background(), &artifact); err != nil {
 				errCh <- err
 				return
 			}
-			file, err := store.OpenRelative(artifact.RelativePath)
+			file, err := store.OpenRelative(context.Background(), artifact.RelativePath)
 			if err != nil {
 				errCh <- err
 				return

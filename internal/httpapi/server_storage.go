@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -329,23 +328,13 @@ func (s *Server) deleteStorageBucket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteStorageBucket(r.Context(), projectID, bucketID, managementStorageActorFrom(r))
+	_, err := s.repo.DeleteStorageBucket(r.Context(), projectID, bucketID, managementStorageActorFrom(r))
 	if storageResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.storage == nil {
-		internalError(s, w, errors.New("storage is unavailable"))
-		return
-	}
-	for _, path := range paths {
-		if err := s.storage.RemoveRelative(path); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted storage blob: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -518,35 +507,46 @@ func (s *Server) uploadStorageFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "anonymous uploads must specify read_permissions, update_permissions, and delete_permissions")
 		return
 	}
-	// Publish first: a DB failure can leave an invisible orphan that can be
-	// reconciled, whereas a committed metadata row without bytes is visible.
-	if err := s.storage.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupStorage,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
 		cleanupPrepared(s.storage, &prepared)
 		internalError(s, w, err)
 		return
 	}
-	removeOnFailure := true
-	defer func() {
-		if removeOnFailure {
-			if cleanupErr := s.storage.RemoveRelative(prepared.RelativePath); cleanupErr != nil {
-				s.logger.Error("failed to clean rejected storage blob", "path", prepared.RelativePath, "error", cleanupErr)
-			}
-		}
-	}()
+	// Publish after the durable reservation. If the metadata transaction fails,
+	// the reservation is retained for the trusted cleanup worker.
+	if err := s.storage.Commit(r.Context(), &prepared); err != nil {
+		cleanupPrepared(s.storage, &prepared)
+		internalError(s, w, err)
+		return
+	}
 	var creator *uuid.UUID
 	if actor.Kind == repository.StorageApplicationActor {
 		creatorID := actor.ProjectUserID
 		creator = &creatorID
 	}
-	item, err := s.repo.CreateStorageFile(r.Context(), fileID, projectID, bucketID, actor, repository.StorageFileInput{Name: filenameField, MimeType: prepared.ContentType, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, StoragePath: prepared.RelativePath, ReadPermissions: readPermissions, UpdatePermissions: updatePermissions, DeletePermissions: deletePermissions, CreatorProjectUserID: creator})
+	item, err := s.repo.CreateStorageFile(r.Context(), fileID, projectID, bucketID, actor, repository.StorageFileInput{Name: filenameField, MimeType: prepared.ContentType, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, StoragePath: prepared.RelativePath, ReadPermissions: readPermissions, UpdatePermissions: updatePermissions, DeletePermissions: deletePermissions, CreatorProjectUserID: creator, PublishCleanup: &publishCleanup})
 	if storageResourceError(w, err) {
+		// The quota check runs before the metadata transaction can commit, so
+		// this typed failure has an unambiguous rollback. Other metadata errors
+		// retain the durable reservation instead of risking deletion after an
+		// ambiguous commit result.
+		if errors.Is(err, repository.ErrStorageQuotaExceeded) {
+			if cleanupErr := s.storage.RemoveRelative(r.Context(), prepared.RelativePath); cleanupErr != nil {
+				s.logger.Error("failed to clean rejected storage blob", "error", cleanupErr)
+			}
+		}
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
 	}
-	removeOnFailure = false
 	writeJSON(w, http.StatusCreated, map[string]domain.StorageFile{"file": item})
 }
 
@@ -691,7 +691,7 @@ func (s *Server) downloadStorageFile(w http.ResponseWriter, r *http.Request) {
 		internalError(s, w, err)
 		return
 	}
-	file, err := s.storage.OpenRelative(path)
+	file, err := s.storage.OpenRelative(r.Context(), path)
 	if errors.Is(err, os.ErrNotExist) {
 		internalError(s, w, errors.New("storage metadata references a missing blob"))
 		return
@@ -725,20 +725,12 @@ func (s *Server) deleteStorageFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	path, err := s.repo.DeleteStorageFile(r.Context(), projectID, bucketID, fileID, storageActorFrom(r))
+	_, err := s.repo.DeleteStorageFile(r.Context(), projectID, bucketID, fileID, storageActorFrom(r))
 	if storageResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
-		return
-	}
-	if s.storage == nil {
-		internalError(s, w, errors.New("storage is unavailable"))
-		return
-	}
-	if err := s.storage.RemoveRelative(path); err != nil {
-		internalError(s, w, fmt.Errorf("remove deleted storage blob: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

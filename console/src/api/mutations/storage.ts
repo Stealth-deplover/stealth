@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, uploadMultipart } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useUploadStorageFile(projectId: string, bucketId: string) {
@@ -10,27 +10,40 @@ export function useUploadStorageFile(projectId: string, bucketId: string) {
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append("file", file);
-      return uploadMultipart<components["schemas"]["StorageFileResponse"]>(
-        `/v1/projects/${projectId}/storage/buckets/${bucketId}/files`,
+      return uploadMultipart(
+        (body, signal) =>
+          api.POST(
+            "/v1/projects/{projectID}/storage/buckets/{bucketID}/files",
+            {
+              params: {
+                path: { projectID: projectId, bucketID: bucketId },
+              },
+              // openapi-typescript represents binary parts as string; the
+              // browser transport receives the corresponding FormData.
+              body: body as unknown as components["schemas"]["StorageUploadRequest"],
+              signal,
+            },
+          ),
         form,
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.files(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.bucket(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "storage-file", projectId, bucketId, operation: "upload" },
+      ]),
   });
 }
 
 export function useRenameStorageFile(projectId: string, bucketId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ fileId, name }: { fileId: string; name: string }) =>
+    mutationFn: async ({
+      fileId,
+      body,
+    }: {
+      fileId: string;
+      body: components["schemas"]["UpdateStorageFileRequest"];
+    }) =>
       unwrap(
         await api.PATCH(
           "/v1/projects/{projectID}/storage/buckets/{bucketID}/files/{fileID}",
@@ -42,18 +55,20 @@ export function useRenameStorageFile(projectId: string, bucketId: string) {
                 fileID: fileId,
               },
             },
-            body: { name },
+            body,
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.files(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.fileScope(projectId, bucketId),
-      });
-    },
+    onSuccess: (_, variables) =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "storage-file",
+          projectId,
+          bucketId,
+          fileId: variables.fileId,
+          operation: "rename",
+        },
+      ]),
   });
 }
 
@@ -69,12 +84,15 @@ export function useUpdateStorageBucket(projectId: string, bucketId: string) {
           body,
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.bucket(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "storage-bucket",
+          projectId,
+          bucketId,
+          includeDetail: true,
+        },
+      ]),
   });
 }
 
@@ -91,7 +109,7 @@ export function useCreateBucket(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "storage-bucket", projectId }]),
   });
 }
 
@@ -113,14 +131,15 @@ export function useDeleteStorageFile(projectId: string, bucketId: string) {
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.files(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.bucket(projectId, bucketId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.buckets(projectId) });
-    },
+    onSuccess: (_, fileId) =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "storage-file",
+          projectId,
+          bucketId,
+          fileId,
+          operation: "delete",
+        },
+      ]),
   });
 }

@@ -3,9 +3,10 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiUrl } from "@/api/client";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import {
   eventTypesForProjectStream,
-  realtimeInvalidationKeys,
+  realtimeCacheChanges,
   type RealtimeNotification,
 } from "@/realtime/invalidation";
 
@@ -27,9 +28,10 @@ export function ProjectRealtimeListener({
       const listener = (message: MessageEvent<string>) => {
         try {
           const event = JSON.parse(message.data) as RealtimeNotification;
-          for (const queryKey of realtimeInvalidationKeys(projectId, event)) {
-            void queryClient.invalidateQueries({ queryKey });
-          }
+          void applyCacheChanges(
+            queryClient,
+            realtimeCacheChanges(projectId, event),
+          );
         } catch {
           // A malformed notification cannot become client state. Existing
           // bounded polling remains the recovery path.

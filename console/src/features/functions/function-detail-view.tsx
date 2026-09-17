@@ -1,14 +1,11 @@
 "use client";
 import Link from "next/link";
 import { Upload } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { api, unwrap } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
 import {
   useActivateFunctionDeployment,
-  useCreateFunctionVariable,
-  useDeleteFunctionVariable,
   useUploadFunctionDeployment,
 } from "@/api/mutations";
 import {
@@ -16,21 +13,14 @@ import {
   useFunctionDeployment,
   useFunctionDeployments,
   useFunctionExecutions,
-  useFunctionVariables,
 } from "@/api/queries";
-import type {
-  FunctionDeployment,
-  FunctionExecution,
-  FunctionVariable,
-} from "@/api/types";
-import type { CreateFunctionVariableRequestKind } from "@/api/generated/schema";
+import type { FunctionDeployment, FunctionExecution } from "@/api/types";
 import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
-import { ConfirmDialog } from "@/components/confirm-dialog";
-import { CreateDialog } from "@/components/create-dialog";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
-import { LogViewer, type LogLine } from "@/components/log-viewer";
+import { LoadingState } from "@/components/feedback/loading-state";
+import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -45,145 +35,7 @@ import {
 } from "@/lib/deployment-state";
 import { pageControls } from "@/lib/pagination";
 import { BackLink } from "@/features/resources/detail-shared";
-
-function FunctionVariablesPanel({
-  projectId,
-  functionId,
-}: {
-  projectId: string;
-  functionId: string;
-}) {
-  const navigation = useCursorPagination("variables_cursor");
-  const query = useFunctionVariables(projectId, functionId, {
-    cursor: navigation.cursor,
-  });
-  const create = useCreateFunctionVariable(projectId, functionId);
-  const remove = useDeleteFunctionVariable(projectId, functionId);
-  const canManage = query.data?.can_manage === true;
-  const handleCreateVariable = async (values: Record<string, string>) => {
-    const kind =
-      values.kind === "secret"
-        ? "secret"
-        : values.kind === "variable"
-          ? "variable"
-          : null;
-    if (!kind) throw new Error("Kind must be variable or secret.");
-    await create.mutateAsync({
-      key: values.key,
-      value: values.value,
-      kind: kind as CreateFunctionVariableRequestKind,
-      is_secret: kind === "secret",
-      description: values.description || undefined,
-    });
-    toast.success("Environment variable added");
-  };
-  const columns: DataTableColumnDef<FunctionVariable>[] = [
-    {
-      accessorKey: "key",
-      header: "Key",
-      cell: ({ row }) => (
-        <span className="font-mono text-xs text-white">{row.original.key}</span>
-      ),
-    },
-    {
-      accessorKey: "kind",
-      header: "Kind",
-      cell: ({ row }) => (
-        <Badge variant={row.original.is_secret ? "warning" : "neutral"}>
-          {row.original.is_secret ? "Secret" : "Variable"}
-        </Badge>
-      ),
-    },
-    {
-      accessorKey: "has_value",
-      header: "Value",
-      cell: ({ row }) => (
-        <span className="text-xs text-slate-400">
-          {row.original.has_value ? "Configured · hidden" : "Not set"}
-        </span>
-      ),
-    },
-    {
-      accessorKey: "updated_at",
-      header: "Updated",
-      cell: ({ row }) => formatDate(row.original.updated_at),
-    },
-    {
-      id: "actions",
-      header: "",
-      cell: ({ row }) =>
-        canManage ? (
-          <ConfirmDialog
-            trigger={
-              <Button variant="ghost" size="sm" className="text-rose-300">
-                Delete
-              </Button>
-            }
-            title="Delete this variable?"
-            description={`The value for ${row.original.key} will be removed from the function configuration.`}
-            confirmLabel="Delete variable"
-            pending={remove.isPending}
-            onConfirm={async () => {
-              await remove.mutateAsync(row.original.id);
-              toast.success("Variable deleted");
-            }}
-          />
-        ) : null,
-    },
-  ];
-  if (query.error)
-    return <ErrorState error={query.error} retry={() => query.refetch()} />;
-  return (
-    <Card className="mt-4">
-      <CardHeader className="flex-row items-center justify-between">
-        <div>
-          <CardTitle>Environment variables</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
-            Values are write-only. The Go API returns metadata and never sends
-            plaintext values back to this browser.
-          </p>
-        </div>
-        {canManage ? (
-          <CreateDialog
-            triggerLabel="Add variable"
-            submitLabel="Add variable"
-            pendingLabel="Adding variable…"
-            title="Add environment variable"
-            description="The value is encrypted by the Go API and cannot be recovered after submission."
-            fields={[
-              { name: "key", label: "Key", placeholder: "DATABASE_URL" },
-              { name: "value", label: "Value", type: "password" },
-              {
-                name: "kind",
-                label: "Kind",
-                defaultValue: "variable",
-                help: "Use variable or secret. Secret values are marked as sensitive.",
-              },
-              { name: "description", label: "Description", required: false },
-            ]}
-            pending={create.isPending}
-            onSubmit={handleCreateVariable}
-          />
-        ) : query.data ? (
-          <Badge variant="neutral">Read-only</Badge>
-        ) : null}
-      </CardHeader>
-      <CardContent>
-        <DataTable
-          data={query.data?.variables ?? []}
-          columns={columns}
-          loading={query.isLoading}
-          empty="No environment variables configured."
-          serverPagination={pageControls(
-            navigation,
-            nextCursor(query.data),
-            query.isFetching,
-          )}
-        />
-      </CardContent>
-    </Card>
-  );
-}
+import { FunctionVariablesPanel } from "@/features/functions/function-variables-panel";
 
 export function FunctionDetailView({
   organizationId,
@@ -211,6 +63,13 @@ export function FunctionDetailView({
   const fn = query.data?.function;
   const canManage = deployments.data?.can_manage === true;
   const activeDeploymentId = fn?.active_deployment_id;
+  const activeDeployment = deployments.data?.deployments.find(
+    (deployment) => deployment.id === activeDeploymentId,
+  );
+  const activeBuildInProgress = Boolean(
+    activeDeploymentId &&
+    (!activeDeployment || isDeploymentInProgress(activeDeployment)),
+  );
   const showFirstDeployment =
     !deploymentsNavigation.cursor && deployments.data?.deployments.length === 0;
   const openFilePicker = () => fileInputRef.current?.click();
@@ -227,29 +86,21 @@ export function FunctionDetailView({
       },
     );
   };
-  const logs = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
-      if (!activeDeploymentId) return [];
-      const result = await api.GET(
-        "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              functionID: functionId,
-              deploymentID: activeDeploymentId,
-            },
-            query: after === undefined ? {} : { after },
-          },
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      activeDeploymentId
+        ? createLogSource({
+            kind: "function-build",
+            projectId,
+            functionId,
+            deploymentId: activeDeploymentId,
+          })
+        : null,
     [activeDeploymentId, functionId, projectId],
   );
   if (query.error)
     return <ErrorState error={query.error} retry={() => query.refetch()} />;
+  if (query.isPending) return <LoadingState rows={6} />;
   if (deployments.error)
     return (
       <ErrorState
@@ -363,7 +214,7 @@ export function FunctionDetailView({
               new Date(row.original.finished_at).valueOf() -
                 new Date(row.original.started_at).valueOf(),
             )
-          : "—",
+          : "Not available",
     },
     {
       accessorKey: "created_at",
@@ -498,7 +349,7 @@ export function FunctionDetailView({
                 <div>
                   <dt className="text-xs text-slate-600">Commands</dt>
                   <dd className="mt-1 font-mono text-sm text-slate-300">
-                    {fn.commands || "—"}
+                    {fn.commands || "Not available"}
                   </dd>
                 </div>
                 <div>
@@ -552,8 +403,9 @@ export function FunctionDetailView({
             key={activeDeploymentId ?? "no-deployment"}
             title="Active deployment build logs"
             description="Build output from the active deployment. Open an execution to inspect runtime logs."
-            fetchPage={logs}
-            enabled={Boolean(fn.active_deployment_id)}
+            source={logSource}
+            enabled={Boolean(logSource)}
+            polling={activeBuildInProgress}
             emptyMessage={
               fn.active_deployment_id
                 ? "No build logs yet. Output will appear when the deployment starts."
@@ -584,29 +436,20 @@ export function FunctionDeploymentView({
   deploymentId: string;
 }) {
   const query = useFunctionDeployment(projectId, functionId, deploymentId);
-  const logFetcher = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
-      const result = await api.GET(
-        "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
-        {
-          params: {
-            path: {
-              projectID: projectId,
-              functionID: functionId,
-              deploymentID: deploymentId,
-            },
-            query: after === undefined ? {} : { after },
-          },
-        },
-      );
-      const data = await unwrap(result);
-      return (data?.logs ?? []) as LogLine[];
-    },
+  const logSource = useMemo(
+    () =>
+      createLogSource({
+        kind: "function-build",
+        projectId,
+        functionId,
+        deploymentId,
+      }),
     [deploymentId, functionId, projectId],
   );
   const deployment = query.data?.deployment;
   if (query.error)
     return <ErrorState error={query.error} retry={() => query.refetch()} />;
+  if (query.isPending) return <LoadingState rows={5} />;
   if (!deployment)
     return (
       <EmptyState
@@ -720,7 +563,8 @@ export function FunctionDeploymentView({
           key={deploymentId}
           title="Build logs"
           description="Backend sequence cursor; only new lines are requested while following."
-          fetchPage={logFetcher}
+          source={logSource}
+          polling={isDeploymentInProgress(deployment)}
           emptyMessage="No logs yet. Build output will appear when this deployment starts."
         />
       </div>

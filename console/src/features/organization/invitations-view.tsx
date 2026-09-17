@@ -2,10 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import {
-  CreateOrganizationInvitationRequestRole,
-  OrganizationInvitationResponseDelivery,
-} from "@/api/generated/schema";
+import { OrganizationInvitationResponseDelivery } from "@/api/generated/schema";
 import {
   useCreateOrganizationInvitation,
   useRevokeOrganizationInvitation,
@@ -25,13 +22,11 @@ import { Card } from "@/components/ui/card";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { formatDate } from "@/lib/format";
 import { pageControls } from "@/lib/pagination";
-
-const roleOptions = Object.values(CreateOrganizationInvitationRequestRole).map(
-  (role) => ({
-    value: role,
-    label: role[0].toUpperCase() + role.slice(1),
-  }),
-);
+import {
+  organizationInvitationFields,
+  organizationInvitationPayload,
+  type OrganizationInvitationFormValues,
+} from "@/features/organization/invitation-form";
 
 export function OrganizationInvitationsView({
   organizationId,
@@ -50,11 +45,10 @@ export function OrganizationInvitationsView({
     useState<OrganizationInvitationResponseDelivery>();
   const canManage = query.data?.can_manage === true;
   const invitations = query.data?.invitations ?? [];
-  const handleCreate = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      email: values.email,
-      role: values.role as CreateOrganizationInvitationRequestRole,
-    });
+  const handleCreate = async (values: OrganizationInvitationFormValues) => {
+    const result = await create.mutateAsync(
+      organizationInvitationPayload(values),
+    );
     setCreated(result?.invitation);
     setCreatedDelivery(result?.delivery);
     toast.success(
@@ -129,7 +123,7 @@ export function OrganizationInvitationsView({
         description="Create and revoke email-bound invitations. The API keeps the one-time token out of the Console response."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<OrganizationInvitationFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Invite member"
@@ -137,16 +131,7 @@ export function OrganizationInvitationsView({
               pendingLabel="Creating invitation…"
               title="Invite a member"
               description="The invitation record is persisted by the Go API. Email delivery is reported separately."
-              fields={[
-                { name: "email", label: "Email", type: "email" },
-                {
-                  name: "role",
-                  label: "Role",
-                  type: "select",
-                  defaultValue: "developer",
-                  options: roleOptions,
-                },
-              ]}
+              fields={organizationInvitationFields}
               pending={create.isPending}
               onSubmit={handleCreate}
             />

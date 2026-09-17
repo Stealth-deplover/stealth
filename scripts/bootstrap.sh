@@ -19,19 +19,23 @@ cleanup() {
 trap cleanup EXIT
 
 version="${STEALTH_VERSION:-}"
+explicit_version=0
+[ -n "$version" ] && explicit_version=1
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--version)
 			[ "$#" -ge 2 ] || fail "--version requires a value"
 			version="$2"
+			explicit_version=1
 			shift 2
 			;;
 		--version=*)
 			version=${1#--version=}
+			explicit_version=1
 			shift
 			;;
 		-h|--help)
-			printf '%s\n' 'Usage: bootstrap.sh [--version vMAJOR.MINOR.PATCH]'
+			printf '%s\n' 'Usage: bootstrap.sh [--version vMAJOR.MINOR.PATCH[(-rc.N)]]'
 			exit 0
 			;;
 		*)
@@ -85,18 +89,45 @@ if [ -z "$version" ]; then
 	esac
 fi
 
+version_error="release version must match vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N: $version"
+case "$version" in
+	v*) ;;
+	*) fail "$version_error" ;;
+esac
 version_parts=${version#v}
-major=${version_parts%%.*}
-version_remainder=${version_parts#*.}
+release_candidate_number=""
+case "$version_parts" in
+	*-rc.*)
+		stable_version_parts=${version_parts%%-rc.*}
+		release_candidate_number=${version_parts#*-rc.}
+		;;
+	*-*)
+		fail "$version_error"
+		;;
+	*)
+		stable_version_parts=$version_parts
+		;;
+esac
+case "$stable_version_parts" in
+	*.*.*) ;;
+	*) fail "$version_error" ;;
+esac
+major=${stable_version_parts%%.*}
+version_remainder=${stable_version_parts#*.}
 minor=${version_remainder%%.*}
 patch_version=${version_remainder#*.}
-case "$version" in
-	v*.*.* ) ;;
-	*) fail "release version must match vMAJOR.MINOR.PATCH: $version" ;;
-esac
 case "$major:$minor:$patch_version" in
-	''|*[!0-9:]*|*:*:*:*) fail "release version must match vMAJOR.MINOR.PATCH: $version" ;;
+	''|*[!0-9:]*|*:*:*:*) fail "$version_error" ;;
 esac
+if [ -n "$release_candidate_number" ]; then
+	case "$release_candidate_number" in
+		''|*[!0-9]*) fail "$version_error" ;;
+		*) ;;
+	esac
+fi
+if [ "$explicit_version" -eq 0 ] && [ -n "$release_candidate_number" ]; then
+	fail "latest GitHub release is not stable"
+fi
 
 temporary_dir="$(mktemp -d "${tmp_root%/}/stealth-bootstrap.XXXXXX")" || fail "could not create a temporary directory"
 archive="${temporary_dir}/${asset}"
@@ -147,9 +178,9 @@ case ":${PATH:-}:" in
 	*) printf 'Add %s to PATH to call `stealth` directly.\n' "$bin_dir" ;;
 esac
 
-if [ -r /dev/tty ] && [ -w /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
-	cleanup
-	temporary_dir=""
-	exec "${bin_dir}/stealth" install < /dev/tty
+cleanup
+temporary_dir=""
+if [ -t 1 ] && [ -t 2 ]; then
+	exec "${bin_dir}/stealth" install
 fi
-fail 'interactive setup requires a TTY; run the downloaded binary from a terminal'
+exec "${bin_dir}/stealth" install --wait

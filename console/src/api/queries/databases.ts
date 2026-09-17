@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import type { paths } from "@/api/generated/schema";
 import { queryKeys } from "@/api/query-keys";
@@ -17,21 +17,21 @@ export function useDatabaseTable(
 ) {
   return useQuery({
     queryKey: queryKeys.table(projectId, databaseId, tableId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}",
-          {
-            params: {
-              path: {
-                projectID: projectId,
-                databaseID: databaseId,
-                tableID: tableId,
-              },
+    queryFn: cancellableQuery((signal) =>
+      api.GET(
+        "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}",
+        {
+          params: {
+            path: {
+              projectID: projectId,
+              databaseID: databaseId,
+              tableID: tableId,
             },
           },
-        ),
+          signal,
+        },
       ),
+    ),
   });
 }
 
@@ -42,7 +42,7 @@ export function useDatabaseColumns(
 ) {
   return useQuery({
     queryKey: queryKeys.columns(projectId, databaseId, tableId),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchAllCursorPages(
         (cursor) =>
           api
@@ -57,10 +57,12 @@ export function useDatabaseColumns(
                   },
                   query: withCursorPage({ cursor }),
                 },
+                signal,
               },
             )
             .then(unwrap),
         (page) => page.columns,
+        { signal },
       ),
   });
 }
@@ -72,7 +74,7 @@ export function useDatabaseIndexes(
 ) {
   return useQuery({
     queryKey: queryKeys.indexes(projectId, databaseId, tableId),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchAllCursorPages(
         (cursor) =>
           api
@@ -87,10 +89,12 @@ export function useDatabaseIndexes(
                   },
                   query: withCursorPage({ cursor }),
                 },
+                signal,
               },
             )
             .then(unwrap),
         (page) => page.indexes,
+        { signal },
       ),
   });
 }
@@ -104,22 +108,22 @@ export function useDatabaseRow(
   return useQuery({
     queryKey: queryKeys.row(projectId, databaseId, tableId, rowId),
     enabled: Boolean(rowId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows/{rowID}",
-          {
-            params: {
-              path: {
-                projectID: projectId,
-                databaseID: databaseId,
-                tableID: tableId,
-                rowID: rowId,
-              },
+    queryFn: cancellableQuery((signal) =>
+      api.GET(
+        "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows/{rowID}",
+        {
+          params: {
+            path: {
+              projectID: projectId,
+              databaseID: databaseId,
+              tableID: tableId,
+              rowID: rowId,
             },
           },
-        ),
+          signal,
+        },
       ),
+    ),
   });
 }
 
@@ -131,12 +135,12 @@ export function useDatabases(
   return useQuery({
     queryKey: [...queryKeys.databases(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/databases", {
-          params: { path: { projectID: projectId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/databases", {
+        params: { path: { projectID: projectId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -146,7 +150,7 @@ export function useCanvasDatabases(projectId: string | undefined) {
     queryKey: [...queryKeys.databases(projectId ?? ""), "canvas"],
     enabled: Boolean(projectId),
     staleTime: 30_000,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchAllCursorPages(
         (cursor) =>
           api
@@ -155,9 +159,11 @@ export function useCanvasDatabases(projectId: string | undefined) {
                 path: { projectID: projectId! },
                 query: withCursorPage(cursor ? { cursor } : undefined),
               },
+              signal,
             })
             .then(unwrap),
         (page) => page.databases,
+        { signal },
       ),
   });
 }
@@ -169,12 +175,12 @@ export function useDatabase(
   return useQuery({
     queryKey: queryKeys.database(projectId ?? "", databaseId ?? ""),
     enabled: Boolean(projectId && databaseId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/databases/{databaseID}", {
-          params: { path: { projectID: projectId!, databaseID: databaseId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/databases/{databaseID}", {
+        params: { path: { projectID: projectId!, databaseID: databaseId! } },
+        signal,
+      }),
+    ),
   });
 }
 
@@ -187,18 +193,15 @@ export function useDatabaseTables(
   return useQuery({
     queryKey: [...queryKeys.tables(projectId ?? "", databaseId ?? ""), params],
     enabled: Boolean(projectId && databaseId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/databases/{databaseID}/tables",
-          {
-            params: {
-              path: { projectID: projectId!, databaseID: databaseId! },
-              query: params,
-            },
-          },
-        ),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/databases/{databaseID}/tables", {
+        params: {
+          path: { projectID: projectId!, databaseID: databaseId! },
+          query: params,
+        },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -215,18 +218,15 @@ export function useDatabaseBackups(
       params,
     ],
     enabled: Boolean(projectId && databaseId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/databases/{databaseID}/backups",
-          {
-            params: {
-              path: { projectID: projectId!, databaseID: databaseId! },
-              query: params,
-            },
-          },
-        ),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/databases/{databaseID}/backups", {
+        params: {
+          path: { projectID: projectId!, databaseID: databaseId! },
+          query: params,
+        },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -244,22 +244,22 @@ export function useDatabaseRows(
       params,
     ],
     enabled: Boolean(projectId && databaseId && tableId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows",
-          {
-            params: {
-              path: {
-                projectID: projectId!,
-                databaseID: databaseId!,
-                tableID: tableId!,
-              },
-              query: params,
+    queryFn: cancellableQuery((signal) =>
+      api.GET(
+        "/v1/projects/{projectID}/databases/{databaseID}/tables/{tableID}/rows",
+        {
+          params: {
+            path: {
+              projectID: projectId!,
+              databaseID: databaseId!,
+              tableID: tableId!,
             },
+            query: params,
           },
-        ),
+          signal,
+        },
       ),
+    ),
     placeholderData: keepPreviousData,
   });
 }

@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/config"
-	"github.com/Stealth-deplover/stealth/internal/migrate"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/Stealth-deplover/stealth/internal/runtime"
 )
 
 func main() {
@@ -30,26 +29,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(signalContext, 10*time.Minute)
 	defer cancel()
 
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
-	if err != nil {
-		logger.Error("database configuration error", "error", err)
-		os.Exit(1)
-	}
-	poolConfig.MaxConns = cfg.DatabaseMaxConns
-	poolConfig.MinConns = cfg.DatabaseMinConns
-	poolConfig.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
-	poolConfig.MaxConnIdleTime = cfg.DatabaseMaxConnIdleTime
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		logger.Error("database connection error", "error", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-
 	logger.Info("applying database migrations")
-	if err := migrate.Apply(ctx, pool); err != nil {
-		logger.Error("migration error", "error", err)
+	resources, err := runtime.Open(ctx, cfg, runtime.OpenOptions{ApplyMigrations: true})
+	if err != nil {
+		logger.Error("runtime resource configuration error", "error", err)
 		os.Exit(1)
 	}
+	defer resources.Close()
 	logger.Info("database migrations complete")
 }

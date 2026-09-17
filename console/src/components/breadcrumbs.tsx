@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { usePathname } from "next/navigation";
 import { useOrganization, useProject } from "@/api/queries";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
+import { organizationProjectsPath, projectPath } from "@/lib/console-routes";
 import { cn } from "@/lib/utils";
 
 const resourceLabels: Record<string, string> = {
@@ -30,38 +31,37 @@ function fallbackName(value: string | undefined, prefix: string) {
   return `${prefix} ${value.slice(0, 8)}`;
 }
 
-export function Breadcrumbs({
-  organizationId,
-  projectId,
-}: {
-  organizationId?: string;
-  projectId?: string;
-}) {
-  const pathname = usePathname();
+export function Breadcrumbs() {
+  const { organizationId, projectId, organizationSegments, projectSegments } =
+    useConsoleRouteContext();
   const organization = useOrganization(organizationId);
   const project = useProject(projectId);
   if (!organizationId) return null;
 
-  const orgBase = `/organizations/${organizationId}`;
   const items: Array<{ label: string; href?: string }> = [
     {
       label:
         organization.data?.name ?? fallbackName(organizationId, "Organization"),
-      href: `${orgBase}/projects`,
+      href: organizationProjectsPath(organizationId),
     },
   ];
   if (!projectId) {
     items.push({
-      label: pathname.includes("/projects") ? "Projects" : "Workspace",
+      label: organizationSegments.includes("projects")
+        ? "Projects"
+        : "Workspace",
     });
   } else {
     const projectName =
       project.data?.project?.name ?? fallbackName(projectId, "Project");
-    const projectBase = `${orgBase}/projects/${projectId}`;
-    items.push({ label: projectName, href: projectBase });
-    const rest = pathname.slice(projectBase.length).split("/").filter(Boolean);
-    if (rest[0]) {
-      const resource = resourceLabels[rest[0]] ?? rest[0].replace(/-/g, " ");
+    items.push({
+      label: projectName,
+      href: projectPath(organizationId, projectId),
+    });
+    if (projectSegments[0]) {
+      const resource =
+        resourceLabels[projectSegments[0]] ??
+        projectSegments[0].replace(/-/g, " ");
       items.push({ label: resource });
     }
   }
@@ -69,7 +69,7 @@ export function Breadcrumbs({
   return (
     <nav
       aria-label="Breadcrumb"
-      className="hidden min-w-0 items-center gap-1 text-xs text-slate-500 xl:flex"
+      className="hidden min-w-0 items-center gap-1 text-xs text-fog xl:flex"
     >
       {items.map((item, index) => (
         <span
@@ -77,22 +77,23 @@ export function Breadcrumbs({
           className="inline-flex min-w-0 items-center gap-1"
         >
           {index > 0 ? (
-            <ChevronRight className="size-3 shrink-0 text-slate-700" />
+            <ChevronRight
+              className="size-3 shrink-0 text-ash"
+              aria-hidden="true"
+            />
           ) : null}
           {item.href && index < items.length - 1 ? (
             <Link
               href={item.href}
               className={cn(
-                "max-w-36 truncate transition hover:text-slate-200",
+                "max-w-36 truncate transition-colors duration-150 hover:text-mist",
                 index === 0 && "max-w-28",
               )}
             >
               {item.label}
             </Link>
           ) : (
-            <span className="max-w-40 truncate text-slate-300">
-              {item.label}
-            </span>
+            <span className="max-w-40 truncate text-mist">{item.label}</span>
           )}
         </span>
       ))}

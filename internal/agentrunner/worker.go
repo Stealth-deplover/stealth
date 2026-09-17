@@ -33,6 +33,19 @@ var (
 	ErrInvalidWorker  = errors.New("invalid Agent worker")
 )
 
+// Persistence is the queue capability required by the Agent worker. Keeping
+// the seam local prevents provider execution code from depending on the full
+// repository surface and makes lease/transition behavior testable without a
+// database.
+type Persistence interface {
+	RequeueStaleAgentRuns(context.Context, time.Duration) (int64, error)
+	ClaimNextAgentRunForProviders(context.Context, string, []string) (repository.AgentRunJob, error)
+	TransitionAgentRun(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, repository.AgentRunResult) (domain.AgentRun, error)
+	AppendAgentRunLog(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, uuid.UUID, int64, string, string) (domain.AgentRunLog, error)
+}
+
+var _ Persistence = (*repository.Repository)(nil)
+
 // PublicError is the only adapter error whose message is persisted into the
 // user-visible AgentRun. Provider adapters should use a deliberately bounded,
 // secret-free message here; arbitrary errors are replaced with a generic
@@ -123,7 +136,7 @@ func (r *Registry) Providers() []string {
 }
 
 type Worker struct {
-	Repository       *repository.Repository
+	Store            Persistence
 	WorkerID         string
 	Adapters         *Registry
 	PollInterval     time.Duration
@@ -133,8 +146,8 @@ type Worker struct {
 	Metrics          *observability.WorkerMetrics
 }
 
-func New(repo *repository.Repository, workerID string, adapters *Registry, logger *slog.Logger) (*Worker, error) {
-	if repo == nil || adapters == nil {
+func New(store Persistence, workerID string, adapters *Registry, logger *slog.Logger) (*Worker, error) {
+	if store == nil || adapters == nil {
 		return nil, ErrInvalidWorker
 	}
 	if !validWorkerID(workerID) {
@@ -144,7 +157,7 @@ func New(repo *repository.Repository, workerID string, adapters *Registry, logge
 		logger = slog.Default()
 	}
 	return &Worker{
-		Repository:       repo,
+		Store:            store,
 		WorkerID:         workerID,
 		Adapters:         adapters,
 		PollInterval:     defaultPollInterval,
@@ -159,7 +172,7 @@ func New(repo *repository.Repository, workerID string, adapters *Registry, logge
 // an empty registry it remains a harmless queue-only loop and never claims a
 // run, which is the safe default for installations without provider workers.
 func (w *Worker) Run(ctx context.Context) error {
-	if w == nil || w.Repository == nil || w.Adapters == nil {
+	if w == nil || w.Store == nil || w.Adapters == nil {
 		return ErrInvalidWorker
 	}
 	poll := w.PollInterval
@@ -176,7 +189,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if metrics := w.Metrics; metrics != nil {
 			metrics.AgentPolls.Inc()
 		}
-		if requeued, err := w.Repository.RequeueStaleAgentRuns(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
+		if requeued, err := w.Store.RequeueStaleAgentRuns(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			w.observeError("requeue")
 			w.Logger.Error("requeue stale Agent runs failed", "error", err)
 		} else if requeued > 0 {
@@ -206,14 +219,14 @@ func (w *Worker) Run(ctx context.Context) error {
 // RunOnce claims and processes one run for a registered provider. Unknown
 // providers remain queued because they are excluded from the atomic claim.
 func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
-	if w == nil || w.Repository == nil || w.Adapters == nil {
+	if w == nil || w.Store == nil || w.Adapters == nil {
 		return false, ErrInvalidWorker
 	}
 	providers := w.Adapters.Providers()
 	if len(providers) == 0 {
 		return false, nil
 	}
-	job, err := w.Repository.ClaimNextAgentRunForProviders(ctx, w.WorkerID, providers)
+	job, err := w.Store.ClaimNextAgentRunForProviders(ctx, w.WorkerID, providers)
 	if errors.Is(err, repository.ErrNoAgentRunJob) {
 		return false, nil
 	}
@@ -267,7 +280,7 @@ func (w *Worker) RunOnce(ctx context.Context) (processed bool, runErr error) {
 		}
 		return w.finishFailure(ctx, job, executeErr)
 	}
-	finished, err := w.Repository.TransitionAgentRun(ctx, projectID, agentID, runID, w.WorkerID, result)
+	finished, err := w.Store.TransitionAgentRun(ctx, projectID, agentID, runID, w.WorkerID, result)
 	if err != nil {
 		w.observeError("transition")
 		return true, err
@@ -295,7 +308,7 @@ func (w *Worker) finishFailure(ctx context.Context, job repository.AgentRunJob, 
 	if err := w.appendLog(ctx, job, "error", message); err != nil && !errors.Is(err, context.Canceled) {
 		w.observeError("log")
 	}
-	finished, err := w.Repository.TransitionAgentRun(ctx, projectID, agentID, runID, w.WorkerID, result)
+	finished, err := w.Store.TransitionAgentRun(ctx, projectID, agentID, runID, w.WorkerID, result)
 	if err != nil {
 		w.observeError("transition")
 		return true, err
@@ -315,7 +328,7 @@ func (w *Worker) appendLog(ctx context.Context, job repository.AgentRunJob, leve
 	if err != nil {
 		return err
 	}
-	_, err = w.Repository.AppendAgentRunLog(ctx, projectID, agentID, runID, w.WorkerID, id, 0, level, message)
+	_, err = w.Store.AppendAgentRunLog(ctx, projectID, agentID, runID, w.WorkerID, id, 0, level, message)
 	return err
 }
 

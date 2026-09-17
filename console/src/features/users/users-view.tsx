@@ -18,6 +18,11 @@ import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
+import {
+  type UserFormValues,
+  userFields,
+  userPayload,
+} from "@/features/users/user-form";
 
 export function UsersView({
   organizationId,
@@ -32,12 +37,8 @@ export function UsersView({
   const query = useProjectUsers(projectId, { cursor: navigation.cursor });
   const create = useCreateProjectUser(projectId);
   const users = query.data?.users ?? [];
-  const handleCreateUser = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      email: values.email,
-      password: values.password,
-      name: values.name || null,
-    });
+  const handleCreateUser = async (values: UserFormValues) => {
+    const result = await create.mutateAsync(userPayload(values));
     toast.success("User created");
     if (result?.user.id)
       router.push(
@@ -124,7 +125,7 @@ export function UsersView({
         description="Application users for this project. Console account sessions and project users are separate domains."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<UserFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create user"
@@ -132,16 +133,7 @@ export function UsersView({
               pendingLabel="Creating user…"
               title="Create an application user"
               description="The password is accepted by the API and is not stored in the console."
-              fields={[
-                { name: "email", label: "Email", type: "email" },
-                {
-                  name: "password",
-                  label: "Temporary password",
-                  type: "password",
-                  help: "Minimum 12 characters.",
-                },
-                { name: "name", label: "Name", required: false },
-              ]}
+              fields={userFields}
               pending={create.isPending}
               onSubmit={handleCreateUser}
             />

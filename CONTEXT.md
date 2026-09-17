@@ -1,0 +1,214 @@
+# Stealth Context
+
+## Console route context
+
+The Console route context is the client-side representation of the current
+Console pathname. It identifies the active organization and optional project,
+and exposes canonical paths for Console navigation. Route parsing and dynamic
+path construction belong to this context rather than to individual rendering
+modules.
+
+## Instance bootstrap capability
+
+The Instance bootstrap capability owns the first-run setup state, GitHub
+first-owner authorization, and legacy-installation Instance Owner adoption.
+The HTTP API depends on its narrow `BootstrapStore` interface rather than the
+full repository. The capability preserves the existing transaction and
+sealing invariants: only the verified first-owner flow can seal bootstrap, and
+an existing installation can be adopted only through the explicit legacy path.
+
+The setup-state credential seam owns the database URL, Redis URL, and S3 key
+pair needed by the setup flow. These values live only in encrypted
+`State.Secrets`; `Draft` and `PublicState` carry the non-secret choices and
+tested markers. Any state-format change must migrate older encrypted setup
+state before rewriting it.
+
+The setup configuration module is the deep seam between HTTP input and durable
+setup state. It owns normalization, validation, credential fallback, and the
+rules that invalidate a dependency's tested marker after a relevant change.
+The setup install input module translates that durable state into the shared
+`installengine.Plan` and private production environment, so the HTTP adapter
+does not assemble release inputs itself.
+
+The first-owner authorization module under `internal/bootstrap` owns provider
+identity normalization, session and setup-handoff creation, and the repository
+write. GitHub Web Application Flow and the retained legacy Device Flow are
+provider adapters that supply its small authorization proof; neither flow
+duplicates owner persistence rules in an HTTP handler.
+
+The Cloudflare provisioning module owns provider side effects and durable
+intent/resource-ID reconciliation for named tunnels and DNS. It validates the
+selected zone, refuses conflicting provider records, and makes retries safe
+after a state write fails. The HTTP adapter only decodes the request and maps
+the module's typed errors to transport responses.
+
+The host preflight module owns CPU, memory, free-disk, Docker, Compose, and
+Cloudflare outbound-connectivity checks. CLI and browser setup adapters supply
+the local-substitutable probes and retain their own presentation, so readiness
+definitions do not drift between installation surfaces.
+
+The browser setup flow module owns form state, provider callbacks, install
+progress effects, and handoff actions. Cloudflare setup is token-first: the
+server verifies the scoped token, discovers accounts and zones, provisions the
+named tunnel and DNS, and the shared installer starts and verifies the
+production cloudflared service before Quick Tunnel cleanup. The browser setup
+view owns stage rendering and delegates lifecycle transitions to that flow
+module. Cloudflare OAuth remains an explicit inactive experimental seam and is
+not a browser connection path.
+
+## Console log stream
+
+Console log viewers consume a typed `LogSource` identified by the resource
+being inspected. The source owns the endpoint path, bounded cursor query, API
+response mapping, and cancellable page loader. The stream hook owns polling,
+cursor progression, deduplication, and resetting retained lines when the
+resource identity changes; feature views provide only the resource context.
+
+## Backend composed configuration
+
+`Config` is the validated application snapshot used by API and worker
+composition roots. Domain-specific loaders own their environment parsing and
+constraints, then apply a complete validated slice to that snapshot. The
+execution loader owns function and agent runner settings; it must preserve the
+existing defaults and production credential gates.
+
+The storage loader owns local/S3 paths, quotas, credentials, and staging
+settings; it must preserve the existing defaults and storage validation
+contract.
+
+The site loader owns static publication limits and Git fetch concurrency. Its
+defaults intentionally inherit storage limits for struct-literal test or
+embedded configurations, while environment loading keeps the explicit site
+values and original bounds.
+
+The telemetry loader owns the optional OTLP endpoint, service name, and sample
+ratio. An empty endpoint is a supported no-op configuration; non-empty values
+must remain absolute HTTP(S) URLs without credentials, query, or fragment.
+
+The agent settings loader owns only the validated public provider/model catalog
+used by Console metadata and request validation. It clones catalog data when
+applying it and never treats catalog entries as provider credentials or worker
+capability.
+
+The secret settings loader owns decoding of the function-encryption key and
+dedicated bootstrap key, plus the GitHub App client ID. It keeps key material
+isolated and clones it into the application snapshot; `ValidateFunctions` and
+`ValidateBootstrap` remain the production fail-closed gates.
+
+The transport settings loader owns the HTTP listener, Redis endpoint, metrics
+token, and trusted proxy network list. It clones network values into the
+application snapshot so request-IP trust remains an explicit, immutable
+boundary for the API.
+
+The TLS settings loader owns optional ACME listener, directory, email, and
+certificate-cache configuration. It receives the resolved storage root and
+HTTP listener so certificate cache placement and listener collision checks are
+validated before the application snapshot is assembled.
+
+The database loader owns the required `DATABASE_URL`, pool bounds, and
+connection lifetime settings. Other configuration domains should follow the
+same loader-and-apply boundary instead of adding parsing branches to
+`config.Load`.
+
+## Backend runtime composition
+
+`internal/runtime` owns shared process resource composition. API, worker, and
+migration entry points use its database pool policy and optional Redis and
+migration lifecycle, while keeping process-specific registration and execution
+in their own composition roots. Resource failures close any already-created
+clients before returning, so a partially assembled process cannot leak a pool
+or Redis client.
+
+The auth loader owns session lifetimes, the canonical public app URL, Console
+CORS origins, auth/project rate limits, cookie security, and SMTP delivery
+settings. It must preserve the existing URL, origin, email, and numeric
+validation before applying values to `Config`.
+
+## Backend queue worker persistence
+
+Queue workers depend on local persistence capabilities instead of the concrete
+repository. Agent, messaging, webhook, realtime, and Site workers each expose
+their own narrow `Persistence` seam for leasing, terminal transitions, and
+worker-owned logs or retention. The repository remains the production
+implementation supplied by the worker composition root; tests can provide a
+small fake without constructing unrelated control-plane state.
+
+## Backend Site lifecycle
+
+Site persistence is organized into three modules. The control-plane module
+owns Site metadata and authorization, the deployment module owns source
+metadata, activation, build leases, quota transitions, and build logs, and the
+artifact module owns immutable path cleanup and public artifact resolution.
+All three remain methods on the repository so existing callers keep one
+transactional persistence boundary; the file/module split keeps each lifecycle
+invariant near the SQL that enforces it.
+
+## Backend authentication email delivery
+
+The mailer transport keeps a generic `Message`/`Sender` seam for explicit
+user-authored project messaging, while authentication flows use the private
+payload of `AuthMessage` through `AuthSender`. `NewAuthMessage` is the only
+constructor for security email content: it selects fixed Stealth-owned copy
+and accepts only a validated server-generated `AuthLink`. The HTTP API stores
+only the typed auth sender, so request handlers cannot pass an arbitrary body
+to authentication email delivery.
+
+## Console typed form adapters
+
+`CreateDialog` owns field rendering, transient string state, and interaction
+feedback. Feature modules own resource-specific form value types and adapters
+that validate those values and map them to generated API request payloads.
+Resource views should pass the typed adapter result to the mutation instead of
+parsing a generic `Record<string, string>` inline.
+
+## Console transport
+
+The Console API transport is the typed seam between TanStack Query and the
+generated OpenAPI client. Query modules pass the Query-owned AbortSignal into
+the request options and use the shared transport normalizer for API errors and
+response data. Cursor traversal accepts the same signal so cancellation stops
+both the active request and any subsequent page request.
+
+## Console cache coherence
+
+`src/api/cache-coherence.ts` owns the mapping from semantic project resource
+changes to query keys and deduplicates invalidation work. Mutation adapters and
+the project realtime adapter both feed this policy; they do not treat realtime
+payloads as authoritative state. Cache removal and restore predicates remain
+local where they express lifecycle-specific behavior rather than ordinary
+resource staleness.
+
+## Console function variables
+
+`FunctionVariablesPanel` owns the complete function-variable workflow: cursor
+pagination, metadata-only query state, typed form adaptation, mutation
+feedback, and table actions. `FunctionDetailView` composes that panel with
+function deployment and execution views instead of owning each variable
+concern inline.
+
+## CLI lifecycle workflows
+
+The setup and uninstall workflows keep operational decisions and effects in
+their workflow modules, while Bubble Tea models and rendering live in sibling
+`*_tui.go` modules. Both TTY and non-TTY paths share the same bootstrap,
+uninstall-plan, safety, and cleanup operations; presentation does not decide
+which resources are safe to change.
+
+## Console database table detail
+
+`DatabaseRowsView` composes the table metadata shell, `TableRowsPanel` owns
+server-filtered row browsing and row creation, `TableSchemaPanel` owns column
+and index rendering plus column creation, and `TableRowDetail` owns the
+selected-row query and row mutations. URL query state remains the navigation
+seam shared by the shell and row browser, so pagination, filtering, and row
+inspection retain the existing route behavior.
+
+## Console storage bucket detail
+
+`BucketDetailView` composes storage metadata and tab state. `BucketObjectBrowser`
+owns paginated object listing, deletion, upload completion, and file selection;
+`BucketUploadDialog` owns filename/quota validation and multipart upload;
+`BucketObjectDetail` owns metadata and rename actions; and
+`BucketSettingsPanel` owns bucket-limit updates. The shell keeps only the
+permission projection and route-level selection so object and settings
+changes remain local to their modules.

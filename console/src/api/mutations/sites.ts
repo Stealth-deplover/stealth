@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, uploadMultipart } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateSite(projectId: string) {
@@ -15,7 +15,7 @@ export function useCreateSite(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.sites(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "site", projectId }]),
   });
 }
 
@@ -32,22 +32,22 @@ export function useUploadSiteDeployment(projectId: string, siteId: string) {
       const form = new FormData();
       form.append("source", file);
       form.append("activate", activate ? "true" : "false");
-      return uploadMultipart<components["schemas"]["SiteDeploymentResponse"]>(
-        `/v1/projects/${projectId}/sites/${siteId}/deployments`,
+      return uploadMultipart(
+        (body, signal) =>
+          api.POST("/v1/projects/{projectID}/sites/{siteID}/deployments", {
+            params: { path: { projectID: projectId, siteID: siteId } },
+            // openapi-typescript represents binary parts as string; the
+            // browser transport receives the corresponding FormData.
+            body: body as unknown as components["schemas"]["SiteDeploymentUploadRequest"],
+            signal,
+          }),
         form,
       );
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.site(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeployments(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeploymentScope(projectId, siteId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "site-deployment", projectId, siteId, includeScope: true },
+      ]),
   });
 }
 
@@ -69,16 +69,9 @@ export function useActivateSiteDeployment(projectId: string, siteId: string) {
           },
         ),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.site(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeployments(projectId, siteId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.siteDeploymentScope(projectId, siteId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "site-deployment", projectId, siteId, includeScope: true },
+      ]),
   });
 }

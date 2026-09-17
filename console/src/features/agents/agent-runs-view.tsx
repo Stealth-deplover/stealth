@@ -8,9 +8,8 @@ import {
   Play,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { api, unwrap } from "@/api/client";
 import { nextCursor } from "@/api/pagination";
 import { useCancelAgentRun, useCreateAgentRun } from "@/api/mutations";
 import { useAgentRun, useAgentRuns } from "@/api/queries";
@@ -21,7 +20,7 @@ import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState, errorMessage } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
-import { LogViewer, type LogLine } from "@/components/log-viewer";
+import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
 import { Button } from "@/components/ui/button";
@@ -49,7 +48,7 @@ export function AgentRunsView({
   const router = useRouter();
   const runsNavigation = useCursorPagination("runs_cursor");
   const runs = useAgentRuns(agentId, { cursor: runsNavigation.cursor });
-  const create = useCreateAgentRun(agentId);
+  const create = useCreateAgentRun(projectId, agentId);
   const [prompt, setPrompt] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
@@ -228,24 +227,15 @@ export function AgentRunDetailView({
   runId: string;
 }) {
   const query = useAgentRun(agentId, runId);
-  const cancel = useCancelAgentRun(agentId, runId);
+  const cancel = useCancelAgentRun(projectId, agentId, runId);
   const run = query.data?.run;
-  const logFetcher = useCallback(
-    async (after?: number): Promise<LogLine[]> => {
-      const result = await api.GET("/v1/agents/{agentID}/runs/{runID}/logs", {
-        params: {
-          path: { agentID: agentId, runID: runId },
-          query: after === undefined ? { limit: 100 } : { limit: 100, after },
-        },
-      });
-      const data = await unwrap(result);
-      return (data?.logs ?? []).map((log) => ({
-        sequence: log.sequence,
-        level: log.level,
-        message: log.message,
-        created_at: log.created_at,
-      }));
-    },
+  const logSource = useMemo(
+    () =>
+      createLogSource({
+        kind: "agent-run",
+        agentId,
+        runId,
+      }),
     [agentId, runId],
   );
 
@@ -484,7 +474,7 @@ export function AgentRunDetailView({
         <LogViewer
           title="Run logs"
           description="Incremental worker log stream"
-          fetchPage={logFetcher}
+          source={logSource}
           enabled
           polling={active}
           emptyMessage="No run logs yet. Logs will appear after the agent starts working."

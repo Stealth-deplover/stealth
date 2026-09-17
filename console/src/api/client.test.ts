@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { ApiError, getApiError, unwrap } from "@/api/client";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ApiError,
+  cancellableQuery,
+  getApiError,
+  uploadMultipart,
+  unwrap,
+} from "@/api/client";
 
 describe("API error normalization", () => {
   it("preserves the backend error envelope", () => {
@@ -41,5 +47,40 @@ describe("API error normalization", () => {
       status: 500,
       code: "request_failed",
     });
+  });
+
+  it("forwards TanStack Query cancellation to the transport operation", async () => {
+    const controller = new AbortController();
+    const operation = vi.fn(async (signal: AbortSignal) => {
+      expect(signal).toBe(controller.signal);
+      return {
+        data: { account: "account-1" },
+        response: new Response(null, { status: 200 }),
+      };
+    });
+
+    await expect(
+      cancellableQuery(operation)({ signal: controller.signal, queryKey: [] }),
+    ).resolves.toEqual({ account: "account-1" });
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes typed multipart operations and forwards cancellation", async () => {
+    const controller = new AbortController();
+    const formData = new FormData();
+    formData.append("source", "archive");
+    const operation = vi.fn(async (body: FormData, signal?: AbortSignal) => {
+      expect(body.get("source")).toBe("archive");
+      expect(signal).toBe(controller.signal);
+      return {
+        data: { deployment: "deployment-1" },
+        response: new Response(null, { status: 201 }),
+      };
+    });
+
+    await expect(
+      uploadMultipart(operation, formData, controller.signal),
+    ).resolves.toEqual({ deployment: "deployment-1" });
+    expect(operation).toHaveBeenCalledOnce();
   });
 });

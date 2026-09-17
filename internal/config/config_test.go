@@ -37,6 +37,24 @@ func TestValidateFunctionsFailsClosedWithoutSecretKey(t *testing.T) {
 	}
 }
 
+func TestValidateBootstrapRequiresDedicatedKeyAndGitHubClientID(t *testing.T) {
+	cfg := Config{FunctionsSecretKey: []byte(strings.Repeat("f", 32))}
+	if err := cfg.ValidateBootstrap(); err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_CLI_KEY") {
+		t.Fatalf("missing dedicated bootstrap key returned %v", err)
+	}
+	cfg.BootstrapCLIKey = []byte(strings.Repeat("b", 32))
+	if err := cfg.ValidateBootstrap(); err == nil || !strings.Contains(err.Error(), "GITHUB_APP_CLIENT_ID") {
+		t.Fatalf("missing GitHub client ID returned %v", err)
+	}
+	cfg.GitHubAppClientID = "Iv1.test-client-id"
+	if err := cfg.ValidateBootstrap(); err != nil {
+		t.Fatalf("valid bootstrap configuration returned %v", err)
+	}
+	if cfg.WithDefaults().BootstrapCLIKey == nil {
+		t.Fatal("WithDefaults dropped dedicated bootstrap key")
+	}
+}
+
 func TestLoadAppSessionTTLIsSeparateAndBounded(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
 	t.Setenv("APP_SESSION_TTL", "30m")
@@ -130,6 +148,36 @@ func TestLoadDatabasePoolSettings(t *testing.T) {
 	t.Setenv("METRICS_TOKEN", "bad token")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "METRICS_TOKEN") {
 		t.Fatalf("invalid metrics token returned %v", err)
+	}
+}
+
+func TestBoundedInt32RejectsValuesOutsideConfiguredRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int32
+		wantErr bool
+	}{
+		{name: "minimum", value: "0", want: 0},
+		{name: "maximum", value: "256", want: 256},
+		{name: "below minimum", value: "-1", wantErr: true},
+		{name: "above maximum", value: "257", wantErr: true},
+		{name: "too large for int32", value: "999999999999999999999999", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TEST_BOUNDED_INT32", test.value)
+			got, err := boundedInt32("TEST_BOUNDED_INT32", "1", 0, 256)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("boundedInt32(%q) returned %d, want an error", test.value, got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("boundedInt32(%q) = %d, %v; want %d", test.value, got, err, test.want)
+			}
+		})
 	}
 }
 

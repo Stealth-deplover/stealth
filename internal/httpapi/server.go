@@ -1,20 +1,26 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/gitarchive"
+	"github.com/Stealth-deplover/stealth/internal/githubauth"
 	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/setuphandoff"
+	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
@@ -24,24 +30,37 @@ const maxBodyBytes = 1 << 20
 const maxMultipartOverhead = 2 << 20
 
 type Server struct {
-	config         config.Config
-	repo           *repository.Repository
-	logger         *slog.Logger
-	limiter        ratelimit.Limiter
-	storage        storage.BlobStore
-	storageReady   bool
-	functions      *functionstore.Store
-	functionCipher *functionsecret.Cipher
-	functionsReady bool
-	sites          *sitestore.Store
-	siteArchives   *functionstore.Store
-	siteGitFetcher gitarchive.SourceFetcher
-	siteGitSlots   chan struct{}
-	sitesReady     bool
-	metrics        *observability.APIMetrics
-	realtimeSlots  chan struct{}
-	realtimeBroker *realtime.Broker
-	emailSender    mailer.Sender
+	config            config.Config
+	repo              *repository.Repository
+	bootstrap         repository.BootstrapStore
+	logger            *slog.Logger
+	limiter           ratelimit.Limiter
+	storage           storage.BlobStore
+	storageReady      bool
+	functions         *functionstore.Store
+	functionCipher    *functionsecret.Cipher
+	functionsReady    bool
+	sites             *sitestore.Store
+	siteArchives      *functionstore.Store
+	siteGitFetcher    gitarchive.SourceFetcher
+	siteGitSlots      chan struct{}
+	sitesReady        bool
+	metrics           *observability.APIMetrics
+	realtimeSlots     chan struct{}
+	realtimeBroker    *realtime.Broker
+	authEmailSender   mailer.AuthSender
+	githubClient      githubauth.Client
+	githubOAuth       githubauth.OAuthClient
+	githubFlowMu      sync.Mutex
+	setupState        setupstate.Store
+	setupHandoff      setuphandoff.Store
+	githubManifest    githubauth.ManifestClient
+	cloudflareOAuth   CloudflareOAuthClient
+	cloudflareFactory CloudflareClientFactory
+	// setupMu serializes setup transitions that can have external provider side
+	// effects. The durable setup-state store remains the source of truth; the
+	// host CLI owns installation execution and is not represented here.
+	setupMu sync.Mutex
 }
 
 // Dependencies carries the collaborators the console API accepts from the
@@ -53,8 +72,18 @@ type Server struct {
 type Dependencies struct {
 	AuthLimiter    ratelimit.Limiter
 	SiteGitFetcher gitarchive.SourceFetcher
-	EmailSender    mailer.Sender
-	RealtimeBroker *realtime.Broker
+	// EmailSender is the low-level delivery transport. Authentication flows
+	// wrap it in mailer.AuthSender; project messaging uses it directly.
+	EmailSender       mailer.Sender
+	RealtimeBroker    *realtime.Broker
+	GitHubClient      githubauth.Client
+	GitHubOAuth       githubauth.OAuthClient
+	BootstrapStore    repository.BootstrapStore
+	SetupState        setupstate.Store
+	SetupHandoff      setuphandoff.Store
+	GitHubManifest    githubauth.ManifestClient
+	CloudflareOAuth   CloudflareOAuthClient
+	CloudflareFactory CloudflareClientFactory
 }
 
 // New builds the console API with production dependencies.
@@ -79,6 +108,20 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	cfg = cfg.WithDefaults()
 	if deps.EmailSender == nil {
 		deps.EmailSender = mailer.NewFromConfig(cfg, logger)
+	}
+	authEmailSender := mailer.NewAuthSender(deps.EmailSender)
+	if deps.GitHubClient == nil {
+		deps.GitHubClient = githubauth.NewClient(nil)
+	}
+	githubOAuth := deps.GitHubOAuth
+	if githubOAuth == nil {
+		if oauthClient, ok := deps.GitHubClient.(githubauth.OAuthClient); ok {
+			githubOAuth = oauthClient
+		}
+	}
+	bootstrapStore := deps.BootstrapStore
+	if bootstrapStore == nil && repo != nil {
+		bootstrapStore = repo.BootstrapStore()
 	}
 	var storageStore storage.BlobStore
 	var storageErr error
@@ -121,9 +164,55 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
-	s := &Server{config: cfg, repo: repo, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageErr == nil, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, emailSender: deps.EmailSender}
+	setupStateStore := deps.SetupState
+	if setupStateStore == nil && cfg.SetupMode && functionCipher != nil && cfg.SetupStateFile != "" {
+		var setupErr error
+		setupStateStore, setupErr = setupstate.NewFileStore(cfg.SetupStateFile, functionCipher)
+		if setupErr != nil {
+			logger.Error("setup state configuration error", "error", setupErr)
+		}
+	}
+	setupHandoffStore := deps.SetupHandoff
+	if setupHandoffStore == nil && functionCipher != nil && cfg.SetupHandoffFile != "" {
+		var handoffErr error
+		setupHandoffStore, handoffErr = setuphandoff.NewFileStore(cfg.SetupHandoffFile, functionCipher)
+		if handoffErr != nil {
+			logger.Error("setup handoff configuration error", "error", handoffErr)
+		}
+	}
+	storageReady := storageErr == nil
+	githubManifest := deps.GitHubManifest
+	if githubManifest == nil {
+		var manifestErr error
+		githubManifest, manifestErr = githubauth.NewManifestClient("", http.DefaultClient)
+		if manifestErr != nil {
+			logger.Error("GitHub manifest client configuration error", "error", manifestErr)
+		}
+	}
+	cloudflareOAuth := deps.CloudflareOAuth
+	if cloudflareOAuth == nil && cfg.CloudflareOAuthClientID != "" && cfg.CloudflareOAuthClientSecret != "" {
+		var oauthErr error
+		cloudflareOAuth, oauthErr = cloudflare.NewOAuthClient(cfg.CloudflareOAuthClientID, cfg.CloudflareOAuthClientSecret, http.DefaultClient)
+		if oauthErr != nil {
+			logger.Error("Cloudflare OAuth configuration error", "error", oauthErr)
+		}
+	}
+	cloudflareFactory := deps.CloudflareFactory
+	if cloudflareFactory == nil {
+		cloudflareFactory = func(token string) (cloudflare.Client, error) {
+			return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
+		}
+	}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory}
 	return s.routes()
 }
+
+type CloudflareOAuthClient interface {
+	AuthorizationURL(string, string, []string) (string, error)
+	Exchange(context.Context, string, string) (cloudflare.OAuthToken, error)
+}
+
+type CloudflareClientFactory func(string) (cloudflare.Client, error)
 
 type contextKey string
 
@@ -133,6 +222,7 @@ const requestIDContextKey contextKey = "request-id"
 const projectUserContextKey contextKey = "project-user"
 const projectUserSessionContextKey contextKey = "project-user-session"
 const projectActorContextKey contextKey = "project-actor"
+const setupSessionContextKey contextKey = "setup-session"
 
 type projectActorKind string
 

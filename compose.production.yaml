@@ -6,16 +6,18 @@ name: ${COMPOSE_PROJECT_NAME:-stealth}
 # using S3-compatible storage should set STORAGE_DRIVER=s3 and the STORAGE_S3_*
 # values without adding another bundled service.
 x-backend-environment: &backend-environment
-  DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable"
+  DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable}"
   DATABASE_MAX_CONNS: "${DATABASE_MAX_CONNS:-16}"
   DATABASE_MIN_CONNS: "${DATABASE_MIN_CONNS:-2}"
   DATABASE_MAX_CONN_LIFETIME: "${DATABASE_MAX_CONN_LIFETIME:-1h}"
   DATABASE_MAX_CONN_IDLE_TIME: "${DATABASE_MAX_CONN_IDLE_TIME:-30m}"
-  REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0"
+  REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0}"
   FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
   PUBLIC_APP_URL: "${PUBLIC_APP_URL:?set PUBLIC_APP_URL}"
   CONSOLE_CORS_ORIGINS: "${CONSOLE_CORS_ORIGINS:-}"
   COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+  SETUP_MODE: "${SETUP_MODE:-false}"
+  STEALTH_SETUP_HANDOFF_FILE: "${STEALTH_SETUP_HANDOFF_FILE:-/var/lib/stealth/storage/.setup-handoff.enc}"
   TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-}"
   METRICS_TOKEN: "${METRICS_TOKEN:-}"
   PROJECT_OPERATION_RATE_LIMIT: "${PROJECT_OPERATION_RATE_LIMIT:-120}"
@@ -90,7 +92,7 @@ services:
     image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
     restart: "no"
     environment:
-      DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable"
+      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable}"
       DATABASE_MAX_CONNS: "${DATABASE_MAX_CONNS:-16}"
       DATABASE_MIN_CONNS: "${DATABASE_MIN_CONNS:-2}"
       DATABASE_MAX_CONN_LIFETIME: "${DATABASE_MAX_CONN_LIFETIME:-1h}"
@@ -103,7 +105,10 @@ services:
   api:
     image: "${STEALTH_API_IMAGE:?set STEALTH_API_IMAGE to a versioned image}"
     restart: unless-stopped
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      BOOTSTRAP_CLI_KEY: "${BOOTSTRAP_CLI_KEY:?set BOOTSTRAP_CLI_KEY}"
+      GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:-}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
     ports:
@@ -183,6 +188,18 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    networks: [stealth]
+
+  cloudflared:
+    image: "${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.9.0}"
+    profiles: [cloudflare]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secrets/cloudflare-tunnel-token"]
+    volumes:
+      - "${CLOUDFLARE_TUNNEL_TOKEN_FILE:-./state/cloudflare-tunnel-token}:/run/secrets/cloudflare-tunnel-token:ro"
+    depends_on:
+      proxy:
+        condition: service_healthy
     networks: [stealth]
 
 volumes:

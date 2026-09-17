@@ -12,10 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/sitestore"
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -85,7 +89,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	})
 
 	// Seed each local artifact namespace. The API must remove only this UUID
-	// namespace after the database transaction commits.
+	// namespace through durable cleanup after the metadata transaction commits.
 	for _, namespace := range []string{"", "functions", "sites", "site-archives"} {
 		path := filepath.Join(storageRoot, namespace, project.Project.ID, "sentinel")
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -101,6 +105,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	requestJSON(t, client, http.MethodGet, projectURL, nil, http.StatusOK, &struct{}{})
 	requestJSON(t, client, http.MethodDelete, projectURL, map[string]string{"confirm_name": projectName}, http.StatusNoContent, nil)
 	requestJSON(t, client, http.MethodGet, projectURL, nil, http.StatusNotFound, nil)
+	requestJSON(t, client, http.MethodDelete, projectURL, map[string]string{"confirm_name": projectName}, http.StatusNotFound, nil)
 
 	var projectRows, auditRows int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM projects WHERE id=$1`, project.Project.ID).Scan(&projectRows); err != nil {
@@ -114,6 +119,47 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	}
 	if auditRows != 1 {
 		t.Fatalf("project delete audit rows = %d, want 1", auditRows)
+	}
+	var cleanupJobs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, project.Project.ID).Scan(&cleanupJobs); err != nil {
+		t.Fatal(err)
+	}
+	if cleanupJobs != 4 {
+		t.Fatalf("project cleanup jobs = %d, want one job per artifact namespace", cleanupJobs)
+	}
+	userStorage, err := storage.New(storageRoot, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	functionStorage, err := functionstore.New(filepath.Join(storageRoot, "functions"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteArchiveStorage, err := functionstore.New(filepath.Join(storageRoot, "site-archives"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteStorage, err := sitestore.New(filepath.Join(storageRoot, "sites"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupWorker, err := artifactcleanup.New(repository.New(pool), artifactcleanup.Stores{
+		Storage:      userStorage,
+		Functions:    functionStorage,
+		SiteArchives: siteArchiveStorage,
+		Sites:        siteStorage,
+	}, "project-integration-cleanup", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempts := 0; attempts < cleanupJobs+4; attempts++ {
+		processed, runErr := cleanupWorker.RunOnce(ctx)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		if !processed {
+			break
+		}
 	}
 	for _, namespace := range []string{"", "functions", "sites", "site-archives"} {
 		path := filepath.Join(storageRoot, namespace, project.Project.ID)

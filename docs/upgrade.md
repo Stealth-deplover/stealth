@@ -2,6 +2,8 @@
 
 Stealth releases are coordinated application releases. Use the same version
 for `stealth-api`, `stealth-worker`, `stealth-migrate`, and `stealth-console`.
+The `stealth-setup` image is only needed for a fresh browser installation or
+setup repair.
 The current deployment does not promise rolling upgrades between incompatible
 API/worker/schema versions.
 
@@ -15,12 +17,23 @@ forwarding packages are provided.
 
 ## Upgrade procedure
 
+For a CLI-only update, use the installed self-update command:
+
+```bash
+stealth update
+```
+
+This changes only the CLI binary and does not pull images, run migrations, or
+restart the server stack. Use the coordinated procedure below for API,
+worker, migration, Console, PostgreSQL, Redis, or proxy changes.
+
 1. Read the GitHub Release notes for the target version, especially migration
    and configuration changes.
 2. Verify PostgreSQL and object-storage backups and record where the restore
    artifacts are stored. See [`backup-restore.md`](backup-restore.md).
-3. Update all four image variables in `.env.production` to the same immutable
-   release tag or digest.
+3. Update all production image variables in `.env.production` to the same
+   immutable release tag or digest. Keep the setup image on the same release
+   when fresh browser setup or repair may be used.
 4. Pull the images and validate the rendered Compose file.
 5. Stop or coordinate workers if the release notes require a quiet queue.
 6. Start PostgreSQL/Redis if needed, then run the one-shot migration command.
@@ -39,6 +52,23 @@ docker compose --env-file .env.production -f compose.production.yaml up -d --for
 The migration runner is deterministic and protected by a PostgreSQL advisory
 lock. It fails loudly; it does not perform destructive automatic rollback.
 
+When upgrading an installation that already has accounts, migration seals
+public first-owner bootstrap as `legacy_installation` without assigning an
+arbitrary account the privileged `instance_owner` role. This prevents an
+existing deployment from unexpectedly exposing `/setup`. After the API is
+healthy, a local operator may review and explicitly adopt an account:
+
+```bash
+stealth setup --adopt-owner
+```
+
+The command requires the dedicated `BOOTSTRAP_CLI_KEY`, lists existing account
+identities locally, and requires the exact `ADOPT <account-id>` confirmation.
+The assignment is audited and does not grant organization membership. Add the
+dedicated `BOOTSTRAP_CLI_KEY` and `GITHUB_APP_CLIENT_ID` to `config.env` before
+starting an upgraded API; neither falls back to `FUNCTIONS_SECRET_KEY`.
+Stop or coordinate the old application processes before applying migrations.
+
 ## Rollback boundary
 
 Changing an image back is safe only when the database schema remains backward
@@ -48,5 +78,5 @@ and object storage from verified backups before starting the older release.
 Do not claim a database rollback merely because an older image is available.
 
 If the migration has not changed schema compatibility and the issue is limited
-to application code, pin all four images back to the previous release, run the
-smoke checks, and inspect worker leases before resuming traffic.
+to application code, pin the production images back to the previous release,
+run the smoke checks, and inspect worker leases before resuming traffic.

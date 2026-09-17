@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateAPIKey(projectId: string) {
@@ -17,7 +17,7 @@ export function useCreateAPIKey(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.apiKeys(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "api-key", projectId }]),
   });
 }
 
@@ -30,13 +30,7 @@ export function useRevokeAPIKey(projectId: string, keyId: string) {
           params: { path: { projectID: projectId, keyID: keyId } },
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.apiKeys(projectId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.apiKey(projectId, keyId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "api-key", projectId, keyId }]),
   });
 }

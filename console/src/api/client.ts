@@ -1,4 +1,5 @@
 import createClient from "openapi-fetch";
+import type { QueryFunctionContext } from "@tanstack/react-query";
 import type { paths } from "@/api/generated/schema";
 import { isRecord } from "@/lib/utils";
 
@@ -50,28 +51,56 @@ export async function unwrap<T>(result: {
   return result.data as T | undefined;
 }
 
-export async function uploadMultipart<T>(
-  path: string,
+export type ApiResult<T = unknown> = {
+  data?: T;
+  error?: unknown;
+  response: Response;
+};
+
+type QueryData<TResult extends ApiResult> = TResult extends { data?: infer T }
+  ? T
+  : never;
+
+/**
+ * Adapts an OpenAPI operation to TanStack Query while preserving cancellation
+ * and the shared API error envelope.
+ */
+export function cancellableQuery<TResult extends ApiResult>(
+  operation: (signal: AbortSignal) => Promise<TResult>,
+): (
+  context: Pick<QueryFunctionContext, "signal"> &
+    Partial<Omit<QueryFunctionContext, "signal">>,
+) => Promise<QueryData<TResult> | undefined> {
+  return async ({ signal }) =>
+    unwrap<QueryData<TResult>>(
+      (await operation(signal)) as {
+        data?: QueryData<TResult>;
+        error?: unknown;
+        response: Response;
+      },
+    );
+}
+
+export async function execute<T>(operation: Promise<ApiResult<T>>) {
+  return unwrap(await operation);
+}
+
+type MultipartOperation<T> = (
   formData: FormData,
-  method = "POST",
+  signal?: AbortSignal,
+) => Promise<ApiResult<T>>;
+
+/**
+ * Adapts a typed OpenAPI multipart operation to the shared response/error
+ * normalizer. The operation owns the generated path and request schema; this
+ * helper deliberately does not accept arbitrary URLs or HTTP methods.
+ */
+export async function uploadMultipart<T>(
+  operation: MultipartOperation<T>,
+  formData: FormData,
+  signal?: AbortSignal,
 ) {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method,
-    body: formData,
-    credentials: "include",
-  });
-  const contentType = response.headers.get("content-type") ?? "";
-  const raw = await response.text();
-  let body: unknown;
-  if (raw && contentType.includes("json")) {
-    try {
-      body = JSON.parse(raw) as unknown;
-    } catch {
-      body = undefined;
-    }
-  }
-  if (!response.ok) throw getApiError(body, response.status);
-  return body as T | undefined;
+  return unwrap(await operation(formData, signal));
 }
 
 export function apiUrl(path: string) {

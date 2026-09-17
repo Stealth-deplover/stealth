@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
-import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useUpdateAuthSettings(projectId: string) {
@@ -17,9 +17,7 @@ export function useUpdateAuthSettings(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.authSettings(projectId),
-      }),
+      applyCacheChanges(queryClient, [{ kind: "auth-settings", projectId }]),
   });
 }
 
@@ -36,8 +34,6 @@ export function useReplaceServiceLayout(projectId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.serviceLayout(projectId),
-      }),
+      applyCacheChanges(queryClient, [{ kind: "service-layout", projectId }]),
   });
 }

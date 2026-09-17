@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery, execute, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
@@ -11,12 +11,12 @@ export function useSites(projectId: string | undefined, query?: CursorQuery) {
   return useQuery({
     queryKey: [...queryKeys.sites(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/sites", {
-          params: { path: { projectID: projectId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/sites", {
+        params: { path: { projectID: projectId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -26,7 +26,7 @@ export function useCanvasSites(projectId: string | undefined) {
     queryKey: [...queryKeys.sites(projectId ?? ""), "canvas"],
     enabled: Boolean(projectId),
     staleTime: 30_000,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchAllCursorPages(
         (cursor) =>
           api
@@ -35,9 +35,11 @@ export function useCanvasSites(projectId: string | undefined) {
                 path: { projectID: projectId! },
                 query: withCursorPage(cursor ? { cursor } : undefined),
               },
+              signal,
             })
             .then(unwrap),
         (page) => page.sites,
+        { signal },
       ),
   });
 }
@@ -49,12 +51,12 @@ export function useSite(
   return useQuery({
     queryKey: queryKeys.site(projectId ?? "", siteId ?? ""),
     enabled: Boolean(projectId && siteId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/sites/{siteID}", {
-          params: { path: { projectID: projectId!, siteID: siteId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/sites/{siteID}", {
+        params: { path: { projectID: projectId!, siteID: siteId! } },
+        signal,
+      }),
+    ),
   });
 }
 
@@ -70,13 +72,14 @@ export function useSiteDeployments(
       params,
     ],
     enabled: Boolean(projectId && siteId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/sites/{siteID}/deployments", {
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/projects/{projectID}/sites/{siteID}/deployments", {
           params: {
             path: { projectID: projectId!, siteID: siteId! },
             query: params,
           },
+          signal,
         }),
       ),
     placeholderData: keepPreviousData,
@@ -99,9 +102,9 @@ export function useSiteDeployment(
       deploymentId ?? "",
     ),
     enabled: Boolean(projectId && siteId && deploymentId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET(
           "/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}",
           {
             params: {
@@ -111,6 +114,7 @@ export function useSiteDeployment(
                 deploymentID: deploymentId!,
               },
             },
+            signal,
           },
         ),
       ),

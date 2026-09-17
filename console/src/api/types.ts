@@ -26,6 +26,7 @@ export type SiteBuildLog = components["schemas"]["SiteBuildLog"];
 export type Database = components["schemas"]["ProjectDatabase"];
 export type DatabaseTable = components["schemas"]["DatabaseTable"];
 export type DatabaseColumn = components["schemas"]["DatabaseColumn"];
+export type DatabaseIndex = components["schemas"]["DatabaseIndex"];
 export type DatabaseBackup = components["schemas"]["DatabaseBackup"];
 export type DatabaseRow = components["schemas"]["DatabaseRow"];
 export type StorageBucket = components["schemas"]["StorageBucket"];

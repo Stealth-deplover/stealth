@@ -26,9 +26,10 @@ The CLI installer is the supported release path. The bootstrap script is
 read through GitHub Raw's `HEAD` reference, so it follows the repository's
 current default branch when that branch is renamed to `main`.
 
-The latest stable release is `v0.1.0`. Read the [release notes](https://github.com/Stealth-deplover/stealth/releases/tag/v0.1.0)
-before installing, and use [Upgrade and rollback](docs/upgrade.md) for
-operational changes and recovery boundaries.
+The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
+is the supported install target. Read its release notes before installing, and
+use [Upgrade and rollback](docs/upgrade.md) for operational changes and recovery
+boundaries.
 
 Supported host: Linux amd64 or arm64 with Docker Engine, Docker Compose v2,
 access to `/var/run/docker.sock`, and a writable installation directory.
@@ -40,15 +41,21 @@ curl -fsSL https://raw.githubusercontent.com/Stealth-deplover/stealth/HEAD/scrip
 ```
 
 The bootstrap verifies the downloaded archive and SHA-256 checksum, then
-starts the interactive `stealth install` flow. To invoke the installed CLI
-directly, run `stealth install`. It generates private configuration and
-secrets, pulls matching API/worker/migration/Console images, applies
-migrations, starts the stack, and checks health and readiness. Open the public
-instance URL entered in the installer afterward. The default local proxy,
+starts `stealth install`. To invoke the installed CLI directly, run
+`stealth install`. On a fresh host it performs local Docker checks, starts the
+temporary setup Compose project, and prints a 15-minute HTTPS setup URL and
+one-time code. The browser wizard then configures GitHub, networking,
+database, Redis, storage, and the production Cloudflare Tunnel before handing
+off to the dashboard. The temporary setup services and Quick Tunnel are
+removed after successful production verification. The default local proxy,
 Console, and API ports are `8080`, `13000`, and `18080` respectively.
 
 See [Production deployment](docs/production-deployment.md) and the
 [CLI guide](docs/cli.md) for the supported self-hosting path.
+
+After installation, `stealth update` securely updates only the installed CLI
+from the latest stable release. It does not upgrade or restart the running
+Stealth server stack; use [Upgrade and rollback](docs/upgrade.md) for that.
 
 ## Development
 
@@ -131,19 +138,24 @@ managed-service availability.
 | Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |
 | Webhooks                         | Beta         | Signed delivery, transactional outbox, retries, SSRF protections                                               |
 | Observability                    | Beta         | Health/readiness, metrics, traces, realtime events, audit records                                              |
-| Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade/uninstall commands are not shipped |
+| Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade remains a documented operator runbook |
 | Agents                           | Experimental | Configuration, catalog, durable runs, logs, and cancellation; provider execution remains queue-only by default |
 | Production hardening             | Beta         | Leases, bounded retries, rate limits, proxy trust, smoke checks; HA and exactly-once execution are not claimed |
 
 ## Releases
 
-Tags must currently match `vMAJOR.MINOR.PATCH`. The release workflow publishes
-coordinated GHCR images for API, worker, migration, and Console plus Linux
-amd64/arm64 CLI archives and `checksums.txt` after production smoke checks.
-The latest stable release is `v0.1.0`; see the [release notes](https://github.com/Stealth-deplover/stealth/releases/latest),
-[Release engineering](docs/release.md), the [release checklist](docs/RELEASING.md),
-and [Upgrade and rollback](docs/upgrade.md). The installer still requires a
-clean-host validation pass, and upgrade/uninstall commands are not shipped.
+Tags use `vMAJOR.MINOR.PATCH` for stable releases or
+`vMAJOR.MINOR.PATCH-rc.N` for explicitly numbered release candidates. The
+release workflow publishes coordinated GHCR images for API, setup, worker,
+migration, and Console plus Linux amd64/arm64 CLI archives and `checksums.txt`
+after production smoke checks. Release candidates are pre-releases; the
+unpinned installer and `stealth update` remain stable-only.
+The [latest stable release](https://github.com/Stealth-deplover/stealth/releases/latest)
+is documented with [Release engineering](docs/release.md), the [release
+checklist](docs/RELEASING.md), and [Upgrade and rollback](docs/upgrade.md). The
+installer still requires a clean-host validation pass; `stealth update` is for
+the CLI only, while coordinated server-stack upgrades remain an operator-runbook
+workflow.
 
 ## Screenshots
 

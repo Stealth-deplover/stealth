@@ -4,21 +4,24 @@ This index links the repository’s existing guides. The root [README](../README
 
 ## Getting Started
 
-- [CLI and installer](cli.md) — installation flow, operator commands, and release artifacts.
-- [Production deployment](production-deployment.md) — the supported Docker Compose baseline.
+- [CLI and installer](cli.md): installation flow, operator commands, and release artifacts.
+- [Browser setup](web-setup.md): the temporary setup Compose flow, wizard stages, provider connections, and recovery behavior.
+- [Host-side setup architecture](host-side-setup-architecture.md): state ownership, host execution, preflight projection, handoff, and security boundaries.
+- [Production deployment](production-deployment.md): the supported Docker Compose baseline.
 
 ## Architecture and API
 
-- [Architecture overview](../README.md#architecture) — Console, API, storage, queues, and workers.
-- [OpenAPI contract](../openapi/openapi.yaml) — source of truth for Console requests.
-- [Backend production-readiness contract](backend-production-readiness.md) — durable work, operational controls, and known guarantees.
-- [Realtime event infrastructure](realtime.md) — outbox, SSE, Redis, and delivery behavior.
+- [Architecture overview](../README.md#architecture): Console, API, storage, queues, and workers.
+- [OpenAPI contract](../openapi/openapi.yaml): source of truth for Console requests.
+- [Backend production-readiness contract](backend-production-readiness.md): durable work, operational controls, and known guarantees.
+- [Realtime event infrastructure](realtime.md): outbox, SSE, Redis, and delivery behavior.
 
 ## Configuration and Self Hosting
 
 - [Production configuration and proxy](production-deployment.md#configuration)
 - [Proxy and cookies](production-deployment.md#proxy-and-cookies)
 - [CLI installer flow](cli.md#installer-flow)
+- [Browser setup wizard](web-setup.md)
 - [Console development](../console/README.md#development)
 
 ## Product Areas
@@ -45,6 +48,10 @@ The API contract is the detailed reference for each product surface. Operational
 - [Upgrade and rollback](upgrade.md)
 - [Backup and restore](backup-restore.md)
 - [Production smoke checks](production-deployment.md#smoke-and-troubleshooting)
+
+## Investigations
+
+- [Setup authorization 403](investigations/2026-09-15-setup-authorization-403.md): first-run browser setup fails after code entry because setup-mode CORS rejects the temporary origin.
 
 ## Project Direction
 

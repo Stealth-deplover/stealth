@@ -892,20 +892,63 @@ func canonicalCursorValue(column repository.DatabaseColumnSchema, value any) (an
 			return nil, fmt.Errorf("%w: cursor value is invalid", repository.ErrInvalidQuery)
 		}
 		return decoded, nil
-	case dbcore.TypeBoolean:
-		text = string(raw)
-	case dbcore.TypeInteger, dbcore.TypeDouble:
-		text = string(raw)
-	default:
-		if err := json.Unmarshal(raw, &text); err != nil {
+	case dbcore.TypeBoolean, dbcore.TypeInteger, dbcore.TypeDouble:
+		var ok bool
+		text, ok = cursorScalarText(value)
+		if !ok {
 			return nil, fmt.Errorf("%w: cursor value is invalid", repository.ErrInvalidQuery)
 		}
+	case dbcore.TypeVarchar, dbcore.TypeText, dbcore.TypeDatetime:
+		var ok bool
+		text, ok = value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%w: cursor value is invalid", repository.ErrInvalidQuery)
+		}
+	default:
+		return nil, fmt.Errorf("%w: cursor value is invalid", repository.ErrInvalidQuery)
 	}
-	value, err = dbcore.ParseQueryValue(dbcore.ColumnDefinition{Key: column.Key, Type: column.Type, VarcharSize: column.VarcharSize}, strings.Trim(text, `"`))
+	value, err = dbcore.ParseQueryValue(dbcore.ColumnDefinition{Key: column.Key, Type: column.Type, VarcharSize: column.VarcharSize}, text)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cursor value is invalid", repository.ErrInvalidQuery)
 	}
 	return value, nil
+}
+
+func cursorScalarText(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case json.Number:
+		return string(typed), true
+	case bool:
+		return strconv.FormatBool(typed), true
+	case int:
+		return strconv.Itoa(typed), true
+	case int8:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int16:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int32:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int64:
+		return strconv.FormatInt(typed, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint64:
+		return strconv.FormatUint(typed, 10), true
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'g', -1, 32), true
+	case float64:
+		return strconv.FormatFloat(typed, 'g', -1, 64), true
+	default:
+		return "", false
+	}
 }
 
 func filterColumnKey(value string) (string, bool) {

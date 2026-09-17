@@ -5,6 +5,8 @@ export type CursorPage = { pagination: { next_cursor: string | null } };
 export type CursorTraversalOptions = {
   /** A last-resort guard for a broken API that never reaches the end cursor. */
   maxPages?: number;
+  /** Cancels a multi-page traversal when its owning query is cancelled. */
+  signal?: AbortSignal;
 };
 
 const DEFAULT_MAX_PAGES = 1_000;
@@ -27,6 +29,7 @@ async function* walkCursorPages<TPage extends CursorPage>(
   let pageCount = 0;
 
   while (true) {
+    options?.signal?.throwIfAborted();
     if (pageCount >= maxPages) {
       throw new Error(
         `Cursor pagination exceeded the maximum of ${maxPages} pages.`,

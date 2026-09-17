@@ -5,8 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/google/uuid"
 )
 
 func TestRegistryNormalizesFixedProviderIdentity(t *testing.T) {
@@ -73,5 +76,57 @@ func TestWorkerConstructionAndPublicFailureBounds(t *testing.T) {
 	}
 	if got := publicFailure(errors.New("provider secret should not be persisted")); got != "agent provider execution failed" {
 		t.Fatalf("arbitrary provider error = %q", got)
+	}
+}
+
+type fakeAgentPersistence struct {
+	job          repository.AgentRunJob
+	transitioned int
+	logs         int
+}
+
+func (f *fakeAgentPersistence) RequeueStaleAgentRuns(context.Context, time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeAgentPersistence) ClaimNextAgentRunForProviders(context.Context, string, []string) (repository.AgentRunJob, error) {
+	return f.job, nil
+}
+
+func (f *fakeAgentPersistence) TransitionAgentRun(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ uuid.UUID, _ string, result repository.AgentRunResult) (domain.AgentRun, error) {
+	f.transitioned++
+	return domain.AgentRun{Status: result.Status}, nil
+}
+
+func (f *fakeAgentPersistence) AppendAgentRunLog(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, uuid.UUID, int64, string, string) (domain.AgentRunLog, error) {
+	f.logs++
+	return domain.AgentRunLog{}, nil
+}
+
+func TestWorkerUsesPersistenceSeamToPersistProviderResult(t *testing.T) {
+	runID := uuid.New()
+	agentID := uuid.New()
+	projectID := uuid.New()
+	store := &fakeAgentPersistence{job: repository.AgentRunJob{
+		Run:   domain.AgentRun{ID: runID.String(), AgentID: agentID.String(), ProjectID: projectID.String()},
+		Agent: domain.Agent{Provider: "openai"},
+	}}
+	registry := NewRegistry()
+	if err := registry.Register("openai", AdapterFunc(func(context.Context, Job) (repository.AgentRunResult, error) {
+		return repository.AgentRunResult{Status: "completed"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	worker, err := New(store, "agent-worker-1", registry, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil || !processed {
+		t.Fatalf("RunOnce() = processed=%v err=%v, want true/nil", processed, err)
+	}
+	if store.transitioned != 1 || store.logs != 2 {
+		t.Fatalf("persistence calls = transitioned=%d logs=%d, want 1/2", store.transitioned, store.logs)
 	}
 }

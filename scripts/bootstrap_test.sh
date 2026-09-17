@@ -31,12 +31,6 @@ if PATH="${architecture_bin}:${PATH}" "$script" --version v1.2.3 >"${temporary_d
 fi
 grep -q 'unsupported architecture' "${temporary_dir}/architecture.out"
 
-if PATH="${mock_bin}:${PATH}" "$script" --version v1.2.3-rc.1 >"${temporary_dir}/version.out" 2>&1; then
-	printf '%s\n' 'pre-release version was accepted' >&2
-	exit 1
-fi
-grep -q 'release version must match' "${temporary_dir}/version.out"
-
 printf '%s\n' '#!/bin/sh' \
 	'output=""' \
 	'while [ "$#" -gt 0 ]; do' \
@@ -47,6 +41,16 @@ printf '%s\n' '#!/bin/sh' \
 	'  *) printf "%s" invalid-archive > "$output" ;;' \
 	'esac' > "${mock_bin}/curl"
 chmod 0755 "${mock_bin}/curl"
+
+if PATH="${mock_bin}:${PATH}" "$script" --version v1.2.3-rc.1 >"${temporary_dir}/version.out" 2>&1; then
+	printf '%s\n' 'pre-release bootstrap unexpectedly completed with the download stub' >&2
+	exit 1
+fi
+grep -q 'download verification failed' "${temporary_dir}/version.out"
+if grep -q 'release version must match' "${temporary_dir}/version.out"; then
+	printf '%s\n' 'valid pre-release version hit version validation' >&2
+	exit 1
+fi
 
 if PATH="${mock_bin}:${PATH}" HOME="$temporary_dir" "$script" --version v1.2.3 >"${temporary_dir}/checksum.out" 2>&1; then
 	printf '%s\n' 'checksum mismatch was accepted' >&2
@@ -113,6 +117,14 @@ if grep -q 'failed to determine latest release' "${temporary_dir}/latest-valid.o
 	exit 1
 fi
 
+if STEALTH_VERSION= STEALTH_TEST_LATEST_URL="https://github.com/Stealth-deplover/stealth/releases/tag/v0.3.0-rc.1" \
+	STEALTH_TEST_LATEST_FAIL=0 PATH="${latest_bin}:${PATH}" \
+	"$script" >"${temporary_dir}/latest-rc.out" 2>&1; then
+	printf '%s\n' 'latest release RC redirect was accepted' >&2
+	exit 1
+fi
+grep -q 'latest GitHub release is not stable' "${temporary_dir}/latest-rc.out"
+
 if STEALTH_VERSION= STEALTH_TEST_LATEST_URL="https://github.com/Stealth-deplover/stealth/releases/tag/v10.20.30" \
 	STEALTH_TEST_LATEST_FAIL=0 PATH="${latest_bin}:${PATH}" \
 	"$script" >"${temporary_dir}/latest-multidigit.out" 2>&1; then
@@ -164,7 +176,7 @@ if STEALTH_VERSION= STEALTH_TEST_LATEST_FAIL=1 PATH="${latest_bin}:${PATH}" \
 fi
 grep -q 'could not resolve the latest stable release' "${temporary_dir}/latest-fail.out"
 
-for invalid_version in latest releases main v1 v1.2 1.2.3 v1.2.3-beta; do
+for invalid_version in latest releases main v1 v1.2 1.2.3 v1.2.3-beta v1.2.3-rc v1.2.3-rc.foo v1.2.3-rc.1.2; do
 	if PATH="${mock_bin}:${PATH}" "$script" --version "$invalid_version" >"${temporary_dir}/invalid-${invalid_version}.out" 2>&1; then
 		printf '%s\n' "invalid version ${invalid_version} was accepted" >&2
 		exit 1
@@ -195,6 +207,19 @@ fi
 grep -q 'could not download .* for v0\.1\.0' "${temporary_dir}/explicit-env.out"
 if [ -e "${temporary_dir}/explicit-env-marker" ]; then
 	printf '%s\n' 'STEALTH_VERSION contacted /releases/latest' >&2
+	exit 1
+fi
+
+rm -f "${temporary_dir}/explicit-rc-marker"
+if STEALTH_TEST_MARKER="${temporary_dir}/explicit-rc-marker" \
+	STEALTH_TEST_LATEST_FAIL=1 PATH="${latest_bin}:${PATH}" \
+	STEALTH_VERSION=v0.1.0-rc.1 "$script" >"${temporary_dir}/explicit-rc.out" 2>&1; then
+	printf '%s\n' 'explicit RC version was accepted without download stub failure' >&2
+	exit 1
+fi
+grep -q 'could not download' "${temporary_dir}/explicit-rc.out"
+if [ -e "${temporary_dir}/explicit-rc-marker" ]; then
+	printf '%s\n' 'explicit RC version contacted /releases/latest' >&2
 	exit 1
 fi
 

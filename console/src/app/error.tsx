@@ -10,7 +10,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl items-center px-6">
+    <main className="mx-auto flex min-h-screen max-w-2xl items-center bg-void px-6">
       <ErrorState
         error={error}
         retry={reset}

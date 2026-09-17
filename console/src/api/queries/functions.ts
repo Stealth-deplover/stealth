@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery, execute, unwrap } from "@/api/client";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
 import { fetchAllCursorPages } from "@/lib/cursor-pagination";
@@ -14,12 +14,12 @@ export function useFunctions(
   return useQuery({
     queryKey: [...queryKeys.functions(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/functions", {
-          params: { path: { projectID: projectId! }, query: params },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/functions", {
+        params: { path: { projectID: projectId! }, query: params },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -35,7 +35,7 @@ export function useCanvasFunctions(projectId: string | undefined) {
     queryKey: [...queryKeys.functions(projectId ?? ""), "canvas"],
     enabled: Boolean(projectId),
     staleTime: 30_000,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchAllCursorPages(
         (cursor) =>
           api
@@ -44,9 +44,11 @@ export function useCanvasFunctions(projectId: string | undefined) {
                 path: { projectID: projectId! },
                 query: withCursorPage(cursor ? { cursor } : undefined),
               },
+              signal,
             })
             .then(unwrap),
         (page) => page.functions,
+        { signal },
       ),
   });
 }
@@ -58,12 +60,12 @@ export function useFunction(
   return useQuery({
     queryKey: queryKeys.function(projectId ?? "", functionId ?? ""),
     enabled: Boolean(projectId && functionId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/projects/{projectID}/functions/{functionID}", {
-          params: { path: { projectID: projectId!, functionID: functionId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/functions/{functionID}", {
+        params: { path: { projectID: projectId!, functionID: functionId! } },
+        signal,
+      }),
+    ),
   });
 }
 
@@ -79,17 +81,15 @@ export function useFunctionDeployments(
       params,
     ],
     enabled: Boolean(projectId && functionId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/functions/{functionID}/deployments",
-          {
-            params: {
-              path: { projectID: projectId!, functionID: functionId! },
-              query: params,
-            },
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/projects/{projectID}/functions/{functionID}/deployments", {
+          params: {
+            path: { projectID: projectId!, functionID: functionId! },
+            query: params,
           },
-        ),
+          signal,
+        }),
       ),
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
@@ -111,17 +111,15 @@ export function useFunctionExecutions(
       params,
     ],
     enabled: Boolean(projectId && functionId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/functions/{functionID}/executions",
-          {
-            params: {
-              path: { projectID: projectId!, functionID: functionId! },
-              query: params,
-            },
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/projects/{projectID}/functions/{functionID}/executions", {
+          params: {
+            path: { projectID: projectId!, functionID: functionId! },
+            query: params,
           },
-        ),
+          signal,
+        }),
       ),
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
@@ -146,18 +144,15 @@ export function useFunctionVariables(
       params,
     ],
     enabled: Boolean(projectId && functionId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
-          "/v1/projects/{projectID}/functions/{functionID}/variables",
-          {
-            params: {
-              path: { projectID: projectId!, functionID: functionId! },
-              query: params,
-            },
-          },
-        ),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/projects/{projectID}/functions/{functionID}/variables", {
+        params: {
+          path: { projectID: projectId!, functionID: functionId! },
+          query: params,
+        },
+        signal,
+      }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -174,9 +169,9 @@ export function useFunctionDeployment(
       deploymentId ?? "",
     ),
     enabled: Boolean(projectId && functionId && deploymentId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET(
           "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}",
           {
             params: {
@@ -186,6 +181,7 @@ export function useFunctionDeployment(
                 deploymentID: deploymentId!,
               },
             },
+            signal,
           },
         ),
       ),
@@ -208,9 +204,9 @@ export function useFunctionExecution(
       executionId ?? "",
     ),
     enabled: Boolean(projectId && functionId && executionId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET(
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET(
           "/v1/projects/{projectID}/functions/{functionID}/executions/{executionID}",
           {
             params: {
@@ -220,6 +216,7 @@ export function useFunctionExecution(
                 executionID: executionId!,
               },
             },
+            signal,
           },
         ),
       ),

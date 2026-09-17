@@ -22,10 +22,10 @@ import (
 )
 
 func (w *Worker) RunBuildOnce(ctx context.Context) (bool, error) {
-	if w == nil || w.Repository == nil || w.Builder == nil {
+	if w == nil || w.BuildStore == nil || w.Builder == nil {
 		return false, nil
 	}
-	job, err := w.Repository.ClaimNextFunctionDeployment(ctx, w.WorkerID)
+	job, err := w.BuildStore.ClaimNextFunctionDeployment(ctx, w.WorkerID)
 	if errors.Is(err, repository.ErrNoDeploymentJob) {
 		return false, nil
 	}
@@ -100,7 +100,7 @@ func (w *Worker) buildDeployment(parent context.Context, job repository.Function
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
 
-	archive, err := w.Store.OpenRelative(job.SourcePath)
+	archive, err := w.Store.OpenRelative(parent, job.SourcePath)
 	if err != nil {
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function source artifact is unavailable", nil)
 	}
@@ -119,7 +119,7 @@ func (w *Worker) buildDeployment(parent context.Context, job repository.Function
 	if err := validateEntrypointFile(workspace, job.Function.Entrypoint); err != nil {
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function entrypoint is unavailable", nil)
 	}
-	variables, err := w.Repository.FunctionRuntimeVariablesForDeployment(parent, projectID, functionID, deploymentID, w.Cipher)
+	variables, err := w.BuildStore.FunctionRuntimeVariablesForDeployment(parent, projectID, functionID, deploymentID, w.Cipher)
 	if err != nil {
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function runtime variables are unavailable", nil)
 	}
@@ -179,12 +179,21 @@ func (w *Worker) buildDeployment(parent context.Context, job repository.Function
 		w.Store.Cleanup(&prepared)
 		return w.failBuild(parent, projectID, functionID, deploymentID, redactFailure(validationErr.Error(), secrets), nil)
 	}
-	if err := w.Store.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupFunctions,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := w.BuildStore.ReserveArtifactPublishCleanup(parent, publishCleanup); err != nil {
+		w.Store.Cleanup(&prepared)
+		return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact publication could not be reserved", nil)
+	}
+	if err := w.Store.Commit(parent, &prepared); err != nil {
 		w.Store.Cleanup(&prepared)
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact could not be committed", nil)
 	}
-	if _, err := w.Repository.CompleteFunctionDeploymentBuild(parent, projectID, functionID, deploymentID, w.WorkerID, prepared.RelativePath, prepared.Size, prepared.Checksum); err != nil {
-		_ = w.Store.RemoveRelative(prepared.RelativePath)
+	if _, err := w.BuildStore.CompleteFunctionDeploymentBuildWithCleanup(parent, projectID, functionID, deploymentID, w.WorkerID, prepared.RelativePath, prepared.Size, prepared.Checksum, publishCleanup); err != nil {
 		if errors.Is(err, repository.ErrFunctionQuotaExceeded) {
 			return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact exceeds the remaining quota", secrets)
 		}
@@ -201,7 +210,7 @@ func (w *Worker) failBuild(ctx context.Context, projectID, functionID, deploymen
 		return "error", ctx.Err()
 	}
 	message = redactFailure(message, secrets)
-	if _, err := w.Repository.FailFunctionDeploymentBuild(ctx, projectID, functionID, deploymentID, w.WorkerID, message); err != nil {
+	if _, err := w.BuildStore.FailFunctionDeploymentBuild(ctx, projectID, functionID, deploymentID, w.WorkerID, message); err != nil {
 		return "error", err
 	}
 	job := repository.FunctionBuildJob{Deployment: domain.FunctionDeployment{ID: deploymentID.String(), FunctionID: functionID.String(), ProjectID: projectID.String()}}
@@ -277,7 +286,7 @@ func (w *Worker) appendBuildLog(ctx context.Context, job repository.FunctionBuil
 	if message == "" {
 		return nil
 	}
-	_, err := w.Repository.AppendFunctionBuildLog(ctx, mustUUID(job.Deployment.ProjectID), mustUUID(job.Deployment.FunctionID), mustUUID(job.Deployment.ID), uuid.Must(uuid.NewV7()), 0, level, message)
+	_, err := w.BuildStore.AppendFunctionBuildLog(ctx, mustUUID(job.Deployment.ProjectID), mustUUID(job.Deployment.FunctionID), mustUUID(job.Deployment.ID), uuid.Must(uuid.NewV7()), 0, level, message)
 	return err
 }
 

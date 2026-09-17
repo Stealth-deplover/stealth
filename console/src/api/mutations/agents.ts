@@ -2,6 +2,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import { queryKeys } from "@/api/query-keys";
+import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
 export function useCreateAgent(projectId: string) {
@@ -10,7 +11,7 @@ export function useCreateAgent(projectId: string) {
     mutationFn: async (body: components["schemas"]["CreateAgentRequest"]) =>
       unwrap(await api.POST("/v1/agents", { body })),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.agents(projectId) }),
+      applyCacheChanges(queryClient, [{ kind: "agent", projectId }]),
   });
 }
 
@@ -24,14 +25,8 @@ export function useUpdateAgent(projectId: string, agentId: string) {
           body,
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.agent(agentId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.agents(projectId),
-      });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "agent", projectId, agentId }]),
   });
 }
 
@@ -47,14 +42,12 @@ export function useDeleteAgent(projectId: string, agentId: string) {
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: queryKeys.agent(agentId) });
       queryClient.removeQueries({ queryKey: queryKeys.agentRuns(agentId) });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.agents(projectId),
-      });
+      void applyCacheChanges(queryClient, [{ kind: "agent", projectId }]);
     },
   });
 }
 
-export function useCreateAgentRun(agentId: string) {
+export function useCreateAgentRun(projectId: string, agentId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: components["schemas"]["CreateAgentRunRequest"]) =>
@@ -65,11 +58,23 @@ export function useCreateAgentRun(agentId: string) {
         }),
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns(agentId) }),
+      applyCacheChanges(queryClient, [
+        {
+          kind: "agent-run",
+          projectId,
+          agentId,
+          includeAgent: true,
+          includeAgentDetail: true,
+        },
+      ]),
   });
 }
 
-export function useCancelAgentRun(agentId: string, runId: string) {
+export function useCancelAgentRun(
+  projectId: string,
+  agentId: string,
+  runId: string,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () =>
@@ -78,12 +83,16 @@ export function useCancelAgentRun(agentId: string, runId: string) {
           params: { path: { agentID: agentId, runID: runId } },
         }),
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.agentRun(agentId, runId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agentRuns(agentId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.agent(agentId) });
-    },
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "agent-run",
+          projectId,
+          agentId,
+          runId,
+          includeAgent: true,
+          includeAgentDetail: true,
+        },
+      ]),
   });
 }

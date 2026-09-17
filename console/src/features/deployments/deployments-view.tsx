@@ -4,6 +4,7 @@ import { nextCursor } from "@/api/pagination";
 import { useFunctions, useSites } from "@/api/queries";
 import { CursorPaginationControls } from "@/components/cursor-pagination-controls";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +37,7 @@ export function DeploymentsView({
         }}
       />
     );
+  if (functions.isLoading || sites.isLoading) return <LoadingState rows={4} />;
   return (
     <>
       <PageHeader

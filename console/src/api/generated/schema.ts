@@ -53,6 +53,552 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bootstrap/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return whether first-run Instance Owner setup is still required. No setup secret is returned. */
+        get: operations["getBootstrapStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Mint a single-use, 15-minute setup code for the installed CLI. The request requires a derived proof from the private installation key; the plaintext code is returned once and is never persisted. */
+        post: operations["createBootstrapSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Verify the one-time code from the local Stealth CLI and issue an opaque authorization-session identifier. This does not create an owner. */
+        post: operations["verifyBootstrapCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/github/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @deprecated
+         * @description Legacy compatibility endpoint for existing non-browser callers. The active browser setup wizard uses GitHub Web Application Flow because Device Flow must be enabled separately in GitHub App settings.
+         */
+        post: operations["startBootstrapGitHubDeviceFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/github/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @deprecated
+         * @description Legacy compatibility endpoint for existing non-browser callers. The active browser setup wizard uses the one-time GitHub web authorization callback instead.
+         */
+        post: operations["pollBootstrapGitHubDeviceFlow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/adoption/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List existing accounts eligible for explicit local operator adoption. This endpoint is authenticated only by the dedicated local CLI proof and is never used by the public setup page. */
+        get: operations["listBootstrapAdoptionAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bootstrap/adoption/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Assign the instance_owner role to a specifically selected existing account. This is a local operator migration path for upgraded installations, not public first-run setup. */
+        post: operations["adoptBootstrapOwner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return the public, secret-free state of the short-lived browser installer. Provider credentials and infrastructure connection strings are never serialized. */
+        get: operations["getSetupStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/quick-tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Register the exact temporary TryCloudflare hostname started by the local CLI. The endpoint accepts only the derived local CLI proof and never accepts a browser credential. */
+        post: operations["registerSetupQuickTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Mint a fresh short-lived setup code after a setup restart. This endpoint requires the local CLI proof and is available only while an incomplete setup needs recovery. */
+        post: operations["createSetupRecoverySession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/manifest/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Consume GitHub's one-time App Manifest callback, persist the converted credentials server-side, and redirect into the browser owner-authorization flow. */
+        get: operations["completeSetupGitHubManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/authorize/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Consume the one-time GitHub web authorization callback. State and PKCE verification are server-side; the short-lived user token is used only for the server-side identity lookup. */
+        get: operations["completeSetupGitHubAuthorization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Experimental and inactive compatibility callback. Cloudflare OAuth is not a browser setup path in this release; the callback never exchanges a code or stores credentials. */
+        get: operations["completeSetupCloudflareOAuth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return host-published CPU, memory, free disk, Docker, and Docker Compose checks plus setup-service dependency and Cloudflare connectivity checks. Docker and resource probes are never run inside the temporary setup container. */
+        get: operations["getSetupPreflight"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Save the reviewed instance, networking, database, Redis, and storage choices. Secret values are write-only and are encrypted in the setup state. */
+        put: operations["saveSetupConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/manifest/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a short-lived GitHub App Manifest POST action and non-secret JSON payload using the current HTTPS setup origin. */
+        post: operations["startSetupGitHubManifest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/authorize/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create a short-lived GitHub web authorization URL for the connected App. The setup service stores state and the PKCE verifier encrypted server-side. */
+        post: operations["startSetupGitHubAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/github/manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Save manually created GitHub App credentials. All credential fields are write-only and are encrypted in the setup state. */
+        post: operations["saveSetupGitHubManual"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/oauth/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @deprecated
+         * @description Experimental and inactive. This endpoint never creates an OAuth redirect; use a scoped Cloudflare API token through the token endpoint.
+         */
+        post: operations["startSetupCloudflareOAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSetupCloudflareAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSetupCloudflareZones"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Validate and save the recommended scoped Cloudflare API token. The token is write-only and encrypted in setup state. The token must allow Account Cloudflare Tunnel Edit and Account Settings Read plus Zone Zone Read and DNS Edit for account and domain discovery and named-tunnel DNS setup. */
+        post: operations["saveSetupCloudflareToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create or resume a named Cloudflare Tunnel, configure ingress to the internal proxy, and create the proxied DNS CNAME. */
+        post: operations["createSetupCloudflareTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/cloudflare/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSetupCloudflareStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/infrastructure/database/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testSetupDatabase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/infrastructure/redis/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testSetupRedis"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/infrastructure/storage/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testSetupStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/handoff-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["issueSetupHandoffToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/handoff/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return whether the one-time production handoff is still pending. This host-CLI coordination endpoint accepts only the derived private CLI proof and never returns the handoff token or production session. */
+        get: operations["getSetupHandoffStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Validate and durably request the idempotent production installation. This setup API endpoint only persists install_requested and returns the current state; the host-side Stealth CLI claims the run, invokes installengine, reports progress, performs health checks, and completes handoff. */
+        post: operations["startSetupInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/install/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stream a setup snapshot and install progress as Server-Sent Events. Reconnecting clients can use the latest snapshot to recover after a dropped connection. */
+        get: operations["streamSetupInstallEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/setup/handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Consume the short-lived setup handoff in a POST body, set the production HttpOnly session cookie, and redirect to the production dashboard. The handoff is never accepted in a query string. */
+        post: operations["completeSetupHandoff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/account/registrations": {
         parameters: {
             query?: never;
@@ -1972,6 +2518,291 @@ export interface components {
             commit: string;
             build_time: string;
         };
+        BootstrapStatusResponse: {
+            /** @description Whether the first Instance Owner still needs to be created. */
+            setup_required: boolean;
+        };
+        BootstrapSessionResponse: {
+            /** @description One-time code shown only to the CLI operator. */
+            setup_code: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        VerifyBootstrapCodeRequest: {
+            setup_code: string;
+        };
+        BootstrapVerificationResponse: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        StartGitHubDeviceRequest: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            setup_code: string;
+        };
+        GitHubDeviceResponse: {
+            /** Format: uuid */
+            authorization_session_id: string;
+            user_code: string;
+            /**
+             * Format: uri
+             * @constant
+             */
+            verification_uri: "https://github.com/login/device";
+            /** Format: date-time */
+            expires_at: string;
+            interval_seconds: number;
+        };
+        PollGitHubDeviceRequest: {
+            /** Format: uuid */
+            authorization_session_id: string;
+        };
+        GitHubPollResponse: {
+            /** @enum {string} */
+            status: GitHubPollResponseStatus;
+            retry_after_seconds?: number;
+            account?: components["schemas"]["Account"];
+            /** @description Setup-mode-only in-memory handoff credential; it must be posted to the final production origin and never stored. */
+            handoff_token?: string;
+        };
+        BootstrapAdoptionAccount: {
+            /** Format: uuid */
+            id: string;
+            /** Format: email */
+            email?: string | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_login?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        BootstrapAdoptionAccountsResponse: {
+            accounts: components["schemas"]["BootstrapAdoptionAccount"][];
+        };
+        AdoptInstanceOwnerRequest: {
+            /** Format: uuid */
+            account_id: string;
+        };
+        AdoptInstanceOwnerResponse: {
+            /** @constant */
+            status: "adopted";
+            /** Format: uuid */
+            account_id: string;
+        };
+        SetupStatusResponse: {
+            setup_required: boolean;
+            ready: boolean;
+            state: components["schemas"]["SetupState"];
+        };
+        SetupState: {
+            version: number;
+            /** @enum {string} */
+            phase: SetupStatePhase;
+            step?: string;
+            error_code?: string;
+            error_message?: string;
+            draft: components["schemas"]["SetupDraft"];
+            github: components["schemas"]["SetupGitHubState"];
+            cloudflare: components["schemas"]["SetupCloudflareState"];
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int64 */
+            last_event_id?: number;
+        };
+        SetupDraft: {
+            instance_name?: string;
+            /** Format: uri */
+            public_url?: string;
+            /** @enum {string} */
+            network_mode?: SetupDraftNetwork_mode;
+            hostname?: string;
+            cloudflare_account_id?: string;
+            cloudflare_zone_id?: string;
+            cloudflare_tunnel_id?: string;
+            cloudflare_tunnel_name?: string;
+            cloudflare_record_id?: string;
+            /** @enum {string} */
+            database_mode?: SetupDraftDatabase_mode;
+            database_tested?: boolean;
+            /** @enum {string} */
+            redis_mode?: SetupDraftRedis_mode;
+            redis_tested?: boolean;
+            /** @enum {string} */
+            storage_mode?: SetupDraftStorage_mode;
+            storage_tested?: boolean;
+            /** Format: uri */
+            storage_s3_endpoint?: string;
+            storage_s3_region?: string;
+            storage_s3_bucket?: string;
+            storage_s3_use_ssl?: boolean;
+            storage_s3_path_style?: boolean;
+            storage_s3_prefix?: string;
+        };
+        /** @description The connected App identifier and setup authorization session are public projections; client secrets, OAuth state, and PKCE verifiers remain encrypted server-side. */
+        SetupGitHubState: {
+            /** @enum {string} */
+            mode?: SetupGitHubStateMode;
+            client_id?: string;
+            connected?: boolean;
+            /** Format: uuid */
+            authorization_session?: string;
+            /** Format: date-time */
+            manifest_expires_at?: string;
+        };
+        /** @description OAuth is retained only as an inactive experimental compatibility value. Production setup uses api_token. */
+        SetupCloudflareState: {
+            /** @enum {string} */
+            mode?: SetupCloudflareStateMode;
+            connected?: boolean;
+            /** Format: date-time */
+            expires_at?: string;
+            token_valid?: boolean;
+        };
+        SetupConfigRequest: {
+            instance_name: string;
+            /** Format: uri */
+            public_url?: string;
+            /** @enum {string} */
+            network_mode: SetupConfigRequestNetwork_mode;
+            hostname?: string;
+            /** @enum {string} */
+            database_mode: SetupConfigRequestDatabase_mode;
+            /** Format: uri */
+            database_url?: string;
+            /** @enum {string} */
+            redis_mode: SetupConfigRequestRedis_mode;
+            /** Format: uri */
+            redis_url?: string;
+            /** @enum {string} */
+            storage_mode: SetupConfigRequestStorage_mode;
+            /** Format: uri */
+            storage_s3_endpoint?: string;
+            storage_s3_region?: string;
+            storage_s3_bucket?: string;
+            storage_s3_access_key?: string;
+            storage_s3_secret_key?: string;
+            storage_s3_use_ssl?: boolean;
+            storage_s3_path_style?: boolean;
+            storage_s3_prefix?: string;
+        };
+        SetupGitHubManifestResponse: {
+            /**
+             * Format: uri
+             * @description GitHub's POST action URL
+             */
+            manifest_url: string;
+            /** @description Non-secret JSON manifest submitted by the browser */
+            manifest: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        SetupGitHubAuthorizationResponse: {
+            /** Format: uri */
+            authorization_url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        SetupGitHubManualRequest: {
+            client_id: string;
+            client_secret: string;
+            private_key: string;
+            webhook_secret?: string;
+        };
+        SetupCloudflareOAuthResponse: {
+            /** Format: uri */
+            authorization_url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        /** @description Use a custom token scoped to the selected account and domain with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit. Global API keys are not accepted. */
+        SetupCloudflareTokenRequest: {
+            api_token: string;
+        };
+        SetupCloudflareTunnelRequest: {
+            account_id: string;
+            zone_id: string;
+            hostname: string;
+            name?: string;
+        };
+        SetupCloudflareAccount: {
+            id: string;
+            name: string;
+            created_on?: string;
+        };
+        SetupCloudflareZone: {
+            id: string;
+            name: string;
+            status?: string;
+        };
+        SetupCloudflareAccountsResponse: {
+            accounts: components["schemas"]["SetupCloudflareAccount"][];
+        };
+        SetupCloudflareZonesResponse: {
+            zones: components["schemas"]["SetupCloudflareZone"][];
+        };
+        SetupCloudflareStatusResponse: {
+            tunnel_id: string;
+            status: string;
+            healthy: boolean;
+            connections: number;
+        };
+        SetupDatabaseTestRequest: {
+            /** Format: uri */
+            url?: string;
+        };
+        SetupRedisTestRequest: {
+            /** Format: uri */
+            url?: string;
+        };
+        SetupStorageTestRequest: {
+            /** Format: uri */
+            endpoint?: string;
+            region?: string;
+            bucket?: string;
+            access_key?: string;
+            secret_key?: string;
+            use_ssl?: boolean;
+            path_style?: boolean;
+        };
+        SetupTestResponse: {
+            /** @constant */
+            status: "ok";
+        };
+        SetupQuickTunnelRequest: {
+            container_name: string;
+            /** Format: uri */
+            url: string;
+        };
+        SetupPreflightResponse: {
+            checks: components["schemas"]["SetupCheck"][];
+        };
+        SetupCheck: {
+            name: string;
+            /** @enum {string} */
+            status: SetupCheckStatus;
+            detail: string;
+            required: boolean;
+        };
+        SetupInstallResponse: {
+            /** @enum {string} */
+            status: SetupInstallResponseStatus;
+            state: components["schemas"]["SetupState"];
+        };
+        SetupHandoffStatusResponse: {
+            /** @description Whether the one-time production handoff is still waiting for browser consumption. */
+            pending: boolean;
+        };
+        SetupHandoffRequest: {
+            token: string;
+        };
+        SetupHandoffForm: {
+            token: string;
+        };
+        SetupHandoffTokenResponse: {
+            token: string;
+        };
         RegisterRequest: {
             /** Format: email */
             email: string;
@@ -1983,7 +2814,7 @@ export interface components {
             email: string;
             password: string;
         };
-        /** @description Empty JSON object by default; an optional trusted url may receive the tokenized link. */
+        /** @description Empty JSON object by default; url is optional and must be the exact configured auth route (relative or on an allowlisted origin) without a query or fragment. The emailed link is rebuilt from trusted server configuration. */
         AuthVerificationRequest: {
             /** Format: uri */
             url?: string;
@@ -1997,6 +2828,7 @@ export interface components {
              */
             user_id?: string;
         } | unknown | unknown;
+        /** @description The optional url must be the exact configured auth route (relative or on an allowlisted origin) without a query or fragment. The emailed link is rebuilt from trusted server configuration. */
         PasswordRecoveryRequest: {
             /** Format: email */
             email: string;
@@ -2079,8 +2911,20 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** Format: email */
-            email: string;
+            email?: string | null;
             email_verified: boolean;
+            /**
+             * @description Instance-level role; this does not imply organization membership.
+             * @enum {string|null}
+             */
+            instance_role?: "instance_owner" | "instance_admin" | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_user_id?: string | null;
+            provider_login?: string | null;
+            display_name?: string | null;
+            /** Format: uri */
+            avatar_url?: string | null;
             /** Format: date-time */
             created_at: string;
         };
@@ -2153,8 +2997,14 @@ export interface components {
             organization_id: string;
             /** Format: uuid */
             account_id: string;
-            /** Format: email */
-            email: string;
+            /**
+             * Format: email
+             * @description Null for provider-only identities without a verified email
+             */
+            email?: string | null;
+            /** @enum {string|null} */
+            provider?: "github" | null;
+            provider_login?: string | null;
             /** @enum {string} */
             role: MembershipRole;
             /** Format: date-time */
@@ -3999,6 +4849,15 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /** @description GitHub or another upstream authorization provider is unavailable or returned an invalid response */
+        BadGateway: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description Internal server error */
         InternalError: {
             headers: {
@@ -4021,6 +4880,15 @@ export interface components {
         };
         /** @description Public Auth protection or a required dependency is unavailable */
         ServiceUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description First-run Instance Owner setup is permanently sealed */
+        BootstrapComplete: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4087,6 +4955,9 @@ export interface components {
         VariableID: string;
         DeploymentID: string;
         ExecutionID: string;
+        BootstrapCLIProof: string;
+        /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+        SetupCSRF: "1";
         /** @description Opaque cursor returned by a previous row page; use it unchanged */
         RowCursor: string;
         /** @description JSON object of equality filters, for example {"status":"active"}. Each filtered column must have a real key index. */
@@ -4164,6 +5035,869 @@ export interface operations {
                     "application/json": components["schemas"]["BuildInfo"];
                 };
             };
+        };
+    };
+    getBootstrapStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bootstrap state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapStatusResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createBootstrapSession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One-time bootstrap session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            410: components["responses"]["BootstrapComplete"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    verifyBootstrapCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyBootstrapCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Setup code accepted for the next bootstrap step */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapVerificationResponse"];
+                };
+            };
+            /** @description Setup code is invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    startBootstrapGitHubDeviceFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartGitHubDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description Legacy GitHub Device Flow user code for non-browser compatibility */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubDeviceResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    pollBootstrapGitHubDeviceFlow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollGitHubDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description Authorization is still pending */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubPollResponse"];
+                };
+            };
+            /** @description First Instance Owner and authenticated session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubPollResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            410: components["responses"]["BootstrapComplete"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    listBootstrapAdoptionAccounts: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Existing accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapAdoptionAccountsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    adoptBootstrapOwner: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptInstanceOwnerRequest"];
+            };
+        };
+        responses: {
+            /** @description Existing account adopted as Instance Owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptInstanceOwnerResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getSetupStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Setup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatusResponse"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    registerSetupQuickTunnel: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupQuickTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description Registered temporary tunnel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    createSetupRecoverySession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recovery setup session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    completeSetupGitHubManifest: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to GitHub browser authorization or back to the setup Console with a non-sensitive result marker */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completeSetupGitHubAuthorization: {
+        parameters: {
+            query: {
+                code?: string;
+                state: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect back to the setup Console with a non-sensitive result marker */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    completeSetupCloudflareOAuth: {
+        parameters: {
+            query: {
+                code: string;
+                state: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect back to the setup Console with a non-sensitive result marker */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSetupPreflight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Prerequisite checks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupPreflightResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    saveSetupConfig: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved public setup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    startSetupGitHubManifest: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GitHub App Manifest POST action and payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupGitHubManifestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    startSetupGitHubAuthorization: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description GitHub browser authorization URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupGitHubAuthorizationResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    saveSetupGitHubManual: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupGitHubManualRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved public setup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+        };
+    };
+    startSetupCloudflareOAuth: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Cloudflare OAuth is experimental and inactive */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listSetupCloudflareAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cloudflare accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCloudflareAccountsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    listSetupCloudflareZones: {
+        parameters: {
+            query: {
+                account_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cloudflare zones */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCloudflareZonesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    saveSetupCloudflareToken: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupCloudflareTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved public setup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    createSetupCloudflareTunnel: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupCloudflareTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved public setup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    getSetupCloudflareStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Named tunnel status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupCloudflareStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    testSetupDatabase: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupDatabaseTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Database is reachable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupTestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    testSetupRedis: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRedisTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Redis is reachable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupTestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    testSetupStorage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupStorageTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Storage is reachable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupTestResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            502: components["responses"]["BadGateway"];
+        };
+    };
+    issueSetupHandoffToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rotated single-use production handoff token */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupHandoffTokenResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getSetupHandoffStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe handoff state for the host CLI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupHandoffStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    startSetupInstall: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
+                "X-Stealth-Setup": components["parameters"]["SetupCSRF"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Production handoff accepted or already running */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupInstallResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    streamSetupInstallEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-Sent setup progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    completeSetupHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupHandoffRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["SetupHandoffForm"];
+            };
+        };
+        responses: {
+            /** @description Production session cookie set and browser redirected to the dashboard */
+            303: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     registerAccount: {
@@ -4245,6 +5979,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["RateLimited"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -4416,6 +6151,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
@@ -9797,6 +11533,71 @@ export enum PathsV1ProjectsProjectIDDatabasesDatabaseIDTablesTableIDExportGetPar
 export enum StatusStatus {
     ok = "ok",
     ready = "ready"
+}
+export enum GitHubPollResponseStatus {
+    pending = "pending",
+    complete = "complete"
+}
+export enum SetupStatePhase {
+    collecting = "collecting",
+    install_requested = "install_requested",
+    installing = "installing",
+    complete = "complete",
+    failed = "failed",
+    handoff = "handoff"
+}
+export enum SetupDraftNetwork_mode {
+    cloudflare_tunnel = "cloudflare_tunnel",
+    public_ip = "public_ip",
+    reverse_proxy = "reverse_proxy",
+    local_only = "local_only"
+}
+export enum SetupDraftDatabase_mode {
+    bundled = "bundled",
+    external = "external"
+}
+export enum SetupDraftRedis_mode {
+    bundled = "bundled",
+    external = "external"
+}
+export enum SetupDraftStorage_mode {
+    local = "local",
+    s3 = "s3"
+}
+export enum SetupGitHubStateMode {
+    manifest = "manifest",
+    manual = "manual"
+}
+export enum SetupCloudflareStateMode {
+    oauth = "oauth",
+    api_token = "api_token"
+}
+export enum SetupConfigRequestNetwork_mode {
+    cloudflare_tunnel = "cloudflare_tunnel",
+    public_ip = "public_ip",
+    reverse_proxy = "reverse_proxy",
+    local_only = "local_only"
+}
+export enum SetupConfigRequestDatabase_mode {
+    bundled = "bundled",
+    external = "external"
+}
+export enum SetupConfigRequestRedis_mode {
+    bundled = "bundled",
+    external = "external"
+}
+export enum SetupConfigRequestStorage_mode {
+    local = "local",
+    s3 = "s3"
+}
+export enum SetupCheckStatus {
+    pass = "pass",
+    warn = "warn",
+    fail = "fail"
+}
+export enum SetupInstallResponseStatus {
+    accepted = "accepted",
+    installing = "installing"
 }
 export enum CreateOrganizationMembershipRequestRole {
     admin = "admin",

@@ -183,7 +183,10 @@ func (r *Repository) CreateSiteDomain(ctx context.Context, id, projectID, siteID
 	if err != nil {
 		return domain.SiteDomain{}, mapError(err)
 	}
-	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.create", "site_domain", id, map[string]any{"hostname": hostname}); err != nil {
+	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.create", "site_domain", id, map[string]any{
+		"site_id":  siteID.String(),
+		"hostname": hostname,
+	}); err != nil {
 		return domain.SiteDomain{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -211,7 +214,10 @@ func (r *Repository) DeleteSiteDomain(ctx context.Context, projectID, siteID, do
 	if _, err := tx.Exec(ctx, `DELETE FROM site_domains WHERE project_id=$1 AND site_id=$2 AND id=$3`, projectID, siteID, domainID); err != nil {
 		return err
 	}
-	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.delete", "site_domain", domainID, map[string]any{"hostname": item.Hostname}); err != nil {
+	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.delete", "site_domain", domainID, map[string]any{
+		"site_id":  siteID.String(),
+		"hostname": item.Hostname,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -261,7 +267,11 @@ func (r *Repository) VerifySiteDomain(ctx context.Context, projectID, siteID, do
 	if err != nil {
 		return domain.SiteDomain{}, err
 	}
-	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.verify", "site_domain", domainID, map[string]any{"hostname": verified.Hostname, "method": "dns_txt"}); err != nil {
+	if err := r.auditSite(ctx, tx, projectID, actor, "site_domain.verify", "site_domain", domainID, map[string]any{
+		"site_id":  siteID.String(),
+		"hostname": verified.Hostname,
+		"method":   "dns_txt",
+	}); err != nil {
 		return domain.SiteDomain{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

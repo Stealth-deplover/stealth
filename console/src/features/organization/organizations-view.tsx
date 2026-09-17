@@ -17,6 +17,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
+import {
+  organizationFields,
+  organizationPayload,
+  type OrganizationFormValues,
+} from "@/features/organization/organization-form";
 
 export function OrganizationsIndexView() {
   const router = useRouter();
@@ -24,11 +29,8 @@ export function OrganizationsIndexView() {
   const [createOpen, setCreateOpen] = useState(false);
   const query = useOrganizations({ cursor: navigation.cursor });
   const create = useCreateOrganization();
-  const handleCreateOrganization = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: values.name,
-      slug: values.slug,
-    });
+  const handleCreateOrganization = async (values: OrganizationFormValues) => {
+    const result = await create.mutateAsync(organizationPayload(values));
     toast.success("Organization created");
     if (result?.organization) {
       router.replace(`/organizations/${result.organization.id}/projects`);
@@ -42,7 +44,7 @@ export function OrganizationsIndexView() {
         title="Organizations"
         description="Choose a workspace, then open a project to operate its services."
         actions={
-          <CreateDialog
+          <CreateDialog<OrganizationFormValues>
             open={createOpen}
             onOpenChange={setCreateOpen}
             triggerLabel="Create organization"
@@ -50,15 +52,7 @@ export function OrganizationsIndexView() {
             pendingLabel="Creating organization…"
             title="Create an organization"
             description="Organizations group people, projects, and plan limits."
-            fields={[
-              { name: "name", label: "Display name", placeholder: "Acme Inc" },
-              {
-                name: "slug",
-                label: "Slug",
-                placeholder: "acme-inc",
-                help: "Lowercase letters, numbers, and hyphens.",
-              },
-            ]}
+            fields={organizationFields}
             pending={create.isPending}
             onSubmit={handleCreateOrganization}
           />
@@ -88,19 +82,19 @@ export function OrganizationsIndexView() {
             {organizations.map((organization) => (
               <Card
                 key={organization.id}
-                className="group transition hover:border-cyan-300/30"
+                className="group transition-colors duration-150 hover:border-smoke"
               >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between">
-                    <span className="flex size-10 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/10 text-sm font-semibold text-cyan-200">
+                    <span className="flex size-10 items-center justify-center rounded-md border border-graphite bg-white/[0.05] text-sm font-semibold text-mist">
                       {organization.name.slice(0, 1).toUpperCase()}
                     </span>
                     <Badge variant="neutral">Workspace</Badge>
                   </div>
-                  <h2 className="mt-5 text-lg font-semibold text-white">
+                  <h2 className="mt-5 text-lg font-semibold tracking-[-0.012em] text-paper">
                     {organization.name}
                   </h2>
-                  <p className="mt-1 font-mono text-xs text-slate-600">
+                  <p className="mt-1 font-mono text-xs text-fog">
                     {organization.slug}
                   </p>
                   <p className="mt-5 text-xs text-slate-500">

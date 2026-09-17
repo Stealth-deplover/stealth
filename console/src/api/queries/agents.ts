@@ -1,6 +1,6 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, cancellableQuery, execute } from "@/api/client";
 import {
   type AgentListQuery,
   type CursorQuery,
@@ -20,8 +20,9 @@ export function useAgents(
   return useQuery({
     queryKey: [...queryKeys.agents(projectId ?? ""), params],
     enabled: Boolean(projectId),
-    queryFn: async () =>
-      unwrap(await api.GET("/v1/agents", { params: { query: params } })),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/agents", { params: { query: params }, signal }),
+    ),
     placeholderData: keepPreviousData,
   });
 }
@@ -30,19 +31,21 @@ export function useAgent(agentId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.agent(agentId ?? ""),
     enabled: Boolean(agentId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/agents/{agentID}", {
-          params: { path: { agentID: agentId! } },
-        }),
-      ),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/agents/{agentID}", {
+        params: { path: { agentID: agentId! } },
+        signal,
+      }),
+    ),
   });
 }
 
 export function useAgentCatalog() {
   return useQuery({
     queryKey: queryKeys.agentCatalog,
-    queryFn: async () => unwrap(await api.GET("/v1/agent-catalog")),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/agent-catalog", { signal }),
+    ),
     staleTime: 300_000,
   });
 }
@@ -52,10 +55,11 @@ export function useAgentRuns(agentId: string | undefined, query?: CursorQuery) {
   return useQuery({
     queryKey: [...queryKeys.agentRuns(agentId ?? ""), params],
     enabled: Boolean(agentId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/agents/{agentID}/runs", {
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/agents/{agentID}/runs", {
           params: { path: { agentID: agentId! }, query: params },
+          signal,
         }),
       ),
     placeholderData: keepPreviousData,
@@ -73,10 +77,11 @@ export function useAgentRun(
   return useQuery({
     queryKey: queryKeys.agentRun(agentId ?? "", runId ?? ""),
     enabled: Boolean(agentId && runId),
-    queryFn: async () =>
-      unwrap(
-        await api.GET("/v1/agents/{agentID}/runs/{runID}", {
+    queryFn: ({ signal }) =>
+      execute(
+        api.GET("/v1/agents/{agentID}/runs/{runID}", {
           params: { path: { agentID: agentId!, runID: runId! } },
+          signal,
         }),
       ),
     refetchInterval: (query) => {

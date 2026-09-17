@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const corsAllowedMethods = "GET, POST, PATCH, DELETE, OPTIONS"
+const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 const corsAllowedHeaders = "Accept, Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Requested-With"
 
 // cors applies a per-project, credentialed origin allowlist. The Console
@@ -34,7 +34,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		// arbitrary origin. This check also covers project routes, allowing the
 		// Console to use its management session without copying its origin into
 		// every project's public Auth CORS setting.
-		if containsCORSOrigin(s.config.ConsoleCORSOrigins, origin) {
+		if containsCORSOrigin(s.config.ConsoleCORSOrigins, origin) || s.sameSetupOrigin(r, origin) {
 			setCORSHeaders(w, origin, r)
 			if r.Method == http.MethodOptions {
 				if !corsMethodAllowed(r.Header.Get("Access-Control-Request-Method")) {
@@ -83,6 +83,23 @@ func (s *Server) cors(next http.Handler) http.Handler {
 	})
 }
 
+// sameSetupOrigin reports whether a browser origin is the server-owned,
+// externally visible origin of this first-run setup request. It is active only
+// in setup mode, where the browser origin is not known at deploy time: the
+// temporary Quick Tunnel host is random. The expected origin is derived with
+// externalOrigin, so the trusted-proxy and forwarded-host rules decide what is
+// accepted and the origin is never taken from the request's own claim alone.
+// This accepts exactly the origin that serves the setup page; a wildcard
+// TryCloudflare trust, a different Quick Tunnel host, or a foreign origin does
+// not match and is rejected.
+func (s *Server) sameSetupOrigin(r *http.Request, origin string) bool {
+	if s == nil || !s.config.SetupMode {
+		return false
+	}
+	expected := s.externalOrigin(r)
+	return expected != "" && strings.EqualFold(expected, origin)
+}
+
 func projectIDFromCORSPath(path string) (uuid.UUID, bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 || parts[0] != "v1" || parts[1] != "projects" {
@@ -121,7 +138,7 @@ func setCORSHeaders(w http.ResponseWriter, origin string, r *http.Request) {
 func corsMethodAllowed(raw string) bool {
 	method := strings.ToUpper(strings.TrimSpace(raw))
 	switch method {
-	case http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete:
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 		return true
 	default:
 		return false

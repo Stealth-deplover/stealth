@@ -33,6 +33,19 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget 
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/stealth-api"]
 
+# The setup image is intentionally a separate target. It serves the temporary
+# browser wizard and reads/writes only the shared encrypted setup state; the
+# host CLI owns production installation and Docker execution. It stays root in
+# the container so a host CLI with a different UID can use the state bind, but
+# it has no Docker client or daemon socket.
+FROM runtime-base AS setup
+COPY --from=build /out/stealth-api /usr/local/bin/stealth-api
+USER root
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/stealth-api"]
+
 FROM runtime-base AS worker
 RUN apk add --no-cache docker-cli
 COPY --from=build /out/stealth-worker /usr/local/bin/stealth-worker

@@ -23,12 +23,12 @@ func TestProjectIDFromCORSPath(t *testing.T) {
 }
 
 func TestCORSMethodAllowed(t *testing.T) {
-	for _, method := range []string{"GET", "post", "PATCH", "delete"} {
+	for _, method := range []string{"GET", "post", "PUT", "patch", "delete"} {
 		if !corsMethodAllowed(method) {
 			t.Errorf("corsMethodAllowed(%q) = false", method)
 		}
 	}
-	for _, method := range []string{"", "PUT", "TRACE", "OPTIONS"} {
+	for _, method := range []string{"", "TRACE", "OPTIONS"} {
 		if corsMethodAllowed(method) {
 			t.Errorf("corsMethodAllowed(%q) = true", method)
 		}

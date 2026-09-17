@@ -19,6 +19,11 @@ import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { pageControls } from "@/lib/pagination";
+import {
+  projectFields,
+  projectPayload,
+  type ProjectFormValues,
+} from "@/features/organization/project-form";
 
 export function OrganizationProjectList({
   organizationId,
@@ -31,8 +36,8 @@ export function OrganizationProjectList({
   const query = useProjects(organizationId, { cursor: navigation.cursor });
   const create = useCreateProject(organizationId);
   const canManage = query.data?.can_manage === true;
-  const handleCreateProject = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({ name: values.name });
+  const handleCreateProject = async (values: ProjectFormValues) => {
+    const result = await create.mutateAsync(projectPayload(values));
     toast.success("Project created");
     if (result?.project) {
       router.push(
@@ -53,13 +58,15 @@ export function OrganizationProjectList({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-white">Projects</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold tracking-[-0.012em] text-paper">
+            Projects
+          </h2>
+          <p className="mt-1 text-xs text-fog">
             Each project maps to one isolated Stealth application boundary.
           </p>
         </div>
         {canManage ? (
-          <CreateDialog
+          <CreateDialog<ProjectFormValues>
             open={createOpen}
             onOpenChange={setCreateOpen}
             triggerLabel="Create project"
@@ -67,14 +74,7 @@ export function OrganizationProjectList({
             pendingLabel="Creating project…"
             title="Create a project"
             description="Project names are normalized to stable API slugs, for example Production API becomes production-api."
-            fields={[
-              {
-                name: "name",
-                label: "Project name",
-                placeholder: "Production API",
-                help: "Use a readable name; the console sends the lowercase hyphenated slug required by the API.",
-              },
-            ]}
+            fields={projectFields}
             pending={create.isPending}
             onSubmit={handleCreateProject}
           />
@@ -105,7 +105,7 @@ export function OrganizationProjectList({
                 cell: ({ row }) => (
                   <button
                     type="button"
-                    className="font-medium text-white hover:text-cyan-200"
+                    className="min-h-11 text-left font-medium text-paper hover:text-acid-lime"
                     onClick={() =>
                       router.push(
                         `/organizations/${organizationId}/projects/${row.original.id}`,

@@ -8,7 +8,8 @@ import (
 )
 
 type Repository struct {
-	pool          *pgxpool.Pool
+	pool *pgxpool.Pool
+	*BootstrapRepository
 	txtResolver   SiteTXTResolver
 	webhookCipher *functionsecret.Cipher
 	// Messaging provider credentials and subscriber addresses use the same
@@ -25,13 +26,31 @@ type Dependencies struct {
 	WebhookCipher *functionsecret.Cipher
 }
 
-func New(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
+func New(pool *pgxpool.Pool) *Repository {
+	return &Repository{pool: pool, BootstrapRepository: &BootstrapRepository{pool: pool}}
+}
 
 // NewWithDependencies builds a repository with injectable collaborators.
 // The webhook and messaging ciphers intentionally share one key so both
 // domains rotate together without changing the API contract.
 func NewWithDependencies(pool *pgxpool.Pool, deps Dependencies) *Repository {
-	return &Repository{pool: pool, txtResolver: deps.TXTResolver, webhookCipher: deps.WebhookCipher, messagingCipher: deps.WebhookCipher}
+	return &Repository{
+		pool:                pool,
+		BootstrapRepository: &BootstrapRepository{pool: pool},
+		txtResolver:         deps.TXTResolver,
+		webhookCipher:       deps.WebhookCipher,
+		messagingCipher:     deps.WebhookCipher,
+	}
+}
+
+// BootstrapStore returns the first-run persistence capability exposed by the
+// repository. Callers should depend on the capability rather than the broad
+// Repository when they only need setup and owner onboarding.
+func (r *Repository) BootstrapStore() BootstrapStore {
+	if r == nil {
+		return nil
+	}
+	return r.BootstrapRepository
 }
 
 func (r *Repository) Ping(ctx context.Context) error { return r.pool.Ping(ctx) }

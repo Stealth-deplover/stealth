@@ -59,10 +59,10 @@ const RESOURCE_ICONS: Record<ResourceNodeData["type"], LucideIcon> = {
 };
 
 const RESOURCE_MINIMAP_COLORS: Record<ResourceNodeData["type"], string> = {
-  function: "#72e4dc",
-  site: "#b9a1ff",
-  database: "#f2c66d",
-  storage: "#73d6a2",
+  function: "var(--color-signal-teal)",
+  site: "var(--color-iris-violet)",
+  database: "var(--color-lavender)",
+  storage: "var(--color-pulse-green)",
 };
 
 const RESOURCE_PATHS: Record<ResourceNodeData["type"], string> = {
@@ -91,15 +91,17 @@ function ResourceNode({ data }: NodeProps<ResourceNode>) {
   const Icon = RESOURCE_ICONS[data.type];
   return (
     <div
-      className={`min-w-48 rounded-xl border px-4 py-3 shadow-xl ${resourceAccent[data.type]}`}
+      className={`min-w-48 rounded-xl border px-4 py-3 ${resourceAccent[data.type]}`}
     >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex size-7 items-center justify-center rounded-lg bg-black/20">
           <Icon className="size-4" />
         </span>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{data.label}</p>
-          <p className="mt-0.5 truncate text-[11px] opacity-70">
+          <p className="truncate text-sm font-semibold text-mist">
+            {data.label}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] text-fog">
             {data.subtitle ?? data.type}
           </p>
         </div>
@@ -321,7 +323,7 @@ export function ServicesCanvasView({
             {selected ? (
               <Panel
                 position="bottom-right"
-                className="w-64 rounded-xl border border-stealth-border bg-stealth-elevated/95 p-4 shadow-2xl"
+                className="w-64 rounded-xl border border-graphite bg-obsidian/95 p-4 shadow-xl"
               >
                 <p className="text-[10px] uppercase tracking-[0.16em] text-slate-600">
                   Selected resource

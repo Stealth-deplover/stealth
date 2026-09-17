@@ -19,8 +19,8 @@ export function EmptyState({
   return (
     <Card className="border-dashed bg-transparent">
       <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
-        <div className="mb-4 flex size-11 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-200">
-          {icon ?? <Blocks className="size-5" />}
+        <div className="mb-4 flex size-10 items-center justify-center rounded-md border border-graphite bg-white/[0.04] text-fog">
+          {icon ?? <Blocks className="size-5" aria-hidden="true" />}
         </div>
         <h3 className="text-sm font-semibold text-white">{title}</h3>
         <p className="mt-2 max-w-md text-sm leading-6 text-stealth-muted">
@@ -28,7 +28,7 @@ export function EmptyState({
         </p>
         {action && actionLabel ? (
           <Button className="mt-5" onClick={action}>
-            <Plus className="size-4" /> {actionLabel}
+            <Plus className="size-4" aria-hidden="true" /> {actionLabel}
           </Button>
         ) : null}
       </CardContent>

@@ -18,9 +18,13 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { formatBytes, formatDate } from "@/lib/format";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
-import { SITE_FRAMEWORK_OPTIONS } from "@/lib/capabilities/runtime-catalog";
 import { ProjectResourceIntro } from "@/features/resources/collection-shared";
 import { pageControls } from "@/lib/pagination";
+import {
+  siteFields,
+  sitePayload,
+  type SiteFormValues,
+} from "@/features/sites/site-form";
 
 export function SitesView({
   organizationId,
@@ -36,12 +40,8 @@ export function SitesView({
   const create = useCreateSite(projectId);
   const base = `/organizations/${organizationId}/projects/${projectId}`;
   const canManage = query.data?.can_manage === true;
-  const handleCreateSite = async (values: Record<string, string>) => {
-    const result = await create.mutateAsync({
-      name: values.name,
-      framework: SITE_FRAMEWORK_OPTIONS[0].value,
-      enabled: true,
-    });
+  const handleCreateSite = async (values: SiteFormValues) => {
+    const result = await create.mutateAsync(sitePayload(values));
     toast.success("Site created");
     if (result?.site) {
       router.push(`${base}/sites/${result.site.id}`);
@@ -98,7 +98,7 @@ export function SitesView({
         description="Deploy static sites from an archive or a public GitHub/GitLab source."
         actions={
           canManage ? (
-            <CreateDialog
+            <CreateDialog<SiteFormValues>
               open={createOpen}
               onOpenChange={setCreateOpen}
               triggerLabel="Create site"
@@ -106,9 +106,7 @@ export function SitesView({
               pendingLabel="Creating site…"
               title="Create a site"
               description="Create the site boundary first, then add a deployment."
-              fields={[
-                { name: "name", label: "Name", placeholder: "marketing-site" },
-              ]}
+              fields={siteFields}
               pending={create.isPending}
               onSubmit={handleCreateSite}
             />

@@ -11,6 +11,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -88,13 +90,11 @@ func ExtractTrusted(ctx context.Context, source io.Reader, sourceName, destinati
 
 func extractArchive(ctx context.Context, source io.Reader, sourceName, destination string, limits ArchiveLimits, allowSymlinks bool) (ArchiveStats, error) {
 	limits = limits.withDefaults()
-	destination, err := filepath.Abs(destination)
-	if err != nil || strings.TrimSpace(destination) == "" {
-		return ArchiveStats{}, ErrArchiveTraversal
+	destination, root, err := prepareArchiveRoot(destination)
+	if err != nil {
+		return ArchiveStats{}, err
 	}
-	if err := os.MkdirAll(destination, 0o700); err != nil {
-		return ArchiveStats{}, fmt.Errorf("create function workspace: %w", err)
-	}
+	defer root.Close()
 	// zip.Reader requires random access. The function upload ceiling is small
 	// relative to worker memory, and this bounded read avoids an unbounded
 	// allocation when a caller invokes Extract directly.
@@ -112,19 +112,45 @@ func extractArchive(ctx context.Context, source io.Reader, sourceName, destinati
 	name := strings.ToLower(strings.TrimSpace(sourceName))
 	switch {
 	case strings.HasSuffix(name, ".zip"):
-		return extractZip(ctx, compressed, destination, limits, allowSymlinks)
+		return extractZip(ctx, compressed, destination, root, limits, allowSymlinks)
 	case strings.HasSuffix(name, ".tar.gz"), strings.HasSuffix(name, ".tgz"):
 		reader, closeFn, err := gzipReader(bytes.NewReader(compressed))
 		if err != nil {
 			return ArchiveStats{}, err
 		}
 		defer closeFn()
-		return extractTar(ctx, reader, destination, limits, allowSymlinks)
+		return extractTar(ctx, reader, destination, root, limits, allowSymlinks)
 	case strings.HasSuffix(name, ".tar"):
-		return extractTar(ctx, bytes.NewReader(compressed), destination, limits, allowSymlinks)
+		return extractTar(ctx, bytes.NewReader(compressed), destination, root, limits, allowSymlinks)
 	default:
 		return ArchiveStats{}, ErrUnsupportedArchive
 	}
+}
+
+func prepareArchiveRoot(destination string) (string, *os.Root, error) {
+	destination, err := filepath.Abs(destination)
+	if err != nil || strings.TrimSpace(destination) == "" {
+		return "", nil, ErrArchiveTraversal
+	}
+	destination = filepath.Clean(destination)
+	info, err := os.Lstat(destination)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(destination, 0o700); err != nil {
+			return "", nil, fmt.Errorf("create function workspace: %w", err)
+		}
+		info, err = os.Lstat(destination)
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect function workspace: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, ErrArchiveTraversal
+	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		return "", nil, fmt.Errorf("open function workspace: %w", err)
+	}
+	return destination, root, nil
 }
 
 func gzipReader(source io.Reader) (io.Reader, func() error, error) {
@@ -135,7 +161,7 @@ func gzipReader(source io.Reader) (io.Reader, func() error, error) {
 	return reader, reader.Close, nil
 }
 
-func extractZip(ctx context.Context, compressed []byte, destination string, limits ArchiveLimits, allowSymlinks bool) (ArchiveStats, error) {
+func extractZip(ctx context.Context, compressed []byte, destination string, root *os.Root, limits ArchiveLimits, allowSymlinks bool) (ArchiveStats, error) {
 	archive, err := zip.NewReader(bytes.NewReader(compressed), int64(len(compressed)))
 	if err != nil {
 		return ArchiveStats{}, fmt.Errorf("open zip source archive: %w", err)
@@ -148,7 +174,7 @@ func extractZip(ctx context.Context, compressed []byte, destination string, limi
 		if err := contextErr(ctx); err != nil {
 			return ArchiveStats{}, err
 		}
-		relative, isDirectory, err := safeEntryPath(entry.Name)
+		relative, isDirectory, err := safeArchiveEntryPath(entry.Name)
 		if err != nil {
 			return ArchiveStats{}, err
 		}
@@ -188,7 +214,7 @@ func extractZip(ctx context.Context, compressed []byte, destination string, limi
 			if int64(len(target)) > maxSymlinkTargetBytes {
 				return ArchiveStats{}, ErrArchiveTooLarge
 			}
-			if err := writeSymlink(destination, relative, string(target)); err != nil {
+			if err := writeSymlink(root, destination, relative, string(target)); err != nil {
 				return ArchiveStats{}, err
 			}
 			stats.Files++
@@ -198,7 +224,7 @@ func extractZip(ctx context.Context, compressed []byte, destination string, limi
 			return ArchiveStats{}, fmt.Errorf("%w: links and special files are not allowed", ErrArchiveEntry)
 		}
 		if isDirectory {
-			if err := makeDirectory(destination, relative); err != nil {
+			if err := makeDirectory(root, destination, relative); err != nil {
 				return ArchiveStats{}, err
 			}
 			stats.Directories++
@@ -215,7 +241,7 @@ func extractZip(ctx context.Context, compressed []byte, destination string, limi
 		if err != nil {
 			return ArchiveStats{}, fmt.Errorf("open zip entry: %w", err)
 		}
-		written, writeErr := writeEntry(ctx, reader, destination, relative, limits.MaxEntry, limits.MaxBytes-stats.Bytes)
+		written, writeErr := writeEntry(ctx, root, reader, destination, relative, limits.MaxEntry, limits.MaxBytes-stats.Bytes)
 		closeErr := reader.Close()
 		if writeErr != nil {
 			return ArchiveStats{}, writeErr
@@ -229,7 +255,7 @@ func extractZip(ctx context.Context, compressed []byte, destination string, limi
 	return stats, nil
 }
 
-func extractTar(ctx context.Context, source io.Reader, destination string, limits ArchiveLimits, allowSymlinks bool) (ArchiveStats, error) {
+func extractTar(ctx context.Context, source io.Reader, destination string, root *os.Root, limits ArchiveLimits, allowSymlinks bool) (ArchiveStats, error) {
 	reader := tar.NewReader(source)
 	stats := ArchiveStats{}
 	seen := map[string]struct{}{}
@@ -256,7 +282,7 @@ func extractTar(ctx context.Context, source io.Reader, destination string, limit
 		if allowSymlinks {
 			relative, isDirectory, err = trustedEntryPath(header.Name)
 		} else {
-			relative, isDirectory, err = safeEntryPath(header.Name)
+			relative, isDirectory, err = safeArchiveEntryPath(header.Name)
 		}
 		if err != nil {
 			return ArchiveStats{}, err
@@ -280,7 +306,7 @@ func extractTar(ctx context.Context, source io.Reader, destination string, limit
 		seen[relative] = struct{}{}
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := makeDirectory(destination, relative); err != nil {
+			if err := makeDirectory(root, destination, relative); err != nil {
 				return ArchiveStats{}, err
 			}
 			stats.Directories++
@@ -288,7 +314,7 @@ func extractTar(ctx context.Context, source io.Reader, destination string, limit
 			if stats.Files >= limits.MaxFiles || header.Size < 0 || header.Size > limits.MaxEntry || header.Size > limits.MaxBytes-stats.Bytes {
 				return ArchiveStats{}, ErrArchiveTooLarge
 			}
-			written, writeErr := writeEntry(ctx, reader, destination, relative, limits.MaxEntry, limits.MaxBytes-stats.Bytes)
+			written, writeErr := writeEntry(ctx, root, reader, destination, relative, limits.MaxEntry, limits.MaxBytes-stats.Bytes)
 			if writeErr != nil {
 				return ArchiveStats{}, writeErr
 			}
@@ -301,7 +327,7 @@ func extractTar(ctx context.Context, source io.Reader, destination string, limit
 			if !allowSymlinks || stats.Files >= limits.MaxFiles {
 				return ArchiveStats{}, fmt.Errorf("%w: links and special files are not allowed", ErrArchiveEntry)
 			}
-			if err := writeSymlink(destination, relative, header.Linkname); err != nil {
+			if err := writeSymlink(root, destination, relative, header.Linkname); err != nil {
 				return ArchiveStats{}, err
 			}
 			stats.Files++
@@ -350,10 +376,15 @@ func trustedEntryPath(name string) (string, bool, error) {
 	if name == "." || name == "" {
 		return "", true, nil
 	}
-	return safeEntryPath(name)
+	return safeArchiveEntryPath(name)
 }
 
-func safeEntryPath(name string) (string, bool, error) {
+// safeArchiveEntryPath returns a canonical, relative archive path. It is the
+// only entry-name sanitizer used before an archive path reaches the
+// filesystem boundary. The lexical checks are intentionally stricter than
+// filepath.Clean so dot segments and platform-specific absolute paths cannot
+// be normalized into an escape.
+func safeArchiveEntryPath(name string) (string, bool, error) {
 	// Archivers commonly include an explicit root directory (`.` or `./`)
 	// when packaging the current working directory. It does not address a
 	// user-controlled filesystem object, so accept that single root marker;
@@ -364,13 +395,17 @@ func safeEntryPath(name string) (string, bool, error) {
 	if name == "." || name == "" {
 		return "", true, nil
 	}
-	if name == "" || strings.ContainsRune(name, '\x00') || strings.Contains(name, "\\") || strings.HasPrefix(name, "/") {
+	if name == "" || strings.ContainsRune(name, '\x00') || strings.Contains(name, "\\") || strings.HasPrefix(name, "/") || hasWindowsDrivePrefix(name) {
 		return "", false, fmt.Errorf("%w: %q", ErrArchiveTraversal, name)
 	}
 	isDirectory := strings.HasSuffix(name, "/")
 	trimmed := strings.TrimSuffix(name, "/")
 	if trimmed == "" {
 		return "", true, fmt.Errorf("%w: empty archive path", ErrArchiveEntry)
+	}
+	native := filepath.FromSlash(trimmed)
+	if filepath.IsAbs(native) || filepath.VolumeName(native) != "" {
+		return "", false, fmt.Errorf("%w: %q", ErrArchiveTraversal, name)
 	}
 	parts := strings.Split(trimmed, "/")
 	for _, part := range parts {
@@ -385,26 +420,47 @@ func safeEntryPath(name string) (string, bool, error) {
 	return clean, isDirectory, nil
 }
 
-func makeDirectory(destination, relative string) error {
-	target, err := safeDestination(destination, relative)
+func hasWindowsDrivePrefix(value string) bool {
+	return len(value) >= 2 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) && value[1] == ':'
+}
+
+func makeDirectory(root *os.Root, destination, relative string) error {
+	if _, err := safeDestination(destination, relative); err != nil {
+		return err
+	}
+	if err := ensureParentsAreDirectories(root, relative); err != nil {
+		return err
+	}
+	native := filepath.FromSlash(relative)
+	info, err := root.Lstat(native)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := root.Mkdir(native, 0o700); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("create archive directory: %w", err)
+			}
+			info, err = root.Lstat(native)
+		} else {
+			return nil
+		}
+	}
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		return fmt.Errorf("create archive directory: %w", err)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: archive directory is not a directory", ErrArchiveEntry)
 	}
-	return ensureParentsAreDirectories(destination, relative)
+	return nil
 }
 
-func writeEntry(ctx context.Context, source io.Reader, destination, relative string, maxEntry, maxRemaining int64) (int64, error) {
-	target, err := safeDestination(destination, relative)
-	if err != nil {
+func writeEntry(ctx context.Context, root *os.Root, source io.Reader, destination, relative string, maxEntry, maxRemaining int64) (int64, error) {
+	if _, err := safeDestination(destination, relative); err != nil {
 		return 0, err
 	}
-	if err := ensureParentsAreDirectories(destination, relative); err != nil {
+	if err := ensureParentsAreDirectories(root, relative); err != nil {
 		return 0, err
 	}
-	if existing, err := os.Lstat(target); err == nil {
+	nativeRelative := filepath.FromSlash(relative)
+	if existing, err := root.Lstat(nativeRelative); err == nil {
 		if existing.IsDir() || existing.Mode()&os.ModeSymlink != 0 {
 			return 0, fmt.Errorf("%w: destination is not a regular file", ErrArchiveEntry)
 		}
@@ -412,18 +468,17 @@ func writeEntry(ctx context.Context, source io.Reader, destination, relative str
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return 0, err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".extract-*")
-	if err != nil {
-		return 0, fmt.Errorf("create archive file: %w", err)
+	parent := filepath.ToSlash(filepath.Dir(relative))
+	if parent == "." {
+		parent = ""
 	}
-	temporaryPath := temporary.Name()
+	temporaryRelative, temporary, err := createArchiveTemporaryFile(root, parent)
+	if err != nil {
+		return 0, err
+	}
 	cleanup := func() {
 		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		cleanup()
-		return 0, err
+		_ = root.Remove(filepath.FromSlash(temporaryRelative))
 	}
 	limit := maxEntry
 	if maxRemaining < limit {
@@ -447,22 +502,39 @@ func writeEntry(ctx context.Context, source io.Reader, destination, relative str
 		return 0, err
 	}
 	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
+		_ = root.Remove(filepath.FromSlash(temporaryRelative))
 		return 0, err
 	}
-	if err := os.Rename(temporaryPath, target); err != nil {
-		_ = os.Remove(temporaryPath)
+	if err := root.Rename(filepath.FromSlash(temporaryRelative), nativeRelative); err != nil {
+		_ = root.Remove(filepath.FromSlash(temporaryRelative))
 		return 0, err
 	}
 	return written, nil
 }
 
-func writeSymlink(destination, relative, target string) error {
-	if relative == "" || target == "" || strings.ContainsAny(target, "\\\x00\r\n") || strings.HasPrefix(target, "/") {
+func createArchiveTemporaryFile(root *os.Root, parent string) (string, *os.File, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", nil, fmt.Errorf("generate archive temporary name: %w", err)
+		}
+		relative := path.Join(parent, ".extract-"+hex.EncodeToString(random[:]))
+		file, err := root.OpenFile(filepath.FromSlash(relative), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return relative, file, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", nil, fmt.Errorf("create archive file: %w", err)
+		}
+	}
+	return "", nil, fmt.Errorf("create archive file: temporary name collision")
+}
+
+func writeSymlink(root *os.Root, destination, relative, target string) error {
+	if relative == "" || target == "" || strings.ContainsAny(target, "\\\x00\r\n") || strings.HasPrefix(target, "/") || hasWindowsDrivePrefix(target) || filepath.IsAbs(filepath.FromSlash(target)) || filepath.VolumeName(filepath.FromSlash(target)) != "" {
 		return fmt.Errorf("%w: unsafe symlink target", ErrArchiveEntry)
 	}
-	linkPath, err := safeDestination(destination, relative)
-	if err != nil {
+	if _, err := safeDestination(destination, relative); err != nil {
 		return err
 	}
 	linkDirectory := path.Dir(relative)
@@ -470,18 +542,19 @@ func writeSymlink(destination, relative, target string) error {
 	if linkDirectory == "." {
 		combined = path.Clean(target)
 	}
-	if _, _, err := safeEntryPath(combined); err != nil {
+	if _, _, err := safeArchiveEntryPath(combined); err != nil {
 		return fmt.Errorf("%w: unsafe symlink target", ErrArchiveEntry)
 	}
-	if err := ensureParentsAreDirectories(destination, relative); err != nil {
+	if err := ensureParentsAreDirectories(root, relative); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(linkPath); err == nil {
+	nativeRelative := filepath.FromSlash(relative)
+	if _, err := root.Lstat(nativeRelative); err == nil {
 		return fmt.Errorf("%w: duplicate destination", ErrArchiveEntry)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Symlink(target, linkPath); err != nil {
+	if err := root.Symlink(target, nativeRelative); err != nil {
 		return fmt.Errorf("create archive symlink: %w", err)
 	}
 	return nil
@@ -498,29 +571,41 @@ func safeDestination(destination, relative string) (string, error) {
 		return "", ErrArchiveTraversal
 	}
 	rel, err := filepath.Rel(base, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return "", ErrArchiveTraversal
 	}
 	return resolved, nil
 }
 
-func ensureParentsAreDirectories(destination, relative string) error {
+func ensureParentsAreDirectories(root *os.Root, relative string) error {
+	if root == nil {
+		return ErrArchiveTraversal
+	}
 	parts := strings.Split(relative, "/")
 	if len(parts) < 2 {
 		return nil
 	}
-	current := destination
+	current := ""
 	for _, part := range parts[:len(parts)-1] {
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
+		current = path.Join(current, part)
+		native := filepath.FromSlash(current)
+		info, err := root.Lstat(native)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				if err := os.Mkdir(current, 0o700); err != nil {
-					return err
+				if err := root.Mkdir(native, 0o700); err != nil {
+					if !errors.Is(err, os.ErrExist) {
+						return err
+					}
+					info, err = root.Lstat(native)
+					if err != nil {
+						return err
+					}
+				} else {
+					continue
 				}
-				continue
+			} else {
+				return err
 			}
-			return err
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%w: archive parent is not a directory", ErrArchiveEntry)

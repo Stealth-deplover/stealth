@@ -17,14 +17,12 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
-	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/runtime"
 	"github.com/Stealth-deplover/stealth/internal/tlsmanager"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -36,6 +34,14 @@ func main() {
 	}
 	if err := cfg.ValidateFunctions(); err != nil {
 		logger.Error("functions configuration error", "error", err)
+		os.Exit(1)
+	}
+	if err := cfg.ValidateBootstrap(); err != nil {
+		logger.Error("bootstrap configuration error", "error", err)
+		os.Exit(1)
+	}
+	if err := cfg.ValidateSetup(); err != nil {
+		logger.Error("setup configuration error", "error", err)
 		os.Exit(1)
 	}
 	if err := cfg.ValidateStorage(); err != nil {
@@ -63,34 +69,19 @@ func main() {
 			logger.Error("telemetry shutdown error", "error", err)
 		}
 	}()
-	redisOptions, err := redis.ParseURL(cfg.RedisURL)
-	if err != nil {
-		logger.Error("redis configuration error", "error", err)
-		os.Exit(1)
-	}
-	redisClient := redis.NewClient(redisOptions)
-	defer redisClient.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	resources, err := runtime.Open(ctx, cfg, runtime.OpenOptions{
+		WithRedis:       true,
+		ApplyMigrations: true,
+	})
 	if err != nil {
-		logger.Error("database configuration error", "error", err)
+		logger.Error("runtime resource configuration error", "error", err)
 		os.Exit(1)
 	}
-	poolConfig.MaxConns = cfg.DatabaseMaxConns
-	poolConfig.MinConns = cfg.DatabaseMinConns
-	poolConfig.MaxConnLifetime = cfg.DatabaseMaxConnLifetime
-	poolConfig.MaxConnIdleTime = cfg.DatabaseMaxConnIdleTime
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		logger.Error("database connection error", "error", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-	if err := migrate.Apply(ctx, pool); err != nil {
-		logger.Error("migration error", "error", err)
-		os.Exit(1)
-	}
+	defer resources.Close()
+	pool := resources.Pool
+	redisClient := resources.Redis
 	// Uploads and downloads are streamed. Header parsing remains short to
 	// resist slowloris clients, while body/read and write deadlines allow the
 	// configured file size to traverse a slow self-hosted link.

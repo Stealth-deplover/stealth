@@ -86,6 +86,25 @@ describe("cursor pagination history", () => {
 
     expect(requests).toEqual([undefined, "a"]);
   });
+
+  it("honors query cancellation between cursor requests", async () => {
+    const controller = new AbortController();
+    let requests = 0;
+
+    await expect(
+      fetchAllCursorPages(
+        async () => {
+          requests += 1;
+          controller.abort();
+          return { items: ["first"], pagination: { next_cursor: "next" } };
+        },
+        (page) => page.items,
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(requests).toBe(1);
+  });
 });
 
 describe("cursor URL state", () => {

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
@@ -48,7 +49,15 @@ func canManageOrganizationMembership(actorRole, targetRole, nextRole string) boo
 
 func membershipFromRow(row interface{ Scan(...any) error }) (domain.Membership, error) {
 	var item domain.Membership
-	err := row.Scan(&item.OrganizationID, &item.AccountID, &item.Email, &item.Role, &item.CreatedAt)
+	var email, provider, providerLogin sql.NullString
+	err := row.Scan(&item.OrganizationID, &item.AccountID, &email, &provider, &providerLogin, &item.Role, &item.CreatedAt)
+	item.Email = nullableStringPointer(email)
+	if provider.Valid {
+		item.Provider = provider.String
+	}
+	if providerLogin.Valid {
+		item.ProviderLogin = providerLogin.String
+	}
 	return item, err
 }
 
@@ -78,15 +87,25 @@ func (r *Repository) AddOrganizationMembership(ctx context.Context, organization
 		return domain.Membership{}, err
 	}
 	var item domain.Membership
+	var accountEmail sql.NullString
+	var provider, providerLogin sql.NullString
 	err = tx.QueryRow(ctx, `
-		SELECT id,email
-		FROM accounts
-		WHERE email=$1`, email).Scan(&item.AccountID, &item.Email)
+		SELECT a.id,a.email,ai.provider,ai.provider_login
+		FROM accounts a
+		LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github'
+		WHERE a.email=$1`, email).Scan(&item.AccountID, &accountEmail, &provider, &providerLogin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Membership{}, ErrNotFound
 	}
 	if err != nil {
 		return domain.Membership{}, err
+	}
+	item.Email = nullableStringPointer(accountEmail)
+	if provider.Valid {
+		item.Provider = provider.String
+	}
+	if providerLogin.Valid {
+		item.ProviderLogin = providerLogin.String
 	}
 	accountID, err := uuid.Parse(item.AccountID)
 	if err != nil {
@@ -105,6 +124,8 @@ func (r *Repository) AddOrganizationMembership(ctx context.Context, organization
 		"organization_id": organizationID.String(),
 		"account_id":      accountID.String(),
 		"email":           item.Email,
+		"provider":        item.Provider,
+		"provider_login":  item.ProviderLogin,
 		"role":            role,
 	}
 	if err := writeAuditMetadata(ctx, tx, organizationID, actorID, "organization.membership.add", "organization_membership", accountID, metadata); err != nil {
@@ -135,11 +156,12 @@ func (r *Repository) UpdateOrganizationMembershipRole(ctx context.Context, organ
 		return domain.Membership{}, err
 	}
 	item, err := membershipFromRow(tx.QueryRow(ctx, `
-		SELECT m.organization_id,m.account_id,a.email,m.role,m.created_at
+		SELECT m.organization_id,m.account_id,a.email,ai.provider,ai.provider_login,m.role,m.created_at
 		FROM organization_memberships m
 		JOIN accounts a ON a.id=m.account_id
+		LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github'
 		WHERE m.organization_id=$1 AND m.account_id=$2
-		FOR UPDATE`, organizationID, targetID))
+		FOR UPDATE OF m,a`, organizationID, targetID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Membership{}, ErrNotFound
 	}
@@ -168,6 +190,8 @@ func (r *Repository) UpdateOrganizationMembershipRole(ctx context.Context, organ
 		"organization_id": organizationID.String(),
 		"account_id":      targetID.String(),
 		"email":           item.Email,
+		"provider":        item.Provider,
+		"provider_login":  item.ProviderLogin,
 		"from":            previousRole,
 		"to":              nextRole,
 	}
@@ -197,11 +221,12 @@ func (r *Repository) RemoveOrganizationMembership(ctx context.Context, organizat
 		return err
 	}
 	item, err := membershipFromRow(tx.QueryRow(ctx, `
-		SELECT m.organization_id,m.account_id,a.email,m.role,m.created_at
+		SELECT m.organization_id,m.account_id,a.email,ai.provider,ai.provider_login,m.role,m.created_at
 		FROM organization_memberships m
 		JOIN accounts a ON a.id=m.account_id
+		LEFT JOIN account_identities ai ON ai.account_id=a.id AND ai.provider='github'
 		WHERE m.organization_id=$1 AND m.account_id=$2
-		FOR UPDATE`, organizationID, targetID))
+		FOR UPDATE OF m,a`, organizationID, targetID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -218,6 +243,8 @@ func (r *Repository) RemoveOrganizationMembership(ctx context.Context, organizat
 		"organization_id": organizationID.String(),
 		"account_id":      targetID.String(),
 		"email":           item.Email,
+		"provider":        item.Provider,
+		"provider_login":  item.ProviderLogin,
 		"role":            item.Role,
 	}
 	if err := writeAuditMetadata(ctx, tx, organizationID, actorID, "organization.membership.remove", "organization_membership", targetID, metadata); err != nil {

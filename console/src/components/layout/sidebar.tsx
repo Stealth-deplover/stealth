@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import {
   Activity,
   Bot,
@@ -24,6 +23,13 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
+import {
+  organizationPath,
+  organizationProjectsPath,
+  organizationsPath,
+  projectPath,
+} from "@/lib/console-routes";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -37,17 +43,18 @@ function NavGroup({
   label,
   items,
   collapsed,
+  pathname,
 }: {
   label: string;
   items: NavItem[];
   collapsed: boolean;
+  pathname: string;
 }) {
-  const pathname = usePathname();
   return (
     <div className="mb-5">
       <p
         className={cn(
-          "mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600",
+          "mb-2 px-3 text-[10px] font-medium uppercase tracking-[0.14em] text-fog",
           collapsed && "sr-only",
         )}
       >
@@ -68,18 +75,17 @@ function NavGroup({
               title={collapsed ? item.label : undefined}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "group flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-100",
+                "group flex min-h-11 items-center gap-2.5 rounded-md px-3 py-2.5 text-[13px] text-fog transition-colors duration-150 hover:bg-white/[0.05] hover:text-mist",
                 collapsed && "justify-center px-2",
-                active && "bg-cyan-300/[0.09] text-cyan-200",
+                active && "bg-white/[0.06] text-mist",
               )}
             >
               <Icon
                 className={cn(
                   "size-4 shrink-0",
-                  active
-                    ? "text-cyan-300"
-                    : "text-slate-600 group-hover:text-slate-300",
+                  active ? "text-acid-lime" : "text-ash group-hover:text-fog",
                 )}
+                aria-hidden="true"
               />
               {collapsed ? (
                 <span className="sr-only">{item.label}</span>
@@ -87,7 +93,7 @@ function NavGroup({
                 <span className="min-w-0 truncate">{item.label}</span>
               )}
               {active && !collapsed ? (
-                <span className="ml-auto size-1.5 rounded-full bg-cyan-300" />
+                <span className="ml-auto size-1.5 rounded-full bg-acid-lime" />
               ) : null}
             </Link>
           );
@@ -98,110 +104,221 @@ function NavGroup({
 }
 
 export function Sidebar({
-  organizationId,
-  projectId,
   mobile = false,
   collapsed = false,
   onToggle,
 }: {
-  organizationId?: string;
-  projectId?: string;
   mobile?: boolean;
   collapsed?: boolean;
   onToggle?: () => void;
 }) {
-  const orgBase = organizationId
-    ? `/organizations/${organizationId}`
-    : "/organizations";
-  const projectBase =
-    organizationId && projectId
-      ? `${orgBase}/projects/${projectId}`
-      : undefined;
+  const { organizationId, projectId, pathname } = useConsoleRouteContext();
+  const projectContext =
+    organizationId && projectId ? { organizationId, projectId } : undefined;
   const orgItems: NavItem[] = organizationId
     ? [
         {
           label: "Projects",
-          href: `${orgBase}/projects`,
+          href: organizationProjectsPath(organizationId),
           icon: FolderKanban,
           exact: true,
         },
-        { label: "Members", href: `${orgBase}/members`, icon: Users },
-        { label: "Plan & limits", href: `${orgBase}/plan`, icon: Gauge },
-        { label: "Incidents", href: `${orgBase}/incidents`, icon: Activity },
-        { label: "Audit", href: `${orgBase}/audit`, icon: ShieldCheck },
+        {
+          label: "Members",
+          href: organizationPath(organizationId, "members"),
+          icon: Users,
+        },
+        {
+          label: "Plan & limits",
+          href: organizationPath(organizationId, "plan"),
+          icon: Gauge,
+        },
+        {
+          label: "Incidents",
+          href: organizationPath(organizationId, "incidents"),
+          icon: Activity,
+        },
+        {
+          label: "Audit",
+          href: organizationPath(organizationId, "audit"),
+          icon: ShieldCheck,
+        },
       ]
     : [
         {
           label: "Organizations",
-          href: "/organizations",
+          href: organizationsPath(),
           icon: FolderKanban,
           exact: true,
         },
       ];
-  const projectItems: NavItem[] = projectBase
+  const projectItems: NavItem[] = projectContext
     ? [
-        { label: "Overview", href: projectBase, icon: Gauge, exact: true },
-        { label: "Services", href: `${projectBase}/services`, icon: Boxes },
+        {
+          label: "Overview",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+          ),
+          icon: Gauge,
+          exact: true,
+        },
+        {
+          label: "Services",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "services",
+          ),
+          icon: Boxes,
+        },
         {
           label: "Deployments",
-          href: `${projectBase}/deployments`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "deployments",
+          ),
           icon: CloudCog,
         },
       ]
     : [];
-  const computeItems: NavItem[] = projectBase
+  const computeItems: NavItem[] = projectContext
     ? [
-        { label: "Functions", href: `${projectBase}/functions`, icon: Zap },
-        { label: "Sites", href: `${projectBase}/sites`, icon: Globe2 },
-        { label: "Agents", href: `${projectBase}/agents`, icon: Bot },
+        {
+          label: "Functions",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "functions",
+          ),
+          icon: Zap,
+        },
+        {
+          label: "Sites",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "sites",
+          ),
+          icon: Globe2,
+        },
+        {
+          label: "Agents",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "agents",
+          ),
+          icon: Bot,
+        },
       ]
     : [];
-  const dataItems: NavItem[] = projectBase
+  const dataItems: NavItem[] = projectContext
     ? [
         {
           label: "Databases",
-          href: `${projectBase}/databases`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "databases",
+          ),
           icon: Database,
         },
-        { label: "Storage", href: `${projectBase}/storage`, icon: Layers3 },
+        {
+          label: "Storage",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "storage",
+          ),
+          icon: Layers3,
+        },
       ]
     : [];
-  const platformItems: NavItem[] = projectBase
+  const platformItems: NavItem[] = projectContext
     ? [
-        { label: "Users", href: `${projectBase}/users`, icon: Users },
+        {
+          label: "Users",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "users",
+          ),
+          icon: Users,
+        },
         {
           label: "Messaging",
-          href: `${projectBase}/messaging`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "messaging",
+          ),
           icon: MessageSquare,
         },
-        { label: "Webhooks", href: `${projectBase}/webhooks`, icon: Webhook },
-        { label: "API keys", href: `${projectBase}/api-keys`, icon: KeyRound },
+        {
+          label: "Webhooks",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "webhooks",
+          ),
+          icon: Webhook,
+        },
+        {
+          label: "API keys",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "api-keys",
+          ),
+          icon: KeyRound,
+        },
       ]
     : [];
-  const observability: NavItem[] = projectBase
+  const observability: NavItem[] = projectContext
     ? [
         {
           label: "Logs",
-          href: `${projectBase}/observability/logs`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "observability",
+            "logs",
+          ),
           icon: Cable,
         },
         {
           label: "Traces",
-          href: `${projectBase}/observability/traces`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "observability",
+            "traces",
+          ),
           icon: Activity,
         },
       ]
     : [];
-  const settings: NavItem[] = projectBase
+  const settings: NavItem[] = projectContext
     ? [
         {
           label: "Project settings",
-          href: `${projectBase}/settings/project`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "settings",
+            "project",
+          ),
           icon: Settings2,
         },
         {
           label: "Auth settings",
-          href: `${projectBase}/auth`,
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "auth",
+          ),
           icon: ShieldCheck,
         },
       ]
@@ -210,7 +327,7 @@ export function Sidebar({
     <aside
       aria-label="Primary navigation"
       className={cn(
-        "scrollbar-thin shrink-0 flex-col overflow-y-auto border-r border-stealth-border bg-stealth-panel/70 py-5 transition-[width] duration-200",
+        "scrollbar-thin shrink-0 flex-col overflow-y-auto border-r border-graphite bg-carbon py-5 transition-[width] duration-200",
         mobile
           ? "flex w-72 px-3"
           : cn("hidden lg:flex", collapsed ? "w-[4.5rem] px-2" : "w-60 px-3"),
@@ -222,15 +339,15 @@ export function Sidebar({
           collapsed && !mobile ? "justify-center" : "px-3",
         )}
       >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-300/10 text-sm font-black text-cyan-200">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-acid-lime/40 bg-acid-lime text-sm font-semibold text-void">
           S
         </span>
         {!collapsed || mobile ? (
           <div className="min-w-0">
-            <p className="text-sm font-semibold tracking-tight text-white">
+            <p className="text-sm font-semibold tracking-[-0.012em] text-paper">
               Stealth
             </p>
-            <p className="text-[10px] uppercase tracking-[0.2em] text-slate-600">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-fog">
               Control plane
             </p>
           </div>
@@ -239,7 +356,7 @@ export function Sidebar({
           <button
             type="button"
             onClick={onToggle}
-            className="ml-auto rounded-md p-1.5 text-slate-600 transition hover:bg-white/[0.06] hover:text-slate-200"
+            className="ml-auto flex size-11 items-center justify-center rounded-md text-ash transition-colors duration-150 hover:bg-white/[0.06] hover:text-mist"
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
@@ -252,47 +369,54 @@ export function Sidebar({
         ) : null}
       </div>
       <NavGroup
-        label={projectBase ? "Workspace" : "Organization"}
+        label={projectContext ? "Workspace" : "Organization"}
         items={orgItems}
         collapsed={collapsed && !mobile}
+        pathname={pathname}
       />
-      {projectBase ? (
+      {projectContext ? (
         <>
           <NavGroup
             label="Project"
             items={projectItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Compute"
             items={computeItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Data"
             items={dataItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Platform"
             items={platformItems}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="Observability"
             items={observability}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
           <NavGroup
             label="System"
             items={settings}
             collapsed={collapsed && !mobile}
+            pathname={pathname}
           />
         </>
       ) : (
         <div
           className={cn(
-            "rounded-xl border border-dashed border-stealth-border px-3 py-4 text-xs leading-5 text-slate-600",
+            "rounded-lg border border-dashed border-graphite px-3 py-4 text-xs leading-5 text-fog",
             collapsed && !mobile && "border-0 px-0 text-center text-[0px]",
           )}
         >
@@ -307,12 +431,12 @@ export function Sidebar({
       )}
       <div
         className={cn(
-          "mt-auto pt-8 text-[10px] leading-5 text-slate-700",
+          "mt-auto pt-8 text-[10px] leading-5 text-fog",
           collapsed && !mobile ? "px-1 text-center" : "px-3",
         )}
       >
         {collapsed && !mobile ? (
-          <span className="text-sm text-slate-700">·</span>
+          <span className="text-sm text-fog">·</span>
         ) : (
           <>
             API is the platform.

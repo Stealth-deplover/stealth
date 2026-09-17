@@ -2,6 +2,7 @@
 import { useOrganizationPlan } from "@/api/queries";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { StatusBadge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +22,7 @@ export function OrganizationPlanView({
         retry={() => query.refetch()}
       />
     );
+  if (query.isLoading) return <LoadingState rows={4} />;
   return (
     <>
       <PageHeader

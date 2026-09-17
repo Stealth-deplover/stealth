@@ -48,11 +48,11 @@ type ReadSeekCloser interface {
 type BlobStore interface {
 	Ping(context.Context) error
 	BeginUploadWithLimit(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, io.Reader, string, int64) (PreparedFile, error)
-	Commit(*PreparedFile) error
+	Commit(context.Context, *PreparedFile) error
 	Cleanup(*PreparedFile)
-	RemoveRelative(string) error
-	RemoveProject(uuid.UUID) error
-	OpenRelative(string) (ReadSeekCloser, error)
+	RemoveRelative(context.Context, string) error
+	RemoveProject(context.Context, uuid.UUID) error
+	OpenRelative(context.Context, string) (ReadSeekCloser, error)
 }
 
 // Store is a self-hosted local blob store. A Store is safe for concurrent use;
@@ -215,7 +215,10 @@ func (s *Store) BeginUploadWithLimit(ctx context.Context, projectID, bucketID, f
 
 // Commit atomically publishes a prepared file under its UUID-derived path and
 // fsyncs its parent directory where the platform supports directory sync.
-func (s *Store) Commit(file *PreparedFile) error {
+func (s *Store) Commit(ctx context.Context, file *PreparedFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if file == nil || file.TempPath == "" || file.RelativePath == "" || file.committed {
 		return ErrInvalidPath
 	}
@@ -247,7 +250,10 @@ func (s *Store) Cleanup(file *PreparedFile) {
 	_ = os.Remove(file.TempPath)
 }
 
-func (s *Store) RemoveRelative(relative string) error {
+func (s *Store) RemoveRelative(ctx context.Context, relative string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path, err := s.resolveRelative(relative)
 	if err != nil {
 		return err
@@ -262,7 +268,10 @@ func (s *Store) RemoveRelative(relative string) error {
 // Project IDs are server-generated UUIDv7 values and are the only accepted
 // directory selector; symlinked namespaces are rejected before RemoveAll so
 // a project deletion can never escape this store's root.
-func (s *Store) RemoveProject(projectID uuid.UUID) error {
+func (s *Store) RemoveProject(ctx context.Context, projectID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s == nil || projectID == uuid.Nil || projectID.Version() != uuid.Version(7) {
 		return ErrInvalidPath
 	}
@@ -286,7 +295,10 @@ func (s *Store) RemoveProject(projectID uuid.UUID) error {
 	return nil
 }
 
-func (s *Store) OpenRelative(relative string) (ReadSeekCloser, error) {
+func (s *Store) OpenRelative(ctx context.Context, relative string) (ReadSeekCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path, err := s.resolveRelative(relative)
 	if err != nil {
 		return nil, err
