@@ -82,19 +82,19 @@ export function OrganizationsIndexView() {
             {organizations.map((organization) => (
               <Card
                 key={organization.id}
-                className="group transition hover:border-cyan-300/30"
+                className="group transition-colors duration-150 hover:border-smoke"
               >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between">
-                    <span className="flex size-10 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/10 text-sm font-semibold text-cyan-200">
+                    <span className="flex size-10 items-center justify-center rounded-md border border-graphite bg-white/[0.05] text-sm font-semibold text-mist">
                       {organization.name.slice(0, 1).toUpperCase()}
                     </span>
                     <Badge variant="neutral">Workspace</Badge>
                   </div>
-                  <h2 className="mt-5 text-lg font-semibold text-white">
+                  <h2 className="mt-5 text-lg font-semibold tracking-[-0.012em] text-paper">
                     {organization.name}
                   </h2>
-                  <p className="mt-1 font-mono text-xs text-slate-600">
+                  <p className="mt-1 font-mono text-xs text-fog">
                     {organization.slug}
                   </p>
                   <p className="mt-5 text-xs text-slate-500">

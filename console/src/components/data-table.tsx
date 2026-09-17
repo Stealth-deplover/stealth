@@ -81,11 +81,14 @@ export function DataTable<T>({
                     )}
                     {header.column.getCanSort() ? (
                       sorted === "asc" ? (
-                        <ArrowUp className="size-3" />
+                        <ArrowUp className="size-3" aria-hidden="true" />
                       ) : sorted === "desc" ? (
-                        <ArrowDown className="size-3" />
+                        <ArrowDown className="size-3" aria-hidden="true" />
                       ) : (
-                        <ChevronsUpDown className="size-3 opacity-50" />
+                        <ChevronsUpDown
+                          className="size-3 opacity-50"
+                          aria-hidden="true"
+                        />
                       )
                     ) : null}
                   </span>
@@ -104,7 +107,7 @@ export function DataTable<T>({
                     {header.isPlaceholder ? null : header.column.getCanSort() ? (
                       <button
                         type="button"
-                        className="min-h-11 rounded-sm text-left hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
+                        className="min-h-11 rounded-sm text-left hover:text-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/40"
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         {label}
@@ -159,7 +162,7 @@ export function DataTable<T>({
           }
         />
       ) : !loading && table.getPageCount() > 1 ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stealth-border px-4 py-3 text-xs text-slate-500">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-graphite px-4 py-3 text-xs text-fog">
           <span>
             Showing {pagination.pageIndex * pagination.pageSize + 1}–
             {Math.min(
@@ -171,7 +174,7 @@ export function DataTable<T>({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-11 min-w-20 rounded-md border border-graphite px-2.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!table.getCanPreviousPage()}
               onClick={() => table.previousPage()}
             >
@@ -182,7 +185,7 @@ export function DataTable<T>({
             </span>
             <button
               type="button"
-              className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-11 min-w-20 rounded-md border border-graphite px-2.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!table.getCanNextPage()}
               onClick={() => table.nextPage()}
             >

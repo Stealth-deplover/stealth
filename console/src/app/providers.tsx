@@ -33,7 +33,7 @@ export function Providers({
         theme="dark"
         position="bottom-right"
         toastOptions={{
-          className: "!border-stealth-border !bg-stealth-elevated !text-white",
+          className: "!border-graphite !bg-obsidian !text-mist",
         }}
       />
     </QueryClientProvider>

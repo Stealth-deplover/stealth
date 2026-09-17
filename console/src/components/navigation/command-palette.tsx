@@ -204,13 +204,16 @@ export function CommandPalette() {
           </DialogDescription>
         </DialogHeader>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" />
+          <Search
+            className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ash"
+            aria-hidden="true"
+          />
           <Input
             autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search the console…"
-            className="h-11 border-transparent bg-black/20 pl-9 text-sm focus:border-cyan-300/40"
+            className="h-11 border-transparent bg-void pl-9 text-sm focus:border-acid-lime/40"
             role="combobox"
             aria-controls="console-command-list"
             aria-expanded="true"
@@ -223,7 +226,7 @@ export function CommandPalette() {
         </div>
         {dynamicLoading ? (
           <div
-            className="mt-2 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.04] px-3 py-2 text-xs text-cyan-200"
+            className="mt-2 rounded-lg border border-acid-lime/15 bg-acid-lime/[0.04] px-3 py-2 text-xs text-mist"
             role="status"
             aria-live="polite"
           >
@@ -263,9 +266,9 @@ export function CommandPalette() {
                   close();
                   router.push(command.href);
                 }}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left ${index === selectedIndex ? "bg-cyan-300/10" : "hover:bg-white/[0.06]"}`}
+                className={`flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition-colors duration-150 ${index === selectedIndex ? "bg-acid-lime/10" : "hover:bg-white/[0.06]"}`}
               >
-                <span className="flex size-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-400">
+                <span className="flex size-8 items-center justify-center rounded-md border border-graphite bg-white/[0.03] text-fog">
                   {command.kind === "project" ? (
                     <FolderKanban className="size-4" />
                   ) : command.kind === "organization" ? (
@@ -275,14 +278,12 @@ export function CommandPalette() {
                   )}
                 </span>
                 <span className="flex-1">
-                  <span className="block text-sm font-medium text-slate-100">
+                  <span className="block text-sm font-medium text-mist">
                     {command.label}
                   </span>
-                  <span className="block text-xs text-slate-500">
-                    {command.hint}
-                  </span>
+                  <span className="block text-xs text-fog">{command.hint}</span>
                 </span>
-                <span className="text-[10px] text-slate-600">↵</span>
+                <span className="font-mono text-[10px] text-fog">↵</span>
               </button>
             ))
           ) : dynamicLoading || dynamicError ? null : (
@@ -291,9 +292,9 @@ export function CommandPalette() {
             </p>
           )}
         </div>
-        <div className="mt-2 flex items-center justify-between border-t border-stealth-border px-3 pt-3 text-[10px] text-slate-600">
+        <div className="mt-2 flex items-center justify-between border-t border-graphite px-3 pt-3 text-[10px] text-fog">
           <span>↑↓ navigate · Enter open</span>
-          <span className="rounded border border-stealth-border px-1.5 py-0.5">
+          <span className="rounded-sm border border-graphite px-1.5 py-0.5 font-mono">
             Esc
           </span>
         </div>

@@ -22,7 +22,7 @@ export function CursorPaginationControls({
   label = "Server page",
 }: CursorPaginationControlsProps) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stealth-border px-4 py-3 text-xs text-slate-500">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-graphite px-4 py-3 text-xs text-fog">
       <span>
         {label}
         {isFetching ? " · Updating…" : ""}
@@ -30,7 +30,7 @@ export function CursorPaginationControls({
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-11 min-w-20 rounded-md border border-graphite px-2.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canFirst || isFetching}
           onClick={onFirst}
         >
@@ -38,7 +38,7 @@ export function CursorPaginationControls({
         </button>
         <button
           type="button"
-          className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-11 min-w-20 rounded-md border border-graphite px-2.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canPrevious || isFetching}
           onClick={onPrevious}
         >
@@ -46,7 +46,7 @@ export function CursorPaginationControls({
         </button>
         <button
           type="button"
-          className="min-h-11 min-w-20 rounded-md border border-stealth-border px-2.5 py-1.5 transition hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-11 min-w-20 rounded-md border border-graphite px-2.5 py-1.5 transition-colors duration-150 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canNext || isFetching}
           onClick={onNext}
         >

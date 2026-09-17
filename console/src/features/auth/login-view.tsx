@@ -45,9 +45,9 @@ export function LoginView() {
     router.replace(destination);
   });
   return (
-    <Card className="w-full max-w-md border-stealth-border/80 bg-stealth-panel">
+    <Card className="w-full max-w-md bg-carbon">
       <CardHeader className="p-7 pb-4">
-        <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">
+        <p className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-fog">
           Welcome back
         </p>
         <CardTitle className="text-2xl">Sign in to Stealth</CardTitle>
@@ -103,7 +103,7 @@ export function LoginView() {
               {errorMessage(mutation.error)}
             </p>
           ) : null}
-          <Button className="mt-2 h-10 w-full" disabled={mutation.isPending}>
+          <Button className="mt-2 w-full" disabled={mutation.isPending}>
             {mutation.isPending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (

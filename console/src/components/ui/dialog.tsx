@@ -17,10 +17,10 @@ export const DialogContent = ({
   showClose?: boolean;
 }) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm" />
+    <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-void/80" />
     <DialogPrimitive.Content
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-stealth-border bg-stealth-elevated p-6 shadow-2xl",
+        "fixed left-1/2 top-1/2 z-50 max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-xl border border-graphite bg-obsidian p-6 shadow-xl",
         className,
       )}
       {...props}
@@ -28,10 +28,10 @@ export const DialogContent = ({
       {children}
       {showClose ? (
         <DialogPrimitive.Close
-          className="absolute right-3 top-3 flex size-11 items-center justify-center rounded-md text-slate-500 hover:bg-white/[0.06] hover:text-white"
+          className="absolute right-3 top-3 flex size-11 items-center justify-center rounded-md text-fog transition-colors duration-150 hover:bg-white/[0.06] hover:text-paper"
           aria-label="Close dialog"
         >
-          <X className="size-4" />
+          <X className="size-4" aria-hidden="true" />
         </DialogPrimitive.Close>
       ) : null}
     </DialogPrimitive.Content>
@@ -61,7 +61,10 @@ export const DialogTitle = ({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Title>) => (
   <DialogPrimitive.Title
-    className={cn("text-lg font-semibold text-white", className)}
+    className={cn(
+      "text-lg font-semibold tracking-[-0.012em] text-paper",
+      className,
+    )}
     {...props}
   />
 );
@@ -70,7 +73,7 @@ export const DialogDescription = ({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Description>) => (
   <DialogPrimitive.Description
-    className={cn("text-sm leading-6 text-stealth-muted", className)}
+    className={cn("text-sm leading-6 text-fog", className)}
     {...props}
   />
 );

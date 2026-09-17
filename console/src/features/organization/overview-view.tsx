@@ -68,12 +68,12 @@ export function OrganizationOverviewView({
           <Card>
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs uppercase tracking-[0.14em] text-slate-600">
+                <p className="text-xs uppercase tracking-[0.12em] text-fog">
                   Projects
                 </p>
-                <FolderKanban className="size-4 text-cyan-300" />
+                <FolderKanban className="size-4 text-fog" />
               </div>
-              <p className="mt-3 text-3xl font-semibold text-white">
+              <p className="mt-3 text-3xl font-semibold tabular-nums text-paper">
                 {formatCount(currentPlan.usage.projects)}
               </p>
             </CardContent>
@@ -81,12 +81,12 @@ export function OrganizationOverviewView({
           <Card>
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs uppercase tracking-[0.14em] text-slate-600">
+                <p className="text-xs uppercase tracking-[0.12em] text-fog">
                   Plan
                 </p>
-                <Activity className="size-4 text-violet-300" />
+                <Activity className="size-4 text-fog" />
               </div>
-              <p className="mt-3 text-3xl font-semibold capitalize text-white">
+              <p className="mt-3 text-3xl font-semibold capitalize tracking-[-0.012em] text-paper">
                 {currentPlan.plan_key}
               </p>
             </CardContent>
@@ -94,12 +94,12 @@ export function OrganizationOverviewView({
           <Card>
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs uppercase tracking-[0.14em] text-slate-600">
+                <p className="text-xs uppercase tracking-[0.12em] text-fog">
                   Members
                 </p>
-                <Users className="size-4 text-amber-300" />
+                <Users className="size-4 text-fog" />
               </div>
-              <p className="mt-3 text-3xl font-semibold text-white">
+              <p className="mt-3 text-3xl font-semibold tabular-nums text-paper">
                 {formatCount(currentPlan.usage.members)}
               </p>
             </CardContent>

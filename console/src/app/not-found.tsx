@@ -5,19 +5,19 @@ import { Card, CardContent } from "@/components/ui/card";
 
 export default function NotFound() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stealth-bg px-6 py-12">
+    <main className="flex min-h-screen items-center justify-center bg-void px-6 py-12">
       <Card className="w-full max-w-lg">
         <CardContent className="p-8 text-center">
-          <div className="mx-auto flex size-11 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-200">
-            <Compass className="size-5" />
+          <div className="mx-auto flex size-10 items-center justify-center rounded-md border border-graphite bg-white/[0.04] text-fog">
+            <Compass className="size-5" aria-hidden="true" />
           </div>
-          <p className="mt-5 text-[11px] font-medium uppercase tracking-[0.18em] text-cyan-300/80">
+          <p className="mt-5 text-[11px] font-medium uppercase tracking-[0.12em] text-fog">
             404 · Not found
           </p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.022em] text-paper">
             This resource is not available
           </h1>
-          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-stealth-muted">
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-fog">
             The route may be outdated, or the resource may have been removed
             from the current project.
           </p>

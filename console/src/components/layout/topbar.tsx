@@ -33,7 +33,7 @@ export function Topbar({
   const logout = useLogout();
   const { organizationId, projectId } = useConsoleRouteContext();
   return (
-    <header className="sticky top-0 z-30 flex min-h-[4.5rem] items-center justify-between gap-2 border-b border-stealth-border bg-stealth-bg/85 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-6">
+    <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between gap-2 border-b border-graphite bg-void/95 px-2.5 sm:gap-3 sm:px-6">
       <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
         <Button
           ref={menuButtonRef}
@@ -61,7 +61,7 @@ export function Topbar({
         <Button
           variant="outline"
           size="sm"
-          className="hidden gap-2 text-slate-500 md:flex"
+          className="hidden gap-2 text-fog md:flex"
           onClick={() =>
             window.dispatchEvent(
               new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
@@ -70,7 +70,7 @@ export function Topbar({
           aria-keyshortcuts="Control+K Meta+K"
         >
           <Search className="size-3.5" /> Search
-          <span className="ml-2 rounded border border-stealth-border px-1.5 py-0.5 text-[10px] text-slate-600">
+          <span className="ml-2 rounded-sm border border-graphite px-1.5 py-0.5 font-mono text-[10px] text-fog">
             ⌘ K
           </span>
         </Button>

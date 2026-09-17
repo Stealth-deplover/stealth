@@ -40,9 +40,9 @@ export function AuthCard({
   description: string;
 }) {
   return (
-    <Card className="w-full max-w-md border-stealth-border/80 bg-stealth-panel">
+    <Card className="w-full max-w-md bg-carbon">
       <CardHeader className="p-7 pb-4">
-        <p className="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">
+        <p className="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-fog">
           Account security
         </p>
         <CardTitle className="text-2xl">{title}</CardTitle>

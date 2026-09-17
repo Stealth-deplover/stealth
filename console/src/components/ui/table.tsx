@@ -21,7 +21,7 @@ export function TableHeader({
   return (
     <thead
       className={cn(
-        "border-b border-stealth-border text-[11px] uppercase tracking-[0.14em] text-slate-500",
+        "border-b border-graphite text-[11px] font-medium uppercase tracking-[0.12em] text-fog",
         className,
       )}
       {...props}
@@ -34,7 +34,7 @@ export function TableBody({
 }: React.HTMLAttributes<HTMLTableSectionElement>) {
   return (
     <tbody
-      className={cn("divide-y divide-stealth-border/70", className)}
+      className={cn("divide-y divide-graphite/70", className)}
       {...props}
     />
   );
@@ -45,7 +45,10 @@ export function TableRow({
 }: React.HTMLAttributes<HTMLTableRowElement>) {
   return (
     <tr
-      className={cn("transition-colors hover:bg-white/[0.025]", className)}
+      className={cn(
+        "transition-colors duration-150 hover:bg-white/[0.025]",
+        className,
+      )}
       {...props}
     />
   );
@@ -60,7 +63,5 @@ export function TableCell({
   className,
   ...props
 }: React.TdHTMLAttributes<HTMLTableCellElement>) {
-  return (
-    <td className={cn("px-3.5 py-3 text-slate-300", className)} {...props} />
-  );
+  return <td className={cn("px-3.5 py-3 text-mist", className)} {...props} />;
 }

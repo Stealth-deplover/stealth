@@ -36,9 +36,9 @@ export function CopyButton({
       title={copied ? "Copied" : label}
     >
       {copied ? (
-        <Check className="size-3.5 text-emerald-300" />
+        <Check className="size-3.5 text-pulse-green" aria-hidden="true" />
       ) : (
-        <Copy className="size-3.5" />
+        <Copy className="size-3.5" aria-hidden="true" />
       )}
     </Button>
   );

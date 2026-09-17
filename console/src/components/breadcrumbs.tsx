@@ -69,7 +69,7 @@ export function Breadcrumbs() {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="hidden min-w-0 items-center gap-1 text-xs text-slate-500 xl:flex"
+      className="hidden min-w-0 items-center gap-1 text-xs text-fog xl:flex"
     >
       {items.map((item, index) => (
         <span
@@ -77,22 +77,23 @@ export function Breadcrumbs() {
           className="inline-flex min-w-0 items-center gap-1"
         >
           {index > 0 ? (
-            <ChevronRight className="size-3 shrink-0 text-slate-700" />
+            <ChevronRight
+              className="size-3 shrink-0 text-ash"
+              aria-hidden="true"
+            />
           ) : null}
           {item.href && index < items.length - 1 ? (
             <Link
               href={item.href}
               className={cn(
-                "max-w-36 truncate transition hover:text-slate-200",
+                "max-w-36 truncate transition-colors duration-150 hover:text-mist",
                 index === 0 && "max-w-28",
               )}
             >
               {item.label}
             </Link>
           ) : (
-            <span className="max-w-40 truncate text-slate-300">
-              {item.label}
-            </span>
+            <span className="max-w-40 truncate text-mist">{item.label}</span>
           )}
         </span>
       ))}

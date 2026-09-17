@@ -164,7 +164,7 @@ export function CreateDialog<
                   onChange={(event) =>
                     updateValue(field.name, event.target.value)
                   }
-                  className="flex min-h-11 w-full rounded-lg border border-stealth-border bg-stealth-panel px-3 text-sm text-white outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/40"
+                  className="flex min-h-11 w-full rounded-md border border-graphite bg-carbon px-3.5 text-sm text-mist outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/40"
                 >
                   {(field.optionsForValues?.(values) ?? field.options)?.map(
                     (option) => (
@@ -179,7 +179,7 @@ export function CreateDialog<
                   id={field.name}
                   role="group"
                   aria-label={field.label}
-                  className="grid gap-2 rounded-lg border border-stealth-border bg-stealth-panel p-3 sm:grid-cols-2"
+                  className="grid gap-2 rounded-lg border border-graphite bg-carbon p-3 sm:grid-cols-2"
                 >
                   {field.options?.map((option) => {
                     const selected = (values[field.name] ?? "")
@@ -189,7 +189,7 @@ export function CreateDialog<
                     return (
                       <label
                         key={option.value}
-                        className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-slate-300 hover:bg-white/[0.04]"
+                        className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-mist hover:bg-white/[0.04]"
                       >
                         <Input
                           type="checkbox"
@@ -206,13 +206,13 @@ export function CreateDialog<
                             else next.delete(option.value);
                             updateValue(field.name, Array.from(next).join(","));
                           }}
-                          className="mt-0.5 size-4 accent-cyan-300"
+                          className="mt-0.5 size-4 accent-acid-lime"
                         />
                         <span className="min-w-0">
-                          <span className="block text-slate-200">
+                          <span className="block text-mist">
                             {option.label}
                           </span>
-                          <span className="font-mono text-[10px] text-slate-600">
+                          <span className="font-mono text-[10px] text-fog">
                             {option.value}
                           </span>
                         </span>
@@ -233,9 +233,7 @@ export function CreateDialog<
                 />
               )}
               {field.help ? (
-                <p className="text-[11px] leading-5 text-slate-600">
-                  {field.help}
-                </p>
+                <p className="text-[11px] leading-5 text-fog">{field.help}</p>
               ) : null}
             </div>
           ))}
