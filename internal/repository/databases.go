@@ -117,7 +117,7 @@ type RowFilter struct {
 
 type RowCursor struct {
 	ID    uuid.UUID `json:"id"`
-	Value any       `json:"value,omitempty"`
+	Value any       `json:"value"`
 }
 
 type RowQuery struct {
@@ -339,6 +339,32 @@ func (r *Repository) DeleteProjectDatabase(ctx context.Context, projectID, datab
 	if !exists {
 		return ErrNotFound
 	}
+	backups, err := tx.Query(ctx, `SELECT storage_path FROM database_backups WHERE project_id=$1 AND database_id=$2 FOR UPDATE`, projectID, databaseID)
+	if err != nil {
+		return err
+	}
+	backupPaths := make([]string, 0)
+	for backups.Next() {
+		var path string
+		if err := backups.Scan(&path); err != nil {
+			backups.Close()
+			return err
+		}
+		backupPaths = append(backupPaths, path)
+	}
+	if err := backups.Err(); err != nil {
+		backups.Close()
+		return err
+	}
+	backups.Close()
+	for _, path := range backupPaths {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
+			Operation: ArtifactCleanupRelative, RelativePath: path,
+		}); err != nil {
+			return err
+		}
+	}
 	if err := dropIndexesForDatabase(ctx, tx, databaseID); err != nil {
 		return err
 	}
@@ -417,7 +443,9 @@ func (r *Repository) CreateDatabaseTable(ctx context.Context, id, projectID, dat
 	if err != nil {
 		return domain.DatabaseTable{}, mapError(err)
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.create", "database_table", id, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.create", "database_table", id, map[string]any{
+		"database_id": databaseID.String(),
+	}); err != nil {
 		return domain.DatabaseTable{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -449,7 +477,10 @@ func (r *Repository) UpdateDatabaseTable(ctx context.Context, projectID, databas
 	if err != nil {
 		return domain.DatabaseTable{}, mapError(err)
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.update", "database_table", tableID, map[string]any{"changed_fields": []string{"row_security", "permissions"}}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.update", "database_table", tableID, map[string]any{
+		"database_id":    databaseID.String(),
+		"changed_fields": []string{"row_security", "permissions"},
+	}); err != nil {
 		return domain.DatabaseTable{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -483,7 +514,9 @@ func (r *Repository) DeleteDatabaseTable(ctx context.Context, projectID, databas
 	if _, err := tx.Exec(ctx, `DELETE FROM database_tables WHERE id=$1 AND database_id=$2 AND project_id=$3`, tableID, databaseID, projectID); err != nil {
 		return err
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.delete", "database_table", tableID, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_table.delete", "database_table", tableID, map[string]any{
+		"database_id": databaseID.String(),
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -561,7 +594,10 @@ func (r *Repository) CreateDatabaseColumn(ctx context.Context, id, projectID, da
 			return domain.DatabaseColumn{}, err
 		}
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_column.create", "database_column", id, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_column.create", "database_column", id, map[string]any{
+		"database_id": databaseID.String(),
+		"table_id":    tableID.String(),
+	}); err != nil {
 		return domain.DatabaseColumn{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -611,7 +647,11 @@ func (r *Repository) DeleteDatabaseColumn(ctx context.Context, projectID, databa
 	if _, err := tx.Exec(ctx, `UPDATE database_rows SET data=data-$2,updated_at=now() WHERE table_id=$1`, tableID, key); err != nil {
 		return err
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_column.delete", "database_column", columnID, map[string]any{"changed_fields": []string{"key"}}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_column.delete", "database_column", columnID, map[string]any{
+		"database_id":    databaseID.String(),
+		"table_id":       tableID.String(),
+		"changed_fields": []string{"key"},
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -725,7 +765,11 @@ func (r *Repository) CreateDatabaseIndex(ctx context.Context, id, projectID, dat
 		// physical index together with failed metadata insertion.
 		return domain.DatabaseIndex{}, mapError(err)
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_index.create", "database_index", id, map[string]any{"columns": input.ColumnKeys}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_index.create", "database_index", id, map[string]any{
+		"database_id": databaseID.String(),
+		"table_id":    tableID.String(),
+		"columns":     input.ColumnKeys,
+	}); err != nil {
 		return domain.DatabaseIndex{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -762,7 +806,10 @@ func (r *Repository) DeleteDatabaseIndex(ctx context.Context, projectID, databas
 	if _, err := tx.Exec(ctx, `DELETE FROM database_indexes WHERE id=$1 AND table_id=$2`, indexID, tableID); err != nil {
 		return err
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_index.delete", "database_index", indexID, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_index.delete", "database_index", indexID, map[string]any{
+		"database_id": databaseID.String(),
+		"table_id":    tableID.String(),
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1065,6 +1112,11 @@ func buildRowSourceMetadata(actor DatabaseActor, changed []string) map[string]an
 // row API after receiving an event.
 func buildDatabaseRowEventMetadata(actor DatabaseActor, table domain.DatabaseTable, rowReadPermissions, changed []string) map[string]any {
 	metadata := buildRowSourceMetadata(actor, changed)
+	// Keep the query scope in the public notification metadata as well as in
+	// the permission marker below. The Console must be able to invalidate the
+	// affected table without depending on authorization-only fields.
+	metadata["database_id"] = table.DatabaseID
+	metadata["table_id"] = table.ID
 	metadata["realtime"] = map[string]any{
 		"database_id":            table.DatabaseID,
 		"table_id":               table.ID,

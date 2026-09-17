@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -298,29 +297,13 @@ func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteSite(r.Context(), projectID, siteID, siteActorFrom(r))
+	_, err := s.repo.DeleteSite(r.Context(), projectID, siteID, siteActorFrom(r))
 	if siteResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.sites == nil {
-		internalError(s, w, errors.New("site artifact storage is unavailable"))
-		return
-	}
-	for _, pathsItem := range paths {
-		if err := s.sites.RemoveRelative(pathsItem.ArtifactPath); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted site artifact: %w", err))
-			return
-		}
-		if pathsItem.SourcePath != "" && s.siteArchives != nil {
-			if err := s.siteArchives.RemoveRelative(pathsItem.SourcePath); err != nil {
-				internalError(s, w, fmt.Errorf("remove deleted site source: %w", err))
-				return
-			}
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -563,7 +546,17 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 			internalError(s, w, pathErr)
 			return
 		}
-		if err := s.siteArchives.Commit(&prepared); err != nil {
+		publishCleanup := repository.ArtifactCleanupInput{
+			ProjectID:    projectID,
+			StoreKind:    repository.ArtifactCleanupSiteArchives,
+			Operation:    repository.ArtifactCleanupRelative,
+			RelativePath: prepared.RelativePath,
+		}
+		if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+			internalError(s, w, err)
+			return
+		}
+		if err := s.siteArchives.Commit(r.Context(), &prepared); err != nil {
 			internalError(s, w, err)
 			return
 		}
@@ -587,13 +580,12 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 			ReservedBytes:      s.config.SitesMaxExpandedBytes,
 			CreatedByAccountID: createdBy,
 			Activate:           activate,
+			PublishCleanup:     &publishCleanup,
 		})
 		if siteResourceError(w, err) {
-			_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 			return
 		}
 		if err != nil {
-			_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 			internalError(s, w, err)
 			return
 		}
@@ -636,6 +628,16 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "site archive must contain a regular index.html at its root")
 		return
 	}
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupSites,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: artifactPath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		internalError(s, w, err)
+		return
+	}
 	if err := s.sites.CommitDirectory(staging, artifactPath); err != nil {
 		internalError(s, w, err)
 		return
@@ -646,13 +648,11 @@ func (s *Server) uploadSiteDeployment(w http.ResponseWriter, r *http.Request) {
 	if actor.Kind == repository.SiteConsoleActor && actor.AccountID != uuid.Nil {
 		createdBy = &actor.AccountID
 	}
-	item, err := s.repo.CreateSiteDeployment(r.Context(), deploymentID, projectID, siteID, actor, repository.SiteDeploymentInput{Source: "upload", SourceName: &sourceName, SizeBytes: stats.Bytes, ArchiveSizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, ArtifactPath: artifactPath, CreatedByAccountID: createdBy, Activate: activate})
+	item, err := s.repo.CreateSiteDeployment(r.Context(), deploymentID, projectID, siteID, actor, repository.SiteDeploymentInput{Source: "upload", SourceName: &sourceName, SizeBytes: stats.Bytes, ArchiveSizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, ArtifactPath: artifactPath, CreatedByAccountID: createdBy, Activate: activate, PublishCleanup: &publishCleanup})
 	if siteResourceError(w, err) {
-		_ = s.sites.RemoveRelative(artifactPath)
 		return
 	}
 	if err != nil {
-		_ = s.sites.RemoveRelative(artifactPath)
 		internalError(s, w, err)
 		return
 	}
@@ -752,7 +752,17 @@ func (s *Server) createGitSiteDeployment(w http.ResponseWriter, r *http.Request)
 		internalError(s, w, err)
 		return
 	}
-	if err := s.siteArchives.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupSiteArchives,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		internalError(s, w, err)
+		return
+	}
+	if err := s.siteArchives.Commit(r.Context(), &prepared); err != nil {
 		internalError(s, w, err)
 		return
 	}
@@ -779,13 +789,12 @@ func (s *Server) createGitSiteDeployment(w http.ResponseWriter, r *http.Request)
 		ReservedBytes:      s.config.SitesMaxExpandedBytes,
 		CreatedByAccountID: createdBy,
 		Activate:           activate,
+		PublishCleanup:     &publishCleanup,
 	})
 	if siteResourceError(w, err) {
-		_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 		return
 	}
 	if err != nil {
-		_ = s.siteArchives.RemoveRelative(prepared.RelativePath)
 		internalError(s, w, err)
 		return
 	}
@@ -810,27 +819,13 @@ func (s *Server) deleteSiteDeployment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteSiteDeploymentWithArtifact(r.Context(), projectID, siteID, deploymentID, siteActorFrom(r))
+	_, err := s.repo.DeleteSiteDeploymentWithArtifact(r.Context(), projectID, siteID, deploymentID, siteActorFrom(r))
 	if siteResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.sites == nil {
-		internalError(s, w, errors.New("site artifact storage is unavailable"))
-		return
-	}
-	if err := s.sites.RemoveRelative(paths.ArtifactPath); err != nil {
-		internalError(s, w, fmt.Errorf("remove deleted site artifact: %w", err))
-		return
-	}
-	if paths.SourcePath != "" && s.siteArchives != nil {
-		if err := s.siteArchives.RemoveRelative(paths.SourcePath); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted site source: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

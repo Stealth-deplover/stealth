@@ -67,6 +67,7 @@ type SiteDeploymentInput struct {
 	ReservedBytes      int64
 	CreatedByAccountID *uuid.UUID
 	Activate           bool
+	PublishCleanup     *ArtifactCleanupInput
 }
 
 // SiteBuildJob is the worker-only view of a source deployment. Private
@@ -87,9 +88,9 @@ type SitePublicArtifact struct {
 	ArtifactPath string
 }
 
-// SiteStoragePaths are private filesystem locators returned only after a
-// metadata transaction commits. Source and public artifact stores are
-// separate namespaces and must both be cleaned up by the caller.
+// SiteStoragePaths are private filesystem locators retained for internal
+// callers that resolve deployment storage. Deletion queues cleanup before its
+// metadata transaction commits.
 type SiteStoragePaths struct {
 	ArtifactPath string
 	SourcePath   string
@@ -395,6 +396,22 @@ func (r *Repository) DeleteSite(ctx context.Context, projectID, siteID uuid.UUID
 		return nil, err
 	}
 	rows.Close()
+	for _, pathsItem := range paths {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupSites,
+			Operation: ArtifactCleanupRelative, RelativePath: pathsItem.ArtifactPath,
+		}); err != nil {
+			return nil, err
+		}
+		if pathsItem.SourcePath != "" {
+			if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+				ProjectID: projectID, StoreKind: ArtifactCleanupSiteArchives,
+				Operation: ArtifactCleanupRelative, RelativePath: pathsItem.SourcePath,
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_sites WHERE project_id=$1 AND id=$2`, projectID, siteID); err != nil {
 		return nil, err
 	}

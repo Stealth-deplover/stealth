@@ -93,7 +93,7 @@ func (w *Worker) handle(parent context.Context, job repository.FunctionExecution
 	if artifactPath == "" || artifactChecksum == "" {
 		return w.fail(parent, job, "function build artifact is unavailable")
 	}
-	archive, err := w.Store.OpenRelative(artifactPath)
+	archive, err := w.Store.OpenRelative(parent, artifactPath)
 	if err != nil {
 		return w.fail(parent, job, "function build artifact is unavailable")
 	}

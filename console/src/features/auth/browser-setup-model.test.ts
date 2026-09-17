@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   configFromState,
   defaultConfig,
+  installationStepState,
+  installationSteps,
   setupCodeSchema,
   toSetupRequest,
   type SetupState,
@@ -61,5 +63,67 @@ describe("browser setup model", () => {
     expect(setupCodeSchema.safeParse("STEALTH-AAAA-1111-OOOO").success).toBe(
       false,
     );
+  });
+});
+
+describe("browser setup installation checklist", () => {
+  it("keeps earlier steps complete while installation advances", () => {
+    expect(
+      installationSteps.map((label) =>
+        installationStepState("installing", "Database migrations", label),
+      ),
+    ).toEqual([
+      "complete",
+      "complete",
+      "complete",
+      "current",
+      "pending",
+      "pending",
+    ]);
+  });
+
+  it("marks every step complete after handoff or completion", () => {
+    for (const phase of ["handoff", "complete"] as const) {
+      expect(
+        installationSteps.map((label) =>
+          installationStepState(phase, "Handoff", label),
+        ),
+      ).toEqual(installationSteps.map(() => "complete"));
+    }
+  });
+
+  it("preserves completed prefix and exposes a failed current step", () => {
+    expect(
+      installationSteps.map((label) =>
+        installationStepState(
+          "failed",
+          "Health and readiness verification",
+          label,
+        ),
+      ),
+    ).toEqual([
+      "complete",
+      "complete",
+      "complete",
+      "complete",
+      "complete",
+      "failed",
+    ]);
+  });
+
+  it("does not invent completed work for a fresh install request", () => {
+    expect(
+      installationSteps.map((label) =>
+        installationStepState("install_requested", undefined, label),
+      ),
+    ).toEqual(installationSteps.map(() => "pending"));
+  });
+
+  it("keeps all install steps complete when failure occurs during handoff cleanup", () => {
+    expect(
+      installationSteps.map((label) =>
+        installationStepState("failed", "Cleanup", label),
+      ),
+    ).toEqual(installationSteps.map(() => "complete"));
   });
 });

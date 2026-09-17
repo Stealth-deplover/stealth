@@ -31,6 +31,22 @@ describe("cache coherence", () => {
     ]);
   });
 
+  it("refreshes the parent Agent when a run can change its derived status", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "agent-run",
+        projectId: "project-1",
+        agentId: "agent-1",
+        includeAgent: true,
+        includeAgentDetail: true,
+      }),
+    ).toEqual([
+      ["agent-runs", "agent-1"],
+      ["agents", "project-1"],
+      ["agent", "agent-1"],
+    ]);
+  });
+
   it("maps an authenticated account refresh to all affected global keys", () => {
     expect(
       invalidationKeysFor({
@@ -58,6 +74,22 @@ describe("cache coherence", () => {
       ["database", "project-1", "database-1"],
       ["tables", "project-1", "database-1"],
       ["database-backups", "project-1", "database-1"],
+    ]);
+  });
+
+  it("refreshes indexes when a table schema changes", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "database-table-schema",
+        projectId: "project-1",
+        databaseId: "database-1",
+        tableId: "table-1",
+      }),
+    ).toEqual([
+      ["columns", "project-1", "database-1", "table-1"],
+      ["rows", "project-1", "database-1", "table-1"],
+      ["row", "project-1", "database-1", "table-1"],
+      ["indexes", "project-1", "database-1", "table-1"],
     ]);
   });
 

@@ -65,7 +65,12 @@ export type CacheChange =
     }
   | { kind: "messaging"; projectId: string }
   | { kind: "database"; projectId: string; databaseId?: string }
-  | { kind: "database-table"; projectId: string; databaseId: string }
+  | {
+      kind: "database-table";
+      projectId: string;
+      databaseId: string;
+      tableId?: string;
+    }
   | {
       kind: "database-table-schema";
       projectId: string;
@@ -94,6 +99,7 @@ export type CacheChange =
       kind: "storage-file";
       projectId: string;
       bucketId: string;
+      fileId?: string;
       operation: "upload" | "rename" | "delete";
     }
   | { kind: "project-user"; projectId: string; userId?: string }
@@ -272,6 +278,12 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
 
     case "database-table":
       addKey(keys, queryKeys.tables(change.projectId, change.databaseId));
+      if (change.tableId) {
+        addKey(
+          keys,
+          queryKeys.table(change.projectId, change.databaseId, change.tableId),
+        );
+      }
       return keys;
 
     case "database-table-schema":
@@ -286,6 +298,10 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
       addKey(
         keys,
         queryKeys.rowScope(change.projectId, change.databaseId, change.tableId),
+      );
+      addKey(
+        keys,
+        queryKeys.indexes(change.projectId, change.databaseId, change.tableId),
       );
       return keys;
 
@@ -334,6 +350,12 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
 
     case "storage-file":
       addKey(keys, queryKeys.files(change.projectId, change.bucketId));
+      if (change.fileId) {
+        addKey(
+          keys,
+          queryKeys.file(change.projectId, change.bucketId, change.fileId),
+        );
+      }
       if (change.operation === "rename") {
         addKey(keys, queryKeys.fileScope(change.projectId, change.bucketId));
       } else {

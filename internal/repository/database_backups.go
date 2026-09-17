@@ -222,6 +222,14 @@ func (r *Repository) BuildDatabaseBackup(ctx context.Context, projectID, databas
 }
 
 func (r *Repository) CreateDatabaseBackup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string) (domain.DatabaseBackup, error) {
+	return r.createDatabaseBackup(ctx, id, projectID, databaseID, actor, storagePath, sizeBytes, checksum, nil)
+}
+
+func (r *Repository) CreateDatabaseBackupWithCleanup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string, cleanup ArtifactCleanupInput) (domain.DatabaseBackup, error) {
+	return r.createDatabaseBackup(ctx, id, projectID, databaseID, actor, storagePath, sizeBytes, checksum, &cleanup)
+}
+
+func (r *Repository) createDatabaseBackup(ctx context.Context, id, projectID, databaseID uuid.UUID, actor DatabaseActor, storagePath string, sizeBytes int64, checksum string, cleanup *ArtifactCleanupInput) (domain.DatabaseBackup, error) {
 	if strings.TrimSpace(storagePath) == "" || strings.Contains(storagePath, "..") || sizeBytes < 1 || sizeBytes > DatabaseBackupMaxBytes || len(checksum) != 64 || checksum != strings.ToLower(checksum) {
 		return domain.DatabaseBackup{}, ErrInvalidBackup
 	}
@@ -246,8 +254,20 @@ func (r *Repository) CreateDatabaseBackup(ctx context.Context, id, projectID, da
 	if err != nil {
 		return domain.DatabaseBackup{}, mapError(err)
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.create", "database_backup", id, map[string]any{"size_bytes": sizeBytes, "checksum_sha256": checksum}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.create", "database_backup", id, map[string]any{
+		"database_id":     databaseID.String(),
+		"size_bytes":      sizeBytes,
+		"checksum_sha256": checksum,
+	}); err != nil {
 		return domain.DatabaseBackup{}, err
+	}
+	if err := validatePublishCleanup(cleanup, projectID, ArtifactCleanupStorage, storagePath); err != nil {
+		return domain.DatabaseBackup{}, err
+	}
+	if cleanup != nil {
+		if err := finalizeArtifactPublishCleanupTx(ctx, tx, *cleanup); err != nil {
+			return domain.DatabaseBackup{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.DatabaseBackup{}, err
@@ -322,7 +342,15 @@ func (r *Repository) DeleteDatabaseBackup(ctx context.Context, projectID, databa
 	if _, err := tx.Exec(ctx, `DELETE FROM database_backups WHERE project_id=$1 AND database_id=$2 AND id=$3`, projectID, databaseID, backupID); err != nil {
 		return "", err
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.delete", "database_backup", backupID, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.delete", "database_backup", backupID, map[string]any{
+		"database_id": databaseID.String(),
+	}); err != nil {
+		return "", err
+	}
+	if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+		ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
+		Operation: ArtifactCleanupRelative, RelativePath: path,
+	}); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -546,7 +574,12 @@ func (r *Repository) RestoreDatabaseBackup(ctx context.Context, projectID, datab
 			result.Indexes++
 		}
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.restore", "project_database", databaseID, map[string]any{"tables": result.Tables, "rows": result.Rows, "relationships": result.Relationships}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_backup.restore", "project_database", databaseID, map[string]any{
+		"database_id":   databaseID.String(),
+		"tables":        result.Tables,
+		"rows":          result.Rows,
+		"relationships": result.Relationships,
+	}); err != nil {
 		return DatabaseBackupRestoreResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

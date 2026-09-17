@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -403,6 +405,28 @@ func TestStorageBinaryQuotaPermissionsAndAPIKeyRevocationIntegration(t *testing.
 	keyHeaders := map[string]string{"X-Stealth-Key": createdKey.Secret}
 	requestJSONWithHeaders(t, keyClient, http.MethodGet, projectURL+"/storage/buckets", nil, http.StatusOK, keyHeaders)
 	requestJSON(t, ownerClient, http.MethodDelete, projectURL+"/storage/buckets/"+bucket.Bucket.ID+"/files/"+fileID, nil, http.StatusNoContent, nil)
+	cleanupStore, err := storage.New(storageRoot, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupWorker, err := artifactcleanup.New(repository.New(pool), artifactcleanup.Stores{Storage: cleanupStore}, "storage-integration-cleanup", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempts := 0; attempts < 32; attempts++ {
+		if _, statErr := os.Stat(blobPath); os.IsNotExist(statErr) {
+			break
+		} else if statErr != nil {
+			t.Fatal(statErr)
+		}
+		processed, runErr := cleanupWorker.RunOnce(ctx)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		if !processed {
+			t.Fatal("storage delete did not expose a due cleanup job")
+		}
+	}
 	if _, err := os.Stat(blobPath); !os.IsNotExist(err) {
 		t.Fatalf("deleted blob stat error = %v, want not exist", err)
 	}

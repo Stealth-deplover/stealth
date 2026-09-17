@@ -153,6 +153,7 @@ func (r *Repository) CreateDatabaseRelationship(ctx context.Context, id, project
 		return domain.DatabaseRelationship{}, mapError(err)
 	}
 	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_relationship.create", "database_relationship", id, map[string]any{
+		"database_id":       databaseID.String(),
 		"source_table_id":   input.SourceTableID,
 		"source_column_key": input.SourceColumnKey,
 		"target_table_id":   input.TargetTableID,
@@ -180,6 +181,12 @@ func (r *Repository) DeleteDatabaseRelationship(ctx context.Context, projectID, 
 	if err := ensureDatabaseProjectTx(ctx, tx, projectID, databaseID); err != nil {
 		return err
 	}
+	var sourceTableID, targetTableID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT source_table_id,target_table_id FROM database_relationships WHERE project_id=$1 AND database_id=$2 AND id=$3 FOR UPDATE`, projectID, databaseID, relationshipID).Scan(&sourceTableID, &targetTableID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
 	result, err := tx.Exec(ctx, `DELETE FROM database_relationships WHERE project_id=$1 AND database_id=$2 AND id=$3`, projectID, databaseID, relationshipID)
 	if err != nil {
 		return err
@@ -187,7 +194,11 @@ func (r *Repository) DeleteDatabaseRelationship(ctx context.Context, projectID, 
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_relationship.delete", "database_relationship", relationshipID, map[string]any{}); err != nil {
+	if err := r.auditDatabase(ctx, tx, projectID, actor, "database_relationship.delete", "database_relationship", relationshipID, map[string]any{
+		"database_id":     databaseID.String(),
+		"source_table_id": sourceTableID,
+		"target_table_id": targetTableID,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

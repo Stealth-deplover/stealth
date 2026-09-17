@@ -86,14 +86,14 @@ func (s *Store) BeginUploadWithLimit(ctx context.Context, projectID, functionID,
 	}, nil
 }
 
-func (s *Store) Commit(artifact *PreparedArtifact) error {
+func (s *Store) Commit(ctx context.Context, artifact *PreparedArtifact) error {
 	if artifact == nil || artifact.committed {
 		return ErrInvalidPath
 	}
 	if s == nil || s.inner == nil {
 		return ErrInvalidPath
 	}
-	if err := s.inner.Commit(&artifact.inner); err != nil {
+	if err := s.inner.Commit(ctx, &artifact.inner); err != nil {
 		return err
 	}
 	artifact.committed = true
@@ -107,25 +107,25 @@ func (s *Store) Cleanup(artifact *PreparedArtifact) {
 	s.inner.Cleanup(&artifact.inner)
 }
 
-func (s *Store) RemoveRelative(relative string) error {
+func (s *Store) RemoveRelative(ctx context.Context, relative string) error {
 	if s == nil || s.inner == nil {
 		return ErrInvalidPath
 	}
-	return s.inner.RemoveRelative(relative)
+	return s.inner.RemoveRelative(ctx, relative)
 }
 
 // RemoveProject removes all source/build artifacts belonging to a project.
 // The underlying store validates the UUID-derived namespace before deleting.
-func (s *Store) RemoveProject(projectID uuid.UUID) error {
+func (s *Store) RemoveProject(ctx context.Context, projectID uuid.UUID) error {
 	if s == nil || s.inner == nil {
 		return ErrInvalidPath
 	}
-	return s.inner.RemoveProject(projectID)
+	return s.inner.RemoveProject(ctx, projectID)
 }
 
-func (s *Store) OpenRelative(relative string) (io.ReadCloser, error) {
+func (s *Store) OpenRelative(ctx context.Context, relative string) (io.ReadCloser, error) {
 	if s == nil || s.inner == nil {
 		return nil, ErrInvalidPath
 	}
-	return s.inner.OpenRelative(relative)
+	return s.inner.OpenRelative(ctx, relative)
 }

@@ -97,8 +97,11 @@ jobs:
           go-version: 1.26.x
           cache-dependency-path: go.sum
 
-      - name: Validate bootstrap scripts
-        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh
+      - name: Validate bootstrap and release scripts
+        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh
+
+      - name: Verify release smoke revision pinning
+        run: ./scripts/release_workflow_test.sh
 
       - name: Test bootstrap failure handling
         run: ./scripts/bootstrap_test.sh

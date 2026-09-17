@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1454,6 +1455,60 @@ func TestProjectDatabasesCoreIntegration(t *testing.T) {
 	requestJSON(t, ownerClient, http.MethodGet, databaseURLPath+"/tables/00000000-0000-7000-8000-000000000000", nil, http.StatusNotFound, nil)
 	requestJSON(t, ownerClient, http.MethodDelete, backupPath, nil, http.StatusNoContent, nil)
 	requestJSON(t, ownerClient, http.MethodGet, backupPath, nil, http.StatusNotFound, nil)
+	// Cursor values are JSON-encoded before they cross the HTTP boundary. This
+	// table exercises quoted boundaries, escapes, Unicode, and an empty text
+	// value through the real ascending and descending pagination path.
+	cursorTableResponse := struct {
+		Table struct {
+			ID string `json:"id"`
+		} `json:"table"`
+	}{}
+	requestJSON(t, ownerClient, http.MethodPost, databaseURLPath+"/tables", map[string]any{"name": "Cursor strings"}, http.StatusCreated, &cursorTableResponse)
+	cursorTableURL := databaseURLPath + "/tables/" + cursorTableResponse.Table.ID
+	requestJSON(t, ownerClient, http.MethodPost, cursorTableURL+"/columns", map[string]any{"key": "value", "type": "text", "required": true}, http.StatusCreated, &struct{}{})
+	requestJSON(t, ownerClient, http.MethodPost, cursorTableURL+"/indexes", map[string]any{"name": "cursor value key", "type": "key", "column_keys": []string{"value"}}, http.StatusCreated, &struct{}{})
+	cursorValues := []string{`"abc`, `abc"`, `"abc"`, `"abc"`, `a \"quoted\" value`, "日本語 🚀", ""}
+	expectedCursorCounts := make(map[string]int, len(cursorValues))
+	for _, value := range cursorValues {
+		expectedCursorCounts[value]++
+		requestJSON(t, ownerClient, http.MethodPost, cursorTableURL+"/rows", map[string]any{"data": map[string]any{"value": value}}, http.StatusCreated, &struct{}{})
+	}
+	for _, direction := range []string{"asc", "desc"} {
+		seenIDs := make(map[string]bool, len(cursorValues))
+		seenCounts := make(map[string]int, len(cursorValues))
+		cursor := ""
+		for pageNumber := 0; pageNumber < 10; pageNumber++ {
+			path := cursorTableURL + "/rows?order_by=value&order_direction=" + direction + "&limit=2"
+			if cursor != "" {
+				path += "&cursor=" + url.QueryEscape(cursor)
+			}
+			var page struct {
+				Rows []struct {
+					ID   string         `json:"id"`
+					Data map[string]any `json:"data"`
+				} `json:"rows"`
+				Pagination struct {
+					NextCursor *string `json:"next_cursor"`
+				} `json:"pagination"`
+			}
+			requestJSON(t, ownerClient, http.MethodGet, path, nil, http.StatusOK, &page)
+			for _, row := range page.Rows {
+				value, ok := row.Data["value"].(string)
+				if !ok || row.ID == "" || seenIDs[row.ID] {
+					t.Fatalf("%s cursor page %d returned duplicate or invalid value: %#v", direction, pageNumber, row.Data)
+				}
+				seenIDs[row.ID] = true
+				seenCounts[value]++
+			}
+			if page.Pagination.NextCursor == nil {
+				break
+			}
+			cursor = *page.Pagination.NextCursor
+		}
+		if len(seenIDs) != len(cursorValues) || !reflect.DeepEqual(seenCounts, expectedCursorCounts) {
+			t.Fatalf("%s cursor pagination returned %d rows/counts %#v, want %d/%#v", direction, len(seenIDs), seenCounts, len(cursorValues), expectedCursorCounts)
+		}
+	}
 	requestJSON(t, ownerClient, http.MethodGet, tableURL+"/rows?filter.count=2", nil, http.StatusUnprocessableEntity, nil)
 	requestJSON(t, ownerClient, http.MethodPost, tableURL+"/indexes", map[string]any{"name": "count key", "type": "key", "column_keys": []string{"count"}}, http.StatusCreated, &struct{}{})
 	var rowsPage struct {
@@ -1546,4 +1601,18 @@ func TestProjectDatabasesCoreIntegration(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM accounts WHERE id=$1`, outsiderRegistration.Account.ID)
 	})
 	requestJSON(t, outsider, http.MethodGet, tableURL+"/rows", nil, http.StatusNotFound, nil)
+	var databaseCleanupJobsBefore int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, projectResponse.Project.ID).Scan(&databaseCleanupJobsBefore); err != nil {
+		t.Fatal(err)
+	}
+	requestJSON(t, ownerClient, http.MethodPost, databaseURLPath+"/backups?max_rows=1000", nil, http.StatusCreated, &backupResponse)
+	requestJSON(t, ownerClient, http.MethodDelete, databaseURLPath, nil, http.StatusNoContent, nil)
+	requestJSON(t, ownerClient, http.MethodGet, databaseURLPath, nil, http.StatusNotFound, nil)
+	var databaseCleanupJobsAfter int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, projectResponse.Project.ID).Scan(&databaseCleanupJobsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if databaseCleanupJobsAfter != databaseCleanupJobsBefore+1 {
+		t.Fatalf("database deletion cleanup jobs = %d, want %d", databaseCleanupJobsAfter, databaseCleanupJobsBefore+1)
+	}
 }

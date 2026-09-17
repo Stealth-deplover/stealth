@@ -100,7 +100,7 @@ func (w *Worker) buildDeployment(parent context.Context, job repository.Function
 	}
 	defer func() { _ = os.RemoveAll(workspace) }()
 
-	archive, err := w.Store.OpenRelative(job.SourcePath)
+	archive, err := w.Store.OpenRelative(parent, job.SourcePath)
 	if err != nil {
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function source artifact is unavailable", nil)
 	}
@@ -179,12 +179,21 @@ func (w *Worker) buildDeployment(parent context.Context, job repository.Function
 		w.Store.Cleanup(&prepared)
 		return w.failBuild(parent, projectID, functionID, deploymentID, redactFailure(validationErr.Error(), secrets), nil)
 	}
-	if err := w.Store.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupFunctions,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := w.BuildStore.ReserveArtifactPublishCleanup(parent, publishCleanup); err != nil {
+		w.Store.Cleanup(&prepared)
+		return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact publication could not be reserved", nil)
+	}
+	if err := w.Store.Commit(parent, &prepared); err != nil {
 		w.Store.Cleanup(&prepared)
 		return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact could not be committed", nil)
 	}
-	if _, err := w.BuildStore.CompleteFunctionDeploymentBuild(parent, projectID, functionID, deploymentID, w.WorkerID, prepared.RelativePath, prepared.Size, prepared.Checksum); err != nil {
-		_ = w.Store.RemoveRelative(prepared.RelativePath)
+	if _, err := w.BuildStore.CompleteFunctionDeploymentBuildWithCleanup(parent, projectID, functionID, deploymentID, w.WorkerID, prepared.RelativePath, prepared.Size, prepared.Checksum, publishCleanup); err != nil {
 		if errors.Is(err, repository.ErrFunctionQuotaExceeded) {
 			return w.failBuild(parent, projectID, functionID, deploymentID, "function build artifact exceeds the remaining quota", secrets)
 		}

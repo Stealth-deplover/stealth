@@ -146,29 +146,5 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Database deletion is already committed. Filesystem cleanup is deliberately
-	// best-effort: an orphaned opaque artifact is unreachable without a live
-	// project row, while returning a 500 would make clients retry a completed
-	// destructive operation and obscure the actual state.
-	if s.storage != nil {
-		if err := s.storage.RemoveProject(projectID); err != nil {
-			s.logger.Warn("project storage cleanup failed", "project_id", projectID, "error", err)
-		}
-	}
-	if s.functions != nil {
-		if err := s.functions.RemoveProject(projectID); err != nil {
-			s.logger.Warn("project function artifact cleanup failed", "project_id", projectID, "error", err)
-		}
-	}
-	if s.siteArchives != nil {
-		if err := s.siteArchives.RemoveProject(projectID); err != nil {
-			s.logger.Warn("project site source cleanup failed", "project_id", projectID, "error", err)
-		}
-	}
-	if s.sites != nil {
-		if err := s.sites.RemoveProject(projectID); err != nil {
-			s.logger.Warn("project site artifact cleanup failed", "project_id", projectID, "error", err)
-		}
-	}
 	w.WriteHeader(http.StatusNoContent)
 }

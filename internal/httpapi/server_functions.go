@@ -3,7 +3,6 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -403,23 +402,13 @@ func (s *Server) deleteFunction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteFunction(r.Context(), projectID, functionID, functionActorFrom(r))
+	_, err := s.repo.DeleteFunction(r.Context(), projectID, functionID, functionActorFrom(r))
 	if functionResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.functions == nil {
-		internalError(s, w, errors.New("function artifact storage is unavailable"))
-		return
-	}
-	for _, path := range paths {
-		if err := s.functions.RemoveRelative(path); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted function artifact: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -720,7 +709,18 @@ func (s *Server) uploadFunctionDeployment(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "source filename is invalid")
 		return
 	}
-	if err := s.functions.Commit(&prepared); err != nil {
+	publishCleanup := repository.ArtifactCleanupInput{
+		ProjectID:    projectID,
+		StoreKind:    repository.ArtifactCleanupFunctions,
+		Operation:    repository.ArtifactCleanupRelative,
+		RelativePath: prepared.RelativePath,
+	}
+	if err := s.repo.ReserveArtifactPublishCleanup(r.Context(), publishCleanup); err != nil {
+		cleanup()
+		internalError(s, w, err)
+		return
+	}
+	if err := s.functions.Commit(r.Context(), &prepared); err != nil {
 		internalError(s, w, err)
 		return
 	}
@@ -730,13 +730,11 @@ func (s *Server) uploadFunctionDeployment(w http.ResponseWriter, r *http.Request
 	if actor.Kind == repository.FunctionConsoleActor && actor.AccountID != uuid.Nil {
 		createdBy = &actor.AccountID
 	}
-	item, err := s.repo.CreateFunctionDeployment(r.Context(), deploymentID, projectID, functionID, actor, repository.FunctionDeploymentInput{Source: "upload", SourceName: &name, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, SourcePath: prepared.RelativePath, CreatedByAccountID: createdBy, Activate: activate})
+	item, err := s.repo.CreateFunctionDeployment(r.Context(), deploymentID, projectID, functionID, actor, repository.FunctionDeploymentInput{Source: "upload", SourceName: &name, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, SourcePath: prepared.RelativePath, CreatedByAccountID: createdBy, Activate: activate, PublishCleanup: &publishCleanup})
 	if functionResourceError(w, err) {
-		_ = s.functions.RemoveRelative(prepared.RelativePath)
 		return
 	}
 	if err != nil {
-		_ = s.functions.RemoveRelative(prepared.RelativePath)
 		internalError(s, w, err)
 		return
 	}
@@ -762,23 +760,13 @@ func (s *Server) deleteFunctionDeployment(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	paths, err := s.repo.DeleteFunctionDeploymentWithArtifacts(r.Context(), projectID, functionID, deploymentID, functionActorFrom(r))
+	_, err := s.repo.DeleteFunctionDeploymentWithArtifacts(r.Context(), projectID, functionID, deploymentID, functionActorFrom(r))
 	if functionResourceError(w, err) {
 		return
 	}
 	if err != nil {
 		internalError(s, w, err)
 		return
-	}
-	if s.functions == nil {
-		internalError(s, w, errors.New("function artifact storage is unavailable"))
-		return
-	}
-	for _, path := range paths {
-		if err := s.functions.RemoveRelative(path); err != nil {
-			internalError(s, w, fmt.Errorf("remove deleted function artifact: %w", err))
-			return
-		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

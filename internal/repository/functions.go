@@ -92,6 +92,7 @@ type FunctionDeploymentInput struct {
 	SourcePath         string
 	CreatedByAccountID *uuid.UUID
 	Activate           bool
+	PublishCleanup     *ArtifactCleanupInput
 }
 
 // FunctionExecutionJob is the worker-only view of an execution. SourcePath
