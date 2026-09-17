@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  eventTypesForProjectStream,
   realtimeInvalidationKeys,
   type RealtimeNotification,
 } from "@/realtime/invalidation";
@@ -7,14 +8,147 @@ import {
 describe("realtime query invalidation", () => {
   it("invalidates an Agent run list and detail without treating the event as state", () => {
     const event: RealtimeNotification = {
-      type: "agent.run.updated",
+      type: "agent.run.running",
       resource_id: "run-1",
       payload: { agent_id: "agent-1", status: "running" },
     };
     expect(realtimeInvalidationKeys("project-1", event)).toEqual([
       ["agent-runs", "agent-1"],
       ["agent-run", "agent-1", "run-1"],
+      ["agents", "project-1"],
+      ["agent", "agent-1"],
     ]);
+  });
+
+  it("maps database row and storage file notifications to scoped caches", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "database_row.update",
+        resource_id: "row-1",
+        payload: { database_id: "database-1", table_id: "table-1" },
+      }),
+    ).toEqual([
+      ["rows", "project-1", "database-1", "table-1"],
+      ["row", "project-1", "database-1", "table-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "storage_file.create",
+        resource_id: "file-1",
+        payload: { bucket_id: "bucket-1" },
+      }),
+    ).toEqual([
+      ["files", "project-1", "bucket-1"],
+      ["file", "project-1", "bucket-1", "file-1"],
+      ["bucket", "project-1", "bucket-1"],
+      ["storage", "project-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "storage_file.update",
+        resource_id: "file-1",
+        payload: { bucket_id: "bucket-1" },
+      }),
+    ).toEqual([
+      ["files", "project-1", "bucket-1"],
+      ["file", "project-1", "bucket-1", "file-1"],
+      ["file", "project-1", "bucket-1"],
+    ]);
+  });
+
+  it("invalidates bucket detail separately from file changes", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "storage_bucket.update",
+        resource_id: "bucket-1",
+      }),
+    ).toEqual([
+      ["storage", "project-1"],
+      ["bucket", "project-1", "bucket-1"],
+    ]);
+  });
+
+  it("maps schema, credential metadata, and service events to their scopes", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "database_column.create",
+        resource_id: "column-1",
+        payload: { database_id: "database-1", table_id: "table-1" },
+      }),
+    ).toEqual([
+      ["columns", "project-1", "database-1", "table-1"],
+      ["rows", "project-1", "database-1", "table-1"],
+      ["row", "project-1", "database-1", "table-1"],
+      ["indexes", "project-1", "database-1", "table-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "database_table.update",
+        resource_id: "table-1",
+        payload: { database_id: "database-1" },
+      }),
+    ).toEqual([
+      ["tables", "project-1", "database-1"],
+      ["table", "project-1", "database-1", "table-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "function_variable.update",
+        resource_id: "variable-1",
+        payload: { function_id: "function-1" },
+      }),
+    ).toEqual([["function-variables", "project-1", "function-1"]]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "project_api_key.revoke",
+        resource_id: "key-1",
+      }),
+    ).toEqual([
+      ["api-keys", "project-1"],
+      ["api-key", "project-1", "key-1"],
+    ]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "site_domain.verify",
+        resource_id: "domain-1",
+        payload: { site_id: "site-1" },
+      }),
+    ).toEqual([
+      ["sites", "project-1"],
+      ["site", "project-1", "site-1"],
+    ]);
+  });
+
+  it("ignores unknown events and keeps unrelated event metadata out of keys", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "future.resource.changed",
+        resource_id: "other-project-resource",
+      }),
+    ).toEqual([]);
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "database_future.changed",
+        resource_id: "other-project-resource",
+      }),
+    ).toEqual([]);
+  });
+
+  it("subscribes to the events that the backend fans out for rows and files", () => {
+    const events = eventTypesForProjectStream();
+    expect(events).toEqual(
+      expect.arrayContaining([
+        "database_row.create",
+        "database_row.update",
+        "database_row.delete",
+        "storage_file.create",
+        "storage_file.update",
+        "storage_file.delete",
+        "site_domain.create",
+        "site_domain.delete",
+        "site_domain.verify",
+      ]),
+    );
   });
 
   it("invalidates deployment queries using the resource metadata", () => {

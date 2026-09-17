@@ -94,7 +94,7 @@ func validEventType(value string) bool {
 // through PostgreSQL, but do not create unnecessary Redis traffic.
 func ShouldFanout(eventType string) bool {
 	eventType = strings.TrimSpace(eventType)
-	if strings.HasPrefix(eventType, "agent.run.") || strings.HasPrefix(eventType, "function_execution.") || strings.HasPrefix(eventType, "function_deployment.") || strings.HasPrefix(eventType, "site_deployment.") || strings.HasPrefix(eventType, "database_row.") {
+	if strings.HasPrefix(eventType, "agent.run.") || strings.HasPrefix(eventType, "function_execution.") || strings.HasPrefix(eventType, "function_deployment.") || strings.HasPrefix(eventType, "function_variable.") || strings.HasPrefix(eventType, "site_deployment.") || strings.HasPrefix(eventType, "site_domain.") || strings.HasPrefix(eventType, "database_row.") || strings.HasPrefix(eventType, "database_table.") || strings.HasPrefix(eventType, "database_column.") || strings.HasPrefix(eventType, "database_index.") || strings.HasPrefix(eventType, "database_relationship.") || strings.HasPrefix(eventType, "database_backup.") || strings.HasPrefix(eventType, "storage_file.") || strings.HasPrefix(eventType, "project_api_key.") || strings.HasPrefix(eventType, "project_user.") {
 		return true
 	}
 	switch eventType {
@@ -103,7 +103,7 @@ func ShouldFanout(eventType string) bool {
 		"webhook.delivery.updated", "messaging.delivery.updated",
 		"messaging.provider.create", "messaging.provider.update", "messaging.provider.delete",
 		"messaging.topic.create", "messaging.topic.update", "messaging.topic.delete",
-		"database.create", "database.delete", "project.update",
+		"database.create", "database.delete", "project.update", "project_auth.settings_update",
 		"function.create", "function.update", "function.delete",
 		"site.create", "site.update", "site.delete",
 		"storage_bucket.create", "storage_bucket.update", "storage_bucket.delete":

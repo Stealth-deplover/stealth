@@ -59,9 +59,15 @@ export function useRenameStorageFile(projectId: string, bucketId: string) {
           },
         ),
       ),
-    onSuccess: () =>
+    onSuccess: (_, variables) =>
       applyCacheChanges(queryClient, [
-        { kind: "storage-file", projectId, bucketId, operation: "rename" },
+        {
+          kind: "storage-file",
+          projectId,
+          bucketId,
+          fileId: variables.fileId,
+          operation: "rename",
+        },
       ]),
   });
 }
@@ -125,9 +131,15 @@ export function useDeleteStorageFile(projectId: string, bucketId: string) {
           },
         ),
       ),
-    onSuccess: () =>
+    onSuccess: (_, fileId) =>
       applyCacheChanges(queryClient, [
-        { kind: "storage-file", projectId, bucketId, operation: "delete" },
+        {
+          kind: "storage-file",
+          projectId,
+          bucketId,
+          fileId,
+          operation: "delete",
+        },
       ]),
   });
 }

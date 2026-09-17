@@ -55,6 +55,16 @@ func TestShouldFanoutOnlyIncludesRealtimeConsumerEvents(t *testing.T) {
 		"function_deployment.updated",
 		"webhook.delivery.updated",
 		"database_row.update",
+		"storage_file.create",
+		"database_table.update",
+		"database_column.create",
+		"database_index.delete",
+		"database_relationship.create",
+		"database_backup.restore",
+		"function_variable.update",
+		"site_domain.verify",
+		"project_api_key.revoke",
+		"project_user.status_change",
 	} {
 		if !ShouldFanout(eventType) {
 			t.Fatalf("ShouldFanout(%q) = false, want true", eventType)
@@ -62,11 +72,8 @@ func TestShouldFanoutOnlyIncludesRealtimeConsumerEvents(t *testing.T) {
 	}
 	for _, eventType := range []string{
 		"organization.membership.add",
-		"project_api_key.create",
-		"project_user.password_reset",
-		"function_variable.create",
-		"site_domain.create",
-		"database_table.create",
+		"billing.invoice.updated",
+		"audit.recorded",
 	} {
 		if ShouldFanout(eventType) {
 			t.Fatalf("ShouldFanout(%q) = true, want false", eventType)
