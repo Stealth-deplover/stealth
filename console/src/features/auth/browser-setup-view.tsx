@@ -33,6 +33,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useBrowserSetupFlow } from "./browser-setup-flow";
 import {
   defaultConfig,
+  installationStepState,
+  installationSteps,
   setupSteps,
   type SetupStep,
 } from "./browser-setup-model";
@@ -1485,27 +1487,30 @@ export function BrowserSetupView() {
                   )}
                 </div>
                 <div className="mt-5 space-y-2">
-                  {[
-                    "Configuration and secrets",
-                    "Release images",
-                    "PostgreSQL and Redis",
-                    "Database migrations",
-                    "API, Worker, Console, and Proxy",
-                    "Health and readiness verification",
-                  ].map((label) => {
-                    const done =
-                      installViewState?.phase !== "failed" &&
-                      installViewState?.step === label;
+                  {installationSteps.map((label) => {
+                    const status = installationStepState(
+                      installViewState?.phase,
+                      installViewState?.step,
+                      label,
+                    );
+                    const done = status === "complete";
+                    const current = status === "current";
+                    const failed = status === "failed";
                     return (
                       <div
                         key={label}
-                        className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${done ? "bg-cyan-300/[0.06] text-cyan-100" : "text-slate-500"}`}
+                        aria-current={current ? "step" : undefined}
+                        className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${done ? "bg-cyan-300/[0.06] text-cyan-100" : current ? "bg-white/[0.03] text-slate-200" : failed ? "bg-rose-400/[0.06] text-rose-200" : "text-slate-500"}`}
                       >
                         <span
-                          className={`flex size-5 items-center justify-center rounded-full border ${done ? "border-cyan-300/50 text-cyan-300" : "border-stealth-border"}`}
+                          className={`flex size-5 items-center justify-center rounded-full border ${done ? "border-cyan-300/50 text-cyan-300" : current ? "border-cyan-300/50 text-cyan-300" : failed ? "border-rose-300/50 text-rose-300" : "border-stealth-border"}`}
                         >
                           {done ? (
+                            <Check className="size-3" />
+                          ) : current ? (
                             <Loader2 className="size-3 animate-spin" />
+                          ) : failed ? (
+                            <CircleAlert className="size-3" />
                           ) : null}
                         </span>
                         {label}

@@ -77,6 +77,46 @@ export const setupSteps: Array<{
   { id: "install", label: "Install", short: "07" },
 ];
 
+export const installationSteps = [
+  "Configuration and secrets",
+  "Release images",
+  "PostgreSQL and Redis",
+  "Database migrations",
+  "API, Worker, Console, and Proxy",
+  "Health and readiness verification",
+] as const;
+
+export type InstallationStepState =
+  "complete" | "current" | "pending" | "failed";
+
+const installationStepAliases: Record<string, number> = {
+  "Preparing installation": -1,
+  "Cloudflare Tunnel health": installationSteps.length,
+  Handoff: installationSteps.length,
+  Cleanup: installationSteps.length,
+};
+
+export function installationStepState(
+  phase: string | undefined,
+  currentStep: string | undefined,
+  label: (typeof installationSteps)[number],
+): InstallationStepState {
+  if (phase === "complete" || phase === "handoff") return "complete";
+
+  const currentIndex = currentStep
+    ? (installationStepAliases[currentStep] ??
+      installationSteps.indexOf(
+        currentStep as (typeof installationSteps)[number],
+      ))
+    : -1;
+  const stepIndex = installationSteps.indexOf(label);
+
+  if (currentIndex < 0) return "pending";
+  if (stepIndex < currentIndex) return "complete";
+  if (stepIndex > currentIndex) return "pending";
+  return phase === "failed" ? "failed" : "current";
+}
+
 export const defaultConfig: ConfigValues = {
   instance_name: "Stealth",
   public_url: "http://localhost:8081",
