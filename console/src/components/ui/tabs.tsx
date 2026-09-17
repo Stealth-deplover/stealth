@@ -33,7 +33,10 @@ export const TabsContent = ({
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Content>) => (
   <TabsPrimitive.Content
-    className={cn("mt-5 outline-none", className)}
+    className={cn(
+      "mt-5 outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/40 focus-visible:ring-offset-2 focus-visible:ring-offset-void",
+      className,
+    )}
     {...props}
   />
 );

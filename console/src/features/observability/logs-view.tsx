@@ -76,7 +76,7 @@ export function LogsView({
               </p>
               <Link
                 href={`/organizations/${organizationId}/projects/${projectId}/sites/${item.id}`}
-                className="mt-4 inline-flex text-xs text-violet-300"
+                className="mt-4 inline-flex text-xs text-mist hover:text-paper"
               >
                 Open site →
               </Link>
