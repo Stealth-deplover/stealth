@@ -101,7 +101,10 @@ jobs:
         run: ./scripts/setup-security-test.sh
 
       - name: Validate smoke scripts
-        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/setup-security-test.sh
+        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/setup-security-test.sh scripts/release_workflow_test.sh
+
+      - name: Verify release bootstrap is revision-pinned
+        run: ./scripts/release_workflow_test.sh
 
       - name: Test bootstrap failure handling
         run: ./scripts/bootstrap_test.sh
@@ -561,8 +564,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bootstrap_url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${RELEASE_VERSION}/scripts/bootstrap.sh"
+          if [[ "$bootstrap_url" == *"/HEAD/"* ]]; then
+            echo "release smoke tests must use the release revision for bootstrap.sh" >&2
+            exit 1
+          fi
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/HEAD/scripts/bootstrap.sh" \
+            "$bootstrap_url" \
             -o "$RUNNER_TEMP/bootstrap.sh"
           chmod 0755 "$RUNNER_TEMP/bootstrap.sh"
 
