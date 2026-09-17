@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/telemetry"
+	"github.com/google/uuid"
 )
 
 type adminComponentStatus struct {
@@ -23,10 +25,20 @@ type adminTelemetryStatus struct {
 }
 
 type adminOverviewResponse struct {
-	InstanceStatus string                 `json:"instance_status"`
-	CheckedAt      time.Time              `json:"checked_at"`
-	Components     []adminComponentStatus `json:"components"`
-	Telemetry      adminTelemetryStatus   `json:"telemetry"`
+	InstanceStatus string                        `json:"instance_status"`
+	CheckedAt      time.Time                     `json:"checked_at"`
+	Components     []adminComponentStatus        `json:"components"`
+	Telemetry      adminTelemetryStatus          `json:"telemetry"`
+	Operations     *domain.AdminOperationSummary `json:"operations,omitempty"`
+}
+
+type adminOperationsResponse struct {
+	Items []domain.AdminOperation `json:"items"`
+}
+
+type adminAuditResponse struct {
+	Items      []domain.AuditEvent `json:"items"`
+	NextCursor string              `json:"next_cursor,omitempty"`
 }
 
 func (s *Server) requireInstanceAdmin(next http.Handler) http.Handler {
@@ -101,11 +113,18 @@ func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
 	if coreHealthy {
 		instanceStatus = "healthy"
 	}
+	var operations *domain.AdminOperationSummary
+	if s.repo != nil {
+		if summary, err := s.repo.AdminOperationSummary(healthContext); err == nil {
+			operations = &summary
+		}
+	}
 	writeJSON(w, http.StatusOK, adminOverviewResponse{
 		InstanceStatus: instanceStatus,
 		CheckedAt:      checkedAt,
 		Components:     components,
 		Telemetry:      adminTelemetryStatus{Status: telemetryStatus},
+		Operations:     operations,
 	})
 }
 
@@ -220,6 +239,71 @@ func (s *Server) adminTelemetrySources(w http.ResponseWriter, r *http.Request) {
 	if !s.writeTelemetryResultError(w, err) {
 		writeJSON(w, http.StatusOK, result)
 	}
+}
+
+func (s *Server) adminOperations(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		internalError(s, w, errors.New("repository is unavailable"))
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "validation_error", "limit must be an integer between 1 and 100")
+			return
+		}
+		limit = parsed
+	}
+	items, err := s.repo.ListAdminOperations(r.Context(), queryRange.From, queryRange.To, limit)
+	if err != nil {
+		if errors.Is(err, repository.ErrInvalidQuery) {
+			writeError(w, http.StatusBadRequest, "validation_error", "operations query is invalid")
+			return
+		}
+		internalError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminOperationsResponse{Items: items})
+}
+
+func (s *Server) adminAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		internalError(s, w, errors.New("repository is unavailable"))
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			writeError(w, http.StatusBadRequest, "validation_error", "limit must be an integer between 1 and 100")
+			return
+		}
+		limit = parsed
+	}
+	var before *uuid.UUID
+	if raw := strings.TrimSpace(r.URL.Query().Get("before")); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "before must be a UUID cursor")
+			return
+		}
+		before = &parsed
+	}
+	items, next, err := s.repo.ListInstanceAuditEvents(r.Context(), limit, before)
+	if err != nil {
+		if errors.Is(err, repository.ErrInvalidQuery) {
+			writeError(w, http.StatusBadRequest, "validation_error", "audit query is invalid")
+			return
+		}
+		internalError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminAuditResponse{Items: items, NextCursor: next})
 }
 
 func (s *Server) adminTimeRange(w http.ResponseWriter, r *http.Request) (telemetry.TimeRange, bool) {

@@ -332,11 +332,21 @@ export function Sidebar({
     ? [
         { label: "Admin overview", href: "/admin", icon: Gauge, exact: true },
         {
+          label: "Admin operations",
+          href: "/admin/operations",
+          icon: CloudCog,
+        },
+        {
           label: "Admin metrics",
           href: "/admin/telemetry/metrics",
           icon: Activity,
         },
         { label: "Admin logs", href: "/admin/telemetry/logs", icon: Cable },
+        {
+          label: "Admin audit",
+          href: "/admin/audit",
+          icon: ShieldCheck,
+        },
       ]
     : [];
   return (

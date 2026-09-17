@@ -70,6 +70,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List durable deployments, executions, Agent runs, artifact cleanup jobs, and database backups through one safe instance-owner projection. */
+        get: operations["listAdminOperations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List instance-level audit records. Organization-scoped audit data remains on the organization audit endpoint. */
+        get: operations["listAdminAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/telemetry/logs": {
         parameters: {
             query?: never;
@@ -2614,6 +2648,64 @@ export interface components {
             checked_at: string;
             components: components["schemas"]["AdminComponentStatus"][];
             telemetry: components["schemas"]["AdminTelemetryStatus"];
+            operations?: components["schemas"]["AdminOperationSummary"];
+        };
+        AdminOperationSummary: {
+            /** Format: int64 */
+            active_deployments: number;
+            /** Format: int64 */
+            queued_jobs: number;
+            /** Format: int64 */
+            running_jobs: number;
+            /** Format: int64 */
+            failed_jobs: number;
+        };
+        AdminOperation: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: AdminOperationKind;
+            name: string;
+            /** Format: uuid */
+            project_id?: string | null;
+            project_name?: string | null;
+            status: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: int64 */
+            duration_ms: number;
+            error?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminOperationsResponse: {
+            items: components["schemas"]["AdminOperation"][];
+        };
+        AdminAuditEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            organization_id?: string | null;
+            /** Format: uuid */
+            actor_account_id?: string | null;
+            /** Format: email */
+            actor_email?: string | null;
+            action: string;
+            target_type: string;
+            /** Format: uuid */
+            target_id?: string | null;
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminAuditResponse: {
+            items: components["schemas"]["AdminAuditEvent"][];
+            /** Format: uuid */
+            next_cursor?: string;
         };
         AdminLog: {
             /** Format: date-time */
@@ -5228,6 +5320,61 @@ export interface operations {
                     "application/json": components["schemas"]["AdminOverviewResponse"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminOperations: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable operations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminAuditEvents: {
+        parameters: {
+            query?: {
+                before?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance audit records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAuditResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
@@ -11862,6 +12009,14 @@ export enum AdminTelemetryStatusStatus {
 export enum AdminOverviewResponseInstance_status {
     healthy = "healthy",
     degraded = "degraded"
+}
+export enum AdminOperationKind {
+    function_deployment = "function_deployment",
+    site_deployment = "site_deployment",
+    function_execution = "function_execution",
+    agent_run = "agent_run",
+    artifact_cleanup = "artifact_cleanup",
+    database_backup = "database_backup"
 }
 export enum AdminMetricKind {
     gauge = "gauge",

@@ -161,6 +161,34 @@ type AuditEvent struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
+// AdminOperation is a safe, instance-wide projection of durable work already
+// owned by the control plane. It deliberately joins existing deployment,
+// execution, Agent, cleanup, and backup records instead of introducing a
+// second operations ledger.
+type AdminOperation struct {
+	ID          string     `json:"id"`
+	Kind        string     `json:"kind"`
+	Name        string     `json:"name"`
+	ProjectID   *string    `json:"project_id,omitempty"`
+	ProjectName *string    `json:"project_name,omitempty"`
+	Status      string     `json:"status"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	DurationMS  int64      `json:"duration_ms"`
+	Error       *string    `json:"error,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// AdminOperationSummary contains only counts derived from durable control
+// plane state. A zero value means no work is currently represented, not a
+// fabricated telemetry measurement.
+type AdminOperationSummary struct {
+	ActiveDeployments int64 `json:"active_deployments"`
+	QueuedJobs        int64 `json:"queued_jobs"`
+	RunningJobs       int64 `json:"running_jobs"`
+	FailedJobs        int64 `json:"failed_jobs"`
+}
+
 type Project struct {
 	ID             string    `json:"id"`
 	OrganizationID string    `json:"organization_id"`

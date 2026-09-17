@@ -92,6 +92,39 @@ export function AdminOverviewView() {
           </Card>
         ))}
       </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {data.operations ? (
+          <>
+            <OverviewStat
+              label="Active deployments"
+              value={data.operations.active_deployments}
+              href="/admin/operations"
+            />
+            <OverviewStat
+              label="Queued jobs"
+              value={data.operations.queued_jobs}
+              href="/admin/operations"
+            />
+            <OverviewStat
+              label="Running jobs"
+              value={data.operations.running_jobs}
+              href="/admin/operations"
+            />
+            <OverviewStat
+              label="Failed jobs"
+              value={data.operations.failed_jobs}
+              href="/admin/operations"
+              warning={data.operations.failed_jobs > 0}
+            />
+          </>
+        ) : (
+          <Card className="sm:col-span-2 lg:col-span-4">
+            <CardContent className="p-4 text-sm text-fog">
+              Durable operation counts are temporarily unavailable.
+            </CardContent>
+          </Card>
+        )}
+      </div>
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
         <Card>
           <CardHeader className="flex-row items-center justify-between">
@@ -165,5 +198,34 @@ export function AdminOverviewView() {
         </Card>
       </div>
     </AdminShell>
+  );
+}
+
+function OverviewStat({
+  label,
+  value,
+  href,
+  warning = false,
+}: {
+  label: string;
+  value: number;
+  href: string;
+  warning?: boolean;
+}) {
+  return (
+    <Link href={href} className="block">
+      <Card className="h-full transition-colors duration-150 hover:border-smoke">
+        <CardContent className="p-5">
+          <p className="text-xs uppercase tracking-[0.12em] text-fog">
+            {label}
+          </p>
+          <p
+            className={`mt-3 font-mono text-2xl tabular-nums ${warning ? "text-coral-red" : "text-paper"}`}
+          >
+            {value.toLocaleString()}
+          </p>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }

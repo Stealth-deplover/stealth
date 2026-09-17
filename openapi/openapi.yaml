@@ -33,6 +33,35 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/operations:
+    get:
+      operationId: listAdminOperations
+      description: List durable deployments, executions, Agent runs, artifact cleanup jobs, and database backups through one safe instance-owner projection.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Durable operations, content: { application/json: { schema: { $ref: '#/components/schemas/AdminOperationsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/audit-events:
+    get:
+      operationId: listAdminAuditEvents
+      description: List instance-level audit records. Organization-scoped audit data remains on the organization audit endpoint.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: before, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Instance audit records, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAuditResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/admin/telemetry/logs:
     get:
       operationId: listAdminTelemetryLogs
@@ -2509,7 +2538,12 @@ components:
     Status: { type: object, required: [status], properties: { status: { type: string, enum: [ok, ready] } } }
     AdminComponentStatus: { type: object, additionalProperties: false, required: [name, status], properties: { name: { type: string, minLength: 1, maxLength: 64 }, status: { type: string, enum: [healthy, unavailable, unknown] } } }
     AdminTelemetryStatus: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [healthy, unavailable] } } }
-    AdminOverviewResponse: { type: object, additionalProperties: false, required: [instance_status, checked_at, components, telemetry], properties: { instance_status: { type: string, enum: [healthy, degraded] }, checked_at: { type: string, format: date-time }, components: { type: array, items: { $ref: '#/components/schemas/AdminComponentStatus' } }, telemetry: { $ref: '#/components/schemas/AdminTelemetryStatus' } } }
+    AdminOverviewResponse: { type: object, additionalProperties: false, required: [instance_status, checked_at, components, telemetry], properties: { instance_status: { type: string, enum: [healthy, degraded] }, checked_at: { type: string, format: date-time }, components: { type: array, items: { $ref: '#/components/schemas/AdminComponentStatus' } }, telemetry: { $ref: '#/components/schemas/AdminTelemetryStatus' }, operations: { $ref: '#/components/schemas/AdminOperationSummary' } } }
+    AdminOperationSummary: { type: object, additionalProperties: false, required: [active_deployments, queued_jobs, running_jobs, failed_jobs], properties: { active_deployments: { type: integer, format: int64, minimum: 0 }, queued_jobs: { type: integer, format: int64, minimum: 0 }, running_jobs: { type: integer, format: int64, minimum: 0 }, failed_jobs: { type: integer, format: int64, minimum: 0 } } }
+    AdminOperation: { type: object, additionalProperties: false, required: [id, kind, name, status, duration_ms, created_at], properties: { id: { type: string, format: uuid }, kind: { type: string, enum: [function_deployment, site_deployment, function_execution, agent_run, artifact_cleanup, database_backup] }, name: { type: string }, project_id: { type: [string, 'null'], format: uuid }, project_name: { type: [string, 'null'] }, status: { type: string }, started_at: { type: [string, 'null'], format: date-time }, finished_at: { type: [string, 'null'], format: date-time }, duration_ms: { type: integer, format: int64, minimum: 0 }, error: { type: [string, 'null'] }, created_at: { type: string, format: date-time } } }
+    AdminOperationsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminOperation' } } } }
+    AdminAuditEvent: { type: object, additionalProperties: false, required: [id, action, target_type, metadata, created_at], properties: { id: { type: string, format: uuid }, organization_id: { type: [string, 'null'], format: uuid }, actor_account_id: { type: [string, 'null'], format: uuid }, actor_email: { type: [string, 'null'], format: email }, action: { type: string }, target_type: { type: string }, target_id: { type: [string, 'null'], format: uuid }, metadata: { type: object, additionalProperties: true }, created_at: { type: string, format: date-time } } }
+    AdminAuditResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAuditEvent' } }, next_cursor: { type: string, format: uuid } } }
     AdminLog: { type: object, additionalProperties: false, required: [timestamp, service, message], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, level: { type: string }, service: { type: string }, message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
     AdminLogsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminLog' } } } }
     AdminTraceSpan: { type: object, additionalProperties: false, required: [timestamp, trace_id, span_id, name, kind, service, duration_ns, status], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, parent_span_id: { type: string }, name: { type: string }, kind: { type: string }, service: { type: string }, duration_ns: { type: integer, format: int64, minimum: 0 }, status: { type: string }, status_message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }

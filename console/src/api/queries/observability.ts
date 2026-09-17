@@ -28,6 +28,34 @@ export function useAdminOverview(options?: {
   });
 }
 
+export function useAdminOperations(
+  query: Pick<AdminTelemetryQuery, "from" | "to" | "limit"> = {},
+  options?: { refetchInterval?: number | false },
+) {
+  return useQuery({
+    queryKey: [...queryKeys.adminOperations, query],
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/admin/operations", { params: { query }, signal }),
+    ),
+    placeholderData: keepPreviousData,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+export function useAdminAuditEvents(
+  query: { before?: string; limit?: number } = {},
+  options?: { refetchInterval?: number | false },
+) {
+  return useQuery({
+    queryKey: queryKeys.adminAuditEvents(query),
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/admin/audit-events", { params: { query }, signal }),
+    ),
+    placeholderData: keepPreviousData,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
 export function useAdminLogs(
   query: AdminTelemetryQuery = {},
   options?: { refetchInterval?: number | false },

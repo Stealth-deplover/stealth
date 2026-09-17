@@ -117,6 +117,9 @@ export const queryKeys = {
   authSettings: (projectId: string) => ["auth-settings", projectId] as const,
   serviceLayout: (projectId: string) => ["service-layout", projectId] as const,
   adminOverview: ["admin", "overview"] as const,
+  adminOperations: ["admin", "operations"] as const,
+  adminAuditEvents: (query: unknown) =>
+    ["admin", "audit-events", query] as const,
   adminTelemetry: (signal: string, query: unknown) =>
     ["admin", "telemetry", signal, query] as const,
 } as const;

@@ -1,16 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, DatabaseZap, Gauge, Logs, RadioTower } from "lucide-react";
+import {
+  Activity,
+  ClipboardList,
+  DatabaseZap,
+  Gauge,
+  Logs,
+  RadioTower,
+  ShieldCheck,
+} from "lucide-react";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/admin", label: "Overview", icon: Gauge },
+  { href: "/admin/operations", label: "Operations", icon: ClipboardList },
   { href: "/admin/telemetry/metrics", label: "Metrics", icon: Activity },
   { href: "/admin/telemetry/logs", label: "Logs", icon: Logs },
   { href: "/admin/telemetry/traces", label: "Traces", icon: RadioTower },
   { href: "/admin/telemetry/sources", label: "Sources", icon: DatabaseZap },
+  { href: "/admin/audit", label: "Audit & security", icon: ShieldCheck },
 ];
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
