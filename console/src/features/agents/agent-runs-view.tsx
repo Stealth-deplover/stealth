@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import {
   CheckCircle2,
   CircleDashed,
@@ -16,7 +15,7 @@ import { useCancelAgentRun, useCreateAgentRun } from "@/api/mutations";
 import { useAgentRun, useAgentRuns } from "@/api/queries";
 import type { AgentRun } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState, errorMessage } from "@/components/feedback/error-state";
@@ -76,7 +75,7 @@ export function AgentRunsView({
     }
   };
 
-  const columns: ColumnDef<AgentRun, unknown>[] = [
+  const columns: DataTableColumnDef<AgentRun>[] = [
     {
       accessorKey: "status",
       header: "Status",

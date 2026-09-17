@@ -1,6 +1,5 @@
 "use client";
 
-import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import { nextCursor } from "@/api/pagination";
@@ -12,7 +11,7 @@ import { useFunctionVariables } from "@/api/queries";
 import type { FunctionVariable } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { ErrorState } from "@/components/feedback/error-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,7 +48,7 @@ export function FunctionVariablesPanel({
     await create.mutateAsync(functionVariablePayload(values));
     toast.success("Environment variable added");
   };
-  const columns: ColumnDef<FunctionVariable, unknown>[] = [
+  const columns: DataTableColumnDef<FunctionVariable>[] = [
     {
       accessorKey: "key",
       header: "Key",

@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import type { ColumnDef } from "@tanstack/react-table";
 import { Upload } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -16,7 +15,7 @@ import {
   useFunctionExecutions,
 } from "@/api/queries";
 import type { FunctionDeployment, FunctionExecution } from "@/api/types";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -120,7 +119,7 @@ export function FunctionDetailView({
         description="The function may have been removed or is outside this project."
       />
     );
-  const deploymentColumns: ColumnDef<FunctionDeployment, unknown>[] = [
+  const deploymentColumns: DataTableColumnDef<FunctionDeployment>[] = [
     {
       accessorKey: "version",
       header: "Version",
@@ -187,7 +186,7 @@ export function FunctionDetailView({
       ),
     },
   ];
-  const executionColumns: ColumnDef<FunctionExecution, unknown>[] = [
+  const executionColumns: DataTableColumnDef<FunctionExecution>[] = [
     {
       accessorKey: "id",
       header: "Execution",

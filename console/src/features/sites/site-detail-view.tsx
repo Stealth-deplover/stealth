@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import { FileUp } from "lucide-react";
 import { useMemo, useRef } from "react";
 import { toast } from "sonner";
@@ -12,7 +11,7 @@ import {
 } from "@/api/mutations";
 import { useSite, useSiteDeployment, useSiteDeployments } from "@/api/queries";
 import type { SiteDeployment } from "@/api/types";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -91,7 +90,7 @@ export function SiteDetailView({
     );
   const showFirstDeployment =
     !deploymentsNavigation.cursor && deployments.data?.deployments.length === 0;
-  const columns: ColumnDef<SiteDeployment, unknown>[] = [
+  const columns: DataTableColumnDef<SiteDeployment>[] = [
     {
       accessorKey: "version",
       header: "Version",

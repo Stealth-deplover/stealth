@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import type { ColumnDef } from "@tanstack/react-table";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -19,7 +18,7 @@ import {
 } from "@/api/queries";
 import type { DatabaseBackup, DatabaseTable } from "@/api/types";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/empty-state";
@@ -57,7 +56,7 @@ function DatabaseBackupsPanel({
   const remove = useDeleteDatabaseBackup(projectId, databaseId);
   const restore = useRestoreDatabaseBackup(projectId, databaseId);
   const [created, setCreated] = useState<DatabaseBackup>();
-  const columns: ColumnDef<DatabaseBackup, unknown>[] = [
+  const columns: DataTableColumnDef<DatabaseBackup>[] = [
     {
       accessorKey: "id",
       header: "Backup ID",
@@ -255,7 +254,7 @@ export function DatabaseDetailView({
         description="The database may have been removed or is outside this project."
       />
     );
-  const columns: ColumnDef<DatabaseTable, unknown>[] = [
+  const columns: DataTableColumnDef<DatabaseTable>[] = [
     {
       accessorKey: "name",
       header: "Table",

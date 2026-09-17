@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateWebhook } from "@/api/mutations";
@@ -11,7 +10,7 @@ import { useWebhooks } from "@/api/queries";
 import type { Webhook } from "@/api/types";
 import type { components } from "@/api/generated/schema";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -58,7 +57,7 @@ export function WebhooksView({
     toast.success("Webhook created");
   };
 
-  const columns: ColumnDef<Webhook, unknown>[] = [
+  const columns: DataTableColumnDef<Webhook>[] = [
     {
       accessorKey: "name",
       header: "Webhook",

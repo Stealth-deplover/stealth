@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ColumnDef } from "@tanstack/react-table";
 import { Activity, Bot, Play, Settings2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -21,7 +20,7 @@ import {
 import type { Agent, AgentCatalog, AgentRun } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -96,7 +95,7 @@ export function AgentsView({
     router.push(`${base}/agents/${result.agent.id}`);
   };
 
-  const columns: ColumnDef<Agent, unknown>[] = [
+  const columns: DataTableColumnDef<Agent>[] = [
     {
       accessorKey: "name",
       header: "Agent",

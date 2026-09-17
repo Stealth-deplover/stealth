@@ -1,6 +1,5 @@
 "use client";
 
-import type { ColumnDef } from "@tanstack/react-table";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { apiUrl } from "@/api/client";
@@ -9,7 +8,7 @@ import { useDeleteStorageFile } from "@/api/mutations";
 import { useStorageFiles } from "@/api/queries";
 import type { StorageBucket, StorageFile } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { Button } from "@/components/ui/button";
@@ -43,7 +42,7 @@ export function BucketObjectBrowser({
   });
   const remove = useDeleteStorageFile(projectId, bucket.id);
 
-  const columns: ColumnDef<StorageFile, unknown>[] = [
+  const columns: DataTableColumnDef<StorageFile>[] = [
     {
       accessorKey: "name",
       header: "Name",

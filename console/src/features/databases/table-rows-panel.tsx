@@ -2,7 +2,6 @@
 
 import { type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
 import { ComponentsParametersOrderDirection } from "@/api/generated/schema";
 import type { DatabaseColumn, DatabaseIndex, DatabaseRow } from "@/api/types";
@@ -10,7 +9,7 @@ import { useDatabaseRows } from "@/api/queries";
 import { useCreateDatabaseRow } from "@/api/mutations";
 import { nextCursor } from "@/api/pagination";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState, errorMessage } from "@/components/feedback/error-state";
 import { Button } from "@/components/ui/button";
@@ -157,7 +156,7 @@ export function TableRowsPanel({
     }
   };
 
-  const rowColumns: ColumnDef<DatabaseRow, unknown>[] = [
+  const rowColumns: DataTableColumnDef<DatabaseRow>[] = [
     {
       accessorKey: "id",
       header: "Row ID",
@@ -178,7 +177,7 @@ export function TableRowsPanel({
           Object.keys(row.data ?? {}),
         ),
       ]),
-    ).map((key): ColumnDef<DatabaseRow, unknown> => ({
+    ).map((key): DataTableColumnDef<DatabaseRow> => ({
       id: `data:${key}`,
       header: key,
       cell: ({ row }) => (

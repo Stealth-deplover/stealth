@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -17,7 +16,7 @@ import type { components } from "@/api/generated/schema";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CopyButton } from "@/components/copy-button";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -79,7 +78,7 @@ export function WebhookDetailView({
       />
     );
 
-  const columns: ColumnDef<WebhookDelivery, unknown>[] = [
+  const columns: DataTableColumnDef<WebhookDelivery>[] = [
     {
       id: "delivery_id",
       header: "Delivery",
