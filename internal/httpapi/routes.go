@@ -28,6 +28,7 @@ func (s *Server) routes() http.Handler {
 			return
 		}
 		r.Post("/setup/handoff", s.completeSetupHandoff)
+		s.registerAdminRoutes(r)
 		s.registerAccountRoutes(r)
 		s.registerOrganizationRoutes(r)
 		s.registerProjectRoutes(r)

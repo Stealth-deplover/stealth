@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useConsoleRouteContext } from "@/components/navigation/console-route-context";
+import { useCurrentAccount } from "@/api/queries";
 import {
   organizationPath,
   organizationProjectsPath,
@@ -113,6 +114,10 @@ export function Sidebar({
   onToggle?: () => void;
 }) {
   const { organizationId, projectId, pathname } = useConsoleRouteContext();
+  const account = useCurrentAccount();
+  const instanceAdmin =
+    account.data?.account.instance_role === "instance_owner" ||
+    account.data?.account.instance_role === "instance_admin";
   const projectContext =
     organizationId && projectId ? { organizationId, projectId } : undefined;
   const orgItems: NavItem[] = organizationId
@@ -323,6 +328,17 @@ export function Sidebar({
         },
       ]
     : [];
+  const adminItems: NavItem[] = instanceAdmin
+    ? [
+        { label: "Admin overview", href: "/admin", icon: Gauge, exact: true },
+        {
+          label: "Admin metrics",
+          href: "/admin/telemetry/metrics",
+          icon: Activity,
+        },
+        { label: "Admin logs", href: "/admin/telemetry/logs", icon: Cable },
+      ]
+    : [];
   return (
     <aside
       aria-label="Primary navigation"
@@ -412,6 +428,14 @@ export function Sidebar({
             collapsed={collapsed && !mobile}
             pathname={pathname}
           />
+          {adminItems.length ? (
+            <NavGroup
+              label="Admin"
+              items={adminItems}
+              collapsed={collapsed && !mobile}
+              pathname={pathname}
+            />
+          ) : null}
         </>
       ) : (
         <div
@@ -429,6 +453,14 @@ export function Sidebar({
           )}
         </div>
       )}
+      {!projectContext && adminItems.length ? (
+        <NavGroup
+          label="Admin"
+          items={adminItems}
+          collapsed={collapsed && !mobile}
+          pathname={pathname}
+        />
+      ) : null}
       <div
         className={cn(
           "mt-auto pt-8 text-[10px] leading-5 text-fog",

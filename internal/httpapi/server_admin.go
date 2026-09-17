@@ -1,0 +1,294 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/telemetry"
+)
+
+type adminComponentStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type adminTelemetryStatus struct {
+	Status string `json:"status"`
+}
+
+type adminOverviewResponse struct {
+	InstanceStatus string                 `json:"instance_status"`
+	CheckedAt      time.Time              `json:"checked_at"`
+	Components     []adminComponentStatus `json:"components"`
+	Telemetry      adminTelemetryStatus   `json:"telemetry"`
+}
+
+func (s *Server) requireInstanceAdmin(next http.Handler) http.Handler {
+	return s.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.repo == nil {
+			internalError(s, w, errors.New("repository is unavailable"))
+			return
+		}
+		allowed, err := s.repo.IsInstanceAdmin(r.Context(), mustUUID(accountFrom(r).ID))
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			internalError(s, w, err)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "forbidden", "instance owner or admin permission is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
+	checkedAt := time.Now().UTC()
+	healthContext, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	components := make([]adminComponentStatus, 0, 6)
+	coreHealthy := true
+
+	apiStatus := "healthy"
+	components = append(components, adminComponentStatus{Name: "api", Status: apiStatus})
+
+	databaseStatus := "healthy"
+	if s.repo == nil || s.repo.Ping(healthContext) != nil {
+		databaseStatus = "unavailable"
+		coreHealthy = false
+	}
+	components = append(components, adminComponentStatus{Name: "postgres", Status: databaseStatus})
+
+	redisStatus := "unavailable"
+	if s.redis != nil {
+		if err := s.redis.Ping(healthContext).Err(); err == nil {
+			redisStatus = "healthy"
+		} else {
+			coreHealthy = false
+		}
+	} else {
+		coreHealthy = false
+	}
+	components = append(components, adminComponentStatus{Name: "redis", Status: redisStatus})
+
+	clickhouseStatus := "unavailable"
+	if s.telemetry != nil {
+		if err := s.telemetry.Ping(healthContext); err == nil {
+			clickhouseStatus = "healthy"
+		}
+	}
+	components = append(components, adminComponentStatus{Name: "clickhouse", Status: clickhouseStatus})
+	collectorStatus := "unknown"
+	if s.config.TelemetryCollectorHealthURL != "" {
+		collectorStatus = "unavailable"
+		if s.collectorHealthy(r.WithContext(healthContext)) {
+			collectorStatus = "healthy"
+		}
+	}
+	components = append(components, adminComponentStatus{Name: "otel-collector", Status: collectorStatus})
+	telemetryStatus := "unavailable"
+	if clickhouseStatus == "healthy" && (collectorStatus == "healthy" || collectorStatus == "unknown") {
+		telemetryStatus = "healthy"
+	}
+
+	instanceStatus := "degraded"
+	if coreHealthy {
+		instanceStatus = "healthy"
+	}
+	writeJSON(w, http.StatusOK, adminOverviewResponse{
+		InstanceStatus: instanceStatus,
+		CheckedAt:      checkedAt,
+		Components:     components,
+		Telemetry:      adminTelemetryStatus{Status: telemetryStatus},
+	})
+}
+
+func (s *Server) collectorHealthy(r *http.Request) bool {
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, s.config.TelemetryCollectorHealthURL, nil)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	return response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices
+}
+
+func (s *Server) adminTelemetryLogs(w http.ResponseWriter, r *http.Request) {
+	if s.telemetry == nil {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.telemetry.QueryLogs(r.Context(), telemetry.LogsQuery{
+		Range:   queryRange,
+		Service: r.URL.Query().Get("service"),
+		Level:   r.URL.Query().Get("level"),
+		Search:  r.URL.Query().Get("query"),
+		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTelemetryTraces(w http.ResponseWriter, r *http.Request) {
+	if s.telemetry == nil {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	minMS, err := parseFloatQuery(r, "min_duration_ms", 0, 24*60*60*1000)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", "min_duration_ms must be a non-negative number within one day")
+		return
+	}
+	result, err := s.telemetry.QueryTraces(r.Context(), telemetry.TracesQuery{
+		Range:   queryRange,
+		Service: r.URL.Query().Get("service"),
+		TraceID: r.URL.Query().Get("trace_id"),
+		MinMs:   minMS,
+		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTelemetryMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.telemetry == nil {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.telemetry.QueryMetrics(r.Context(), telemetry.MetricsQuery{
+		Range:   queryRange,
+		Service: r.URL.Query().Get("service"),
+		Name:    r.URL.Query().Get("name"),
+		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTelemetrySources(w http.ResponseWriter, r *http.Request) {
+	if s.telemetry == nil {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.telemetry.ListSources(r.Context(), telemetry.SourcesQuery{Range: queryRange, Limit: limit})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTimeRange(w http.ResponseWriter, r *http.Request) (telemetry.TimeRange, bool) {
+	to := time.Now().UTC()
+	if raw := strings.TrimSpace(r.URL.Query().Get("to")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "to must be an RFC3339 timestamp")
+			return telemetry.TimeRange{}, false
+		}
+		to = parsed.UTC()
+	}
+	from := to.Add(-time.Hour)
+	if raw := strings.TrimSpace(r.URL.Query().Get("from")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "from must be an RFC3339 timestamp")
+			return telemetry.TimeRange{}, false
+		}
+		from = parsed.UTC()
+	}
+	queryRange := telemetry.TimeRange{From: from, To: to}
+	if !to.After(from) || to.Sub(from) > s.config.TelemetryMaxQueryRange {
+		writeError(w, http.StatusBadRequest, "validation_error", "time range is invalid or exceeds the configured limit")
+		return telemetry.TimeRange{}, false
+	}
+	return queryRange, true
+}
+
+func (s *Server) adminLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "limit must be an integer")
+			return 0, false
+		}
+		limit = parsed
+	}
+	if limit < 1 || limit > s.config.TelemetryMaxQueryRows {
+		writeError(w, http.StatusBadRequest, "validation_error", "limit exceeds the configured telemetry query limit")
+		return 0, false
+	}
+	return limit, true
+}
+
+func parseFloatQuery(r *http.Request, key string, minimum, maximum float64) (float64, error) {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < minimum || parsed > maximum {
+		return 0, errors.New("invalid number")
+	}
+	return parsed, nil
+}
+
+func (s *Server) writeTelemetryResultError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, telemetry.ErrInvalidQuery) {
+		writeError(w, http.StatusBadRequest, "validation_error", "telemetry query is invalid")
+		return true
+	}
+	// Backend failures are intentionally generic. ClickHouse errors can contain
+	// query fragments or deployment-specific details and must not reach the
+	// browser.
+	writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+	return true
+}

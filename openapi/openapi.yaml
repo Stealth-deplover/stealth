@@ -23,6 +23,84 @@ paths:
       description: Safe build metadata for release and operator checks. No configuration or secrets are returned.
       responses:
         '200': { description: Build metadata, content: { application/json: { schema: { $ref: '#/components/schemas/BuildInfo' } } } }
+  /v1/admin/overview:
+    get:
+      operationId: getAdminOverview
+      description: Return live instance component and telemetry-backend health. Requires an instance owner or instance admin role; organization membership is not sufficient.
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { description: Live instance overview, content: { application/json: { schema: { $ref: '#/components/schemas/AdminOverviewResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/telemetry/logs:
+    get:
+      operationId: listAdminTelemetryLogs
+      description: Query structured logs through a bounded, parameterized server-side query. Raw ClickHouse SQL is not accepted.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: level, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Logs, content: { application/json: { schema: { $ref: '#/components/schemas/AdminLogsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/traces:
+    get:
+      operationId: listAdminTelemetryTraces
+      description: Query distributed spans through a bounded, parameterized server-side query.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: trace_id, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: min_duration_ms, in: query, schema: { type: number, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Trace spans, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTracesResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/metrics:
+    get:
+      operationId: listAdminTelemetryMetrics
+      description: Query real OTel metric points through a bounded server-side query.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: name, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Metric points, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMetricsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/sources:
+    get:
+      operationId: listAdminTelemetrySources
+      description: List services and signal types observed in the bounded telemetry window.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Telemetry sources, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSourcesResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/bootstrap/status:
     get:
       operationId: getBootstrapStatus
@@ -2429,6 +2507,17 @@ components:
     ValidationError: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
   schemas:
     Status: { type: object, required: [status], properties: { status: { type: string, enum: [ok, ready] } } }
+    AdminComponentStatus: { type: object, additionalProperties: false, required: [name, status], properties: { name: { type: string, minLength: 1, maxLength: 64 }, status: { type: string, enum: [healthy, unavailable, unknown] } } }
+    AdminTelemetryStatus: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [healthy, unavailable] } } }
+    AdminOverviewResponse: { type: object, additionalProperties: false, required: [instance_status, checked_at, components, telemetry], properties: { instance_status: { type: string, enum: [healthy, degraded] }, checked_at: { type: string, format: date-time }, components: { type: array, items: { $ref: '#/components/schemas/AdminComponentStatus' } }, telemetry: { $ref: '#/components/schemas/AdminTelemetryStatus' } } }
+    AdminLog: { type: object, additionalProperties: false, required: [timestamp, service, message], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, level: { type: string }, service: { type: string }, message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminLogsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminLog' } } } }
+    AdminTraceSpan: { type: object, additionalProperties: false, required: [timestamp, trace_id, span_id, name, kind, service, duration_ns, status], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, parent_span_id: { type: string }, name: { type: string }, kind: { type: string }, service: { type: string }, duration_ns: { type: integer, format: int64, minimum: 0 }, status: { type: string }, status_message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminTracesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminTraceSpan' } } } }
+    AdminMetric: { type: object, additionalProperties: false, required: [timestamp, name, service, value, kind], properties: { timestamp: { type: string, format: date-time }, name: { type: string }, service: { type: string }, value: { type: number }, kind: { type: string, enum: [gauge, sum] }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminMetricsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminMetric' } } } }
+    AdminTelemetrySource: { type: object, additionalProperties: false, required: [service, signal, last_received, volume], properties: { service: { type: string }, signal: { type: string, enum: [logs, traces, metrics] }, last_received: { type: string, format: date-time }, volume: { type: integer, format: int64, minimum: 0 } } }
+    AdminSourcesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminTelemetrySource' } } } }
     BuildInfo: { type: object, required: [version, commit, build_time], properties: { version: { type: string }, commit: { type: string }, build_time: { type: string } } }
     BootstrapStatusResponse: { type: object, additionalProperties: false, required: [setup_required], properties: { setup_required: { type: boolean, description: Whether the first Instance Owner still needs to be created. } } }
     BootstrapSessionResponse: { type: object, additionalProperties: false, required: [setup_code, expires_at], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', description: One-time code shown only to the CLI operator. }, expires_at: { type: string, format: date-time } } }

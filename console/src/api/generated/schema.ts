@@ -53,6 +53,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return live instance component and telemetry-backend health. Requires an instance owner or instance admin role; organization membership is not sufficient. */
+        get: operations["getAdminOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query structured logs through a bounded, parameterized server-side query. Raw ClickHouse SQL is not accepted. */
+        get: operations["listAdminTelemetryLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query distributed spans through a bounded, parameterized server-side query. */
+        get: operations["listAdminTelemetryTraces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query real OTel metric points through a bounded server-side query. */
+        get: operations["listAdminTelemetryMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List services and signal types observed in the bounded telemetry window. */
+        get: operations["listAdminTelemetrySources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bootstrap/status": {
         parameters: {
             query?: never;
@@ -2512,6 +2597,94 @@ export interface components {
         Status: {
             /** @enum {string} */
             status: StatusStatus;
+        };
+        AdminComponentStatus: {
+            name: string;
+            /** @enum {string} */
+            status: AdminComponentStatusStatus;
+        };
+        AdminTelemetryStatus: {
+            /** @enum {string} */
+            status: AdminTelemetryStatusStatus;
+        };
+        AdminOverviewResponse: {
+            /** @enum {string} */
+            instance_status: AdminOverviewResponseInstance_status;
+            /** Format: date-time */
+            checked_at: string;
+            components: components["schemas"]["AdminComponentStatus"][];
+            telemetry: components["schemas"]["AdminTelemetryStatus"];
+        };
+        AdminLog: {
+            /** Format: date-time */
+            timestamp: string;
+            trace_id?: string;
+            span_id?: string;
+            level?: string;
+            service: string;
+            message: string;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminLogsResponse: {
+            items: components["schemas"]["AdminLog"][];
+        };
+        AdminTraceSpan: {
+            /** Format: date-time */
+            timestamp: string;
+            trace_id: string;
+            span_id: string;
+            parent_span_id?: string;
+            name: string;
+            kind: string;
+            service: string;
+            /** Format: int64 */
+            duration_ns: number;
+            status: string;
+            status_message?: string;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminTracesResponse: {
+            items: components["schemas"]["AdminTraceSpan"][];
+        };
+        AdminMetric: {
+            /** Format: date-time */
+            timestamp: string;
+            name: string;
+            service: string;
+            value: number;
+            /** @enum {string} */
+            kind: AdminMetricKind;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminMetricsResponse: {
+            items: components["schemas"]["AdminMetric"][];
+        };
+        AdminTelemetrySource: {
+            service: string;
+            /** @enum {string} */
+            signal: AdminTelemetrySourceSignal;
+            /** Format: date-time */
+            last_received: string;
+            /** Format: int64 */
+            volume: number;
+        };
+        AdminSourcesResponse: {
+            items: components["schemas"]["AdminTelemetrySource"][];
         };
         BuildInfo: {
             version: string;
@@ -5035,6 +5208,149 @@ export interface operations {
                     "application/json": components["schemas"]["BuildInfo"];
                 };
             };
+        };
+    };
+    getAdminOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live instance overview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOverviewResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminTelemetryLogs: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                level?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLogsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryTraces: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                trace_id?: string;
+                min_duration_ms?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trace spans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTracesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryMetrics: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                name?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metric points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMetricsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetrySources: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Telemetry sources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSourcesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getBootstrapStatus: {
@@ -11533,6 +11849,28 @@ export enum PathsV1ProjectsProjectIDDatabasesDatabaseIDTablesTableIDExportGetPar
 export enum StatusStatus {
     ok = "ok",
     ready = "ready"
+}
+export enum AdminComponentStatusStatus {
+    healthy = "healthy",
+    unavailable = "unavailable",
+    unknown = "unknown"
+}
+export enum AdminTelemetryStatusStatus {
+    healthy = "healthy",
+    unavailable = "unavailable"
+}
+export enum AdminOverviewResponseInstance_status {
+    healthy = "healthy",
+    degraded = "degraded"
+}
+export enum AdminMetricKind {
+    gauge = "gauge",
+    sum = "sum"
+}
+export enum AdminTelemetrySourceSignal {
+    logs = "logs",
+    traces = "traces",
+    metrics = "metrics"
 }
 export enum GitHubPollResponseStatus {
     pending = "pending",

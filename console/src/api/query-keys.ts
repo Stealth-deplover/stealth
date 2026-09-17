@@ -116,4 +116,7 @@ export const queryKeys = {
     ["messaging-messages", projectId] as const,
   authSettings: (projectId: string) => ["auth-settings", projectId] as const,
   serviceLayout: (projectId: string) => ["service-layout", projectId] as const,
+  adminOverview: ["admin", "overview"] as const,
+  adminTelemetry: (signal: string, query: unknown) =>
+    ["admin", "telemetry", signal, query] as const,
 } as const;
