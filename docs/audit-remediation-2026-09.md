@@ -5,6 +5,9 @@ This document preserves the historical context in
 and records the re-verification and remediation performed against the latest
 `main`.
 
+For a subsequent read-only repository-wide bug audit of the current HEAD, see
+[`docs/full-bug-audit-2026-09-17.md`](full-bug-audit-2026-09-17.md).
+
 ## Re-verification
 
 - Main before remediation: `157b1ba0903f2f1dc0e7be96e6a7b3d0a387360e`
@@ -175,3 +178,28 @@ Docker validation, and the release smoke guard. CodeQL Go and
 JavaScript/TypeScript analyses also passed.
 
 Remediation PR: [#76 — fix: remediate 2026-09 audit findings](https://github.com/Stealth-deplover/stealth/pull/76)
+
+## Follow-up residual fixes
+
+The subsequent read-only audit identified four related residual correctness
+issues. They are implemented in the current working tree and are not yet
+committed or pushed:
+
+- Artifact publication now creates a durable PostgreSQL publish reservation
+  before physical upload/build publication. The metadata transaction consumes
+  it atomically; stale reservations are promoted to the existing cleanup
+  worker, which keeps crash recovery idempotent and rooted. Metadata-error
+  paths no longer perform ambiguous direct deletion.
+- Messaging subscriber/message and webhook secret-rotation events now pass
+  through backend fanout and the Console subscription allow-list. Recovered
+  stale Agent runs emit `agent.run.queued`, so the existing scoped Agent cache
+  invalidation refreshes the parent status.
+- Request contexts now reach S3 stat, upload, download, list, and delete
+  operations; the storage wrappers and cleanup worker use the same context
+  contract.
+
+Regression coverage includes publish-reservation integration checks, stale
+Agent recovery/event checks, realtime fanout/cache mapping tests, and canceled
+S3 operation tests. The 24-hour reservation age is a conservative crash
+recovery boundary; known request/build failures still leave a durable row for
+the cleanup worker rather than relying on process memory.
