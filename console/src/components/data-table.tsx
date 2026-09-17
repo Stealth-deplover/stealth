@@ -1,13 +1,16 @@
 "use client";
 
 import {
+  createPaginatedRowModel,
+  createSortedRowModel,
   flexRender,
-  getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable,
+  rowPaginationFeature,
+  rowSortingFeature,
+  tableFeatures,
+  useTable,
   type ColumnDef,
   type PaginationState,
+  type RowData,
   type SortingState,
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
@@ -28,15 +31,28 @@ import {
 
 export type ServerPagination = CursorPaginationControlsProps;
 
-type DataTableProps<T> = {
-  columns: ColumnDef<T, unknown>[];
+const dataTableFeatures = tableFeatures({
+  paginatedRowModel: createPaginatedRowModel(),
+  rowPaginationFeature,
+  rowSortingFeature,
+  sortedRowModel: createSortedRowModel(),
+});
+
+export type DataTableColumnDef<T extends RowData> = ColumnDef<
+  typeof dataTableFeatures,
+  T,
+  unknown
+>;
+
+type DataTableProps<T extends RowData> = {
+  columns: DataTableColumnDef<T>[];
   data: T[];
   loading?: boolean;
   empty?: string;
   serverPagination?: ServerPagination;
 };
 
-export function DataTable<T>({
+export function DataTable<T extends RowData>({
   columns,
   data,
   loading,
@@ -49,20 +65,16 @@ export function DataTable<T>({
     pageSize: 25,
   });
   const isServerPaginated = Boolean(serverPagination);
-  // TanStack Table exposes an intentionally imperative table instance; React Compiler cannot memoize it safely.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable({
+  const table = useTable<typeof dataTableFeatures, T>({
     data,
     columns,
+    features: dataTableFeatures,
     state: isServerPaginated ? { sorting } : { sorting, pagination },
     onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
     ...(isServerPaginated
       ? { manualPagination: true, enableSorting: false }
       : {
           onPaginationChange: setPagination,
-          getSortedRowModel: getSortedRowModel(),
-          getPaginationRowModel: getPaginationRowModel(),
         }),
   });
   return (
@@ -132,7 +144,7 @@ export function DataTable<T>({
           ) : table.getRowModel().rows.length ? (
             table.getRowModel().rows.map((row) => (
               <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
+                {row.getAllCells().map((cell) => (
                   <TableCell key={cell.id}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TableCell>

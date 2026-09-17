@@ -2,7 +2,6 @@
 
 import { useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
 import {
   ComponentsParametersOrderDirection,
@@ -26,7 +25,7 @@ import {
 import { nextCursor } from "@/api/pagination";
 import { CreateDialog } from "@/components/create-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState, errorMessage } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -268,7 +267,7 @@ export function DatabaseRowsView({
         description="This table may have been removed."
       />
     );
-  const rowColumns: ColumnDef<DatabaseRow, unknown>[] = [
+  const rowColumns: DataTableColumnDef<DatabaseRow>[] = [
     {
       accessorKey: "id",
       header: "Row ID",
@@ -289,7 +288,7 @@ export function DatabaseRowsView({
           Object.keys(row.data ?? {}),
         ),
       ]),
-    ).map((key): ColumnDef<DatabaseRow, unknown> => ({
+    ).map((key): DataTableColumnDef<DatabaseRow> => ({
       id: `data:${key}`,
       header: key,
       cell: ({ row }) => (

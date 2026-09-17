@@ -1,6 +1,5 @@
 "use client";
 
-import type { ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -16,7 +15,7 @@ import { useOrganizationInvitations } from "@/api/queries";
 import type { OrganizationInvitation } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -64,7 +63,7 @@ export function OrganizationInvitationsView({
         : "Invitation created; email delivery failed",
     );
   };
-  const columns: ColumnDef<OrganizationInvitation, unknown>[] = [
+  const columns: DataTableColumnDef<OrganizationInvitation>[] = [
     {
       accessorKey: "email",
       header: "Email",

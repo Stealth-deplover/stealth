@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import { type ColumnDef } from "@tanstack/react-table";
 import { Globe2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -10,7 +9,7 @@ import { nextCursor } from "@/api/pagination";
 import { useSites } from "@/api/queries";
 import type { Site } from "@/api/types";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -48,7 +47,7 @@ export function SitesView({
       router.push(`${base}/sites/${result.site.id}`);
     }
   };
-  const columns: ColumnDef<Site, unknown>[] = [
+  const columns: DataTableColumnDef<Site>[] = [
     {
       accessorKey: "name",
       header: "Site",

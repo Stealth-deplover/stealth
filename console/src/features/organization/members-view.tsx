@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ColumnDef } from "@tanstack/react-table";
 import { toast } from "sonner";
 import {
   useDeleteOrganizationMembership,
@@ -14,7 +13,7 @@ import { useMemberships } from "@/api/queries";
 import type { Membership } from "@/api/types";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -44,7 +43,7 @@ export function OrganizationMembersView({
   const remove = useDeleteOrganizationMembership(organizationId);
   const canManage = query.data?.can_manage === true;
   const members = query.data?.memberships ?? [];
-  const columns: ColumnDef<Membership, unknown>[] = [
+  const columns: DataTableColumnDef<Membership>[] = [
     {
       accessorKey: "email",
       header: "Identity",

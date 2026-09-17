@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import { CreateProjectAPIKeyRequestScopes } from "@/api/generated/schema";
@@ -13,7 +12,7 @@ import type { APIKey } from "@/api/types";
 import type { components } from "@/api/generated/schema";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -107,7 +106,7 @@ export function APIKeysView({
     toast.success("API key created");
   };
 
-  const columns: ColumnDef<APIKey, unknown>[] = [
+  const columns: DataTableColumnDef<APIKey>[] = [
     {
       accessorKey: "name",
       header: "Key",

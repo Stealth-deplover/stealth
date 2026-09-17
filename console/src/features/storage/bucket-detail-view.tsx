@@ -1,5 +1,4 @@
 "use client";
-import type { ColumnDef } from "@tanstack/react-table";
 import { useState, type FormEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -17,7 +16,7 @@ import {
   useStorageFile,
 } from "@/api/queries";
 import type { StorageFile, StorageBucket } from "@/api/types";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CreateDialog } from "@/components/create-dialog";
@@ -318,7 +317,7 @@ export function BucketDetailView({
         description="The bucket may have been removed or is outside this project."
       />
     );
-  const columns: ColumnDef<StorageFile, unknown>[] = [
+  const columns: DataTableColumnDef<StorageFile>[] = [
     {
       accessorKey: "name",
       header: "Name",

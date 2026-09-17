@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ColumnDef } from "@tanstack/react-table";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useCreateProjectUser } from "@/api/mutations";
@@ -9,7 +8,7 @@ import { nextCursor } from "@/api/pagination";
 import { useProjectUsers } from "@/api/queries";
 import type { ProjectUser } from "@/api/types";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -51,7 +50,7 @@ export function UsersView({
       );
   };
   const canManage = query.data?.can_manage === true;
-  const columns: ColumnDef<ProjectUser, unknown>[] = [
+  const columns: DataTableColumnDef<ProjectUser>[] = [
     {
       accessorKey: "email",
       header: "Identity",

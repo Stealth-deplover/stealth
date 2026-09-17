@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import { type ColumnDef } from "@tanstack/react-table";
 import { Database as DatabaseIcon, MoreHorizontal } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -10,7 +9,7 @@ import { nextCursor } from "@/api/pagination";
 import { useDatabases } from "@/api/queries";
 import type { Database } from "@/api/types";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -47,7 +46,7 @@ export function DatabasesView({
       router.push(`${base}/databases/${result.database.id}`);
     }
   };
-  const columns: ColumnDef<Database, unknown>[] = [
+  const columns: DataTableColumnDef<Database>[] = [
     {
       accessorKey: "name",
       header: "Database",

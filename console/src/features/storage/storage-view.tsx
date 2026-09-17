@@ -1,6 +1,5 @@
 "use client";
 import Link from "next/link";
-import { type ColumnDef } from "@tanstack/react-table";
 import { HardDrive } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -10,7 +9,7 @@ import { nextCursor } from "@/api/pagination";
 import { useStorageBuckets } from "@/api/queries";
 import type { StorageBucket } from "@/api/types";
 import { CreateDialog } from "@/components/create-dialog";
-import { DataTable } from "@/components/data-table";
+import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/page-header";
@@ -46,7 +45,7 @@ export function StorageView({
       router.push(`${base}/storage/${result.bucket.id}`);
     }
   };
-  const columns: ColumnDef<StorageBucket, unknown>[] = [
+  const columns: DataTableColumnDef<StorageBucket>[] = [
     {
       accessorKey: "name",
       header: "Bucket",
