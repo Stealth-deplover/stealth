@@ -11,7 +11,7 @@ import {
   Cloud,
   Database,
   ExternalLink,
-  Github,
+  GitBranch,
   HardDrive,
   KeyRound,
   Loader2,
@@ -753,7 +753,7 @@ export function BrowserSetupView() {
                   {providerMode === "manifest" ? (
                     <div className="rounded-xl border border-stealth-border p-5">
                       <div className="flex items-start gap-3">
-                        <Github className="mt-0.5 size-5 shrink-0 text-slate-200" />
+                        <GitBranch className="mt-0.5 size-5 shrink-0 text-slate-200" />
                         <div>
                           <p className="text-sm font-medium text-white">
                             Create a private GitHub App
@@ -788,7 +788,7 @@ export function BrowserSetupView() {
                         {startManifest.isPending ? (
                           <Loader2 className="size-4 animate-spin" />
                         ) : (
-                          <Github className="size-4" />
+                          <GitBranch className="size-4" />
                         )}
                         {startManifest.isPending
                           ? "Opening GitHub"
@@ -902,7 +902,7 @@ export function BrowserSetupView() {
                         {startAuthorization.isPending ? (
                           <Loader2 className="size-4 animate-spin" />
                         ) : (
-                          <Github className="size-4" />
+                          <GitBranch className="size-4" />
                         )}
                         {startAuthorization.isPending
                           ? "Opening GitHub"
