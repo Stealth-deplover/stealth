@@ -149,22 +149,25 @@ bundled single PostgreSQL, Redis, or local storage services.
 
 ## First-run onboarding
 
-Fresh `stealth install` starts a separate setup Compose project after local
-Docker checks. It contains only the setup API, setup Console, setup proxy,
-PostgreSQL, and Redis. The CLI requests a single-use setup session, displays a
-15-minute setup code, and starts a temporary, digest-pinned
-`cloudflare/cloudflared:2026.9.0` Quick Tunnel to the setup proxy when
-possible. The Console setup page is `/setup` on that temporary URL. The
-browser wizard reviews the public URL, GitHub App, networking, database,
-Redis, storage, and final production tunnel settings before invoking the
-shared Go install engine.
+Fresh `stealth install` starts a separate setup Compose project after host
+Docker and Docker Compose checks. It contains only the setup API, setup
+Console, setup proxy, PostgreSQL, and Redis. The CLI requests a single-use
+setup session, displays a 15-minute setup code, and starts a temporary,
+digest-pinned `cloudflare/cloudflared:2026.9.0` Quick Tunnel to the setup proxy
+when possible. The Console setup page is `/setup` on that temporary URL. The
+browser wizard reviews the public URL, GitHub App, networking, database, Redis,
+storage, and final production tunnel settings before persisting
+`install_requested`.
 
-The setup image is the only service in the setup Compose project with the host
-Docker socket. It starts and verifies the final production Compose project
-through that socket, then the setup API removes the setup API, Console, and
-proxy. The production API and Console do not receive the socket. The
-production worker intentionally retains it for the existing Docker-backed
-function and site runner and runs non-root with the configured `DOCKER_GID`.
+The host CLI is the production installer. It reloads and validates the
+finalized state, claims the InstallRunID under the installer lock, invokes the
+shared Go install engine, runs host Docker Compose and production health
+checks, waits for the one-time handoff, and removes the temporary setup API,
+Console, and proxy. The setup image has no `/var/run/docker.sock`, Docker CLI,
+or Compose plugin. The production API and Console images do not receive the
+socket. The production worker intentionally retains it for the existing
+Docker-backed function and site runner and runs non-root with the configured
+`DOCKER_GID`.
 
 The operator enters the Stealth setup code first. The API stores only a hash of
 the code and encrypts provider credentials, short-lived OAuth state, and the
@@ -177,12 +180,12 @@ discarded, never returned to the browser or persisted.
 Cloudflare setup uses a scoped API token, not a Global API Key. The Console
 verifies the token, discovers accounts and domains, and sends the selected
 account, domain, and dashboard hostname to the setup API. The API creates and
-configures the named tunnel and proxied DNS record, writes the private
-cloudflared token file, starts the production tunnel, verifies tunnel health
-and the production hostname, and removes the Quick Tunnel only after those
-checks pass. The minimum custom-token permissions are Account: Cloudflare
-Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS Edit,
-scoped to the resources used by the installation.
+configures the named tunnel and proxied DNS record, and writes the private
+cloudflared token file. The host CLI starts the production tunnel, verifies
+tunnel health and the production hostname, and removes the Quick Tunnel only
+after those checks pass. The minimum custom-token permissions are Account:
+Cloudflare Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS
+Edit, scoped to the resources used by the installation.
 
 Cloudflare OAuth remains experimental and inactive. The setup Console does
 not offer it, the inactive endpoint never builds an authorization redirect,

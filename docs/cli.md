@@ -54,23 +54,24 @@ configuration, downloads the versioned Compose assets, starts the setup
 Compose project, and stays alive while the browser wizard runs. The setup
 project contains the setup API, setup Console, setup proxy, PostgreSQL, and
 Redis. It does not collect provider credentials in the terminal. The browser
-wizard owns the reviewed configuration and calls the same reusable Go install
-engine that the CLI uses.
+wizard owns the reviewed configuration, while the host CLI remains the only
+production installation executor and calls the reusable Go install engine.
 
 The CLI prints the setup URL and code, then waits for the browser to submit the
-reviewed configuration. Use `stealth install --no-wait` when another process
-will observe setup state, or `stealth install --wait` to make the behavior
-explicit. `STEALTH_INSTALL_WAIT=0` and `STEALTH_INSTALL_WAIT=1` provide the
-same environment-level override. After the browser commits installation, the
-request is stored in encrypted resumable state; closing the browser does not
-cancel the running setup operation.
+reviewed configuration. The host process must stay attached for fresh browser
+setup: `stealth install --wait` and the default invocation both observe
+`install_requested` and execute production installation. `--no-wait` is
+rejected because this release has no separate host supervisor. The
+`STEALTH_INSTALL_WAIT` environment setting cannot disable this safety rule.
+After the browser commits installation, the request is stored in encrypted
+resumable state; closing the browser does not cancel the host operation.
 
-The setup image is the only service in the setup Compose project allowed to
-mount the host Docker socket. It writes the final production files through the
-host installation mount, starts and verifies the production stack, and is then
-removed. The production API and Console images do not receive the socket. The
-production worker still mounts it for the existing non-root Docker-backed
-function and site runner.
+The temporary setup image has no Docker socket, Docker CLI, or Compose plugin.
+The host CLI writes the finalized production configuration, runs Docker Compose,
+performs health checks, owns Quick Tunnel cleanup, and removes the setup API,
+Console, and proxy after the one-time handoff. The production API and Console
+images do not receive the socket. The production worker still mounts it for the
+existing non-root Docker-backed function and site runner.
 
 See the [browser setup guide](web-setup.md) for the complete wizard, provider
 connection, external infrastructure, and recovery behavior. The owner is an
@@ -181,8 +182,8 @@ browser storage or logs. If a Quick Tunnel cannot be started, the CLI leaves
 the installation intact and shows the local setup URL instead.
 
 The browser Install action first persists an `install_requested` phase. This
-phase closes browser-owned configuration updates before the setup service
-claims the run as `installing`. A second click returns the existing run. If
+phase closes browser-owned configuration updates before the host CLI claims the
+run as `installing`. A second click returns the existing run. If
 Ctrl+C is pressed before the request, the waiting CLI removes the temporary
 setup services and tunnel after rechecking state. After the request, it keeps
 the installation state resumable and prints `stealth install --repair --wait`

@@ -6,6 +6,7 @@ This index links the repository’s existing guides. The root [README](../README
 
 - [CLI and installer](cli.md): installation flow, operator commands, and release artifacts.
 - [Browser setup](web-setup.md): the temporary setup Compose flow, wizard stages, provider connections, and recovery behavior.
+- [Host-side setup architecture](host-side-setup-architecture.md): state ownership, host execution, preflight projection, handoff, and security boundaries.
 - [Production deployment](production-deployment.md): the supported Docker Compose baseline.
 
 ## Architecture and API

@@ -27,8 +27,8 @@ The workflow uses `GITHUB_TOKEN` with `contents: write` and `packages: write`
 only for the publishing jobs. It does not put registry credentials or
 application secrets in image layers. Production should pin one release across
 API, worker, migrate, and Console. The setup image is used only by fresh
-browser setup or setup repair. `latest` is not used by the deployment
-documentation.
+browser setup or setup repair; production installation is always executed by
+the host CLI. `latest` is not used by the deployment documentation.
 
 The CLI archives are published as `stealth_Linux_x86_64.tar.gz` and
 `stealth_Linux_arm64.tar.gz`. The bootstrap verifies the corresponding
