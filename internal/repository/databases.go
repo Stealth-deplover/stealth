@@ -117,7 +117,7 @@ type RowFilter struct {
 
 type RowCursor struct {
 	ID    uuid.UUID `json:"id"`
-	Value any       `json:"value,omitempty"`
+	Value any       `json:"value"`
 }
 
 type RowQuery struct {
