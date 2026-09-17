@@ -55,7 +55,9 @@ leased cleanup queue. Delete transactions enqueue UUID-derived relative paths
 or project namespaces in the same transaction as metadata deletion. The
 trusted worker in `internal/artifactcleanup` retries physical failures with
 bounded backoff, recovers stale leases, treats missing objects as success,
-and validates paths before dispatch. The HTTP delete handlers no longer own
+and validates paths before dispatch. Database deletion collects and closes its
+backup rows before enqueuing cleanup jobs, keeping the transaction usable for
+the rest of the metadata deletion. The HTTP delete handlers no longer own
 physical cleanup.
 
 Files: `internal/migrate/migrations/000041_artifact_cleanup.up.sql`,
@@ -165,5 +167,11 @@ testing was attempted but the environment has no C compiler (`-race` cannot
 build without cgo/gcc). Docker/Compose image validation, CodeQL, and a fresh
 VPS test were not available locally. No merge or VPS success claim is made by
 this document.
+
+GitHub Actions validation for head `a919d14f8ef96c330667b23207a902a687724477`
+passed for both CI workflow runs: backend unit and PostgreSQL/Redis
+integration checks, installer/release checks, Console checks, setup-image and
+Docker validation, and the release smoke guard. CodeQL Go and
+JavaScript/TypeScript analyses also passed.
 
 Remediation PR: [#76 — fix: remediate 2026-09 audit findings](https://github.com/Stealth-deplover/stealth/pull/76)
