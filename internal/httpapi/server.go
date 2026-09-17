@@ -14,7 +14,6 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/gitarchive"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
-	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
@@ -55,16 +54,12 @@ type Server struct {
 	githubFlowMu      sync.Mutex
 	setupState        setupstate.Store
 	setupHandoff      setuphandoff.Store
-	setupEngine       *installengine.Engine
-	setupRunner       installengine.CommandRunner
 	githubManifest    githubauth.ManifestClient
 	cloudflareOAuth   CloudflareOAuthClient
 	cloudflareFactory CloudflareClientFactory
-	setupEvents       *setupEventHub
-	// setupMu serializes setup transitions that can have external provider or
-	// Docker side effects. The durable setup-state store remains the source of
-	// truth, while this process-local guard prevents duplicate browser actions
-	// from racing between a state read and the corresponding provider write.
+	// setupMu serializes setup transitions that can have external provider side
+	// effects. The durable setup-state store remains the source of truth; the
+	// host CLI owns installation execution and is not represented here.
 	setupMu sync.Mutex
 }
 
@@ -86,8 +81,6 @@ type Dependencies struct {
 	BootstrapStore    repository.BootstrapStore
 	SetupState        setupstate.Store
 	SetupHandoff      setuphandoff.Store
-	InstallEngine     *installengine.Engine
-	InstallRunner     installengine.CommandRunner
 	GitHubManifest    githubauth.ManifestClient
 	CloudflareOAuth   CloudflareOAuthClient
 	CloudflareFactory CloudflareClientFactory
@@ -188,14 +181,6 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 		}
 	}
 	storageReady := storageErr == nil
-	installRunner := deps.InstallRunner
-	if installRunner == nil {
-		installRunner = installengine.OSCommandRunner{}
-	}
-	setupEngine := deps.InstallEngine
-	if setupEngine == nil {
-		setupEngine = installengine.New(installengine.Options{Runner: installRunner, HTTPClient: http.DefaultClient})
-	}
 	githubManifest := deps.GitHubManifest
 	if githubManifest == nil {
 		var manifestErr error
@@ -218,10 +203,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 			return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
 		}
 	}
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, setupEngine: setupEngine, setupRunner: installRunner, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, setupEvents: newSetupEventHub()}
-	if cfg.SetupMode && setupStateStore != nil {
-		go s.resumeSetupLifecycle()
-	}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory}
 	return s.routes()
 }
 

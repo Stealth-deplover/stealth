@@ -1380,7 +1380,7 @@ export function BrowserSetupView() {
               <StageHeader
                 eyebrow="06 / Review"
                 title="Review the production handoff"
-                description="This is the final configuration the setup service will write before it starts the production Compose project."
+                description="This is the final configuration the setup service will validate and persist before the host installer starts the production Compose project."
               />
               <dl className="rounded-xl border border-stealth-border px-4">
                 <ReviewRow
@@ -1462,8 +1462,8 @@ export function BrowserSetupView() {
                   installViewState?.phase === "failed"
                     ? "The production stack is still repairable. Review the safe error below and retry after correcting the underlying issue."
                     : installViewState?.phase === "install_requested"
-                      ? "Your configuration was received. The setup service is preparing the installation."
-                      : "The setup service is running the shared install engine. Keep this window open until the production session handoff completes."
+                      ? "Your configuration was received. The host installer is preparing the installation."
+                      : "The host installer is running the shared install engine. Keep this window open until the production session handoff completes."
                 }
               />
               <div className="rounded-xl border border-stealth-border p-5">

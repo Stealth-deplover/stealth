@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,18 +23,6 @@ const (
 	setupCORSTestCode       = "STEALTH-ABCD-2345-EFGH"
 	setupCORSTestConfigBody = `{"instance_name":"My Stealth","network_mode":"cloudflare_tunnel","hostname":"app.example.test","database_mode":"external","database_url":"postgres://user:pass@db.example.test/stealth","redis_mode":"external","redis_url":"redis://:pass@cache.example.test/0","storage_mode":"local"}`
 )
-
-// setupNoopRunner keeps the setup preflight endpoint hermetic: Docker probes
-// fail closed but the handler still responds, and no real Docker command runs.
-type setupNoopRunner struct{}
-
-func (setupNoopRunner) Run(context.Context, string, io.Writer, io.Writer, string, ...string) error {
-	return nil
-}
-
-func (setupNoopRunner) Output(context.Context, string, string, ...string) ([]byte, error) {
-	return nil, errors.New("probe unavailable in tests")
-}
 
 func newSetupCORSTestServer(t *testing.T, publicURL, tunnelURL string) (http.Handler, string) {
 	t.Helper()
@@ -76,7 +62,6 @@ func newSetupCORSTestServer(t *testing.T, publicURL, tunnelURL string) (http.Han
 		SetupState:     store,
 		GitHubManifest: setupManifestFake{},
 		GitHubOAuth:    &setupGitHubOAuthFake{},
-		InstallRunner:  setupNoopRunner{},
 	})
 	register := httptest.NewRecorder()
 	registerRequest := httptest.NewRequest(http.MethodPost, "/v1/setup/quick-tunnel", strings.NewReader(`{"container_name":"stealth-onboarding-test","url":"`+tunnelURL+`"}`))

@@ -159,6 +159,9 @@ func (s *Server) verifyBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		}
 		codeHash := bootstrap.HashCode(req.SetupCode)
 		_, claimErr := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+			if setupstate.InstallationLocked(*state) {
+				return errors.New("installation is already in progress or complete")
+			}
 			if state.SetupSessionID != "" || state.SetupCodeHash != "" {
 				return errors.New("setup code already claimed")
 			}
@@ -174,6 +177,9 @@ func (s *Server) verifyBootstrapCode(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.setSetupCookie(w, r, verification.ID.String(), codeHash, verification.ExpiresAt); err != nil {
 			_, _ = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+				if setupstate.InstallationLocked(*state) {
+					return nil
+				}
 				if state.SetupSessionID == verification.ID.String() && state.SetupCodeHash == base64.RawURLEncoding.EncodeToString(codeHash) {
 					state.SetupSessionID = ""
 					state.SetupCodeHash = ""

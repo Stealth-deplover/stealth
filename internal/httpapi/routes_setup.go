@@ -17,9 +17,8 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
-	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/setupconfig"
-	"github.com/Stealth-deplover/stealth/internal/setupinstall"
+	"github.com/Stealth-deplover/stealth/internal/setuphandoff"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -107,6 +106,18 @@ type setupInstallResponse struct {
 	State  setupstate.PublicState `json:"state"`
 }
 
+type setupHandoffStatusResponse struct {
+	Pending bool `json:"pending"`
+}
+
+type setupInstallValidationError struct {
+	err error
+}
+
+func (e *setupInstallValidationError) Error() string { return e.err.Error() }
+
+func (e *setupInstallValidationError) Unwrap() error { return e.err }
+
 func (s *Server) registerSetupRoutes(r chi.Router) {
 	r.Get("/setup/status", s.setupStatus)
 	r.Get("/setup/github/manifest/callback", s.setupGitHubManifestCallback)
@@ -129,6 +140,7 @@ func (s *Server) registerSetupRoutes(r chi.Router) {
 	r.With(s.requireSetupMutation).Post("/setup/infrastructure/redis/test", s.testSetupRedis)
 	r.With(s.requireSetupMutation).Post("/setup/infrastructure/storage/test", s.testSetupStorage)
 	r.With(s.requireSetup).Get("/setup/handoff-token", s.issueSetupHandoffToken)
+	r.Get("/setup/handoff/status", s.setupHandoffStatus)
 	r.With(s.requireSetupMutation).Post("/setup/install", s.startSetupInstall)
 	r.With(s.requireSetup).Get("/setup/install/events", s.setupInstallEvents)
 }
@@ -154,6 +166,31 @@ func (s *Server) issueSetupHandoffToken(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// setupHandoffStatus is a host-CLI-only observation endpoint. It is
+// authenticated with the same private bootstrap proof as other CLI
+// coordination calls and never exposes the handoff token or session.
+func (s *Server) setupHandoffStatus(w http.ResponseWriter, r *http.Request) {
+	if s.setupHandoff == nil {
+		writeError(w, http.StatusServiceUnavailable, "handoff_unavailable", "production session handoff is unavailable")
+		return
+	}
+	if !s.verifyBootstrapCLI(w, r) {
+		return
+	}
+	pendingStore, ok := s.setupHandoff.(setuphandoff.PendingStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "handoff_unavailable", "production session handoff status is unavailable")
+		return
+	}
+	pending, err := pendingStore.Pending(r.Context())
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, setupHandoffStatusResponse{Pending: pending})
 }
 
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
@@ -863,8 +900,12 @@ func (s *Server) recoverSetupSession(w http.ResponseWriter, r *http.Request) {
 	}
 	expiresAt := time.Now().UTC().Add(bootstrap.CodeLifetime)
 	_, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		// Recovery is CLI-proofed and host-owned. It must remain available for
+		// an installing or handoff run so a browser can reconnect after the
+		// setup API/container was restarted. A completed run is the only state
+		// that must not receive a new setup claim.
 		if state.Phase == setupstate.PhaseComplete {
-			return errors.New("setup is already complete")
+			return errors.New("installation is already complete")
 		}
 		state.SetupSessionID = sessionID.String()
 		state.SetupCodeHash = base64.RawURLEncoding.EncodeToString(codeHash)
@@ -939,8 +980,13 @@ func (s *Server) registerSetupQuickTunnel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	state, err := s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		// This endpoint is CLI-proofed and is a host-owned coordination
+		// projection. The host may need to replace a Quick Tunnel after a
+		// restart or transient disconnect while production installation is
+		// already locked. Browser-owned mutations remain sealed by the normal
+		// setup middleware and setupconfig.Apply guard.
 		if state.Phase == setupstate.PhaseComplete {
-			return errors.New("setup is already complete")
+			return errors.New("installation is already complete")
 		}
 		state.QuickTunnel = request.ContainerName
 		if status.SetupRequired {
@@ -965,7 +1011,7 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setupMu.Lock()
 	defer s.setupMu.Unlock()
-	if !s.setupStateReady() || s.setupEngine == nil {
+	if !s.setupStateReady() {
 		writeError(w, http.StatusServiceUnavailable, "setup_unavailable", "the setup service is not ready")
 		return
 	}
@@ -986,289 +1032,47 @@ func (s *Server) startSetupInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "setup_complete", "installation has already been handed off")
 		return
 	}
+	bootstrapStatus, err := s.bootstrap.BootstrapStatus(r.Context())
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	if bootstrapStatus.SetupRequired {
+		writeError(w, http.StatusConflict, "setup_owner_required", "finish GitHub first-owner verification before installing")
+		return
+	}
 	if err := setupconfig.ValidateInstallableSetup(state); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	plan, err := setupinstall.BuildPlan(state, s.config.InstallRoot)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "configuration_error", "the reviewed configuration could not be prepared")
-		return
-	}
 	runID := uuid.NewString()
 	state, err = s.setupState.Update(r.Context(), func(state *setupstate.State) error {
+		if err := setupconfig.ValidateInstallableSetup(*state); err != nil {
+			return &setupInstallValidationError{err: err}
+		}
 		if err := setupstate.RequestInstallation(state, runID); err != nil {
 			return err
 		}
-		state.Step = installengine.StepNames[installengine.StepConfiguration]
+		state.Step = "Configuration and secrets"
 		return nil
 	})
 	if err != nil {
+		var validationErr *setupInstallValidationError
+		if errors.As(err, &validationErr) {
+			writeError(w, http.StatusUnprocessableEntity, "validation_error", validationErr.Error())
+			return
+		}
 		writeError(w, http.StatusConflict, "setup_state_conflict", "the installation could not be started")
 		return
 	}
-	go s.runSetupInstall(runID, plan)
 	writeJSON(w, http.StatusAccepted, setupInstallResponse{Status: "accepted", State: state.Public()})
 }
 
-func (s *Server) runSetupInstall(runID string, plan installengine.Plan) {
-	ctx := context.Background()
-	if _, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if err := setupstate.BeginInstallation(state, runID); err != nil {
-			return err
-		}
-		state.Step = installengine.StepNames[installengine.StepConfiguration]
-		return nil
-	}); err != nil {
-		s.logger.Warn("setup installation request could not be claimed", "run_id", runID, "error", err)
-		return
-	}
-	err := s.setupEngine.Install(ctx, plan, func(event installengine.Event) {
-		s.publishSetupEvent(ctx, event)
-	})
-	if err != nil {
-		if errors.Is(err, installengine.ErrOperationInProgress) {
-			s.logger.Info("setup installation is already owned by another worker", "run_id", runID)
-			return
-		}
-		s.setupState.Update(ctx, func(state *setupstate.State) error {
-			if state.InstallRunID == runID {
-				state.Phase = setupstate.PhaseFailed
-				state.ErrorCode = "install_failed"
-				state.ErrorMessage = safeSetupError(err)
-			}
-			return nil
-		})
-		return
-	}
-	if plan.Cloudflare {
-		if err := s.waitForCloudflareTunnelHealth(ctx); err != nil {
-			// Keep the temporary Quick Tunnel and setup services available when
-			// production ingress cannot be proven healthy. Cleanup is only safe
-			// after both the public hostname and the named tunnel are healthy.
-			s.publishSetupEvent(ctx, installengine.Event{Step: "Cloudflare Tunnel health", Status: "failed", Error: safeSetupError(err)})
-			return
-		}
-	}
-	_, _ = s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if state.InstallRunID == runID {
-			state.Step = "Cleanup"
-		}
-		return nil
-	})
-	cleanupFailed := false
-	if state, stateErr := s.setupState.Load(ctx); stateErr == nil {
-		if state.QuickTunnel != "" {
-			if err := s.removeQuickTunnel(ctx, plan.Layout, state.QuickTunnel); err != nil {
-				cleanupFailed = true
-				s.logger.Error("temporary setup tunnel cleanup failed", "error", err)
-			}
-		}
-	} else {
-		cleanupFailed = true
-		s.logger.Error("load setup state before cleanup failed", "error", stateErr)
-	}
-	// The setup Compose project shares the production data volumes, so only
-	// the setup API, Console, and proxy are removed. A cleanup failure leaves
-	// the state resumable and keeps the browser informed that production is
-	// ready but the temporary control plane still needs attention.
-	if s.setupRunner != nil && plan.Layout.SetupComposeFile != "" {
-		if err := s.setupRunner.Run(ctx, plan.Layout.Root, io.Discard, io.Discard, "docker", "compose", "--env-file", plan.Layout.EnvFile, "-f", plan.Layout.SetupComposeFile, "rm", "-sf", "setup-console", "setup-proxy"); err != nil {
-			cleanupFailed = true
-			s.logger.Error("setup Compose cleanup failed", "error", err)
-		}
-	}
-	if cleanupFailed {
-		s.publishSetupEvent(ctx, installengine.Event{Step: "Cleanup", Status: "failed", Error: "production is ready, but temporary setup cleanup needs to be retried"})
-		return
-	}
-	// Keep the setup API alive until the production origin consumes the
-	// one-time session handoff. This closes the race where a browser loses the
-	// final redirect while the setup container is being removed, and gives a
-	// refreshed setup browser a short window to rotate its ticket.
-	_, _ = s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if state.InstallRunID == runID {
-			state.Phase = setupstate.PhaseHandoff
-			state.Step = "Handoff"
-			state.ErrorCode = ""
-			state.ErrorMessage = ""
-		}
-		return nil
-	})
-	s.publishSetupEvent(ctx, installengine.Event{Step: "Handoff", Status: "succeeded", Message: "production is ready; transferring the Console session"})
-	go s.waitForSetupHandoff(runID, plan)
-}
-
-func (s *Server) waitForCloudflareTunnelHealth(ctx context.Context) error {
-	state, err := s.setupState.Load(ctx)
-	if err != nil {
-		return errors.New("Cloudflare Tunnel health could not be verified")
-	}
-	binding := state.EffectiveCloudflareBinding()
-	if err := state.Cloudflare.Binding.ValidateDraft(state.Draft); err != nil {
-		return errors.New("Cloudflare Tunnel state is inconsistent")
-	}
-	if binding.AccountID == "" || binding.TunnelID == "" {
-		return errors.New("Cloudflare Tunnel identifiers are missing")
-	}
-	client, err := s.cloudflareClient(ctx)
-	if err != nil {
-		return errors.New("Cloudflare Tunnel health could not be verified")
-	}
-	healthContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	for {
-		status, statusErr := client.TunnelStatus(healthContext, binding.AccountID, binding.TunnelID)
-		if statusErr == nil && cloudflare.StatusIsHealthy(status) {
-			return nil
-		}
-		if healthContext.Err() != nil {
-			break
-		}
-		timer := time.NewTimer(2 * time.Second)
-		select {
-		case <-healthContext.Done():
-			timer.Stop()
-			return errors.New("Cloudflare Tunnel did not become healthy")
-		case <-timer.C:
-		}
-	}
-	return errors.New("Cloudflare Tunnel did not become healthy")
-}
-
-type pendingSetupHandoff interface {
-	Pending(context.Context) (bool, error)
-}
-
-func (s *Server) resumeSetupLifecycle() {
-	state, err := s.setupState.Load(context.Background())
-	if err != nil {
-		s.logger.Warn("setup lifecycle resume could not load state", "error", err)
-		return
-	}
-	switch state.Phase {
-	case setupstate.PhaseInstallRequested, setupstate.PhaseInstalling:
-		if state.InstallRunID == "" {
-			s.markSetupResumeFailed("setup installation has no durable run identifier")
-			return
-		}
-		plan, planErr := setupinstall.BuildPlan(state, s.config.InstallRoot)
-		if planErr != nil {
-			s.markSetupResumeFailed(planErr.Error())
-			return
-		}
-		go s.runSetupInstall(state.InstallRunID, plan)
-	case setupstate.PhaseHandoff:
-		if s.setupHandoff != nil && state.InstallRunID != "" {
-			layout, layoutErr := installengine.NewLayout(s.config.InstallRoot)
-			if layoutErr != nil {
-				s.logger.Warn("setup handoff cleanup cannot resolve installation layout", "error", layoutErr)
-				return
-			}
-			go s.waitForSetupHandoff(state.InstallRunID, installengine.Plan{Layout: layout})
-		}
-	}
-}
-
-func (s *Server) markSetupResumeFailed(message string) {
-	message = safeSetupError(errors.New(message))
-	_, _ = s.setupState.Update(context.Background(), func(state *setupstate.State) error {
-		state.Phase = setupstate.PhaseFailed
-		state.ErrorCode = "install_resume_failed"
-		state.ErrorMessage = message
-		return nil
-	})
-}
-
-func (s *Server) waitForSetupHandoff(runID string, plan installengine.Plan) {
-	ctx := context.Background()
-	deadline := time.Now().UTC().Add(bootstrap.CodeLifetime)
-	pendingStore, canObserve := s.setupHandoff.(pendingSetupHandoff)
-	if !canObserve {
-		// The production implementation is a FileStore. Keep injected stores
-		// useful in tests and fail closed if a different implementation cannot
-		// report consumption: the setup routes remain sealed by the database
-		// owner invariant, while the operator can remove the setup project.
-		s.logger.Warn("setup handoff store cannot observe consumption")
-		s.finalizeSetupHandoff(ctx, runID, plan)
-		return
-	}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		pending, err := pendingStore.Pending(ctx)
-		if err != nil {
-			s.logger.Warn("setup handoff observation failed", "error", err)
-		}
-		expired := time.Now().UTC().After(deadline)
-		if (err == nil && !pending) || expired {
-			if expired {
-				_ = s.setupHandoff.Discard(ctx)
-			}
-			s.finalizeSetupHandoff(ctx, runID, plan)
-			return
-		}
-		<-ticker.C
-	}
-}
-
-func (s *Server) finalizeSetupHandoff(ctx context.Context, runID string, plan installengine.Plan) {
-	_, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
-		if state.InstallRunID == runID {
-			state.Phase = setupstate.PhaseComplete
-			state.Step = "Complete"
-			state.ErrorCode = ""
-			state.ErrorMessage = ""
-			state.SetupSessionID = ""
-			state.SetupCodeHash = ""
-			state.SetupExpiresAt = time.Time{}
-		}
-		return nil
-	})
-	if err != nil {
-		s.logger.Error("persist completed setup handoff failed", "error", err)
-		return
-	}
-	s.publishSetupEvent(ctx, installengine.Event{Step: "Complete", Status: "succeeded", Message: "production setup is complete"})
-	// Persist and publish the terminal state before asking Docker to remove the
-	// setup API container that is executing this goroutine. The cleanup command
-	// is detached from the state transition so stopping this service cannot
-	// leave the browser in an apparently-running state.
-	if s.setupRunner != nil && plan.Layout.SetupComposeFile != "" {
-		go func() {
-			time.Sleep(2 * time.Second)
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := s.setupRunner.Run(cleanupCtx, plan.Layout.Root, io.Discard, io.Discard, "docker", "compose", "--env-file", plan.Layout.EnvFile, "-f", plan.Layout.SetupComposeFile, "rm", "-sf", "setup"); err != nil {
-				s.logger.Warn("setup API cleanup after completion failed", "error", err)
-			}
-		}()
-	}
-}
-
-func (s *Server) removeQuickTunnel(ctx context.Context, layout installengine.Layout, name string) error {
-	if !validQuickTunnelName(name) || s.setupRunner == nil {
-		return nil
-	}
-	containers, err := s.setupRunner.Output(ctx, layout.Root, "docker", "ps", "--all", "--filter", "name=^"+name+"$", "--format", "{{.Names}}")
-	if err != nil {
-		return err
-	}
-	for _, candidate := range strings.Split(string(containers), "\n") {
-		if strings.TrimSpace(candidate) == name {
-			return s.setupRunner.Run(ctx, layout.Root, io.Discard, io.Discard, "docker", "rm", "--force", name)
-		}
-	}
-	return nil
-}
-
 func (s *Server) setupInstallEvents(w http.ResponseWriter, r *http.Request) {
-	if s.setupState == nil || s.setupEvents == nil {
+	if s.setupState == nil {
 		writeError(w, http.StatusServiceUnavailable, "setup_unavailable", "setup events are not available")
 		return
 	}
-	channel, unsubscribe := s.setupEvents.subscribe()
-	defer unsubscribe()
 	state, err := s.setupState.Load(r.Context())
 	if err != nil {
 		internalError(s, w, err)
@@ -1285,17 +1089,24 @@ func (s *Server) setupInstallEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	writeSSE(w, "snapshot", state.LastEventID, state.Public())
 	flusher.Flush()
+	poll := time.NewTicker(setupEventPoll)
+	defer poll.Stop()
 	heartbeat := time.NewTicker(setupEventHeartbeat)
 	defer heartbeat.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case event, ok := <-channel:
-			if !ok {
-				return
+		case <-poll.C:
+			latest, loadErr := s.setupState.Load(r.Context())
+			if loadErr != nil || latest.LastEventID <= state.LastEventID {
+				continue
 			}
-			writeSSE(w, "progress", event.ID, event.Event)
+			state = latest
+			writeSSE(w, "progress", state.LastEventID, map[string]string{
+				"step":  state.Step,
+				"error": state.ErrorMessage,
+			})
 			flusher.Flush()
 		case <-heartbeat.C:
 			_, _ = io.WriteString(w, ": heartbeat\n\n")
@@ -1381,17 +1192,6 @@ func valueOr(value, fallback string) string {
 		return strings.TrimSpace(value)
 	}
 	return fallback
-}
-
-func safeSetupError(err error) string {
-	if err == nil {
-		return ""
-	}
-	message := strings.TrimSpace(err.Error())
-	if len(message) > 240 {
-		message = message[:240]
-	}
-	return message
 }
 
 // jsonMarshal is kept local to the SSE writer so the event path has no

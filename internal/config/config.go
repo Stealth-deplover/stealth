@@ -113,9 +113,9 @@ type Config struct {
 	// Console. Agent execution remains queue-only until a trusted provider
 	// worker is deployed.
 	AgentProviderCatalog []AgentProviderCatalogItem
-	// SetupMode exposes only the short-lived browser installer routes. The
-	// setup Compose service is allowed to use the Docker socket; production API
-	// containers never enable this mode.
+	// SetupMode exposes only the short-lived browser installer routes. The host
+	// CLI owns Docker and production installation; setup-mode API containers do
+	// not receive Docker authority.
 	SetupMode                   bool
 	InstallRoot                 string
 	SetupStateFile              string
@@ -235,17 +235,8 @@ func (c Config) ValidateSetup() error {
 	if !c.SetupMode {
 		return nil
 	}
-	if strings.TrimSpace(c.InstallRoot) == "" || !filepath.IsAbs(c.InstallRoot) || filepath.Clean(c.InstallRoot) == string(filepath.Separator) {
-		return fmt.Errorf("STEALTH_INSTALL_ROOT must be a valid non-root absolute path in setup mode")
-	}
 	if strings.TrimSpace(c.SetupStateFile) == "" || !filepath.IsAbs(c.SetupStateFile) || filepath.Clean(c.SetupStateFile) == string(filepath.Separator) {
 		return fmt.Errorf("STEALTH_SETUP_STATE_FILE must be a valid non-root absolute path in setup mode")
-	}
-	if strings.TrimSpace(c.ProductionComposeFile) == "" || !filepath.IsAbs(c.ProductionComposeFile) {
-		return fmt.Errorf("STEALTH_PRODUCTION_COMPOSE_FILE must be an absolute path in setup mode")
-	}
-	if strings.TrimSpace(c.SetupComposeFile) == "" || !filepath.IsAbs(c.SetupComposeFile) {
-		return fmt.Errorf("STEALTH_SETUP_COMPOSE_FILE must be an absolute path in setup mode")
 	}
 	return nil
 }
