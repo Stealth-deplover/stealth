@@ -12,11 +12,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
-	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 )
@@ -25,7 +23,7 @@ const (
 	setupCookieName       = "stealth_setup"
 	setupCookieLifetime   = bootstrap.CodeLifetime
 	setupCSRFHeader       = "X-Stealth-Setup"
-	setupEventBuffer      = 32
+	setupEventPoll        = 500 * time.Millisecond
 	setupEventHeartbeat   = 20 * time.Second
 	setupCallbackStateTTL = 10 * time.Minute
 )
@@ -40,61 +38,6 @@ type setupSession struct {
 	ID        string
 	CodeHash  []byte
 	ExpiresAt time.Time
-}
-
-type setupEvent struct {
-	ID    uint64
-	Event installengine.Event
-}
-
-type setupEventHub struct {
-	mu          sync.Mutex
-	nextID      uint64
-	subscribers map[chan setupEvent]struct{}
-}
-
-func newSetupEventHub() *setupEventHub {
-	return &setupEventHub{subscribers: make(map[chan setupEvent]struct{})}
-}
-
-func (h *setupEventHub) subscribe() (<-chan setupEvent, func()) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.subscribers == nil {
-		h.subscribers = make(map[chan setupEvent]struct{})
-	}
-	channel := make(chan setupEvent, setupEventBuffer)
-	h.subscribers[channel] = struct{}{}
-	return channel, func() {
-		h.mu.Lock()
-		if _, ok := h.subscribers[channel]; ok {
-			delete(h.subscribers, channel)
-			close(channel)
-		}
-		h.mu.Unlock()
-	}
-}
-
-func (h *setupEventHub) publish(event setupEvent) {
-	if h == nil {
-		return
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if event.ID == 0 {
-		h.nextID++
-		event.ID = h.nextID
-	} else if event.ID > h.nextID {
-		h.nextID = event.ID
-	}
-	for channel := range h.subscribers {
-		select {
-		case channel <- event:
-		default:
-			// A reconnect receives the persisted snapshot. Dropping an event
-			// here is safer than blocking the installer on a slow browser.
-		}
-	}
 }
 
 func (s *Server) setupStateReady() bool {
@@ -230,31 +173,6 @@ func (s *Server) validSetupCSRF(r *http.Request) bool {
 func (s *Server) setupSession(r *http.Request) (setupSession, bool) {
 	session, ok := r.Context().Value(setupSessionContextKey).(setupSession)
 	return session, ok
-}
-
-func (s *Server) publishSetupEvent(ctx context.Context, event installengine.Event) {
-	if s == nil || s.setupEvents == nil {
-		return
-	}
-	id := uint64(0)
-	if s.setupState != nil {
-		state, err := s.setupState.Update(ctx, func(state *setupstate.State) error {
-			state.LastEventID++
-			state.Step = event.Step
-			if event.Status == "failed" {
-				state.Phase = setupstate.PhaseFailed
-				state.ErrorCode = "install_failed"
-				state.ErrorMessage = event.Error
-			}
-			return nil
-		})
-		if err != nil {
-			s.logger.Error("persist setup install event failed", "error", err)
-		} else {
-			id = state.LastEventID
-		}
-	}
-	s.setupEvents.publish(setupEvent{ID: id, Event: event})
 }
 
 func (s *Server) requestIsHTTPS(r *http.Request) bool {

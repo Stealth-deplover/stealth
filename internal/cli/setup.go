@@ -111,6 +111,15 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 			fmt.Fprintf(a.errOut, "could not read setup configuration: %v\n", err)
 			return 1
 		}
+		stateStore, storeErr := a.setupStateStore(values)
+		if storeErr != nil {
+			fmt.Fprintf(a.errOut, "could not prepare browser setup state: %v\n", storeErr)
+			return 1
+		}
+		if storeErr := stateStore.PrepareShared(); storeErr != nil {
+			fmt.Fprintf(a.errOut, "could not prepare browser setup state permissions: %v\n", storeErr)
+			return 1
+		}
 	}
 	setupServiceResumed := false
 	pendingInstall := false
@@ -160,9 +169,9 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 		DockerGID:          gid,
 		Setup:              true,
 		ConfigContents:     configContents,
-		InternalAPIURL:     "http://127.0.0.1:18081",
-		InternalConsoleURL: "http://127.0.0.1:13001",
-		InternalProxyURL:   "http://127.0.0.1:8081",
+		InternalAPIURL:     "http://127.0.0.1:" + setupPortsFromConfig(values).API,
+		InternalConsoleURL: "http://127.0.0.1:" + setupPortsFromConfig(values).Console,
+		InternalProxyURL:   "http://127.0.0.1:" + setupPortsFromConfig(values).Proxy,
 		Existing:           existing,
 	}
 	if !setupServiceResumed {
@@ -196,6 +205,10 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 			fmt.Fprintf(a.errOut, "could not read setup configuration: %v\n", err)
 			return 1
 		}
+	}
+	if err := a.persistHostPreflight(values, checks); err != nil {
+		fmt.Fprintf(a.errOut, "could not publish host system checks to setup: %v\n", err)
+		return 1
 	}
 	key, err := bootstrapCLIKey(values)
 	if err != nil {
@@ -274,10 +287,7 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 			_ = a.closeQuickTunnel(cleanupContext, layout, containerName)
 			cleanupCancel()
 			a.printQuickTunnelFallback(tunnelErr)
-			if a.shouldWaitForSetup() {
-				return a.orchestrateBrowserSetupLocked(ctx, layout, values, containerName)
-			}
-			return 1
+			return a.orchestrateBrowserSetupLocked(ctx, layout, values, containerName)
 		}
 	}
 	if err := a.registerQuickTunnel(ctx, apiURL+"/v1/setup/quick-tunnel", key, containerName, quickURL); err != nil {
@@ -302,9 +312,6 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 		fmt.Fprintln(a.out, "Existing browser setup session resumed; reconnect to the setup URL to continue.")
 	}
 	fmt.Fprintln(a.out, "Complete setup in the browser. The temporary tunnel closes after the named production tunnel is verified.")
-	if !a.shouldWaitForSetup() {
-		return 0
-	}
 	return a.orchestrateBrowserSetupLocked(ctx, layout, values, containerName)
 }
 
@@ -314,6 +321,22 @@ func (a *App) loadSetupState(values map[string]string) (setupstate.State, error)
 		return setupstate.State{}, err
 	}
 	return store.Load(context.Background())
+}
+
+// setupLifecycleNeedsRecovery keeps an unfinished browser installation in the
+// web setup path even after the host has rendered SETUP_MODE=false into the
+// production env file. The durable phase, not that mutable deployment value,
+// decides whether repair must restore the temporary setup services.
+func (a *App) setupLifecycleNeedsRecovery(layout InstallLayout) bool {
+	values, err := readEnvFile(layout.EnvFile)
+	if err != nil {
+		return false
+	}
+	state, err := a.loadSetupState(values)
+	if err != nil {
+		return false
+	}
+	return state.InstallRunID != "" && state.Phase != setupstate.PhaseComplete
 }
 
 func (a *App) setupStateStore(values map[string]string) (*setupstate.FileStore, error) {

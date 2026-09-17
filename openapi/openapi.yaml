@@ -177,7 +177,7 @@ paths:
   /v1/setup/preflight:
     get:
       operationId: getSetupPreflight
-      description: Check setup dependencies plus CPU, memory, free disk, Docker, Cloudflare API reachability, and Cloudflare Tunnel edge connectivity.
+      description: Return host-published CPU, memory, free disk, Docker, and Docker Compose checks plus setup-service dependency and Cloudflare connectivity checks. Docker and resource probes are never run inside the temporary setup container.
       security: [{ setupCookie: [] }]
       responses:
         '200': { description: Prerequisite checks, content: { application/json: { schema: { $ref: '#/components/schemas/SetupPreflightResponse' } } } }
@@ -342,10 +342,20 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/setup/handoff/status:
+    get:
+      operationId: getSetupHandoffStatus
+      description: Return whether the one-time production handoff is still pending. This host-CLI coordination endpoint accepts only the derived private CLI proof and never returns the handoff token or production session.
+      security: [{ bootstrapCLIProof: [] }]
+      parameters: [{ $ref: '#/components/parameters/BootstrapCLIProof' }]
+      responses:
+        '200': { description: Safe handoff state for the host CLI, content: { application/json: { schema: { $ref: '#/components/schemas/SetupHandoffStatusResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /v1/setup/install:
     post:
       operationId: startSetupInstall
-      description: Validate and durably request the idempotent production handoff. The setup worker claims the request asynchronously; progress is available through the SSE endpoint and failures remain repairable.
+      description: Validate and durably request the idempotent production installation. This setup API endpoint only persists install_requested and returns the current state; the host-side Stealth CLI claims the run, invokes installengine, reports progress, performs health checks, and completes handoff.
       security: [{ setupCookie: [] }]
       parameters: [{ $ref: '#/components/parameters/SetupCSRF' }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false } } } }
@@ -2457,6 +2467,7 @@ components:
     SetupPreflightResponse: { type: object, additionalProperties: false, required: [checks], properties: { checks: { type: array, items: { $ref: '#/components/schemas/SetupCheck' } } } }
     SetupCheck: { type: object, additionalProperties: false, required: [name, status, detail, required], properties: { name: { type: string }, status: { type: string, enum: [pass, warn, fail] }, detail: { type: string }, required: { type: boolean } } }
     SetupInstallResponse: { type: object, additionalProperties: false, required: [status, state], properties: { status: { type: string, enum: [accepted, installing] }, state: { $ref: '#/components/schemas/SetupState' } } }
+    SetupHandoffStatusResponse: { type: object, additionalProperties: false, required: [pending], properties: { pending: { type: boolean, description: Whether the one-time production handoff is still waiting for browser consumption. } } }
     SetupHandoffRequest: { type: object, additionalProperties: false, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }
     SetupHandoffForm: { type: object, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }
     SetupHandoffTokenResponse: { type: object, additionalProperties: false, required: [token], properties: { token: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$', writeOnly: true } } }

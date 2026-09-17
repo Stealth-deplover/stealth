@@ -23,13 +23,23 @@ func (s *Server) setupPreflight(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	probes := preflight.NewProbes(s.setupRunner, http.DefaultClient)
-	for _, check := range preflight.ResourceChecks(ctx, probes, s.config.InstallRoot) {
-		add(check.Name, check.Detail, check.OK, check.Required)
+	state, err := s.setupState.Load(ctx)
+	if err != nil {
+		internalError(s, w, err)
+		return
 	}
-	for _, check := range preflight.DockerChecks(ctx, probes, true, true) {
-		add(check.Name, check.Detail, check.OK, check.Required)
+	if len(state.HostPreflight) == 0 {
+		add("Host preflight", "the host CLI has not published system checks", false, true)
+	} else {
+		for _, check := range state.HostPreflight {
+			add(check.Name, check.Detail, check.OK, check.Required)
+		}
 	}
+
+	// The setup container may verify services it legitimately owns, but it has
+	// no Docker runner. In particular, Docker and resource checks never execute
+	// inside the temporary web-facing container.
+	probes := preflight.NewProbes(nil, http.DefaultClient)
 
 	if s.repo == nil {
 		add("Database", "database dependency is not configured", false, true)

@@ -183,4 +183,4 @@ temporary_dir=""
 if [ -t 1 ] && [ -t 2 ]; then
 	exec "${bin_dir}/stealth" install
 fi
-exec "${bin_dir}/stealth" install --no-wait
+exec "${bin_dir}/stealth" install --wait

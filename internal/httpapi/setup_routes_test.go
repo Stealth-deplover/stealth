@@ -11,20 +11,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/auth"
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
-	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupconfig"
+	"github.com/Stealth-deplover/stealth/internal/setuphandoff"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/google/uuid"
 )
@@ -302,59 +304,11 @@ func TestSetupHTTPFlowClaimsCodeAndKeepsProviderSecretsServerSide(t *testing.T) 
 	}
 }
 
-type gatedSetupInstallRunner struct {
-	mu        sync.Mutex
-	started   chan struct{}
-	release   chan struct{}
-	done      chan struct{}
-	startOnce sync.Once
-	doneOnce  sync.Once
-	runCalls  int
-}
-
-func (r *gatedSetupInstallRunner) Run(ctx context.Context, _ string, _, _ io.Writer, _ string, _ ...string) error {
-	r.mu.Lock()
-	r.runCalls++
-	r.mu.Unlock()
-	r.startOnce.Do(func() { close(r.started) })
-	select {
-	case <-r.release:
-		r.doneOnce.Do(func() { close(r.done) })
-		return errors.New("test installation stopped")
-	case <-ctx.Done():
-		r.doneOnce.Do(func() { close(r.done) })
-		return ctx.Err()
-	}
-}
-
-func (*gatedSetupInstallRunner) Output(context.Context, string, string, ...string) ([]byte, error) {
-	return nil, nil
-}
-
-func (r *gatedSetupInstallRunner) calls() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.runCalls
-}
-
-func TestSetupInstallPersistsRequestAndSuppressesDuplicateWorkers(t *testing.T) {
+func TestSetupInstallPersistsRequestWithoutExecutingDocker(t *testing.T) {
 	root := t.TempDir()
 	functionKey := bytes.Repeat([]byte{0x57}, functionsecret.KeySize)
 	cipher, err := functionsecret.New(functionKey)
 	if err != nil {
-		t.Fatal(err)
-	}
-	layout, err := installengine.NewLayout(filepath.Join(root, "install"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WritePrivateFile(layout.EnvFile, "STEALTH_API_IMAGE=ghcr.io/stealth-deplover/stealth-api:v1.2.3\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WriteAtomic(layout.ProxyFile, []byte("server {\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	statePath := filepath.Join(root, "state", "setup-state.enc")
@@ -370,15 +324,11 @@ func TestSetupInstallPersistsRequestAndSuppressesDuplicateWorkers(t *testing.T) 
 	if err := store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
 	}
-	runner := &gatedSetupInstallRunner{started: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
 	server := &Server{
-		config:         config.Config{SetupMode: true, InstallRoot: layout.Root},
+		config:         config.Config{SetupMode: true},
 		bootstrap:      &bootstrapStoreFake{status: repository.BootstrapStatus{SetupRequired: false}},
 		functionCipher: cipher,
 		setupState:     store,
-		setupEngine:    installengine.New(installengine.Options{Runner: runner, PollAttempts: 1}),
-		setupRunner:    runner,
-		setupEvents:    newSetupEventHub(),
 		logger:         slog.Default(),
 	}
 
@@ -393,24 +343,16 @@ func TestSetupInstallPersistsRequestAndSuppressesDuplicateWorkers(t *testing.T) 
 	if err := json.Unmarshal(first.Body.Bytes(), &firstResponse); err != nil {
 		t.Fatal(err)
 	}
-	if firstResponse.Status != "accepted" || firstResponse.State.Phase != setupstate.PhaseInstallRequested {
+	if firstResponse.Status != "accepted" || firstResponse.State.Phase != setupstate.PhaseInstallRequested || firstResponse.State.LastEventID == 0 {
 		t.Fatalf("first install response = %#v", firstResponse)
 	}
-	if firstResponse.State.Version == 0 {
-		t.Fatal("accepted response did not include durable setup state")
-	}
 
-	select {
-	case <-runner.started:
-	case <-time.After(time.Second):
-		t.Fatal("setup worker did not start")
-	}
 	state, err = store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Phase != setupstate.PhaseInstalling || state.InstallRunID == "" {
-		t.Fatalf("claimed setup state = %#v", state)
+	if state.Phase != setupstate.PhaseInstallRequested || state.InstallRunID == "" {
+		t.Fatalf("requested setup state = %#v", state)
 	}
 	runID := state.InstallRunID
 
@@ -425,53 +367,20 @@ func TestSetupInstallPersistsRequestAndSuppressesDuplicateWorkers(t *testing.T) 
 	if err := json.Unmarshal(second.Body.Bytes(), &secondResponse); err != nil {
 		t.Fatal(err)
 	}
-	if secondResponse.Status != "installing" || secondResponse.State.Phase != setupstate.PhaseInstalling || runner.calls() != 1 {
-		t.Fatalf("duplicate install response = %#v, runner calls = %d", secondResponse, runner.calls())
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	close(runner.release)
-	select {
-	case <-runner.done:
-	case <-time.After(time.Second):
-		t.Fatal("setup worker did not finish")
-	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		state, err = store.Load(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.Phase == setupstate.PhaseFailed {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("setup worker did not publish failure: %#v", state)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if state.InstallRunID != runID || state.ErrorCode != "install_failed" {
-		t.Fatalf("failed setup state = %#v", state)
+	if secondResponse.Status != "accepted" || secondResponse.State.Phase != setupstate.PhaseInstallRequested || state.InstallRunID != runID {
+		t.Fatalf("duplicate install response = %#v", secondResponse)
 	}
 }
 
-func TestSetupInstallWorkerLeavesRunOwnedByLockHolder(t *testing.T) {
+func TestSetupInstallEventsReloadDurableHostProgress(t *testing.T) {
 	root := t.TempDir()
-	functionKey := bytes.Repeat([]byte{0x58}, functionsecret.KeySize)
-	cipher, err := functionsecret.New(functionKey)
+	key := bytes.Repeat([]byte{0x61}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(key)
 	if err != nil {
-		t.Fatal(err)
-	}
-	layout, err := installengine.NewLayout(filepath.Join(root, "install"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://localhost:8080\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := installengine.WriteAtomic(layout.ProxyFile, []byte("server {\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
@@ -479,50 +388,99 @@ func TestSetupInstallWorkerLeavesRunOwnedByLockHolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := setupstate.NewState()
-	state.Phase = setupstate.PhaseInstalling
-	state.InstallRunID = "run-1"
+	if err := setupstate.RequestInstallation(&state, "run-sse"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupstate.BeginInstallation(&state, "run-sse"); err != nil {
+		t.Fatal(err)
+	}
+	state.Step = "Configuration and secrets"
 	if err := store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
 	}
-	runner := &setupInstallProbeRunner{}
-	server := &Server{
-		setupState:  store,
-		setupEngine: installengine.New(installengine.Options{Runner: runner}),
-		logger:      slog.Default(),
+	server := &Server{setupState: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/v1/setup/install/events", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.setupInstallEvents(recorder, request)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(recorder.Body.String(), "event: snapshot") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
-	lock, err := installengine.AcquireProcessLock(layout.StateDir, "install.lock", "installation")
+	if !strings.Contains(recorder.Body.String(), "event: snapshot") {
+		t.Fatal("SSE stream did not publish its durable snapshot")
+	}
+	if _, err := store.Update(context.Background(), func(state *setupstate.State) error {
+		return setupstate.UpdateInstallationProgress(state, "run-sse", "Release images")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for !strings.Contains(recorder.Body.String(), `"step":"Release images"`) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SSE stream did not close after browser disconnect")
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `event: progress`) || !strings.Contains(body, `"step":"Release images"`) {
+		t.Fatalf("durable host progress was not streamed after reconnect: %s", body)
+	}
+	if strings.Contains(body, "run-sse") {
+		t.Fatalf("SSE exposed the installation run identifier: %s", body)
+	}
+}
+
+func TestSetupHandoffStatusRequiresCLIProofAndNeverReturnsToken(t *testing.T) {
+	root := t.TempDir()
+	key := bytes.Repeat([]byte{0x62}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.runSetupInstall("run-1", installengine.Plan{Layout: layout, Existing: true, Version: "v1.2.3"})
-	if err := lock.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err = store.Load(context.Background())
+	handoff, err := setuphandoff.NewFileStore(filepath.Join(root, "handoff", "handoff.enc"), cipher)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Phase != setupstate.PhaseInstalling || state.InstallRunID != "run-1" {
-		t.Fatalf("lock-holder run was overwritten: %#v", state)
+	if err := os.MkdirAll(filepath.Join(root, "handoff"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("losing worker invoked Docker: %#v", runner.calls)
+	ticket, _, err := auth.NewSessionToken()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-type setupInstallProbeRunner struct {
-	calls []string
-}
-
-func (r *setupInstallProbeRunner) Run(_ context.Context, _ string, _, _ io.Writer, name string, _ ...string) error {
-	r.calls = append(r.calls, name)
-	return nil
-}
-
-func (r *setupInstallProbeRunner) Output(_ context.Context, _ string, name string, _ ...string) ([]byte, error) {
-	r.calls = append(r.calls, name)
-	return nil, nil
+	sessionToken, _, err := auth.NewSessionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handoff.Save(context.Background(), ticket, sessionToken, time.Now().UTC().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{config: config.Config{BootstrapCLIKey: key}, setupHandoff: handoff}
+	unauthorized := httptest.NewRecorder()
+	server.setupHandoffStatus(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/setup/handoff/status", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("handoff status without proof = %d: %s", unauthorized.Code, unauthorized.Body.String())
+	}
+	valid := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/setup/handoff/status", nil)
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(key))
+	server.setupHandoffStatus(valid, request)
+	if valid.Code != http.StatusOK || valid.Body.String() != "{\"pending\":true}\n" {
+		t.Fatalf("handoff status with proof = %d: %q", valid.Code, valid.Body.String())
+	}
+	if strings.Contains(valid.Body.String(), ticket) || strings.Contains(valid.Body.String(), sessionToken) {
+		t.Fatalf("handoff status exposed a credential: %s", valid.Body.String())
+	}
 }
 
 func TestGitHubAuthorizationRejectsInvalidCallbackState(t *testing.T) {
@@ -898,6 +856,99 @@ func TestSetupRecoveryRequiresCLIProofAndPersistsFreshClaim(t *testing.T) {
 	expectedHash := base64.RawURLEncoding.EncodeToString(bootstrap.HashCode(payload.SetupCode))
 	if state.SetupCodeHash != expectedHash {
 		t.Fatalf("recovery claim hash = %q, want %q", state.SetupCodeHash, expectedHash)
+	}
+}
+
+func TestHostCoordinationCanRefreshTunnelDuringInstallation(t *testing.T) {
+	root := t.TempDir()
+	functionKey := bytes.Repeat([]byte{0x73}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(functionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	if err := setupstate.RequestInstallation(&state, "run-tunnel-refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupstate.BeginInstallation(&state, "run-tunnel-refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	cliKey := bytes.Repeat([]byte{0x42}, 32)
+	server := &Server{
+		config:         config.Config{SetupMode: true, BootstrapCLIKey: cliKey},
+		bootstrap:      &setupBootstrapFake{bootstrapStoreFake: bootstrapStoreFake{status: repository.BootstrapStatus{SetupRequired: false}}},
+		functionCipher: cipher,
+		setupState:     store,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/setup/quick-tunnel", strings.NewReader(`{"container_name":"stealth-onboarding-recovered","url":"https://recovered.trycloudflare.com"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(cliKey))
+	response := httptest.NewRecorder()
+	server.registerSetupQuickTunnel(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("locked host tunnel refresh = %d: %s", response.Code, response.Body.String())
+	}
+	refreshed, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Phase != setupstate.PhaseInstalling || refreshed.QuickTunnel != "stealth-onboarding-recovered" || refreshed.Secret("quick_tunnel_url") != "https://recovered.trycloudflare.com" {
+		t.Fatalf("refreshed host tunnel state = %#v", refreshed)
+	}
+}
+
+func TestHostRecoveryCanRefreshSetupClaimDuringInstallation(t *testing.T) {
+	root := t.TempDir()
+	functionKey := bytes.Repeat([]byte{0x74}, functionsecret.KeySize)
+	cipher, err := functionsecret.New(functionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := setupstate.NewFileStore(filepath.Join(root, "state", "setup-state.enc"), cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	if err := setupstate.RequestInstallation(&state, "run-session-refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setupstate.BeginInstallation(&state, "run-session-refresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	cliKey := bytes.Repeat([]byte{0x43}, 32)
+	server := &Server{
+		config:         config.Config{SetupMode: true, BootstrapCLIKey: cliKey},
+		bootstrap:      &setupBootstrapFake{bootstrapStoreFake: bootstrapStoreFake{status: repository.BootstrapStatus{SetupRequired: false}}},
+		functionCipher: cipher,
+		setupState:     store,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/setup/recovery", nil)
+	request.Header.Set(bootstrap.CLIProofHeader, bootstrap.CLIProof(cliKey))
+	response := httptest.NewRecorder()
+	server.recoverSetupSession(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("locked setup recovery = %d: %s", response.Code, response.Body.String())
+	}
+	var payload bootstrapSessionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Phase != setupstate.PhaseInstalling || refreshed.SetupSessionID == "" || refreshed.SetupCodeHash != base64.RawURLEncoding.EncodeToString(bootstrap.HashCode(payload.SetupCode)) {
+		t.Fatalf("refreshed setup claim = %#v", refreshed)
 	}
 }
 

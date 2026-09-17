@@ -1,11 +1,10 @@
 name: ${COMPOSE_PROJECT_NAME:-stealth}
 
-# Setup is a short-lived, browser-facing Compose project. The setup API is
-# deliberately a different service from production api so it can start the
-# finalized production stack, verify it, and then remove only itself and the
-# setup proxy/Console. It is the only service in the setup Compose project
-# that mounts the host Docker socket. The production worker has a separate,
-# intentional socket mount for the existing Docker-backed runner.
+# Setup is a short-lived, browser-facing Compose project. The host Stealth CLI
+# starts and owns production Compose; this project only serves the wizard and
+# its temporary service dependencies. The setup API has no Docker socket,
+# Docker CLI, or production installation filesystem. The narrow state bind is
+# the encrypted coordination boundary shared with the host CLI.
 
 services:
   postgres:
@@ -56,14 +55,11 @@ services:
       SETUP_MODE: "true"
       STEALTH_SETUP_HANDOFF_FILE: "${STEALTH_SETUP_HANDOFF_FILE:-/var/lib/stealth/storage/.setup-handoff.enc}"
       GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:-}"
-      # Keep the host installation path identical inside this container. The
-      # setup API invokes Docker Compose through the host socket; Docker
-      # resolves bind sources on the daemon host, not in this container's
-      # private filesystem namespace.
-      STEALTH_INSTALL_ROOT: "${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}"
-      STEALTH_SETUP_STATE_FILE: "${STEALTH_SETUP_STATE_FILE:?set STEALTH_SETUP_STATE_FILE}"
-      STEALTH_PRODUCTION_COMPOSE_FILE: "${STEALTH_PRODUCTION_COMPOSE_FILE:?set STEALTH_PRODUCTION_COMPOSE_FILE}"
-      STEALTH_SETUP_COMPOSE_FILE: "${STEALTH_SETUP_COMPOSE_FILE:?set STEALTH_SETUP_COMPOSE_FILE}"
+      # The host state directory is the only installation path visible to the
+      # setup API. The container runs this API as root solely so the shared
+      # encrypted state file remains usable when the host CLI runs as a
+      # different UID; root has no Docker authority without the socket/CLI.
+      STEALTH_SETUP_STATE_FILE: "/var/lib/stealth/setup-state/setup-state.enc"
       PUBLIC_APP_URL: "${PUBLIC_APP_URL:-http://localhost:8081}"
       COOKIE_SECURE: "false"
       TRUSTED_PROXY_CIDRS: "${TRUSTED_PROXY_CIDRS:-172.30.0.0/24}"
@@ -72,8 +68,7 @@ services:
       CLOUDFLARE_API_BASE_URL: "${CLOUDFLARE_API_BASE_URL:-}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
-      - "${STEALTH_INSTALL_ROOT:-.}:${STEALTH_INSTALL_ROOT:-.}"
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/state:/var/lib/stealth/setup-state"
     ports:
       - "127.0.0.1:${SETUP_API_HOST_PORT:-18081}:8080"
     depends_on:

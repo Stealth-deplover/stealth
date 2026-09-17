@@ -55,10 +55,8 @@ type App struct {
 	executablePath      func() (string, error)
 	renameFile          func(string, string) error
 	currentVersion      func() string
+	cloudflareFactory   cloudflareClientFactory
 	verbose             bool
-	// waitForSetup overrides whether `stealth install` stays alive to observe
-	// the browser wizard. Nil means decide from the terminal/environment.
-	waitForSetup *bool
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.
@@ -170,7 +168,7 @@ func (a *App) runInstall(args []string) int {
 	repair := fs.Bool("repair", false, "reuse an existing installation without replacing its configuration")
 	versionOverride := fs.String("version", "", "install a specific release version")
 	wait := fs.Bool("wait", false, "wait for browser setup to complete before returning")
-	noWait := fs.Bool("no-wait", false, "return after starting the setup service instead of waiting")
+	noWait := fs.Bool("no-wait", false, "deprecated: rejected unless a host-side supervisor is available")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -182,12 +180,10 @@ func (a *App) runInstall(args []string) int {
 		fmt.Fprintln(a.errOut, "install accepts either --wait or --no-wait, not both")
 		return 2
 	}
-	if *wait {
-		value := true
-		a.waitForSetup = &value
-	} else if *noWait {
-		value := false
-		a.waitForSetup = &value
+	if *noWait {
+		fmt.Fprintln(a.errOut, "--no-wait is not supported for browser setup: the host CLI must remain running to execute install_requested")
+		fmt.Fprintln(a.errOut, "Use `stealth install --wait` or omit the flag. A future host supervisor may provide an explicit alternative.")
+		return 2
 	}
 	a.verbose = *verbose
 	layout, err := a.layout()
@@ -205,7 +201,7 @@ func (a *App) runInstall(args []string) int {
 	if existing && *repair && !a.hasInteractiveTerminal() {
 		values, configErr := readEnvFile(layout.EnvFile)
 		setupMode := configErr == nil && strings.EqualFold(strings.TrimSpace(values["SETUP_MODE"]), "true")
-		if !setupMode {
+		if !setupMode && !a.setupLifecycleNeedsRecovery(layout) {
 			fmt.Fprintln(a.errOut, "Repair setup requires a TTY so the existing configuration can be reviewed safely.")
 			return 1
 		}
@@ -220,7 +216,7 @@ func (a *App) runInstall(args []string) int {
 			fmt.Fprintf(a.errOut, "existing installation cannot be repaired: %v\n", loadErr)
 			return 1
 		}
-		if plan.Setup {
+		if plan.Setup || a.setupLifecycleNeedsRecovery(layout) {
 			return a.runWebBootstrap(ctx, checks, layout, plan.Version, true)
 		}
 		return a.runInstallerTUI(ctx, checks, plan, true)

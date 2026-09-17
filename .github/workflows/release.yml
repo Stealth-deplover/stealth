@@ -97,8 +97,11 @@ jobs:
           STEALTH_SETUP_COMPOSE_FILE: /tmp/stealth-install/compose.setup.yaml
         run: docker compose --env-file .env.production.example -f compose.setup.yaml config --quiet
 
+      - name: Setup security regression
+        run: ./scripts/setup-security-test.sh
+
       - name: Validate smoke scripts
-        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh
+        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/setup-security-test.sh
 
       - name: Test bootstrap failure handling
         run: ./scripts/bootstrap_test.sh
@@ -192,6 +195,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-console:smoke-$SHORT_SHA" .
+
+      - name: Verify local setup image has no Docker tooling
+        env:
+          STEALTH_SETUP_IMAGE_FOR_TEST: stealth-setup:smoke-${{ env.SHORT_SHA }}
+        run: ./scripts/setup-security-test.sh
 
       - name: Generate ephemeral smoke configuration
         env:

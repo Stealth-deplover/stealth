@@ -287,7 +287,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Check setup dependencies plus CPU, memory, free disk, Docker, Cloudflare API reachability, and Cloudflare Tunnel edge connectivity. */
+        /** @description Return host-published CPU, memory, free disk, Docker, and Docker Compose checks plus setup-service dependency and Cloudflare connectivity checks. Docker and resource probes are never run inside the temporary setup container. */
         get: operations["getSetupPreflight"];
         put?: never;
         post?: never;
@@ -531,6 +531,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/setup/handoff/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return whether the one-time production handoff is still pending. This host-CLI coordination endpoint accepts only the derived private CLI proof and never returns the handoff token or production session. */
+        get: operations["getSetupHandoffStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/setup/install": {
         parameters: {
             query?: never;
@@ -540,7 +557,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Validate and durably request the idempotent production handoff. The setup worker claims the request asynchronously; progress is available through the SSE endpoint and failures remain repairable. */
+        /** @description Validate and durably request the idempotent production installation. This setup API endpoint only persists install_requested and returns the current state; the host-side Stealth CLI claims the run, invokes installengine, reports progress, performs health checks, and completes handoff. */
         post: operations["startSetupInstall"];
         delete?: never;
         options?: never;
@@ -2772,6 +2789,10 @@ export interface components {
             /** @enum {string} */
             status: SetupInstallResponseStatus;
             state: components["schemas"]["SetupState"];
+        };
+        SetupHandoffStatusResponse: {
+            /** @description Whether the one-time production handoff is still waiting for browser consumption. */
+            pending: boolean;
         };
         SetupHandoffRequest: {
             token: string;
@@ -5772,6 +5793,30 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getSetupHandoffStatus: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Bootstrap-Proof": components["parameters"]["BootstrapCLIProof"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe handoff state for the host CLI */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupHandoffStatusResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };

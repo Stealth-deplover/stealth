@@ -1,6 +1,7 @@
-// Package installengine owns the idempotent installation primitives shared by
-// the CLI and the browser setup service. UI layers select a plan and receive
-// structured progress; this package owns files, Compose, and health checks.
+// Package installengine owns the idempotent installation primitives used by
+// the host CLI. UI and setup API layers select or project state; this package
+// owns files, Compose, and health checks without exposing a shell boundary to
+// the browser.
 package installengine
 
 import (
@@ -32,9 +33,8 @@ const (
 // a later process can resume it after a crash releases the OS lock.
 var ErrOperationInProgress = errors.New("another installation operation is already running")
 
-// CommandRunner is the only process boundary the engine needs. The browser
-// service injects the same runner as the CLI, but it never invokes the
-// stealth executable itself.
+// CommandRunner is the only process boundary the host engine needs. The setup
+// API does not construct an engine or receive a command runner.
 type CommandRunner interface {
 	Run(context.Context, string, io.Writer, io.Writer, string, ...string) error
 	Output(context.Context, string, string, ...string) ([]byte, error)
@@ -58,9 +58,9 @@ func (OSCommandRunner) Output(ctx context.Context, dir, name string, args ...str
 	return command.Output()
 }
 
-// Layout is the on-host installation boundary. The setup service receives a
-// host bind mount at this exact root, which lets the same engine write the
-// durable production files before handing Compose back to the host.
+// Layout is the on-host installation boundary. The host CLI writes durable
+// production files and runs Compose from this root; the setup API only shares
+// the separate encrypted state directory.
 type Layout struct {
 	Root             string
 	EnvFile          string
@@ -191,7 +191,7 @@ func New(options Options) *Engine {
 }
 
 // Install executes every step while holding an OS-level lock. The lock is
-// released on process exit, so a restarted setup service can safely resume a
+// released on process exit, so a restarted host CLI can safely resume a
 // partial installation without manual lock-file cleanup.
 func (e *Engine) Install(ctx context.Context, plan Plan, emit func(Event)) error {
 	if e == nil {
@@ -202,7 +202,18 @@ func (e *Engine) Install(ctx context.Context, plan Plan, emit func(Event)) error
 		return err
 	}
 	defer lock.Close()
+	return e.InstallLocked(ctx, plan, emit)
+}
 
+// InstallLocked executes every step after the caller has acquired the
+// installation lock. It exists for the host orchestrator, which must hold the
+// same lock while it claims the durable InstallRunID and performs handoff
+// cleanup. Callers must not invoke this method without owning the lock for
+// plan.Layout.StateDir.
+func (e *Engine) InstallLocked(ctx context.Context, plan Plan, emit func(Event)) error {
+	if e == nil {
+		return errors.New("install engine is nil")
+	}
 	for step := StepConfiguration; step <= StepVerify; step++ {
 		event := Event{Step: StepNames[step], Status: "started", At: time.Now().UTC()}
 		if emit != nil {
@@ -230,7 +241,10 @@ func (e *Engine) Install(ctx context.Context, plan Plan, emit func(Event)) error
 func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	switch step {
 	case StepConfiguration:
-		return e.Prepare(ctx, plan)
+		if err := e.Prepare(ctx, plan); err != nil {
+			return err
+		}
+		return e.runCompose(ctx, plan, "config", "--quiet")
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
@@ -284,8 +298,15 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 	if err := os.Chmod(plan.Layout.Root, 0o700); err != nil {
 		return fmt.Errorf("protect installation directory: %w", err)
 	}
-	if err := os.MkdirAll(plan.Layout.StateDir, 0o700); err != nil {
+	// Setup state is shared by the host CLI and the root setup container. The
+	// setgid directory preserves the host operator's group on files atomically
+	// replaced by the container, while the state payload remains group-private.
+	stateDirectoryMode := os.FileMode(0o770) | os.ModeSetgid
+	if err := os.MkdirAll(plan.Layout.StateDir, stateDirectoryMode); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
+	}
+	if err := os.Chmod(plan.Layout.StateDir, stateDirectoryMode); err != nil {
+		return fmt.Errorf("protect state directory: %w", err)
 	}
 	if !plan.Existing {
 		contents := plan.ConfigContents
