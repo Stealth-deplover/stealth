@@ -273,6 +273,19 @@ func InstallationRequested(state State) bool {
 	}
 }
 
+// InstallationTerminal reports whether the host-owned installation lifecycle
+// has reached a state that the observer can render without another installer
+// attempt. A handoff is deliberately not terminal because cleanup and the
+// one-time production transition may still need to be resumed.
+func InstallationTerminal(state State) bool {
+	switch state.Phase {
+	case PhaseComplete, PhaseFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // RequestInstallation durably advances a reviewed setup draft into the
 // request phase. Callers must supply a fresh run identifier and persist the
 // surrounding state through Store.Update.

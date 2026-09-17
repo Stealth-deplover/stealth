@@ -224,6 +224,23 @@ func TestHostInstallerFailsInvalidFinalizedStateWithoutDocker(t *testing.T) {
 	}
 }
 
+func TestHostInstallerRejectsRunIDMismatchWithoutChangingState(t *testing.T) {
+	fixture := newHostInstallFixture(t)
+	if err := fixture.app.executeHostInstallation(context.Background(), fixture.layout, fixture.values, fixture.store, "run-2"); err == nil || !strings.Contains(err.Error(), "does not own setup state") {
+		t.Fatalf("run ID mismatch error = %v", err)
+	}
+	state, err := fixture.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Phase != setupstate.PhaseInstallRequested || state.InstallRunID != "run-1" || state.Step != fixture.state.Step {
+		t.Fatalf("run ID mismatch changed setup state = %#v", state)
+	}
+	if len(fixture.app.runner.(*setupRunner).calls) != 0 {
+		t.Fatalf("run ID mismatch invoked host Docker: %#v", fixture.app.runner.(*setupRunner).calls)
+	}
+}
+
 func TestHostInstallerLeavesRequestOwnedByExistingLock(t *testing.T) {
 	fixture := newHostInstallFixture(t)
 	lock, err := installengine.AcquireProcessLock(fixture.layout.StateDir, "install.lock", "installation")

@@ -100,7 +100,7 @@ func TestFileStoreSupportsPreparedSharedStateDirectory(t *testing.T) {
 
 func TestInstallationRequestPhaseIsDurableAndSingleOwner(t *testing.T) {
 	state := NewState()
-	if InstallationLocked(state) || InstallationRequested(state) {
+	if InstallationLocked(state) || InstallationRequested(state) || InstallationTerminal(state) {
 		t.Fatal("new setup state is already locked or requested")
 	}
 	if err := RequestInstallation(&state, "run-1"); err != nil {
@@ -126,6 +126,9 @@ func TestInstallationRequestPhaseIsDurableAndSingleOwner(t *testing.T) {
 	}
 
 	state.Phase = PhaseFailed
+	if !InstallationTerminal(state) {
+		t.Fatal("failed installation is not terminal")
+	}
 	if err := RequestInstallation(&state, "run-2"); err != nil {
 		t.Fatalf("failed installation was not repairable: %v", err)
 	}

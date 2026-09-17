@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 )
 
@@ -91,6 +92,101 @@ func TestObserveBrowserSetupWaitsForRequestAndCompletion(t *testing.T) {
 	for _, want := range []string{"Waiting for browser setup to complete...", "Preparing installation...", "Release images", "✓ Installation complete"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("observer output is missing %q: %s", want, rendered)
+		}
+	}
+}
+
+func TestObserveBrowserSetupInstallerErrorBeforeTerminalStateStopsWithoutRetry(t *testing.T) {
+	requested := setupstate.NewState()
+	if err := setupstate.RequestInstallation(&requested, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	source := &setupStateSequenceSource{states: []setupstate.State{requested}, last: requested}
+	var errorsOutput strings.Builder
+	app := NewApp(strings.NewReader(""), io.Discard, &errorsOutput)
+	app.pollInterval = time.Millisecond
+	var invocations int
+	installerErr := errors.New("host filesystem permission denied")
+
+	result := app.observeBrowserSetupWithInstaller(context.Background(), source, func(context.Context, setupstate.State) error {
+		invocations++
+		return installerErr
+	})
+
+	if result.exitCode != 1 || result.cancelled || !result.installRequested {
+		t.Fatalf("non-terminal installer failure result = %#v", result)
+	}
+	if !errors.Is(result.err, installerErr) {
+		t.Fatalf("observer error = %v, want %v", result.err, installerErr)
+	}
+	if invocations != 1 {
+		t.Fatalf("installer invocation count = %d, want 1", invocations)
+	}
+	if !strings.Contains(errorsOutput.String(), "Host installation failed before a terminal failure state was persisted.") || !strings.Contains(errorsOutput.String(), "stealth install --repair") {
+		t.Fatalf("actionable failure output = %q", errorsOutput.String())
+	}
+}
+
+func TestObserveBrowserSetupInstallerPersistedFailureUsesNormalStatePath(t *testing.T) {
+	requested := setupstate.NewState()
+	if err := setupstate.RequestInstallation(&requested, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	failed := requested
+	if err := setupstate.FailInstallation(&failed, "run-1", "install_failed", "Docker Compose could not start"); err != nil {
+		t.Fatal(err)
+	}
+	source := &setupStateSequenceSource{states: []setupstate.State{requested, failed}, last: requested}
+	var output strings.Builder
+	var errorsOutput strings.Builder
+	app := NewApp(strings.NewReader(""), &output, &errorsOutput)
+	app.pollInterval = time.Millisecond
+	var invocations int
+
+	result := app.observeBrowserSetupWithInstaller(context.Background(), source, func(context.Context, setupstate.State) error {
+		invocations++
+		return errors.New("compose execution failed")
+	})
+
+	if result.exitCode != 1 || result.cancelled || result.err != nil || result.lastObservedPhase != setupstate.PhaseFailed {
+		t.Fatalf("persisted failure result = %#v", result)
+	}
+	if invocations != 1 {
+		t.Fatalf("installer invocation count = %d, want 1", invocations)
+	}
+	if !strings.Contains(errorsOutput.String(), "Installation failed.") || !strings.Contains(errorsOutput.String(), "Docker Compose could not start") {
+		t.Fatalf("normal failure output = %q", errorsOutput.String())
+	}
+	if strings.Contains(errorsOutput.String(), "Host installation failed before a terminal failure state was persisted.") {
+		t.Fatalf("duplicate observer failure output = %q", errorsOutput.String())
+	}
+}
+
+func TestObserveBrowserSetupInstallerLockConflictStopsWithoutBusyLoop(t *testing.T) {
+	requested := setupstate.NewState()
+	if err := setupstate.RequestInstallation(&requested, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	source := &setupStateSequenceSource{states: []setupstate.State{requested}, last: requested}
+	var errorsOutput strings.Builder
+	app := NewApp(strings.NewReader(""), io.Discard, &errorsOutput)
+	app.pollInterval = time.Millisecond
+	var invocations int
+
+	result := app.observeBrowserSetupWithInstaller(context.Background(), source, func(context.Context, setupstate.State) error {
+		invocations++
+		return installengine.ErrOperationInProgress
+	})
+
+	if result.exitCode != 1 || result.cancelled || !errors.Is(result.err, installengine.ErrOperationInProgress) {
+		t.Fatalf("lock conflict result = %#v", result)
+	}
+	if invocations != 1 {
+		t.Fatalf("installer invocation count = %d, want 1", invocations)
+	}
+	for _, want := range []string{"Another host installer already owns this installation run.", "No second installation was started", "stealth install --repair --wait"} {
+		if !strings.Contains(errorsOutput.String(), want) {
+			t.Fatalf("lock conflict output missing %q: %q", want, errorsOutput.String())
 		}
 	}
 }
