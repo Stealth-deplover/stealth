@@ -46,7 +46,7 @@ export function ConfirmDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         {error ? (
-          <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">
+          <p className="rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 text-xs text-mist">
             {error}
           </p>
         ) : null}
@@ -70,7 +70,9 @@ export function ConfirmDialog({
               }
             }}
           >
-            {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : null}
             {pending ? "Working…" : confirmLabel}
           </Button>
         </DialogFooter>

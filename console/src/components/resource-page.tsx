@@ -46,9 +46,12 @@ export function ResourceTableCard<T extends object>({
   return (
     <Card>
       {searchable ? (
-        <div className="border-b border-stealth-border bg-white/[0.01] p-4">
+        <div className="border-b border-graphite bg-white/[0.01] p-4">
           <div className="relative max-w-sm">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" />
+            <Search
+              className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ash"
+              aria-hidden="true"
+            />
             <Input
               value={search}
               onChange={(event) => updateSearch(event.target.value)}
@@ -57,7 +60,7 @@ export function ResourceTableCard<T extends object>({
               aria-label={searchPlaceholder}
             />
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-slate-600">
+          <p className="mt-2 text-[11px] leading-5 text-fog">
             Searches the records on this page. The API does not expose a global
             resource search for this list.
           </p>

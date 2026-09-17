@@ -43,14 +43,16 @@ function Metric({
   return (
     <Link
       href={href}
-      className="group rounded-xl border border-stealth-border bg-stealth-panel p-4 transition hover:border-cyan-300/30 hover:bg-white/[0.03]"
+      className="group rounded-xl border border-graphite bg-carbon p-4 transition-colors duration-150 hover:border-smoke hover:bg-white/[0.03]"
     >
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-500">{label}</p>
-        <Icon className="size-4 text-slate-600 transition group-hover:text-cyan-300" />
+        <Icon className="size-4 text-ash transition-colors duration-150 group-hover:text-acid-lime" />
       </div>
-      <p className="mt-3 text-2xl font-semibold text-white">{value}</p>
-      <span className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-600 group-hover:text-cyan-300">
+      <p className="mt-3 text-2xl font-semibold tabular-nums text-paper">
+        {value}
+      </p>
+      <span className="mt-2 inline-flex items-center gap-1 text-[11px] text-fog group-hover:text-acid-lime">
         Open resource <ArrowUpRight className="size-3" />
       </span>
     </Link>
@@ -136,7 +138,7 @@ function QuickStart({ base }: { base: string }) {
   ];
 
   return (
-    <Card className="mb-6 border-cyan-300/20 bg-cyan-300/[0.03]">
+    <Card className="mb-6 border-smoke bg-carbon">
       <CardHeader className="flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <CardTitle>Your project is ready</CardTitle>
@@ -153,9 +155,9 @@ function QuickStart({ base }: { base: string }) {
             <Link
               key={href}
               href={href}
-              className="group flex items-start gap-3 rounded-lg border border-stealth-border bg-stealth-panel/60 p-3 transition hover:border-cyan-300/30 hover:bg-white/[0.04]"
+              className="group flex items-start gap-3 rounded-lg border border-graphite bg-obsidian/60 p-3 transition-colors duration-150 hover:border-smoke hover:bg-white/[0.04]"
             >
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-cyan-300/10 text-cyan-200">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-white/[0.05] text-mist">
                 <Icon className="size-4" />
               </span>
               <span className="min-w-0 flex-1">
@@ -166,7 +168,7 @@ function QuickStart({ base }: { base: string }) {
                   {description}
                 </span>
               </span>
-              <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-slate-600 group-hover:text-cyan-300" />
+              <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-ash group-hover:text-acid-lime" />
             </Link>
           ))}
         </div>
@@ -342,11 +344,11 @@ export function ProjectOverviewView({
                 ].map(([label, value, note]) => (
                   <div
                     key={label}
-                    className="rounded-lg border border-stealth-border bg-black/10 p-3.5"
+                    className="rounded-lg border border-graphite bg-void/60 p-3.5"
                   >
                     <p className="text-xs text-slate-500">{label}</p>
                     <div className="mt-2 flex items-end justify-between gap-2">
-                      <p className="text-lg font-semibold text-white">
+                      <p className="text-lg font-semibold tabular-nums text-paper">
                         {value}
                       </p>
                       <span className="text-[10px] text-slate-600">{note}</span>
@@ -375,7 +377,7 @@ export function ProjectOverviewView({
             ) : audit.data?.events?.length ? (
               audit.data.events.slice(0, 6).map((event) => (
                 <div key={event.id} className="flex gap-3">
-                  <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-cyan-300" />
+                  <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-acid-lime" />
                   <div className="min-w-0">
                     <p className="truncate text-sm text-slate-200">
                       {event.action}

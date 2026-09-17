@@ -90,7 +90,7 @@ export function InvitationAcceptanceView() {
       {accept.error ? (
         <XCircle className="size-6 text-rose-300" />
       ) : (
-        <ShieldCheck className="size-6 text-cyan-300" />
+        <ShieldCheck className="size-6 text-acid-lime" aria-hidden="true" />
       )}
       <p className="mt-4 text-sm leading-6 text-slate-400">
         Accepting adds the signed-in account to the organization with the role

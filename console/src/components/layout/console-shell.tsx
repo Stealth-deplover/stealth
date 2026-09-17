@@ -43,7 +43,7 @@ function ConsoleShellContent({
 
   if (account.isPending)
     return (
-      <div className="flex min-h-screen items-center justify-center bg-stealth-bg">
+      <div className="flex min-h-screen items-center justify-center bg-void">
         <div className="w-72 space-y-3">
           <Skeleton className="mx-auto size-12 rounded-2xl" />
           <Skeleton className="h-4 w-40 mx-auto" />
@@ -53,7 +53,7 @@ function ConsoleShellContent({
     );
   if (unauthorized)
     return (
-      <div className="flex min-h-screen items-center justify-center bg-stealth-bg">
+      <div className="flex min-h-screen items-center justify-center bg-void">
         <div className="w-72 space-y-3">
           <Skeleton className="mx-auto size-12 rounded-2xl" />
           <p className="text-center text-xs text-slate-500">
@@ -74,8 +74,14 @@ function ConsoleShellContent({
     );
 
   return (
-    <div className="min-h-screen bg-stealth-bg">
+    <div className="min-h-screen bg-void">
       <ProjectRealtimeListener projectId={projectId} />
+      <a
+        href="#main-content"
+        className="sr-only fixed left-4 top-4 z-[60] rounded-md bg-acid-lime px-3 py-2 text-sm font-medium text-void focus:not-sr-only"
+      >
+        Skip to content
+      </a>
       <div className="flex min-h-screen">
         <Sidebar
           collapsed={sidebarCollapsed}
@@ -103,7 +109,10 @@ function ConsoleShellContent({
             onMenu={() => setMobileOpen(true)}
             menuButtonRef={mobileMenuTriggerRef}
           />
-          <main className="mx-auto w-full max-w-[1600px] px-4 py-7 sm:px-6 lg:px-10">
+          <main
+            id="main-content"
+            className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
+          >
             {children}
           </main>
         </div>

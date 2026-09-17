@@ -56,11 +56,11 @@ function SelectorItem({
       onClick={onClick}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-white/[0.06]",
-        selected && "bg-cyan-300/10",
+        "flex min-h-11 w-full items-center gap-3 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.06]",
+        selected && "bg-acid-lime/10",
       )}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-black/20 text-xs text-cyan-200">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-graphite bg-void text-xs text-mist">
         {icon}
       </span>
       <span className="min-w-0 flex-1">
@@ -74,7 +74,7 @@ function SelectorItem({
         ) : null}
       </span>
       {selected ? (
-        <Check className="size-4 text-cyan-300" aria-label="Selected" />
+        <Check className="size-4 text-acid-lime" aria-label="Selected" />
       ) : null}
     </button>
   );
@@ -118,16 +118,16 @@ export function OrganizationSwitcher({ currentId }: { currentId?: string }) {
       <DialogTrigger asChild>
         <Button
           variant="ghost"
-          className="h-10 max-w-[7.5rem] justify-start px-2.5 sm:max-w-52"
+          className="max-w-[7.5rem] justify-start px-2.5 sm:max-w-52"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-cyan-300/10 text-[10px] font-semibold text-cyan-200">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-acid-lime/10 text-[10px] font-semibold text-acid-lime">
             {getInitials(current?.name ?? "S")}
           </span>
           <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-xs font-semibold text-white">
+            <span className="block truncate text-xs font-semibold text-paper">
               {current?.name ?? "Organizations"}
             </span>
-            <span className="block truncate text-[10px] text-slate-500">
+            <span className="block truncate text-[10px] text-fog">
               Workspace
             </span>
           </span>
@@ -235,18 +235,16 @@ export function ProjectSwitcher({
       <DialogTrigger asChild>
         <Button
           variant="ghost"
-          className="h-10 max-w-[7.5rem] justify-start border-l border-stealth-border pl-3 pr-2.5 sm:max-w-60"
+          className="max-w-[7.5rem] justify-start border-l border-stealth-border pl-3 pr-2.5 sm:max-w-60"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-violet-300/10 text-violet-200">
             <FolderKanban className="size-3.5" />
           </span>
           <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-xs font-semibold text-white">
+            <span className="block truncate text-xs font-semibold text-paper">
               {current?.name ?? "Select project"}
             </span>
-            <span className="block truncate text-[10px] text-slate-500">
-              Project
-            </span>
+            <span className="block truncate text-[10px] text-fog">Project</span>
           </span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-slate-500" />
         </Button>
@@ -314,7 +312,8 @@ export function ProjectSwitcher({
 export function ContextBadge({ projectId }: { projectId?: string }) {
   return projectId ? (
     <span className="hidden items-center gap-1.5 text-[11px] text-slate-500 md:flex">
-      <Cable className="size-3 text-cyan-300" /> Live API context
+      <Cable className="size-3 text-acid-lime" aria-hidden="true" /> Live API
+      context
     </span>
   ) : null;
 }

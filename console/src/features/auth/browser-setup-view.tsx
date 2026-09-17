@@ -83,10 +83,12 @@ export function submitGitHubManifest(actionURL: string, manifest: string) {
 function BrandMark() {
   return (
     <div className="flex items-center gap-2.5">
-      <span className="flex size-9 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-300/10 font-black text-cyan-200">
+      <span className="flex size-9 items-center justify-center rounded-md border border-acid-lime/40 bg-acid-lime text-sm font-semibold text-void">
         S
       </span>
-      <span className="text-sm font-semibold text-white">Stealth</span>
+      <span className="text-sm font-semibold tracking-[-0.012em] text-paper">
+        Stealth
+      </span>
     </div>
   );
 }
@@ -109,19 +111,19 @@ function ChoiceCard({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`flex min-h-28 w-full items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:ring-cyan-300/40 ${active ? "border-cyan-300/60 bg-cyan-300/[0.08]" : "border-stealth-border bg-stealth-panel hover:border-slate-500"}`}
+      className={`flex min-h-28 w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-acid-lime/40 ${active ? "border-acid-lime/60 bg-acid-lime/[0.08]" : "border-graphite bg-carbon hover:border-smoke"}`}
     >
       <Icon
-        className={`mt-0.5 size-5 shrink-0 ${active ? "text-cyan-300" : "text-slate-500"}`}
+        className={`mt-0.5 size-5 shrink-0 ${active ? "text-acid-lime" : "text-fog"}`}
       />
       <span>
-        <span className="block text-sm font-medium text-white">{title}</span>
-        <span className="mt-1 block text-xs leading-5 text-slate-500">
+        <span className="block text-sm font-medium text-paper">{title}</span>
+        <span className="mt-1 block text-xs leading-5 text-fog">
           {description}
         </span>
       </span>
       {active ? (
-        <Check className="ml-auto size-4 shrink-0 text-cyan-300" />
+        <Check className="ml-auto size-4 shrink-0 text-acid-lime" />
       ) : null}
     </button>
   );
@@ -136,13 +138,13 @@ function StatusPill({
 }) {
   const styles = {
     ready: "border-emerald-300/25 bg-emerald-300/10 text-emerald-200",
-    pending: "border-cyan-300/25 bg-cyan-300/10 text-cyan-200",
+    pending: "border-acid-lime/25 bg-acid-lime/10 text-mist",
     warning: "border-amber-300/25 bg-amber-300/10 text-amber-200",
     error: "border-rose-300/25 bg-rose-300/10 text-rose-200",
   }[status];
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium ${styles}`}
+      className={`inline-flex items-center gap-1.5 rounded-xs border px-1.5 py-1 text-xs font-medium ${styles}`}
     >
       <span className="size-1.5 rounded-full bg-current" />
       {children}
@@ -197,15 +199,13 @@ function StageHeader({
 }) {
   return (
     <header className="mb-7">
-      <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-cyan-300">
+      <p className="mb-2 text-xs font-medium uppercase tracking-[0.14em] text-fog">
         {eyebrow}
       </p>
-      <h1 className="text-2xl font-semibold tracking-[-0.03em] text-white sm:text-3xl">
+      <h1 className="text-2xl font-semibold leading-tight tracking-[-0.022em] text-paper sm:text-3xl">
         {title}
       </h1>
-      <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-        {description}
-      </p>
+      <p className="mt-3 max-w-2xl text-sm leading-6 text-fog">{description}</p>
     </header>
   );
 }
@@ -490,7 +490,7 @@ export function BrowserSetupView() {
                     type="button"
                     disabled={!available}
                     onClick={() => available && moveTo(item.id)}
-                    className={`flex min-h-10 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-cyan-300/40 lg:w-full ${active ? "bg-cyan-300/[0.08] text-cyan-200" : available ? "text-slate-400 hover:bg-white/[0.04] hover:text-white" : "cursor-not-allowed text-slate-700"}`}
+                    className={`flex min-h-11 items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-acid-lime/40 lg:w-full ${active ? "bg-acid-lime/[0.08] text-mist" : available ? "text-fog hover:bg-white/[0.04] hover:text-paper" : "cursor-not-allowed text-slate-700"}`}
                   >
                     <span
                       className={`flex size-6 items-center justify-center rounded-full border font-mono text-[10px] ${active ? "border-cyan-300/60" : "border-stealth-border"}`}
@@ -1553,24 +1553,27 @@ function SetupShell({
   currentStep: SetupStep;
 }) {
   return (
-    <main className="min-h-screen bg-stealth-bg px-4 py-5 text-white sm:px-6 sm:py-8">
-      <div className="mx-auto max-w-6xl">
+    <main className="min-h-screen bg-void px-4 py-5 text-paper sm:px-6 sm:py-8">
+      <div className="mx-auto max-w-[1200px]">
         <header className="mb-8 flex items-center justify-between gap-4">
           <BrandMark />
           <div className="text-right">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-600">
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-fog">
               First-run setup
             </p>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-fog">
               {setupSteps.find((item) => item.id === currentStep)?.label ??
                 "Setup"}
             </p>
           </div>
         </header>
         {children}
-        <footer className="mt-8 flex flex-col gap-2 border-t border-stealth-border pt-4 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+        <footer className="mt-8 flex flex-col gap-2 border-t border-graphite pt-4 text-xs text-fog sm:flex-row sm:items-center sm:justify-between">
           <span>Stealth Console · setup state stays on the server</span>
-          <Link href="/login" className="text-cyan-300 hover:text-cyan-200">
+          <Link
+            href="/login"
+            className="text-mist transition-colors duration-150 hover:text-acid-lime"
+          >
             Already have access? Sign in
           </Link>
         </footer>
@@ -1581,12 +1584,12 @@ function SetupShell({
 
 function LoadingPanel({ label }: { label: string }) {
   return (
-    <Card className="mx-auto max-w-xl border-stealth-border bg-stealth-panel">
+    <Card className="mx-auto max-w-xl bg-carbon">
       <CardContent
-        className="flex items-center gap-3 p-6 text-sm text-slate-400"
+        className="flex items-center gap-3 p-6 text-sm text-fog"
         aria-live="polite"
       >
-        <Loader2 className="size-5 animate-spin text-cyan-300" /> {label}
+        <Loader2 className="size-5 animate-spin text-acid-lime" /> {label}
       </CardContent>
     </Card>
   );
@@ -1602,10 +1605,10 @@ function InfoCard({
   description: string;
 }) {
   return (
-    <div className="rounded-xl border border-stealth-border bg-stealth-panel p-4">
-      <Icon className="size-5 text-cyan-300" />
-      <p className="mt-4 text-sm font-medium text-white">{title}</p>
-      <p className="mt-1 text-xs leading-5 text-slate-600">{description}</p>
+    <div className="rounded-lg border border-graphite bg-carbon p-4">
+      <Icon className="size-5 text-fog" />
+      <p className="mt-4 text-sm font-medium text-paper">{title}</p>
+      <p className="mt-1 text-xs leading-5 text-fog">{description}</p>
     </div>
   );
 }
@@ -1630,26 +1633,26 @@ function DependencySection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-stealth-border p-5">
+    <section className="rounded-lg border border-graphite bg-carbon/40 p-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
-          <Icon className="mt-0.5 size-5 shrink-0 text-cyan-300" />
+          <Icon className="mt-0.5 size-5 shrink-0 text-fog" />
           <div>
-            <h2 className="text-sm font-medium text-white">{title}</h2>
-            <p className="mt-1 text-xs text-slate-600">
+            <h2 className="text-sm font-medium text-paper">{title}</h2>
+            <p className="mt-1 text-xs text-fog">
               {mode === "bundled"
                 ? "Managed by this setup Compose project."
                 : "Your endpoint is tested before install."}
             </p>
           </div>
         </div>
-        <div className="flex gap-1 rounded-lg border border-stealth-border p-1">
+        <div className="flex gap-1 rounded-md border border-graphite p-1">
           {(["bundled", "external"] as const).map((option) => (
             <button
               key={option}
               type="button"
               onClick={() => onModeChange(option)}
-              className={`min-h-9 rounded-md px-3 text-xs font-medium ${mode === option ? "bg-cyan-300 text-slate-950" : "text-slate-500 hover:text-white"}`}
+              className={`min-h-11 rounded-sm px-3 text-xs font-medium transition-colors duration-150 ${mode === option ? "bg-acid-lime text-void" : "text-fog hover:text-paper"}`}
             >
               {option === "bundled" ? "Bundled" : "External"}
             </button>

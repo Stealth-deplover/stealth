@@ -50,7 +50,7 @@ export function BucketObjectBrowser({
       cell: ({ row }) => (
         <button
           type="button"
-          className="block min-h-11 max-w-64 truncate text-left font-medium text-white hover:text-cyan-200"
+          className="block min-h-11 max-w-64 truncate text-left font-medium text-white hover:text-acid-lime"
           title={row.original.name}
           onClick={() => onSelectObject(row.original.id)}
         >

@@ -10,7 +10,7 @@ export const TabsList = ({
 }: React.ComponentProps<typeof TabsPrimitive.List>) => (
   <TabsPrimitive.List
     className={cn(
-      "inline-flex max-w-full items-center gap-1 overflow-x-auto border-b border-stealth-border",
+      "inline-flex max-w-full items-center gap-1 overflow-x-auto border-b border-graphite",
       className,
     )}
     {...props}
@@ -22,7 +22,7 @@ export const TabsTrigger = ({
 }: React.ComponentProps<typeof TabsPrimitive.Trigger>) => (
   <TabsPrimitive.Trigger
     className={cn(
-      "inline-flex min-h-11 shrink-0 items-center justify-center border-b-2 border-transparent px-3 py-2 text-xs font-medium text-slate-500 transition hover:text-slate-200 data-[state=active]:border-cyan-300 data-[state=active]:text-cyan-200",
+      "inline-flex min-h-11 shrink-0 items-center justify-center border-b-2 border-transparent px-3 py-2 text-xs font-medium text-fog transition-colors duration-150 hover:text-mist focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/40 data-[state=active]:border-acid-lime data-[state=active]:text-mist",
       className,
     )}
     {...props}
@@ -33,7 +33,10 @@ export const TabsContent = ({
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.Content>) => (
   <TabsPrimitive.Content
-    className={cn("mt-5 outline-none", className)}
+    className={cn(
+      "mt-5 outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/40 focus-visible:ring-offset-2 focus-visible:ring-offset-void",
+      className,
+    )}
     {...props}
   />
 );

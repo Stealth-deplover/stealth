@@ -76,17 +76,17 @@ export function OneTimeSecretDialog({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="size-4 text-amber-300" />
+            <ShieldAlert className="size-4 text-acid-lime" aria-hidden="true" />
             {title}
           </DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-4">
-          <p className="text-xs font-medium text-amber-100">
+        <div className="rounded-lg border border-acid-lime/20 bg-acid-lime/10 p-4">
+          <p className="text-xs font-medium text-mist">
             Save this value in a password manager or secure deployment secret.
           </p>
           <code
-            className="mt-3 block select-all break-all rounded-md border border-amber-300/10 bg-black/20 p-3 font-mono text-xs text-amber-50"
+            className="mt-3 block select-all break-all rounded-md border border-acid-lime/10 bg-void p-3 font-mono text-xs text-bone"
             data-testid="one-time-secret"
           >
             {secret ? (revealed ? secret : maskSecret(secret)) : ""}
@@ -99,9 +99,9 @@ export function OneTimeSecretDialog({
               onClick={() => setRevealed((current) => !current)}
             >
               {revealed ? (
-                <EyeOff className="size-3.5" />
+                <EyeOff className="size-3.5" aria-hidden="true" />
               ) : (
-                <Eye className="size-3.5" />
+                <Eye className="size-3.5" aria-hidden="true" />
               )}
               {revealed ? "Hide" : "Reveal"}
             </Button>
@@ -111,12 +111,12 @@ export function OneTimeSecretDialog({
               variant="outline"
               onClick={() => void copy()}
             >
-              <Copy className="size-3.5" />
+              <Copy className="size-3.5" aria-hidden="true" />
               {copyState === "copied" ? "Copied" : "Copy"}
             </Button>
           </div>
           {copyState === "failed" ? (
-            <p className="mt-2 text-xs text-amber-200">
+            <p className="mt-2 text-xs text-acid-lime">
               Clipboard access failed. Reveal the value and copy it manually
               from the selectable text.
             </p>
@@ -129,18 +129,18 @@ export function OneTimeSecretDialog({
             aria-label="I have saved this secret safely"
             checked={acknowledged}
             onChange={(event) => setAcknowledged(event.target.checked)}
-            className="mt-0.5 size-4 accent-cyan-300"
+            className="mt-0.5 size-4 accent-acid-lime"
           />
           <Label
             htmlFor="secret-acknowledged"
-            className="text-sm leading-5 text-slate-300"
+            className="text-sm leading-5 text-mist"
           >
             I have saved this secret safely.
           </Label>
         </div>
         <DialogFooter>
           <Button type="button" disabled={!acknowledged} onClick={close}>
-            <Check className="size-4" /> Done
+            <Check className="size-4" aria-hidden="true" /> Done
           </Button>
         </DialogFooter>
       </DialogContent>

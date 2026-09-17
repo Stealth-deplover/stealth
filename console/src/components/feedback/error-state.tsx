@@ -37,17 +37,17 @@ export function ErrorState({
   title?: string;
 }) {
   return (
-    <Card className="border-rose-300/20 bg-rose-400/[0.04]" role="alert">
+    <Card className="border-coral-red/20 bg-coral-red/[0.04]" role="alert">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-rose-200">
-          <AlertTriangle className="size-4" /> {title}
+        <CardTitle className="flex items-center gap-2 text-mist">
+          <AlertTriangle className="size-4" aria-hidden="true" /> {title}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-3">
-        <p className="text-sm text-slate-400">{errorMessage(error)}</p>
+        <p className="text-sm text-mist">{errorMessage(error)}</p>
         {retry ? (
           <Button variant="outline" size="sm" onClick={retry}>
-            <RefreshCw className="size-3.5" /> Retry
+            <RefreshCw className="size-3.5" aria-hidden="true" /> Retry
           </Button>
         ) : null}
       </CardContent>

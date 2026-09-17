@@ -18,14 +18,20 @@ import { useLogStream } from "./use-log-stream";
 import type { LogLine, LogSource } from "./log-source";
 
 const LOG_LEVEL_CLASSES: Record<string, string> = {
-  error: "text-rose-300",
-  warn: "text-amber-300",
-  debug: "text-slate-500",
-  info: "text-cyan-200",
+  error: "text-coral-red",
+  warn: "text-acid-lime",
+  debug: "text-fog",
+  info: "text-signal-teal",
 };
 
 function getLogLevelClass(level: string) {
   return LOG_LEVEL_CLASSES[level] ?? LOG_LEVEL_CLASSES.info;
+}
+
+function getScrollBehavior(): ScrollBehavior {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "auto"
+    : "smooth";
 }
 
 function LogToolbar({
@@ -54,11 +60,11 @@ function LogToolbar({
   onClear: () => void;
 }) {
   return (
-    <CardHeader className="border-b border-stealth-border bg-stealth-panel/95 pb-4">
+    <CardHeader className="border-b border-graphite bg-carbon/95 pb-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <CardTitle>{title}</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-fog">
             {description} · cursor {after ?? "start"}
           </p>
         </div>
@@ -94,9 +100,9 @@ function LogToolbar({
             title={copied ? "Copied" : "Copy logs"}
           >
             {copied ? (
-              <Check className="size-3.5 text-emerald-300" />
+              <Check className="size-3.5 text-pulse-green" aria-hidden="true" />
             ) : (
-              <Copy className="size-3.5" />
+              <Copy className="size-3.5" aria-hidden="true" />
             )}
           </Button>
           <Button
@@ -110,12 +116,16 @@ function LogToolbar({
         </div>
       </div>
       <div className="relative mt-3 max-w-sm">
-        <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-600" />
+        <Search
+          className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ash"
+          aria-hidden="true"
+        />
         <Input
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Filter current view"
           className="h-8 pl-8 text-xs"
+          aria-label="Filter current log view"
         />
       </div>
     </CardHeader>
@@ -140,30 +150,30 @@ function LogBody({
   return (
     <CardContent className="p-0">
       <div
-        className="scrollbar-thin max-h-[32rem] overflow-x-hidden overflow-y-auto bg-stealth-bg p-4 font-mono text-xs leading-6"
+        className="scrollbar-thin max-h-[32rem] overflow-x-hidden overflow-y-auto bg-void p-4 font-mono text-xs leading-6"
         aria-live="polite"
       >
         {error ? (
-          <div className="mb-3 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 font-sans text-xs text-rose-200">
+          <div className="mb-3 rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 font-sans text-xs text-mist">
             {error}
           </div>
         ) : null}
         {lines.length ? (
           lines.map((line) => (
             <div key={line.sequence} className="stealth-log-line flex gap-3">
-              <span className="w-32 shrink-0 text-slate-700">
+              <span className="w-32 shrink-0 text-fog">
                 {formatDate(line.created_at)}
               </span>
               <span className={getLogLevelClass(line.level)}>
                 {line.level.padEnd(5, " ")}
               </span>
-              <span className="min-w-0 flex-1 break-words whitespace-pre-wrap text-slate-300">
+              <span className="min-w-0 flex-1 break-words whitespace-pre-wrap text-mist">
                 {line.message}
               </span>
             </div>
           ))
         ) : (
-          <div className="py-16 text-center font-sans text-sm text-slate-600">
+          <div className="py-16 text-center font-sans text-sm text-fog">
             {loading
               ? "Loading log lines…"
               : localCleared
@@ -201,7 +211,7 @@ export function LogViewer({
 
   useEffect(() => {
     if (autoFollow) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      bottomRef.current?.scrollIntoView({ behavior: getScrollBehavior() });
     }
   }, [autoFollow, lines]);
 
@@ -236,7 +246,7 @@ export function LogViewer({
 
   const handleJumpToLatest = () => {
     setAutoFollow(true);
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: getScrollBehavior() });
   };
 
   return (

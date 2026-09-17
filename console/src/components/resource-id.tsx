@@ -15,10 +15,10 @@ export function ResourceId({
   label?: string;
 }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-slate-600">
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-fog">
       <span className="sr-only">{label}</span>
       <span
-        className="max-w-[14rem] truncate font-mono text-[11px] text-slate-500"
+        className="max-w-[14rem] truncate font-mono text-[11px] text-fog"
         title={id}
       >
         {shortenResourceId(id)}
@@ -26,7 +26,7 @@ export function ResourceId({
       <CopyButton
         value={id}
         label={`Copy ${label.toLowerCase()}`}
-        className="text-slate-600 hover:text-slate-200"
+        className="text-ash hover:text-mist"
       />
     </span>
   );

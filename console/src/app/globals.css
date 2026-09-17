@@ -1,35 +1,157 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --color-stealth-bg: #080a0d;
-  --color-stealth-panel: #0d1015;
-  --color-stealth-elevated: #12161d;
-  --color-stealth-subtle: #171d26;
-  --color-stealth-border: #202733;
-  --color-stealth-muted: #8d98a9;
-  --color-stealth-accent: #72e4dc;
-  --color-stealth-success: #73d6a2;
-  --color-stealth-warning: #f2c66d;
-  --color-stealth-danger: #f28b9d;
-  --color-stealth-info: #91b7ff;
-  /* Secondary text must remain readable on every dark surface. */
-  --color-slate-500: #a1adbc;
-  --color-slate-600: #8d98a9;
-  --color-slate-700: #7d8ca0;
+  /* Stealth's visual language: a quiet operations surface with one action accent. */
+  --font-sans:
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-inter-variable:
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+    SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-berkeley-mono:
+    "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+    SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --font-weight-medium: 510;
+  --font-weight-semibold: 590;
+  --font-weight-bold: 590;
+  --font-weight-extrabold: 590;
+  --font-weight-black: 590;
+
+  --color-void: #08090a;
+  --color-carbon: #0f1011;
+  --color-obsidian: #161718;
+  --color-graphite: #23252a;
+  --color-smoke: #383b3f;
+  --color-ash: #62666d;
+  --color-fog: #8a8f98;
+  --color-mist: #d0d6e0;
+  --color-bone: #e5e5e6;
+  --color-paper: #ffffff;
+  --color-acid-lime: #e4f222;
+  --color-pulse-green: #27a644;
+  --color-coral-red: #eb5757;
+  --color-signal-teal: #02b8cc;
+  --color-iris-violet: #6366f1;
+  --color-lavender: #8b5cf6;
+
+  /* Named aliases retain the existing component API while moving it to the system. */
+  --color-stealth-bg: #08090a;
+  --color-stealth-panel: #0f1011;
+  --color-stealth-elevated: #161718;
+  --color-stealth-subtle: #23252a;
+  --color-stealth-border: #23252a;
+  --color-stealth-muted: #8a8f98;
+  --color-stealth-accent: #e4f222;
+  --color-stealth-success: #27a644;
+  --color-stealth-warning: #e4f222;
+  --color-stealth-danger: #eb5757;
+  --color-stealth-info: #02b8cc;
+
+  /* Legacy utility names are semantic aliases, not a second palette. */
+  --color-cyan-100: #ffffff;
+  --color-cyan-200: #e5e5e6;
+  --color-cyan-300: #e4f222;
+  --color-cyan-400: #e4f222;
+  --color-cyan-500: #b9c915;
+  --color-cyan-600: #8f9b0e;
+  --color-slate-100: #e5e5e6;
+  --color-slate-200: #d0d6e0;
+  --color-slate-300: #d0d6e0;
+  --color-slate-400: #aeb5bf;
+  --color-slate-500: #8a8f98;
+  --color-slate-600: #8a8f98;
+  --color-slate-700: #8a8f98;
+  --color-slate-950: #08090a;
+  --color-emerald-100: #c6f0cd;
+  --color-emerald-200: #9be3a8;
+  --color-emerald-300: #27a644;
+  --color-emerald-400: #27a644;
+  --color-rose-100: #ffd0d0;
+  --color-rose-200: #f6a2a2;
+  --color-rose-300: #eb5757;
+  --color-rose-400: #eb5757;
+  --color-rose-500: #eb5757;
+  --color-amber-50: #fffbc2;
+  --color-amber-100: #f9f5a2;
+  --color-amber-200: #e4f222;
+  --color-amber-300: #e4f222;
+  --color-amber-400: #c1ce1b;
+  --color-violet-100: #ddd9ff;
+  --color-violet-200: #bcb8ff;
+  --color-violet-300: #6366f1;
+  --color-violet-400: #6366f1;
+  --color-orange-100: #d0f1f4;
+  --color-orange-200: #7dd9e1;
+  --color-orange-300: #02b8cc;
+  --color-orange-400: #02b8cc;
+  --color-pink-200: #d9c7ff;
+  --color-pink-300: #8b5cf6;
+
+  --text-caption: 13px;
+  --text-body-sm: 15px;
+  --text-body-lg: 20px;
+  --text-subheading: 24px;
+  --text-heading-sm: 32px;
+  --text-heading: 48px;
+  --text-heading-lg: 64px;
+  --text-display: 72px;
+  --leading-caption: 1.2;
+  --leading-body-sm: 1.6;
+  --leading-body-lg: 1.33;
+  --leading-subheading: 1.33;
+  --leading-heading-sm: 1.13;
+  --leading-heading: 1;
+  --leading-heading-lg: 1;
+  --leading-display: 1;
+
+  --spacing-4: 4px;
+  --spacing-8: 8px;
+  --spacing-12: 12px;
+  --spacing-16: 16px;
+  --spacing-20: 20px;
+  --spacing-24: 24px;
+  --spacing-28: 28px;
+  --spacing-32: 32px;
+  --spacing-36: 36px;
+  --spacing-40: 40px;
+  --spacing-48: 48px;
+  --spacing-56: 56px;
+  --spacing-64: 64px;
+  --spacing-80: 80px;
+  --spacing-96: 96px;
+  --spacing-128: 128px;
+
+  --radius-xs: 4px;
+  --radius-sm: 2px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 2px 4px rgb(0 0 0 / 40%);
+  --shadow-md: inset 0 0 12px rgb(0 0 0 / 20%);
+  --shadow-subtle: inset 0 0 0 1px #23252a;
+  --shadow-xl: 0 4px 32px rgb(8 9 10 / 60%);
 }
 
 :root {
   color-scheme: dark;
-  --background: #080a0d;
-  --foreground: #eef3f7;
-  --muted: #8d98a9;
-  --border: #202733;
-  --panel: #0d1015;
-  --elevated: #12161d;
-  --subtle: #171d26;
-  --accent: #72e4dc;
+  --background: #08090a;
+  --foreground: #e5e5e6;
+  --muted: #8a8f98;
+  --border: #23252a;
+  --panel: #0f1011;
+  --elevated: #161718;
+  --subtle: #23252a;
+  --accent: #e4f222;
+  --page-max-width: 1200px;
+  --section-gap: 96px;
+  --card-padding: 24px;
+  --element-gap: 8px;
 }
 
 * {
@@ -38,16 +160,24 @@
 
 html {
   background: var(--background);
+  color-scheme: dark;
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-inter-variable);
+  font-feature-settings:
+    "cv01" 1,
+    "ss03" 1,
+    "zero" 1;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -55,24 +185,27 @@ a,
 input,
 textarea,
 select {
-  outline: none;
+  font: inherit;
 }
 
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  box-shadow: 0 0 0 2px rgba(114, 228, 220, 0.36);
+:focus-visible {
+  outline: 2px solid var(--color-acid-lime);
+  outline-offset: 2px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-fog);
 }
 
 ::selection {
-  background: rgba(114, 228, 220, 0.26);
+  background: rgb(228 242 34 / 24%);
+  color: var(--color-paper);
 }
 
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #2b3544 transparent;
+  scrollbar-color: var(--color-graphite) transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
@@ -81,8 +214,8 @@ select:focus-visible {
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #2b3544;
-  border-radius: 999px;
+  background: var(--color-graphite);
+  border-radius: 9999px;
 }
 
 .stealth-log-line {
@@ -91,10 +224,13 @@ select:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   *,
   *::before,
   *::after {
-    scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

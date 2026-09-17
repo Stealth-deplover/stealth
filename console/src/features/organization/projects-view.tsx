@@ -58,8 +58,10 @@ export function OrganizationProjectList({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-white">Projects</h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <h2 className="text-sm font-semibold tracking-[-0.012em] text-paper">
+            Projects
+          </h2>
+          <p className="mt-1 text-xs text-fog">
             Each project maps to one isolated Stealth application boundary.
           </p>
         </div>
@@ -103,7 +105,7 @@ export function OrganizationProjectList({
                 cell: ({ row }) => (
                   <button
                     type="button"
-                    className="min-h-11 text-left font-medium text-white hover:text-cyan-200"
+                    className="min-h-11 text-left font-medium text-paper hover:text-acid-lime"
                     onClick={() =>
                       router.push(
                         `/organizations/${organizationId}/projects/${row.original.id}`,
