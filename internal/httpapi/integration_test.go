@@ -1207,7 +1207,7 @@ func TestProjectDatabasesCoreIntegration(t *testing.T) {
 	if err := migrate.Apply(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := httptest.NewServer(httpapi.NewWithDependencies(config.Config{SessionCookieName: "stealth_session", SessionTTL: time.Hour, AppSessionTTL: time.Hour, StorageRoot: t.TempDir(), StorageMaxFileSize: 50 << 20}, repository.New(pool), logger, httpapi.Dependencies{AuthLimiter: integrationLimiter(t, ctx)}))
 	defer server.Close()
 

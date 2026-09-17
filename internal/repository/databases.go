@@ -343,25 +343,28 @@ func (r *Repository) DeleteProjectDatabase(ctx context.Context, projectID, datab
 	if err != nil {
 		return err
 	}
+	backupPaths := make([]string, 0)
 	for backups.Next() {
 		var path string
 		if err := backups.Scan(&path); err != nil {
 			backups.Close()
 			return err
 		}
-		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
-			ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
-			Operation: ArtifactCleanupRelative, RelativePath: path,
-		}); err != nil {
-			backups.Close()
-			return err
-		}
+		backupPaths = append(backupPaths, path)
 	}
 	if err := backups.Err(); err != nil {
 		backups.Close()
 		return err
 	}
 	backups.Close()
+	for _, path := range backupPaths {
+		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
+			ProjectID: projectID, StoreKind: ArtifactCleanupStorage,
+			Operation: ArtifactCleanupRelative, RelativePath: path,
+		}); err != nil {
+			return err
+		}
+	}
 	if err := dropIndexesForDatabase(ctx, tx, databaseID); err != nil {
 		return err
 	}
