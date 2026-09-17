@@ -532,6 +532,15 @@ func (s *Server) uploadStorageFile(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.repo.CreateStorageFile(r.Context(), fileID, projectID, bucketID, actor, repository.StorageFileInput{Name: filenameField, MimeType: prepared.ContentType, SizeBytes: prepared.Size, ChecksumSHA256: prepared.Checksum, StoragePath: prepared.RelativePath, ReadPermissions: readPermissions, UpdatePermissions: updatePermissions, DeletePermissions: deletePermissions, CreatorProjectUserID: creator, PublishCleanup: &publishCleanup})
 	if storageResourceError(w, err) {
+		// The quota check runs before the metadata transaction can commit, so
+		// this typed failure has an unambiguous rollback. Other metadata errors
+		// retain the durable reservation instead of risking deletion after an
+		// ambiguous commit result.
+		if errors.Is(err, repository.ErrStorageQuotaExceeded) {
+			if cleanupErr := s.storage.RemoveRelative(r.Context(), prepared.RelativePath); cleanupErr != nil {
+				s.logger.Error("failed to clean rejected storage blob", "error", cleanupErr)
+			}
+		}
 		return
 	}
 	if err != nil {
