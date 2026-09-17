@@ -1,0 +1,146 @@
+# Pinned to the OpenTelemetry Collector Contrib release declared in
+# compose.production.yaml. The receiver is reachable only on the private
+# Compose network; no host port is published.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
+    fsync: true
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  hostmetrics:
+    collection_interval: 15s
+    root_path: /hostfs
+    scrapers:
+      cpu: {}
+      disk: {}
+      filesystem: {}
+      load: {}
+      memory: {}
+      network: {}
+      paging: {}
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: stealth-api
+          scrape_interval: 15s
+          metrics_path: /metrics
+          http_config:
+            http_headers:
+              X-Metrics-Token:
+                values: ["${env:METRICS_TOKEN}"]
+          static_configs:
+            - targets: [api:8080]
+        - job_name: stealth-worker
+          scrape_interval: 15s
+          metrics_path: /metrics
+          http_config:
+            http_headers:
+              X-Metrics-Token:
+                values: ["${env:METRICS_TOKEN}"]
+          static_configs:
+            - targets: [worker:9091]
+
+  filelog/docker:
+    include:
+      - /var/lib/docker/containers/*/*-json.log
+    start_at: end
+    include_file_path: true
+    storage: file_storage
+    operators:
+      - type: json_parser
+        id: docker-json
+        parse_from: body
+        parse_to: attributes
+      - type: move
+        id: move-message
+        from: attributes.log
+        to: body
+      - type: move
+        id: move-level
+        from: attributes.level
+        to: severity_text
+      - type: time_parser
+        id: docker-time
+        parse_from: attributes.time
+        layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        layout_type: gotime
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 384
+    spike_limit_mib: 96
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: self-hosted
+        action: upsert
+      - key: service.name
+        value: stealth-host
+        action: insert
+
+exporters:
+  clickhouse:
+    endpoint: tcp://${env:CLICKHOUSE_ADDR}?dial_timeout=10s
+    database: ${env:CLICKHOUSE_DATABASE}
+    username: ${env:CLICKHOUSE_USER}
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: true
+    async_insert: true
+    compress: lz4
+    ttl: ${env:TELEMETRY_RETENTION}
+    timeout: 10s
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    metrics_tables:
+      gauge:
+        name: otel_metrics_gauge
+      sum:
+        name: otel_metrics_sum
+      summary:
+        name: otel_metrics_summary
+      histogram:
+        name: otel_metrics_histogram
+      exponential_histogram:
+        name: otel_metrics_exp_histogram
+    sending_queue:
+      enabled: true
+      storage: file_storage
+      queue_size: 1000
+      block_on_overflow: true
+      num_consumers: 2
+      batch:
+        min_size: 512
+        flush_timeout: 2s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    logs:
+      receivers: [otlp, filelog/docker]
+      processors: [memory_limiter, resource]
+      exporters: [clickhouse]
+    metrics:
+      receivers: [otlp, hostmetrics, prometheus]
+      processors: [memory_limiter, resource]
+      exporters: [clickhouse]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource]
+      exporters: [clickhouse]

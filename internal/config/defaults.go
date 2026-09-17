@@ -12,5 +12,6 @@ func (c Config) WithDefaults() Config {
 	c.applyStorageDefaults()
 	c.applyExecutionDefaults()
 	c.applySiteDefaults()
+	c.applyTelemetryStoreDefaults()
 	return c
 }

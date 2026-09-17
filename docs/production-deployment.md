@@ -12,7 +12,10 @@ TLS terminator / Nginx
   └── /v1/* → stealth-api:8080
                          ├── PostgreSQL
                          ├── Redis
+                         ├── ClickHouse (private telemetry store)
                          └── worker → Docker runner + persistent storage
+                                      └── telemetry-docker → OTel collector
+OTLP / hostmetrics / Prometheus → otel-collector → ClickHouse
 ```
 
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
@@ -41,9 +44,9 @@ stat -c '%g' /var/run/docker.sock
 docker login ghcr.io
 docker compose --env-file .env.production -f compose.production.yaml config
 docker compose --env-file .env.production -f compose.production.yaml pull
-docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis
+docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-docker
 ./scripts/production-smoke.sh
 ```
 
@@ -88,6 +91,8 @@ Strongly recommended values:
   private network and protect the endpoint.
 - `TRUSTED_PROXY_CIDRS`, limited to the network(s) of trusted forwarding
   peers.
+- `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_MEMORY_LIMIT`, and a reviewed
+  `TELEMETRY_RETENTION` value for the private telemetry services.
 - `STORAGE_DRIVER=s3` with provider-specific `STORAGE_S3_*` credentials for a
   production object-store service. The bundled local mode is a persistent
   single-host volume, not highly available object storage.
@@ -135,6 +140,10 @@ The production Compose baseline keeps these named volumes:
   when `STORAGE_DRIVER=local`.
 - `stealth_function_runner_staging`: the shared staging volume referenced by
   Docker-launched build/execution containers.
+- `stealth_clickhouse_data`: ClickHouse logs, metrics, and traces. It is not a
+  PostgreSQL volume and should be backed up with a telemetry-specific policy.
+- `stealth_otel_state`: the Collector's crash-safe sending queue and file-log
+  offsets.
 
 Redis is authenticated but intentionally has no volume in this baseline. It
 stores distributed rate-limit windows, not the durable job state. Losing Redis
@@ -146,6 +155,15 @@ availability.
 For serious production installations, managed PostgreSQL and an
 S3-compatible object store are recommended. Stealth does not claim HA for the
 bundled single PostgreSQL, Redis, or local storage services.
+
+### Telemetry operations
+
+ClickHouse and the Collector are internal-only services. The standard Compose
+file does not publish ports `9000`, `4317`, `4318`, or `13133` to the host.
+`telemetry-docker` is intentionally separate from the main Collector because
+it is the only telemetry process that reads `/var/run/docker.sock`; it has no
+receiver and no public listener. See the [telemetry architecture guide](telemetry-architecture.md)
+for the schema pin, query boundary, retention, and backup separation.
 
 ## First-run onboarding
 

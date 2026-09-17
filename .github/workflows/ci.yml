@@ -41,6 +41,21 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.8.6.5
+        env:
+          CLICKHOUSE_DB: stealth_telemetry
+          CLICKHOUSE_USER: stealth
+          CLICKHOUSE_PASSWORD: ci-clickhouse-password
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "clickhouse-client --user stealth --password ci-clickhouse-password --query 'SELECT 1' | grep -q 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 20s
     env:
       # This is a non-secret validation value: 32 bytes of `a`, Base64 encoded.
       FUNCTIONS_SECRET_KEY: YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
@@ -68,6 +83,14 @@ jobs:
           TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable
           TEST_REDIS_URL: redis://127.0.0.1:6379/0
         run: go test ./internal/httpapi -run Integration -count=1
+
+      - name: ClickHouse telemetry integration suite
+        env:
+          TEST_CLICKHOUSE_ADDR: 127.0.0.1:9000
+          TEST_CLICKHOUSE_DATABASE: stealth_telemetry
+          TEST_CLICKHOUSE_USER: stealth
+          TEST_CLICKHOUSE_PASSWORD: ci-clickhouse-password
+        run: go test ./internal/telemetry -run Integration -count=1
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .

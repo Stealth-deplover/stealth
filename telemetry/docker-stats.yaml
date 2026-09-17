@@ -1,0 +1,47 @@
+# This is the only production telemetry component with Docker API authority.
+# It has no OTLP receiver, no HTTP listener, no host port, and exports only
+# receiver-produced metrics to the unprivileged main collector.
+receivers:
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 15s
+    timeout: 5s
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 160
+    spike_limit_mib: 40
+  resource:
+    attributes:
+      - key: service.name
+        value: stealth-container-metrics
+        action: upsert
+      - key: deployment.environment
+        value: self-hosted
+        action: upsert
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 1024
+
+exporters:
+  otlp:
+    endpoint: otel-collector:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 256
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  pipelines:
+    metrics:
+      receivers: [docker_stats]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]

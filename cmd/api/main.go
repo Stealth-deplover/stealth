@@ -22,6 +22,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/runtime"
+	"github.com/Stealth-deplover/stealth/internal/telemetry"
 	"github.com/Stealth-deplover/stealth/internal/tlsmanager"
 )
 
@@ -91,7 +92,29 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: webhookCipher})
-	handler := httpapi.NewWithDependencies(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient), RealtimeBroker: realtime.NewBroker(redisClient)})
+	telemetryStore, telemetryErr := telemetry.New(telemetry.Config{
+		Address:          cfg.TelemetryClickHouseAddr,
+		Database:         cfg.TelemetryClickHouseDatabase,
+		Username:         cfg.TelemetryClickHouseUser,
+		Password:         cfg.TelemetryClickHousePassword,
+		MaxQueryDuration: cfg.TelemetryMaxQueryDuration,
+		MaxQueryRange:    cfg.TelemetryMaxQueryRange,
+		MaxQueryRows:     cfg.TelemetryMaxQueryRows,
+		Retention:        cfg.TelemetryRetention,
+	})
+	if telemetryErr != nil && !errors.Is(telemetryErr, telemetry.ErrDisabled) {
+		logger.Error("telemetry store configuration error", "error", telemetryErr)
+	}
+	if telemetryStore != nil {
+		defer telemetryStore.Close()
+		if err := telemetryStore.Migrate(ctx); err != nil {
+			// Telemetry is intentionally not a startup dependency for the core
+			// API. The collector has a persistent queue and will retry its own
+			// schema/data path when ClickHouse recovers.
+			logger.Warn("telemetry schema registry unavailable", "error", err)
+		}
+	}
+	handler := httpapi.NewWithDependencies(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient), RealtimeBroker: realtime.NewBroker(redisClient), TelemetryStore: telemetryStore, Redis: redisClient})
 	server := &http.Server{Addr: cfg.HTTPAddress, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	servers := []*http.Server{server}
 	var tlsServer, challengeServer *http.Server

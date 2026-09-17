@@ -16,6 +16,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func (s *Server) recoverer(next http.Handler) http.Handler {
@@ -46,7 +47,12 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 			s.metrics.RequestDuration.WithLabelValues(r.Method, route).Observe(duration.Seconds())
 			s.metrics.ResponseBytes.WithLabelValues(r.Method, route, status).Add(float64(recorder.BytesWritten()))
 		}
-		s.logger.Info("request", "request_id", requestIDFrom(r.Context()), "method", r.Method, "path", r.URL.Path, "route", route, "status", recorder.Status(), "bytes", recorder.BytesWritten(), "duration", duration.String())
+		logArgs := []any{"request_id", requestIDFrom(r.Context()), "method", r.Method, "path", r.URL.Path, "route", route, "status", recorder.Status(), "bytes", recorder.BytesWritten(), "duration", duration.String()}
+		spanContext := trace.SpanContextFromContext(r.Context())
+		if spanContext.IsValid() {
+			logArgs = append(logArgs, "trace_id", spanContext.TraceID().String(), "span_id", spanContext.SpanID().String())
+		}
+		s.logger.Info("request", logArgs...)
 	})
 }
 
