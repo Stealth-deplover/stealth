@@ -446,5 +446,6 @@ working tree on `fix/audit-2026-09-remediation`:
 - S3 stat/put/get/list/remove paths and storage wrappers accept request
   contexts.
 
-Regression tests cover these paths. This follow-up is not yet committed or
-pushed, so no PR/CI/VPS result is claimed here.
+Regression tests cover these paths. The follow-up is committed and pushed in
+[PR #76](https://github.com/Stealth-deplover/stealth/pull/76); CI status is
+tracked there. A fresh VPS validation has not been performed.

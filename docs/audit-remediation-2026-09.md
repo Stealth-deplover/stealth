@@ -182,8 +182,8 @@ Remediation PR: [#76 — fix: remediate 2026-09 audit findings](https://github.c
 ## Follow-up residual fixes
 
 The subsequent read-only audit identified four related residual correctness
-issues. They are implemented in the current working tree and are not yet
-committed or pushed:
+issues. They are implemented and pushed in the same remediation PR, [#76 —
+fix: remediate 2026-09 audit findings](https://github.com/Stealth-deplover/stealth/pull/76):
 
 - Artifact publication now creates a durable PostgreSQL publish reservation
   before physical upload/build publication. The metadata transaction consumes
