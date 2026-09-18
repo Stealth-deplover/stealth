@@ -296,14 +296,14 @@ FROM (
   WHERE Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
   GROUP BY ServiceName
   UNION ALL
-  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
-  FROM otel_metrics_gauge
-  WHERE TimeUnix >= {from:DateTime} AND TimeUnix < {to:DateTime}
-  GROUP BY ServiceName
-  UNION ALL
-  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
-  FROM otel_metrics_sum
-  WHERE TimeUnix >= {from:DateTime} AND TimeUnix < {to:DateTime}
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_gauge
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_sum
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
   GROUP BY ServiceName
 )
 GROUP BY ServiceName, Signal
@@ -437,6 +437,8 @@ func (s *ClickHouseStore) ListSources(ctx context.Context, query SourcesQuery) (
 	rows, err := s.query(ctx, sourcesQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
+		clickhouse.DateNamed("from_metrics", query.Range.From.UTC(), clickhouse.Seconds),
+		clickhouse.DateNamed("to_metrics", query.Range.To.UTC(), clickhouse.Seconds),
 		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
