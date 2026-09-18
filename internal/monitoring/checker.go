@@ -361,6 +361,48 @@ func validatePublicURL(value *url.URL) error {
 	return nil
 }
 
+// ValidatePublicHTTPSURL is shared by trusted outbound workers such as alert
+// notifications. It preserves the monitor SSRF boundary while allowing the
+// query parameters used by provider webhook endpoints.
+func ValidatePublicHTTPSURL(value *url.URL) error {
+	if value == nil || value.Scheme != "https" || value.Hostname() == "" || value.User != nil || value.Fragment != "" {
+		return errors.New("notification URL is invalid")
+	}
+	if _, err := resolvePublicHost(context.Background(), value.Hostname()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// NewSafeHTTPSClient is the trusted outbound client for owner-configured
+// notification endpoints. It resolves and dials public addresses only and
+// validates every redirect, so a notification URL cannot become an SSRF
+// primitive for the worker.
+func NewSafeHTTPSClient(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           safeDialContext,
+			TLSHandshakeTimeout:   timeout,
+			ResponseHeaderTimeout: timeout,
+			MaxIdleConnsPerHost:   2,
+		},
+	}
+	redirects := 0
+	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
+		redirects++
+		if redirects > maxRedirects {
+			return errors.New("too many redirects")
+		}
+		return ValidatePublicHTTPSURL(next.URL)
+	}
+	return client
+}
+
 func safeDialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {

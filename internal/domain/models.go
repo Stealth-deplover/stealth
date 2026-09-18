@@ -266,12 +266,25 @@ type AdminNotificationChannel struct {
 	Name               string     `json:"name"`
 	Kind               string     `json:"kind"`
 	Enabled            bool       `json:"enabled"`
+	SecretConfigured   bool       `json:"secret_configured"`
 	LastDeliveryAt     *time.Time `json:"last_delivery_at,omitempty"`
 	LastDeliveryStatus *string    `json:"last_delivery_status,omitempty"`
 	LastError          *string    `json:"last_error,omitempty"`
 	CreatedByAccountID *string    `json:"created_by_account_id,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+type AdminNotificationDelivery struct {
+	ID           string     `json:"id"`
+	ChannelID    string     `json:"channel_id"`
+	AlertEventID *string    `json:"alert_event_id,omitempty"`
+	Status       string     `json:"status"`
+	Attempts     int        `json:"attempts"`
+	AvailableAt  time.Time  `json:"available_at"`
+	LastError    *string    `json:"last_error,omitempty"`
+	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type AdminIncident struct {

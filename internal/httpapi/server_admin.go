@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -165,6 +166,119 @@ func (s *Server) adminTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 	})
 	if !s.writeTelemetryResultError(w, err) {
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// adminTelemetryLogTail keeps the transport streaming and the query bounded.
+// It deliberately does not expose ClickHouse's native stream or credentials:
+// every poll is still an authenticated, parameterized domain query, and the
+// browser receives only redacted log records. The short-lived connection is
+// also safe to cancel when the operator navigates away.
+func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
+	if s.telemetry == nil {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	if limit > 250 {
+		limit = 250
+	}
+	service := r.URL.Query().Get("service")
+	level := r.URL.Query().Get("level")
+	search := r.URL.Query().Get("query")
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		writeError(w, http.StatusInternalServerError, "stream_unavailable", "live log streaming is unavailable")
+		return
+	}
+
+	seen := make(map[string]struct{}, limit*4)
+	cursor := queryRange.From
+	maxRange := s.config.TelemetryMaxQueryRange
+	if maxRange <= 0 {
+		maxRange = 30 * 24 * time.Hour
+	}
+	deadline := time.NewTimer(30 * time.Minute)
+	defer deadline.Stop()
+	poll := time.NewTicker(2 * time.Second)
+	defer poll.Stop()
+
+	writeEvent := func(event string, value any) bool {
+		payload, err := json.Marshal(value)
+		if err != nil {
+			return false
+		}
+		if _, err := io.WriteString(w, "event: "+event+"\ndata: "+string(payload)+"\n\n"); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	writeHeartbeat := func() bool {
+		if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	for {
+		to := time.Now().UTC()
+		from := cursor.Add(-time.Nanosecond)
+		if from.Before(to.Add(-maxRange)) {
+			from = to.Add(-maxRange)
+		}
+		result, err := s.telemetry.QueryLogs(r.Context(), telemetry.LogsQuery{
+			Range:   telemetry.TimeRange{From: from, To: to},
+			Service: service,
+			Level:   level,
+			Search:  search,
+			Limit:   limit,
+		})
+		if err != nil {
+			_ = writeEvent("stream_error", map[string]string{"message": "telemetry backend is unavailable"})
+			return
+		}
+		for index := len(result.Items) - 1; index >= 0; index-- {
+			item := result.Items[index]
+			key := item.Timestamp.UTC().Format(time.RFC3339Nano) + "\x00" + item.TraceID + "\x00" + item.SpanID + "\x00" + item.Service + "\x00" + item.Body
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			if len(seen) > limit*8 {
+				seen = make(map[string]struct{}, limit*4)
+			}
+			if item.Timestamp.After(cursor) {
+				cursor = item.Timestamp
+			}
+			if !writeEvent("log", item) {
+				return
+			}
+		}
+		if !writeHeartbeat() {
+			return
+		}
+
+		select {
+		case <-r.Context().Done():
+			return
+		case <-deadline.C:
+			return
+		case <-poll.C:
+		}
 	}
 }
 

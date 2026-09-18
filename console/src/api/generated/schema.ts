@@ -121,6 +121,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/telemetry/logs/tail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stream bounded redacted log records over an authenticated server-sent event connection. The server owns the ClickHouse query and closes idle streams after a bounded lifetime. */
+        get: operations["streamAdminTelemetryLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/telemetry/traces": {
         parameters: {
             query?: never;
@@ -340,6 +357,38 @@ export interface paths {
         put: operations["updateAdminAlertRule"];
         post?: never;
         delete: operations["deleteAdminAlertRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminNotificationChannels"];
+        put?: never;
+        post: operations["createAdminNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/notifications/{channelID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminNotificationChannel"];
+        put: operations["updateAdminNotificationChannel"];
+        post?: never;
+        delete: operations["deleteAdminNotificationChannel"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3221,6 +3270,39 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        AdminNotificationChannel: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: AdminNotificationChannelKind;
+            enabled: boolean;
+            secret_configured: boolean;
+            /** Format: date-time */
+            last_delivery_at?: string | null;
+            /** @enum {string|null} */
+            last_delivery_status?: AdminNotificationChannelLast_delivery_status;
+            last_error?: string | null;
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminNotificationChannelsResponse: {
+            items: components["schemas"]["AdminNotificationChannel"][];
+        };
+        CreateAdminNotificationChannelRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: CreateAdminNotificationChannelRequestKind;
+            /** @default true */
+            enabled: boolean;
+            config: {
+                [key: string]: unknown;
+            };
+        };
         AdminAlertEvent: {
             /** Format: uuid */
             id: string;
@@ -5841,6 +5923,7 @@ export interface components {
         AlertRuleID: string;
         AdminIncidentID: string;
         DashboardID: string;
+        NotificationChannelID: string;
         BootstrapCLIProof: string;
         /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
         SetupCSRF: "1";
@@ -6024,6 +6107,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminLogsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    streamAdminTelemetryLogs: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                level?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted log events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -6548,6 +6662,136 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAdminNotificationChannels: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannelsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminNotificationChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Notification channel created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminNotificationChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Notification channel updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -13469,6 +13713,25 @@ export enum AdminAlertRuleState {
     firing = "firing",
     resolved = "resolved",
     muted = "muted"
+}
+export enum AdminNotificationChannelKind {
+    email = "email",
+    webhook = "webhook",
+    slack = "slack",
+    discord = "discord",
+    telegram = "telegram"
+}
+export enum AdminNotificationChannelLast_delivery_status {
+    success = "success",
+    failed = "failed",
+    null = "null"
+}
+export enum CreateAdminNotificationChannelRequestKind {
+    email = "email",
+    webhook = "webhook",
+    slack = "slack",
+    discord = "discord",
+    telegram = "telegram"
 }
 export enum AdminAlertEventState {
     firing = "firing",

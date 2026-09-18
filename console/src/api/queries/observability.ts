@@ -1,9 +1,10 @@
 "use client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, cancellableQuery } from "@/api/client";
+import { api, apiUrl, cancellableQuery } from "@/api/client";
 import type { PathsV1AdminInfrastructureMetricsGetParametersQueryScope } from "@/api/generated/schema";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
+import { useEffect, useMemo, useState } from "react";
 
 export type AdminTelemetryQuery = {
   from?: string;
@@ -16,6 +17,99 @@ export type AdminTelemetryQuery = {
   name?: string;
   limit?: number;
 };
+
+export type AdminTailLog = {
+  timestamp: string;
+  trace_id?: string;
+  span_id?: string;
+  level?: string;
+  service: string;
+  message: string;
+  attributes?: Record<string, string>;
+  resource_attributes?: Record<string, string>;
+};
+
+export function useAdminLogTail(
+  query: Pick<
+    AdminTelemetryQuery,
+    "from" | "to" | "service" | "level" | "query"
+  > & { limit?: number },
+  enabled: boolean,
+) {
+  const [items, setItems] = useState<AdminTailLog[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const params = useMemo(() => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") search.set(key, String(value));
+    }
+    return search.toString();
+  }, [query]);
+
+  useEffect(() => {
+    if (!enabled || typeof EventSource === "undefined") {
+      return;
+    }
+    const source = new EventSource(
+      apiUrl(`/v1/admin/telemetry/logs/tail?${params}`),
+      { withCredentials: true },
+    );
+    const onLog = (event: Event) => {
+      try {
+        const item = JSON.parse((event as MessageEvent).data) as AdminTailLog;
+        setItems((current) => {
+          const seen = new Set<string>();
+          const next = [item, ...current].filter((candidate) => {
+            const candidateKey = `${candidate.timestamp}\u0000${candidate.trace_id ?? ""}\u0000${candidate.span_id ?? ""}\u0000${candidate.service}\u0000${candidate.message}`;
+            if (seen.has(candidateKey)) return false;
+            seen.add(candidateKey);
+            return true;
+          });
+          return next.slice(0, 250);
+        });
+        setError(null);
+      } catch {
+        setError("The live log stream returned an invalid event.");
+      }
+    };
+    const onStreamError = (event: Event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          message?: string;
+        };
+        setError(payload.message ?? "Live log stream is unavailable.");
+      } catch {
+        setError("Live log stream is unavailable.");
+      }
+    };
+    const onConnectionError = () => {
+      setConnected(false);
+      setError("Live log stream disconnected. The browser will retry.");
+    };
+    source.addEventListener("log", onLog);
+    source.addEventListener("stream_error", onStreamError);
+    source.onerror = onConnectionError;
+    source.onopen = () => {
+      setItems([]);
+      setConnected(true);
+      setError(null);
+    };
+    return () => {
+      source.removeEventListener("log", onLog);
+      source.removeEventListener("stream_error", onStreamError);
+      source.onerror = null;
+      source.close();
+      setConnected(false);
+    };
+  }, [enabled, params]);
+
+  return {
+    items: enabled ? items : [],
+    error,
+    connected: enabled && connected,
+  };
+}
 
 export function useAdminOverview(options?: {
   refetchInterval?: number | false;
@@ -228,6 +322,20 @@ export function useAdminAlerts(
     queryKey: [...queryKeys.adminAlerts, query],
     queryFn: cancellableQuery((signal) =>
       api.GET("/v1/admin/alerts", { params: { query }, signal }),
+    ),
+    placeholderData: keepPreviousData,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+export function useAdminNotificationChannels(
+  query: { limit?: number } = {},
+  options?: { refetchInterval?: number | false },
+) {
+  return useQuery({
+    queryKey: [...queryKeys.adminNotifications, query],
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/admin/notifications", { params: { query }, signal }),
     ),
     placeholderData: keepPreviousData,
     refetchInterval: options?.refetchInterval,

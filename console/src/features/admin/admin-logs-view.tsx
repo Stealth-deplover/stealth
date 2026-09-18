@@ -2,14 +2,16 @@
 
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useAdminLogs } from "@/api/queries";
+import { useAdminLogTail, useAdminLogs } from "@/api/queries";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -23,16 +25,34 @@ import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
 
 export function AdminLogsView() {
   const timeRange = useAdminTimeRange();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [service, setService] = useState("");
   const [level, setLevel] = useState("");
+  const [traceID, setTraceID] = useState(
+    () => searchParams.get("trace_id") ?? "",
+  );
+  const [tailEnabled, setTailEnabled] = useState(false);
   const query = useMemo(
-    () => ({ ...timeRange.query, query: search, service, level, limit: 100 }),
-    [level, search, service, timeRange.query],
+    () => ({
+      ...timeRange.query,
+      query: search,
+      service,
+      level,
+      trace_id: traceID,
+      limit: 100,
+    }),
+    [level, search, service, timeRange.query, traceID],
   );
   const logs = useAdminLogs(query, {
     refetchInterval: timeRange.refreshInterval,
   });
+  const tail = useAdminLogTail(query, tailEnabled);
+  const displayItems = tailEnabled
+    ? tail.items.length
+      ? tail.items
+      : (logs.data?.items ?? [])
+    : (logs.data?.items ?? []);
 
   return (
     <AdminShell>
@@ -41,16 +61,43 @@ export function AdminLogsView() {
         title="Logs"
         description="Search structured logs collected from the Stealth runtime and its Docker services."
         actions={
-          <AdminTimeRange
-            rangeKey={timeRange.rangeKey}
-            refreshKey={timeRange.refreshKey}
-            onRangeChange={timeRange.setRange}
-            onRefreshChange={timeRange.setRefresh}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={tailEnabled ? "secondary" : "ghost"}
+              aria-pressed={tailEnabled}
+              onClick={() => setTailEnabled((enabled) => !enabled)}
+            >
+              <span
+                className={`size-1.5 rounded-full ${tail.connected ? "bg-pulse-green" : "bg-ash"}`}
+                aria-hidden="true"
+              />
+              {tailEnabled ? "Live tail on" : "Live tail"}
+            </Button>
+            <AdminTimeRange
+              rangeKey={timeRange.rangeKey}
+              refreshKey={timeRange.refreshKey}
+              onRangeChange={timeRange.setRange}
+              onRefreshChange={timeRange.setRefresh}
+            />
+          </div>
         }
       />
+      {tailEnabled ? (
+        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fog">
+          <span>
+            {tail.connected
+              ? "Streaming new records"
+              : "Connecting to live stream"}
+          </span>
+          {tail.error ? (
+            <span className="text-coral-red">{tail.error}</span>
+          ) : null}
+        </div>
+      ) : null}
       <Card className="mb-4">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1fr_0.35fr_0.25fr]">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-[1fr_0.35fr_0.25fr_0.5fr]">
           <label className="relative block">
             <span className="sr-only">Search logs</span>
             <Search
@@ -80,6 +127,14 @@ export function AdminLogsView() {
               placeholder="Level"
             />
           </label>
+          <label>
+            <span className="sr-only">Trace ID</span>
+            <Input
+              value={traceID}
+              onChange={(event) => setTraceID(event.target.value)}
+              placeholder="Trace ID"
+            />
+          </label>
         </CardContent>
       </Card>
       {logs.isPending ? <LoadingState rows={6} /> : null}
@@ -90,16 +145,16 @@ export function AdminLogsView() {
           retry={() => logs.refetch()}
         />
       ) : null}
-      {logs.data && !logs.data.items.length ? (
+      {logs.data && !displayItems.length ? (
         <Card>
           <CardContent className="p-8 text-center text-sm text-fog">
             No logs matched the selected filters.
           </CardContent>
         </Card>
       ) : null}
-      {logs.data?.items.length ? (
+      {displayItems.length ? (
         <Card className="overflow-hidden">
-          <VirtualizedLogTable items={logs.data.items} />
+          <VirtualizedLogTable items={displayItems} />
         </Card>
       ) : null}
     </AdminShell>

@@ -7,6 +7,7 @@ import {
   DatabaseZap,
   Gauge,
   BellRing,
+  Send,
   CircleAlert,
   LayoutDashboard,
   Logs,
@@ -24,6 +25,7 @@ const links = [
   { href: "/admin/operations", label: "Operations", icon: ClipboardList },
   { href: "/admin/monitoring", label: "Monitoring", icon: Radar },
   { href: "/admin/alerts", label: "Alerts", icon: BellRing },
+  { href: "/admin/notifications", label: "Notifications", icon: Send },
   { href: "/admin/incidents", label: "Incidents", icon: CircleAlert },
   { href: "/admin/dashboards", label: "Dashboards", icon: LayoutDashboard },
   {

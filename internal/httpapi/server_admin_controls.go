@@ -30,6 +30,17 @@ type adminAlertRulesResponse struct {
 	Items []domain.AdminAlertRule `json:"items"`
 }
 
+type adminNotificationChannelRequest struct {
+	Name    string         `json:"name"`
+	Kind    string         `json:"kind"`
+	Enabled *bool          `json:"enabled"`
+	Config  map[string]any `json:"config"`
+}
+
+type adminNotificationChannelsResponse struct {
+	Items []domain.AdminNotificationChannel `json:"items"`
+}
+
 type adminIncidentRequest struct {
 	Title    string   `json:"title"`
 	Severity string   `json:"severity"`
@@ -92,6 +103,97 @@ func (s *Server) listAdminAlertRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, adminAlertRulesResponse{Items: items})
+}
+
+func (s *Server) listAdminNotificationChannels(w http.ResponseWriter, r *http.Request) {
+	limit, ok := adminConfigLimit(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.repo.ListAdminNotificationChannels(r.Context(), limit)
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminNotificationChannelsResponse{Items: items})
+}
+
+func (s *Server) createAdminNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	var request adminNotificationChannelRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	config, err := json.Marshal(request.Config)
+	if err != nil {
+		adminControlError(s, w, repository.ErrInvalidAdminNotification)
+		return
+	}
+	enabled := true
+	if request.Enabled != nil {
+		enabled = *request.Enabled
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	item, err := s.repo.CreateAdminNotificationChannel(r.Context(), mustUUID(accountFrom(r).ID), id, repository.AdminNotificationChannelInput{Name: request.Name, Kind: request.Kind, Enabled: enabled, Config: config})
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) getAdminNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "channelID")
+	if !ok {
+		return
+	}
+	item, err := s.repo.AdminNotificationChannelByID(r.Context(), id)
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) updateAdminNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "channelID")
+	if !ok {
+		return
+	}
+	var request adminNotificationChannelRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	config, err := json.Marshal(request.Config)
+	if err != nil {
+		adminControlError(s, w, repository.ErrInvalidAdminNotification)
+		return
+	}
+	enabled := true
+	if request.Enabled != nil {
+		enabled = *request.Enabled
+	}
+	item, err := s.repo.UpdateAdminNotificationChannel(r.Context(), mustUUID(accountFrom(r).ID), id, repository.AdminNotificationChannelInput{Name: request.Name, Kind: request.Kind, Enabled: enabled, Config: config})
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) deleteAdminNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "channelID")
+	if !ok {
+		return
+	}
+	if err := s.repo.DeleteAdminNotificationChannel(r.Context(), mustUUID(accountFrom(r).ID), id); err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) createAdminAlertRule(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +513,7 @@ func adminConfigLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 
 func adminControlError(s *Server, w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, repository.ErrInvalidAdminAlert), errors.Is(err, repository.ErrInvalidAdminIncident), errors.Is(err, repository.ErrInvalidAdminDashboard), errors.Is(err, repository.ErrInvalidAdminStatus):
+	case errors.Is(err, repository.ErrInvalidAdminAlert), errors.Is(err, repository.ErrInvalidAdminNotification), errors.Is(err, repository.ErrInvalidAdminIncident), errors.Is(err, repository.ErrInvalidAdminDashboard), errors.Is(err, repository.ErrInvalidAdminStatus):
 		writeError(w, http.StatusBadRequest, "validation_error", "admin configuration is invalid")
 	case errors.Is(err, repository.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "admin resource was not found")

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/adminnotification"
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
@@ -21,6 +22,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
+	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/messagingrunner"
 	"github.com/Stealth-deplover/stealth/internal/monitoring"
 	"github.com/Stealth-deplover/stealth/internal/observability"
@@ -146,6 +148,13 @@ func main() {
 	}
 	monitorWorker.PollInterval = cfg.FunctionsRunnerPoll
 	monitorWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
+	notificationWorker, err := adminnotification.New(repo, cipher, mailer.NewFromConfig(cfg, logger), cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("admin notification worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	notificationWorker.PollInterval = cfg.FunctionsRunnerPoll
+	notificationWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	webhookWorker, err := webhookrunner.New(repo, cipher, cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("webhook worker configuration error", "error", err)
@@ -185,6 +194,7 @@ func main() {
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
 			{Name: "admin monitoring worker", Runner: monitorWorker},
+			{Name: "admin notification worker", Runner: notificationWorker},
 		}
 		if agentWorker != nil {
 			registrations = append(registrations, workersupervisor.Registration{Name: "Agent worker", Runner: agentWorker})
@@ -242,6 +252,7 @@ func main() {
 		{Name: "webhook worker", Runner: webhookWorker},
 		{Name: "messaging worker", Runner: messagingWorker},
 		{Name: "admin monitoring worker", Runner: monitorWorker},
+		{Name: "admin notification worker", Runner: notificationWorker},
 		{Name: "worker metrics", Runner: workersupervisor.RunnerFunc(func(ctx context.Context) error {
 			return serveWorkerMetrics(ctx, metricsServer, logger)
 		})},

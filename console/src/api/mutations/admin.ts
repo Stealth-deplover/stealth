@@ -88,6 +88,31 @@ export function useDeleteAdminAlert() {
   });
 }
 
+export function useCreateAdminNotificationChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["CreateAdminNotificationChannelRequest"],
+    ) => unwrap(await api.POST("/v1/admin/notifications", { body })),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminNotifications }),
+  });
+}
+
+export function useDeleteAdminNotificationChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (channelId: string) =>
+      unwrap(
+        await api.DELETE("/v1/admin/notifications/{channelID}", {
+          params: { path: { channelID: channelId } },
+        }),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminNotifications }),
+  });
+}
+
 export function useCreateAdminIncident() {
   const queryClient = useQueryClient();
   return useMutation({

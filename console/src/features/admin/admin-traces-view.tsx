@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import type { components } from "@/api/generated/schema";
 import { useAdminTraces } from "@/api/queries";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -12,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { formatDate, formatDuration } from "@/lib/format";
 import { AdminShell } from "./admin-shell";
 import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
+
+type TraceSpan = components["schemas"]["AdminTraceSpan"];
 
 export function AdminTracesView() {
   const timeRange = useAdminTimeRange();
@@ -74,6 +78,9 @@ export function AdminTracesView() {
           </CardContent>
         </Card>
       ) : null}
+      {traceID && traces.data?.items.length ? (
+        <TraceDetail spans={traces.data.items} />
+      ) : null}
       {traces.data?.items.length ? (
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
@@ -112,12 +119,19 @@ export function AdminTracesView() {
                       <StatusBadge status={item.status} />
                     </td>
                     <td className="px-4 py-3">
-                      <Badge
-                        variant="neutral"
-                        className="font-mono text-[10px]"
+                      <button
+                        type="button"
+                        onClick={() => setTraceID(item.trace_id)}
+                        className="rounded border border-transparent focus-visible:border-acid-lime/70 focus-visible:outline-none"
+                        aria-label={`Open trace ${item.trace_id}`}
                       >
-                        {item.trace_id}
-                      </Badge>
+                        <Badge
+                          variant="neutral"
+                          className="font-mono text-[10px]"
+                        >
+                          {item.trace_id}
+                        </Badge>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -128,4 +142,112 @@ export function AdminTracesView() {
       ) : null}
     </AdminShell>
   );
+}
+
+function TraceDetail({ spans }: { spans: TraceSpan[] }) {
+  const rows = useMemo(() => flattenTrace(spans), [spans]);
+  const start = Math.min(
+    ...spans.map((span) => new Date(span.timestamp).getTime()),
+  );
+  const end = Math.max(
+    ...spans.map(
+      (span) => new Date(span.timestamp).getTime() + span.duration_ns / 1e6,
+    ),
+  );
+  const duration = Math.max(end - start, 1);
+
+  return (
+    <Card className="mb-4">
+      <CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.1em] text-fog">
+              Trace detail
+            </p>
+            <p className="mt-1 text-sm text-mist">
+              {spans.length} span{spans.length === 1 ? "" : "s"} in the selected
+              trace.
+            </p>
+          </div>
+          <Link
+            href={`/admin/telemetry/logs?trace_id=${encodeURIComponent(spans[0]?.trace_id ?? "")}`}
+            className="text-xs text-mist underline decoration-graphite underline-offset-4 hover:text-paper"
+          >
+            View linked logs
+          </Link>
+        </div>
+        <div className="space-y-2" role="list" aria-label="Trace waterfall">
+          {rows.map(({ span, depth }) => {
+            const left =
+              ((new Date(span.timestamp).getTime() - start) / duration) * 100;
+            const width = Math.max(
+              (span.duration_ns / 1e6 / duration) * 100,
+              0.5,
+            );
+            return (
+              <div
+                key={span.span_id}
+                role="listitem"
+                className="grid gap-2 text-xs sm:grid-cols-[minmax(180px,0.7fr)_minmax(220px,1fr)_90px] sm:items-center"
+              >
+                <div
+                  className="min-w-0 truncate text-mist"
+                  style={{ paddingLeft: `${depth * 16}px` }}
+                  title={span.name}
+                >
+                  <span className="text-fog">{span.service}</span>
+                  <span className="mx-1 text-ash">/</span>
+                  {span.name}
+                </div>
+                <div className="relative h-6 overflow-hidden rounded border border-graphite bg-void">
+                  <div
+                    className={`absolute top-1 h-4 rounded-sm ${span.status.toUpperCase() === "ERROR" ? "bg-coral-red/80" : "bg-signal-teal/70"}`}
+                    style={{
+                      left: `${Math.min(left, 99.5)}%`,
+                      width: `${Math.min(width, 100 - Math.min(left, 99.5))}%`,
+                    }}
+                    title={`${span.name}: ${formatDuration(span.duration_ns / 1e6)}`}
+                  />
+                </div>
+                <div className="font-mono tabular-nums text-fog">
+                  {formatDuration(span.duration_ns / 1e6)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function flattenTrace(spans: TraceSpan[]) {
+  const byParent = new Map<string, TraceSpan[]>();
+  const byID = new Set(spans.map((span) => span.span_id));
+  for (const span of spans) {
+    const parent =
+      span.parent_span_id && byID.has(span.parent_span_id)
+        ? span.parent_span_id
+        : "";
+    const children = byParent.get(parent) ?? [];
+    children.push(span);
+    byParent.set(parent, children);
+  }
+  for (const children of byParent.values()) {
+    children.sort((left, right) =>
+      left.timestamp.localeCompare(right.timestamp),
+    );
+  }
+  const rows: Array<{ span: TraceSpan; depth: number }> = [];
+  const visited = new Set<string>();
+  const visit = (span: TraceSpan, depth: number) => {
+    if (visited.has(span.span_id)) return;
+    visited.add(span.span_id);
+    rows.push({ span, depth });
+    for (const child of byParent.get(span.span_id) ?? [])
+      visit(child, depth + 1);
+  };
+  for (const root of byParent.get("") ?? []) visit(root, 0);
+  for (const span of spans) visit(span, 0);
+  return rows;
 }

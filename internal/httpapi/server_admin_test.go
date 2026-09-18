@@ -15,10 +15,11 @@ import (
 )
 
 type fakeAdminTelemetryStore struct {
-	logsCalled bool
-	logsQuery  telemetry.LogsQuery
-	logs       telemetry.LogsResult
-	logsErr    error
+	logsCalled  bool
+	logsQuery   telemetry.LogsQuery
+	logs        telemetry.LogsResult
+	logsErr     error
+	logsStarted chan struct{}
 }
 
 func (f *fakeAdminTelemetryStore) Ping(context.Context) error { return nil }
@@ -26,6 +27,12 @@ func (f *fakeAdminTelemetryStore) Ping(context.Context) error { return nil }
 func (f *fakeAdminTelemetryStore) QueryLogs(_ context.Context, query telemetry.LogsQuery) (telemetry.LogsResult, error) {
 	f.logsCalled = true
 	f.logsQuery = query
+	if f.logsStarted != nil {
+		select {
+		case f.logsStarted <- struct{}{}:
+		default:
+		}
+	}
 	return f.logs, f.logsErr
 }
 
@@ -110,5 +117,43 @@ func TestAdminTelemetryHandlerDoesNotExposeBackendError(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), "do-not-return") || strings.Contains(recorder.Body.String(), "password") {
 		t.Fatalf("backend details leaked: %s", recorder.Body.String())
+	}
+}
+
+func TestAdminTelemetryLogTailStreamsRedactedDomainRecords(t *testing.T) {
+	started := make(chan struct{}, 1)
+	store := &fakeAdminTelemetryStore{
+		logsStarted: started,
+		logs: telemetry.LogsResult{Items: []telemetry.LogRecord{{
+			Timestamp: time.Now().UTC(), TraceID: "trace-1", Service: "api", Body: "request failed",
+		}}},
+	}
+	server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/logs/tail?limit=7&service=api", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.adminTelemetryLogTail(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("tail did not query the telemetry store")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tail did not stop after request cancellation")
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content type = %q", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: log") || !strings.Contains(body, "trace-1") {
+		t.Fatalf("stream body = %s", body)
 	}
 }

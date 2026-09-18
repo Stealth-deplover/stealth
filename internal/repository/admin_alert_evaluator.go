@@ -61,6 +61,7 @@ func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid
 		return err
 	}
 	defer rows.Close()
+	eventIDs := make([]uuid.UUID, 0)
 	now := time.Now().UTC()
 	for rows.Next() {
 		var ruleID uuid.UUID
@@ -107,9 +108,20 @@ func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid
 			if _, err := tx.Exec(ctx, `INSERT INTO admin_alert_events (id,rule_id,state,value,message,occurred_at) VALUES ($1,$2,$3,$4,$5,$6)`, eventID, ruleID, transition.EventState, lastValue, message, now); err != nil {
 				return err
 			}
+			eventIDs = append(eventIDs, eventID)
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, eventID := range eventIDs {
+		if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func certificateExpiryTriggered(condition map[string]any, details json.RawMessage) bool {
