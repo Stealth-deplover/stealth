@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -470,10 +471,14 @@ func (s *ClickHouseStore) validate(queryRange TimeRange, limit int) error {
 }
 
 func clickHouseLimit(value int) (uint32, error) {
-	if value < 0 || uint64(value) > uint64(^uint32(0)) {
+	if value < 0 {
 		return 0, fmt.Errorf("%w: result limit cannot fit ClickHouse UInt32", ErrInvalidQuery)
 	}
-	return uint32(value), nil
+	parsed, err := strconv.ParseUint(strconv.FormatInt(int64(value), 10), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%w: result limit cannot fit ClickHouse UInt32", ErrInvalidQuery)
+	}
+	return uint32(parsed), nil
 }
 
 func (s *ClickHouseStore) query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
