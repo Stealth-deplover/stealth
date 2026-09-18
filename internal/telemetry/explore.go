@@ -27,6 +27,23 @@ type InfrastructureExplorer interface {
 	QueryInfrastructure(context.Context, InfrastructureQuery) (InfrastructureResult, error)
 }
 
+type OverviewExplorer interface {
+	QueryHTTPOverview(context.Context, HTTPOverviewQuery) (HTTPOverviewResult, error)
+}
+
+type HTTPOverviewQuery struct {
+	Range TimeRange
+}
+
+type HTTPOverviewResult struct {
+	RequestRate  float64 `json:"request_rate"`
+	ErrorRate    float64 `json:"error_rate"`
+	P50LatencyMS float64 `json:"p50_latency_ms"`
+	P95LatencyMS float64 `json:"p95_latency_ms"`
+	P99LatencyMS float64 `json:"p99_latency_ms"`
+	SampleCount  uint64  `json:"sample_count"`
+}
+
 type LogVolumeQuery struct {
 	Range   TimeRange
 	Service string
@@ -137,6 +154,46 @@ GROUP BY ServiceName, TargetService
 HAVING TargetService != '' AND TargetService != ServiceName
 ORDER BY RequestCount DESC, ServiceName ASC, TargetService ASC
 LIMIT {limit:UInt32}`
+
+const httpOverviewQuery = `
+SELECT toFloat64(count()) / {seconds:Float64} AS RequestRate,
+       if(count() = 0, 0., toFloat64(countIf(upperUTF8(StatusCode) IN ('ERROR', 'STATUS_CODE_ERROR'))) / toFloat64(count())) AS ErrorRate,
+       quantileTDigest(0.50)(toFloat64(Duration) / 1000000.0) AS P50LatencyMS,
+       quantileTDigest(0.95)(toFloat64(Duration) / 1000000.0) AS P95LatencyMS,
+       quantileTDigest(0.99)(toFloat64(Duration) / 1000000.0) AS P99LatencyMS,
+       count() AS SampleCount
+FROM otel_traces
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND Timestamp < {to:DateTime64(9)}
+  AND (lowerUTF8(SpanKind) IN ('server', 'span_kind_server')
+       OR SpanAttributes['http.request.method'] != ''
+       OR SpanAttributes['http.method'] != '')`
+
+func (s *ClickHouseStore) QueryHTTPOverview(ctx context.Context, query HTTPOverviewQuery) (HTTPOverviewResult, error) {
+	if err := s.validate(query.Range, 1); err != nil {
+		return HTTPOverviewResult{}, err
+	}
+	seconds := query.Range.To.Sub(query.Range.From).Seconds()
+	rows, err := s.query(ctx, httpOverviewQuery,
+		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
+		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
+		clickhouse.Named("seconds", seconds),
+	)
+	if err != nil {
+		return HTTPOverviewResult{}, err
+	}
+	defer rows.Close()
+	var result HTTPOverviewResult
+	if rows.Next() {
+		if err := rows.Scan(&result.RequestRate, &result.ErrorRate, &result.P50LatencyMS, &result.P95LatencyMS, &result.P99LatencyMS, &result.SampleCount); err != nil {
+			return HTTPOverviewResult{}, fmt.Errorf("scan HTTP overview: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return HTTPOverviewResult{}, fmt.Errorf("read HTTP overview: %w", err)
+	}
+	return result, nil
+}
 
 // Infrastructure metrics are intentionally selected by a fixed allowlist of
 // signal namespaces. The browser can choose a scope, but it cannot turn this

@@ -25,11 +25,21 @@ type adminTelemetryStatus struct {
 	Status string `json:"status"`
 }
 
+type adminHTTPOverview struct {
+	RequestRate  float64 `json:"request_rate"`
+	ErrorRate    float64 `json:"error_rate"`
+	P50LatencyMS float64 `json:"p50_latency_ms"`
+	P95LatencyMS float64 `json:"p95_latency_ms"`
+	P99LatencyMS float64 `json:"p99_latency_ms"`
+	SampleCount  uint64  `json:"sample_count"`
+}
+
 type adminOverviewResponse struct {
 	InstanceStatus string                        `json:"instance_status"`
 	CheckedAt      time.Time                     `json:"checked_at"`
 	Components     []adminComponentStatus        `json:"components"`
 	Telemetry      adminTelemetryStatus          `json:"telemetry"`
+	HTTP           *adminHTTPOverview            `json:"http,omitempty"`
 	Operations     *domain.AdminOperationSummary `json:"operations,omitempty"`
 }
 
@@ -120,11 +130,18 @@ func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
 			operations = &summary
 		}
 	}
+	var httpOverview *adminHTTPOverview
+	if explorer, ok := s.telemetry.(telemetry.OverviewExplorer); ok {
+		if result, err := explorer.QueryHTTPOverview(healthContext, telemetry.HTTPOverviewQuery{Range: telemetry.TimeRange{From: checkedAt.Add(-time.Hour), To: checkedAt}}); err == nil {
+			httpOverview = &adminHTTPOverview{RequestRate: result.RequestRate, ErrorRate: result.ErrorRate, P50LatencyMS: result.P50LatencyMS, P95LatencyMS: result.P95LatencyMS, P99LatencyMS: result.P99LatencyMS, SampleCount: result.SampleCount}
+		}
+	}
 	writeJSON(w, http.StatusOK, adminOverviewResponse{
 		InstanceStatus: instanceStatus,
 		CheckedAt:      checkedAt,
 		Components:     components,
 		Telemetry:      adminTelemetryStatus{Status: telemetryStatus},
+		HTTP:           httpOverview,
 		Operations:     operations,
 	})
 }

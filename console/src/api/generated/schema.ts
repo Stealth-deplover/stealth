@@ -2966,7 +2966,17 @@ export interface components {
             checked_at: string;
             components: components["schemas"]["AdminComponentStatus"][];
             telemetry: components["schemas"]["AdminTelemetryStatus"];
+            http?: components["schemas"]["AdminHTTPOverview"];
             operations?: components["schemas"]["AdminOperationSummary"];
+        };
+        AdminHTTPOverview: {
+            request_rate: number;
+            error_rate: number;
+            p50_latency_ms: number;
+            p95_latency_ms: number;
+            p99_latency_ms: number;
+            /** Format: int64 */
+            sample_count: number;
         };
         AdminOperationSummary: {
             /** Format: int64 */

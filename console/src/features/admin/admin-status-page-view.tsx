@@ -86,12 +86,12 @@ export function AdminStatusPageView() {
           <div className="flex items-center gap-3">
             {form.is_public ? (
               <a
-                href="/v1/status-page"
+                href="/status"
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 text-xs text-mist hover:text-paper"
               >
-                Open public JSON{" "}
+                Open public status{" "}
                 <ExternalLink className="size-3.5" aria-hidden="true" />
               </a>
             ) : null}

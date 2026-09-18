@@ -123,6 +123,16 @@ export function useAdminOverview(options?: {
   });
 }
 
+export function usePublicStatusPage() {
+  return useQuery({
+    queryKey: queryKeys.publicStatusPage,
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/status-page", { signal }),
+    ),
+    retry: false,
+  });
+}
+
 export function useAdminOperations(
   query: Pick<AdminTelemetryQuery, "from" | "to" | "limit"> = {},
   options?: { refetchInterval?: number | false },

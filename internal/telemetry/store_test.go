@@ -226,3 +226,15 @@ func TestInfrastructureQueryUsesFixedNamespacesAndValidatesScope(t *testing.T) {
 		t.Fatalf("invalid infrastructure scope error = %v, want ErrInvalidQuery", err)
 	}
 }
+
+func TestHTTPOverviewUsesBoundedTraceAggregate(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryHTTPOverview(context.Background(), HTTPOverviewQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "quantileTDigest") || !strings.Contains(conn.query, "{seconds:Float64}") || strings.Contains(conn.query, "SELECT "+"*") {
+		t.Fatalf("HTTP overview query is not a fixed aggregate: %s", conn.query)
+	}
+}

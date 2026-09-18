@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -8,7 +9,12 @@ import {
   Server,
   ShieldAlert,
 } from "lucide-react";
-import { useAdminOverview, useAdminSources } from "@/api/queries";
+import {
+  useAdminInfrastructure,
+  useAdminOverview,
+  useAdminSources,
+} from "@/api/queries";
+import { PathsV1AdminInfrastructureMetricsGetParametersQueryScope } from "@/api/generated/schema";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
@@ -26,6 +32,18 @@ export function AdminOverviewView() {
   const sources = useAdminSources(
     { ...timeRange.query, limit: 8 },
     { refetchInterval: timeRange.refreshInterval },
+  );
+  const infrastructure = useAdminInfrastructure(
+    {
+      ...timeRange.query,
+      scope: PathsV1AdminInfrastructureMetricsGetParametersQueryScope.host,
+      limit: 250,
+    },
+    { refetchInterval: timeRange.refreshInterval },
+  );
+  const hostMetrics = useMemo(
+    () => latestHostMetrics(infrastructure.data?.items),
+    [infrastructure.data?.items],
   );
 
   if (overview.isPending) {
@@ -97,6 +115,73 @@ export function AdminOverviewView() {
             </CardContent>
           </Card>
         ))}
+      </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ResourceStat
+          label="CPU utilization"
+          value={formatRatio(hostMetrics["system.cpu.utilization"])}
+          state={resourceState(
+            infrastructure,
+            hostMetrics["system.cpu.utilization"],
+          )}
+          href="/admin/infrastructure"
+        />
+        <ResourceStat
+          label="Memory utilization"
+          value={formatRatio(hostMetrics["system.memory.utilization"])}
+          state={resourceState(
+            infrastructure,
+            hostMetrics["system.memory.utilization"],
+          )}
+          href="/admin/infrastructure"
+        />
+        <ResourceStat
+          label="Filesystem utilization"
+          value={formatRatio(hostMetrics["system.filesystem.utilization"])}
+          state={resourceState(
+            infrastructure,
+            hostMetrics["system.filesystem.utilization"],
+          )}
+          href="/admin/infrastructure"
+        />
+        <ResourceStat
+          label="Load average"
+          value={formatNumber(hostMetrics["system.load.1"])}
+          state={resourceState(infrastructure, hostMetrics["system.load.1"])}
+          href="/admin/infrastructure"
+        />
+      </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <ResourceStat
+          label="Request rate"
+          value={formatRate(data.http?.request_rate)}
+          state={data.http ? "ready" : "missing"}
+          href="/admin/telemetry/traces"
+        />
+        <ResourceStat
+          label="Error rate"
+          value={formatRatio(data.http?.error_rate)}
+          state={data.http ? "ready" : "missing"}
+          href="/admin/telemetry/errors"
+        />
+        <ResourceStat
+          label="p50 latency"
+          value={formatLatency(data.http?.p50_latency_ms)}
+          state={data.http ? "ready" : "missing"}
+          href="/admin/telemetry/traces"
+        />
+        <ResourceStat
+          label="p95 latency"
+          value={formatLatency(data.http?.p95_latency_ms)}
+          state={data.http ? "ready" : "missing"}
+          href="/admin/telemetry/traces"
+        />
+        <ResourceStat
+          label="p99 latency"
+          value={formatLatency(data.http?.p99_latency_ms)}
+          state={data.http ? "ready" : "missing"}
+          href="/admin/telemetry/traces"
+        />
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {data.operations ? (
@@ -234,4 +319,80 @@ function OverviewStat({
       </Card>
     </Link>
   );
+}
+
+function ResourceStat({
+  label,
+  value,
+  state,
+  href,
+}: {
+  label: string;
+  value: string;
+  state: "loading" | "ready" | "missing" | "unavailable";
+  href: string;
+}) {
+  return (
+    <Link href={href} className="block">
+      <Card className="h-full transition-colors duration-150 hover:border-smoke">
+        <CardContent className="p-5">
+          <p className="text-xs uppercase tracking-[0.12em] text-fog">
+            {label}
+          </p>
+          <p className="mt-3 font-mono text-xl tabular-nums text-paper">
+            {value}
+          </p>
+          {state !== "ready" ? (
+            <p className="mt-2 text-[11px] text-fog">
+              {state === "loading"
+                ? "Loading sample"
+                : state === "unavailable"
+                  ? "Telemetry unavailable"
+                  : "No sample in this window"}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+function latestHostMetrics(
+  items: Array<{ name: string; value: number; timestamp: string }> | undefined,
+) {
+  const latest = new Map<string, { timestamp: string; value: number }>();
+  for (const item of items ?? []) {
+    const current = latest.get(item.name);
+    if (!current || item.timestamp > current.timestamp) {
+      latest.set(item.name, { timestamp: item.timestamp, value: item.value });
+    }
+  }
+  return Object.fromEntries(
+    [...latest.entries()].map(([name, item]) => [name, item.value]),
+  ) as Record<string, number | undefined>;
+}
+
+function resourceState(
+  query: { isPending: boolean; error: unknown },
+  value: number | undefined,
+): "loading" | "ready" | "missing" | "unavailable" {
+  if (query.isPending) return "loading";
+  if (query.error) return "unavailable";
+  return value === undefined ? "missing" : "ready";
+}
+
+function formatRatio(value: number | undefined) {
+  return value === undefined ? "No sample" : `${(value * 100).toFixed(1)}%`;
+}
+
+function formatNumber(value: number | undefined) {
+  return value === undefined ? "No sample" : value.toFixed(2);
+}
+
+function formatRate(value: number | undefined) {
+  return value === undefined ? "No sample" : `${value.toFixed(2)}/s`;
+}
+
+function formatLatency(value: number | undefined) {
+  return value === undefined ? "No sample" : `${value.toFixed(1)} ms`;
 }
