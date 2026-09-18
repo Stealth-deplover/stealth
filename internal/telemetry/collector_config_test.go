@@ -29,7 +29,7 @@ func TestDockerLogTimestampLayoutMatchesDockerJSON(t *testing.T) {
 func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
 	for _, expected := range []string{
-		"http_config:",
+		"http_headers:",
 		"layout_type: gotime",
 		"layout: '2006-01-02T15:04:05.999999999Z07:00'",
 		"id: stream-severity",
@@ -46,6 +46,9 @@ func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	}
 	if strings.Contains(config, "layout: '%Y-") {
 		t.Fatal("collector config still uses a strptime layout with gotime")
+	}
+	if strings.Contains(config, "http_config:") {
+		t.Fatal("Prometheus receiver config must use its inline http_headers field")
 	}
 }
 
