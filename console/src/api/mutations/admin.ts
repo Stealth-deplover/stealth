@@ -136,6 +136,20 @@ export function useDeleteAdminNotificationChannel() {
   });
 }
 
+export function useTestAdminNotificationChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (channelId: string) =>
+      unwrap(
+        await api.POST("/v1/admin/notifications/{channelID}/test", {
+          params: { path: { channelID: channelId } },
+        }),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminNotifications }),
+  });
+}
+
 export function useCreateAdminIncident() {
   const queryClient = useQueryClient();
   return useMutation({

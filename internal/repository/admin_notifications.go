@@ -47,6 +47,8 @@ type AdminNotificationDeliveryJob struct {
 	Attempts        int
 }
 
+const adminNotificationTestMessage = "This is a test notification from the Stealth admin control room."
+
 const adminNotificationProjection = `
 	c.id::text,c.name,c.kind,c.enabled,
 	(c.config_encrypted IS NOT NULL AND octet_length(c.config_encrypted) > 0),
@@ -185,6 +187,47 @@ func (r *Repository) DeleteAdminNotificationChannel(ctx context.Context, account
 	return tx.Commit(ctx)
 }
 
+func (r *Repository) EnqueueAdminNotificationTest(ctx context.Context, accountID, channelID uuid.UUID) (uuid.UUID, error) {
+	if r == nil || r.pool == nil || accountID == uuid.Nil || channelID == uuid.Nil {
+		return uuid.Nil, ErrInvalidAdminNotification
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
+		return uuid.Nil, err
+	}
+	var enabled, configured bool
+	if err := tx.QueryRow(ctx, `
+		SELECT enabled,(config_encrypted IS NOT NULL AND octet_length(config_encrypted) > 0)
+		FROM admin_notification_channels WHERE id=$1`, channelID).Scan(&enabled, &configured); errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	} else if err != nil {
+		return uuid.Nil, err
+	}
+	if !enabled || !configured {
+		return uuid.Nil, fmt.Errorf("%w: channel must be enabled and configured", ErrInvalidAdminNotification)
+	}
+	deliveryID, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO admin_notification_deliveries (id,channel_id,test_message)
+		VALUES ($1,$2,$3)`, deliveryID, channelID, adminNotificationTestMessage); err != nil {
+		return uuid.Nil, mapError(err)
+	}
+	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.notification_channel.test", "admin_notification_channel", channelID, map[string]any{}); err != nil {
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return deliveryID, nil
+}
+
 func (r *Repository) RequeueStaleAdminNotificationDeliveries(ctx context.Context, leaseAge time.Duration) (int64, error) {
 	if r == nil || r.pool == nil || leaseAge <= 0 {
 		return 0, ErrInvalidAdminNotification
@@ -211,12 +254,17 @@ func (r *Repository) ClaimNextAdminNotificationDelivery(ctx context.Context, wor
 	var job AdminNotificationDeliveryJob
 	err = tx.QueryRow(ctx, `
 		SELECT d.id,d.channel_id,c.name,c.kind,c.config_encrypted,d.alert_event_id,
-		       r.name,r.severity,e.state,e.message,e.occurred_at,d.attempts
+		       COALESCE(r.name,'Stealth notification test'),
+		       COALESCE(r.severity,'info'),
+		       COALESCE(e.state,'test'),
+		       COALESCE(e.message,d.test_message),
+		       COALESCE(e.occurred_at,d.created_at),d.attempts
 		FROM admin_notification_deliveries d
 		JOIN admin_notification_channels c ON c.id=d.channel_id
-		JOIN admin_alert_events e ON e.id=d.alert_event_id
-		JOIN admin_alert_rules r ON r.id=e.rule_id
+		LEFT JOIN admin_alert_events e ON e.id=d.alert_event_id
+		LEFT JOIN admin_alert_rules r ON r.id=e.rule_id
 		WHERE d.status='pending' AND d.available_at<=now() AND c.enabled
+		  AND (d.alert_event_id IS NOT NULL OR d.test_message IS NOT NULL)
 		  AND (d.leased_at IS NULL OR d.leased_at < now() - ($1::double precision * interval '1 second'))
 		ORDER BY d.available_at,d.id
 		LIMIT 1 FOR UPDATE OF d SKIP LOCKED`, leaseAge.Seconds()).Scan(

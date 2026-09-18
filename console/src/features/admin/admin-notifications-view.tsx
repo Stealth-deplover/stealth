@@ -6,6 +6,7 @@ import { BellRing, Plus, Trash2 } from "lucide-react";
 import {
   useCreateAdminNotificationChannel,
   useDeleteAdminNotificationChannel,
+  useTestAdminNotificationChannel,
 } from "@/api/mutations";
 import { useAdminNotificationChannels } from "@/api/queries";
 import {
@@ -38,6 +39,7 @@ type ChannelRequest =
 export function AdminNotificationsView() {
   const channels = useAdminNotificationChannels({ limit: 100 });
   const remove = useDeleteAdminNotificationChannel();
+  const testChannel = useTestAdminNotificationChannel();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
@@ -131,27 +133,38 @@ export function AdminNotificationsView() {
                       {formatDate(channel.updated_at)}
                     </td>
                     <td className="px-4 py-4 text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Delete ${channel.name}`}
-                        disabled={remove.isPending}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Delete the channel "${channel.name}"?`,
-                            )
-                          ) {
-                            remove.mutate(channel.id);
-                          }
-                        }}
-                      >
-                        <Trash2
-                          className="size-4 text-fog"
-                          aria-hidden="true"
-                        />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={testChannel.isPending || !channel.enabled}
+                          onClick={() => testChannel.mutate(channel.id)}
+                        >
+                          Test
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Delete ${channel.name}`}
+                          disabled={remove.isPending}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Delete the channel "${channel.name}"?`,
+                              )
+                            ) {
+                              remove.mutate(channel.id);
+                            }
+                          }}
+                        >
+                          <Trash2
+                            className="size-4 text-fog"
+                            aria-hidden="true"
+                          />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -164,6 +177,14 @@ export function AdminNotificationsView() {
               role="alert"
             >
               {errorMessage(remove.error)}
+            </p>
+          ) : null}
+          {testChannel.error ? (
+            <p
+              className="border-t border-graphite p-4 text-sm text-coral-red"
+              role="alert"
+            >
+              {errorMessage(testChannel.error)}
             </p>
           ) : null}
         </div>

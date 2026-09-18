@@ -41,6 +41,11 @@ type adminNotificationChannelsResponse struct {
 	Items []domain.AdminNotificationChannel `json:"items"`
 }
 
+type adminNotificationTestResponse struct {
+	DeliveryID string `json:"delivery_id"`
+	Status     string `json:"status"`
+}
+
 type adminIncidentRequest struct {
 	Title    string   `json:"title"`
 	Severity string   `json:"severity"`
@@ -194,6 +199,19 @@ func (s *Server) deleteAdminNotificationChannel(w http.ResponseWriter, r *http.R
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) testAdminNotificationChannel(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "channelID")
+	if !ok || s.repo == nil {
+		return
+	}
+	deliveryID, err := s.repo.EnqueueAdminNotificationTest(r.Context(), mustUUID(accountFrom(r).ID), id)
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, adminNotificationTestResponse{DeliveryID: deliveryID.String(), Status: "pending"})
 }
 
 func (s *Server) createAdminAlertRule(w http.ResponseWriter, r *http.Request) {

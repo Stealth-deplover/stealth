@@ -370,6 +370,13 @@ paths:
       security: [{ sessionCookie: [] }]
       parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
       responses: { '204': { description: Notification channel deleted }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/notifications/{channelID}/test:
+    post:
+      operationId: testAdminNotificationChannel
+      description: Queue a redacted test notification for an enabled, configured channel. The trusted worker performs delivery.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
+      responses: { '202': { description: Test delivery queued, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationTestResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
   /v1/admin/incidents:
     get:
       operationId: listAdminIncidents
@@ -2886,6 +2893,7 @@ components:
     AdminNotificationChannel: { type: object, additionalProperties: false, required: [id, name, kind, enabled, secret_configured, created_at, updated_at], properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [email, webhook, slack, discord, telegram] }, enabled: { type: boolean }, secret_configured: { type: boolean }, last_delivery_at: { type: [string, 'null'], format: date-time }, last_delivery_status: { type: [string, 'null'], enum: [success, failed, 'null'] }, last_error: { type: [string, 'null'], maxLength: 1000 }, created_by_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
     AdminNotificationChannelsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }
     CreateAdminNotificationChannelRequest: { type: object, additionalProperties: false, required: [name, kind, config], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [email, webhook, slack, discord, telegram] }, enabled: { type: boolean, default: true }, config: { type: object, additionalProperties: true, writeOnly: true } } }
+    AdminNotificationTestResponse: { type: object, additionalProperties: false, required: [delivery_id, status], properties: { delivery_id: { type: string, format: uuid }, status: { type: string, enum: [pending] } } }
     AdminAlertEvent: { type: object, additionalProperties: false, required: [id, rule_id, state, message, occurred_at], properties: { id: { type: string, format: uuid }, rule_id: { type: string, format: uuid }, state: { type: string, enum: [firing, resolved] }, value: { type: [number, 'null'] }, message: { type: string, maxLength: 1000 }, occurred_at: { type: string, format: date-time } } }
     AdminAlertRulesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAlertRule' } } } }
     AdminAlertRuleResponse: { type: object, additionalProperties: false, required: [rule], properties: { rule: { $ref: '#/components/schemas/AdminAlertRule' }, events: { type: array, items: { $ref: '#/components/schemas/AdminAlertEvent' } } } }

@@ -411,6 +411,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/notifications/{channelID}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Queue a redacted test notification for an enabled, configured channel. The trusted worker performs delivery. */
+        post: operations["testAdminNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/incidents": {
         parameters: {
             query?: never;
@@ -3342,6 +3359,12 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+        };
+        AdminNotificationTestResponse: {
+            /** Format: uuid */
+            delivery_id: string;
+            /** @enum {string} */
+            status: AdminNotificationTestResponseStatus;
         };
         AdminAlertEvent: {
             /** Format: uuid */
@@ -6862,6 +6885,32 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    testAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test delivery queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationTestResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -13826,6 +13875,9 @@ export enum CreateAdminNotificationChannelRequestKind {
     slack = "slack",
     discord = "discord",
     telegram = "telegram"
+}
+export enum AdminNotificationTestResponseStatus {
+    pending = "pending"
 }
 export enum AdminAlertEventState {
     firing = "firing",

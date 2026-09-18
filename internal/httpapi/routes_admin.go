@@ -30,6 +30,7 @@ func (s *Server) registerAdminRoutes(r chi.Router) {
 	r.With(s.requireInstanceAdmin).Post("/admin/notifications", s.createAdminNotificationChannel)
 	r.With(s.requireInstanceAdmin).Get("/admin/notifications/{channelID}", s.getAdminNotificationChannel)
 	r.With(s.requireInstanceAdmin).Put("/admin/notifications/{channelID}", s.updateAdminNotificationChannel)
+	r.With(s.requireInstanceAdmin).Post("/admin/notifications/{channelID}/test", s.testAdminNotificationChannel)
 	r.With(s.requireInstanceAdmin).Delete("/admin/notifications/{channelID}", s.deleteAdminNotificationChannel)
 	r.With(s.requireInstanceAdmin).Get("/admin/incidents", s.listAdminIncidents)
 	r.With(s.requireInstanceAdmin).Post("/admin/incidents", s.createAdminIncident)
