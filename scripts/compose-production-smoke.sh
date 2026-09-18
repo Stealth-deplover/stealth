@@ -217,10 +217,10 @@ if [ -z "$auth_cookie_header" ]; then
 fi
 
 "${compose[@]}" exec -T postgres sh -ec \
-	'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --set "smoke_email=$1" --command "INSERT INTO instance_roles (account_id, role) SELECT id, '\''instance_admin'\'' FROM accounts WHERE email = :'\''smoke_email'\'' ON CONFLICT (account_id) DO UPDATE SET role = EXCLUDED.role"' \
+	'email="$1"; case "$email" in *[!A-Za-z0-9.@_-]*) printf "invalid smoke email\n" >&2; exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "INSERT INTO instance_roles (account_id, role) SELECT id, '\''instance_admin'\'' FROM accounts WHERE email = '\''$email'\'' ON CONFLICT (account_id) DO UPDATE SET role = EXCLUDED.role"' \
 	sh "$smoke_email"
 role_count="$("${compose[@]}" exec -T postgres sh -ec \
-	'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --set "smoke_email=$1" --tuples-only --no-align --command "SELECT count(*) FROM instance_roles WHERE account_id = (SELECT id FROM accounts WHERE email = :'\''smoke_email'\'') AND role = '\''instance_admin'\''"' \
+	'email="$1"; case "$email" in *[!A-Za-z0-9.@_-]*) printf "invalid smoke email\n" >&2; exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --command "SELECT count(*) FROM instance_roles WHERE account_id = (SELECT id FROM accounts WHERE email = '\''$email'\'') AND role = '\''instance_admin'\''"' \
 	sh "$smoke_email" | tr -d '[:space:]')"
 if [ "$role_count" != '1' ]; then
 	printf 'smoke admin role was not created\n' >&2
