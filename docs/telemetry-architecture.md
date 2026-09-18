@@ -123,6 +123,15 @@ currently lets an owner create and edit metric time-series, recent-log, and
 monitor-status panels. Each panel uses the same authenticated domain query
 API and never accepts raw SQL.
 
+The owner control room also exposes durable operations, audit events, monitor
+checks, alert history, notification delivery state, incidents, infrastructure
+metric samples, service-map edges, error-group status, and a public status-page
+projection. Error groups are derived and fingerprinted in ClickHouse; their
+owner-controlled lifecycle state is kept in PostgreSQL so acknowledgement and
+resolution survive a restart without copying high-volume occurrences into the
+control plane. Notification test sends use the same durable delivery queue as
+alert notifications and never return channel secrets to the browser.
+
 The API remains usable when ClickHouse or the Collector is unavailable. Admin
 pages report the telemetry backend as unavailable; core authentication,
 projects, deployments, and storage do not depend on a successful telemetry
@@ -150,6 +159,30 @@ The minimum controls are:
 - `TELEMETRY_RETENTION` for signal TTL;
 - the Collector memory limiter and persistent sending queue for ingestion.
 
-There is no unlimited browser query path. Later alerting and dashboard slices
-must use the same bounded `TelemetryStore` contract rather than connecting to
-ClickHouse directly.
+There is no unlimited browser query path. Any future alerting or dashboard
+slice must use the same bounded `TelemetryStore` contract rather than
+connecting to ClickHouse directly. The current release intentionally does not
+claim the following as implemented: a Playwright synthetic runner,
+workload-scoped OTLP
+credential issuance, owner-editable retention/sampling/export settings, a
+ClickHouse backup provider, automatic alert-to-incident correlation,
+maintenance-window scheduling, or a full advanced SQL mode. These are not
+represented by placeholder endpoints or fabricated telemetry. The existing
+monitoring surface accepts only the probe kinds implemented by the trusted
+worker, and unsupported alert kinds are rejected instead of being stored as
+inert rules.
+
+## Failure and recovery behavior
+
+Telemetry is an optional dependency for the control plane. If ClickHouse or
+the Collector is unavailable, API authentication, projects, deployments,
+storage, and the rest of the Console remain available. Query endpoints return
+a generic degraded response and the UI renders an explicit unavailable or
+empty state. Collector export has a persistent queue, retry, and memory
+limits; the worker leaves an alert state unchanged when the required sample
+is unavailable, avoiding false recoveries during an outage.
+
+ClickHouse data and the Collector queue are separate from the PostgreSQL
+control-plane volume. PostgreSQL backups therefore do not constitute a
+telemetry backup. Operators who need telemetry recovery must configure and
+verify a ClickHouse backup workflow appropriate for their storage platform.
