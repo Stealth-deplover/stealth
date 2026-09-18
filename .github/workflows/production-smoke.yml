@@ -1,0 +1,131 @@
+name: Production Compose Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-smoke:
+    name: Build local images and run production smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ci
+      COMMIT_SHA: ${{ github.sha }}
+      BUILD_TIME: ${{ github.run_started_at }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Build local API, setup, worker, migration, Collector, proxy, and Console images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --target api \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-api:smoke-${GITHUB_RUN_ID}" .
+          docker build --target setup \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-setup:smoke-${GITHUB_RUN_ID}" .
+          docker build --target worker \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-worker:smoke-${GITHUB_RUN_ID}" .
+          docker build --target migrate \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-migrate:smoke-${GITHUB_RUN_ID}" .
+          docker build --target telemetry-collector \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-otel-collector:smoke-${GITHUB_RUN_ID}" .
+          docker build --target telemetry-docker-proxy \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-telemetry-docker-proxy:smoke-${GITHUB_RUN_ID}" .
+          docker build -f console/Dockerfile \
+            --build-arg NEXT_PUBLIC_API_BASE_URL= \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-console:smoke-${GITHUB_RUN_ID}" .
+
+      - name: Generate ephemeral smoke configuration
+        env:
+          SMOKE_ENV: ${{ runner.temp }}/stealth-production-smoke.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          postgres_password="$(openssl rand -hex 24)"
+          redis_password="$(openssl rand -hex 24)"
+          clickhouse_password="$(openssl rand -hex 24)"
+          functions_secret_key="$(openssl rand -base64 32 | tr -d '\n')"
+          bootstrap_cli_key="$(openssl rand -base64 32 | tr -d '\n')"
+          metrics_token="$(openssl rand -hex 32)"
+          docker_gid="$(stat -c '%g' /var/run/docker.sock)"
+          cat >"$SMOKE_ENV" <<EOF
+          COMPOSE_PROJECT_NAME=stealth-pr-smoke-${GITHUB_RUN_ID}
+          STEALTH_API_IMAGE=stealth-api:smoke-${GITHUB_RUN_ID}
+          STEALTH_WORKER_IMAGE=stealth-worker:smoke-${GITHUB_RUN_ID}
+          STEALTH_MIGRATE_IMAGE=stealth-migrate:smoke-${GITHUB_RUN_ID}
+          STEALTH_CONSOLE_IMAGE=stealth-console:smoke-${GITHUB_RUN_ID}
+          OTEL_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${GITHUB_RUN_ID}
+          OTEL_DOCKER_COLLECTOR_IMAGE=otel/opentelemetry-collector-contrib:0.161.0
+          STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=stealth-telemetry-docker-proxy:smoke-${GITHUB_RUN_ID}
+          POSTGRES_DB=stealth
+          POSTGRES_USER=stealth
+          POSTGRES_PASSWORD=${postgres_password}
+          REDIS_PASSWORD=${redis_password}
+          CLICKHOUSE_DATABASE=stealth_telemetry
+          CLICKHOUSE_USER=stealth
+          CLICKHOUSE_PASSWORD=${clickhouse_password}
+          FUNCTIONS_SECRET_KEY=${functions_secret_key}
+          BOOTSTRAP_CLI_KEY=${bootstrap_cli_key}
+          GITHUB_APP_CLIENT_ID=smoke-client-id
+          PUBLIC_APP_URL=http://127.0.0.1:13000
+          COOKIE_SECURE=false
+          TRUSTED_PROXY_CIDRS=172.31.0.0/24
+          STEALTH_NETWORK_SUBNET=172.31.0.0/24
+          STEALTH_NETWORK_NAME=stealth_pr_smoke_network_${GITHUB_RUN_ID}
+          STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_pr_smoke_telemetry_store_${GITHUB_RUN_ID}
+          STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_pr_smoke_telemetry_docker_${GITHUB_RUN_ID}
+          DOCKER_GID=${docker_gid}
+          METRICS_TOKEN=${metrics_token}
+          FUNCTIONS_RUNNER_ENABLED=true
+          FUNCTIONS_RUNNER_STAGING_VOLUME=stealth_pr_smoke_staging_${GITHUB_RUN_ID}
+          POSTGRES_VOLUME_NAME=stealth_pr_smoke_postgres_${GITHUB_RUN_ID}
+          STORAGE_VOLUME_NAME=stealth_pr_smoke_storage_${GITHUB_RUN_ID}
+          CLICKHOUSE_VOLUME_NAME=stealth_pr_smoke_clickhouse_${GITHUB_RUN_ID}
+          OTELCOL_VOLUME_NAME=stealth_pr_smoke_otelcol_${GITHUB_RUN_ID}
+          PROXY_HTTP_BIND=127.0.0.1
+          PROXY_HTTP_PORT=8080
+          API_HOST_PORT=18080
+          CONSOLE_HOST_PORT=13000
+          EOF
+          chmod 600 "$SMOKE_ENV"
+
+      - name: Validate rendered smoke Compose
+        env:
+          SMOKE_ENV: ${{ runner.temp }}/stealth-production-smoke.env
+        run: docker compose --env-file "$SMOKE_ENV" -f compose.production.yaml config --quiet
+
+      - name: Run production Compose HTTP and telemetry smoke
+        env:
+          ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
+          SMOKE_REMOVE_VOLUMES: "true"
+        run: ./scripts/compose-production-smoke.sh
