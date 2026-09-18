@@ -109,6 +109,12 @@ jobs:
       - name: Test bootstrap failure handling
         run: ./scripts/bootstrap_test.sh
 
+      - name: Telemetry security regression
+        run: ./scripts/telemetry-security-test.sh
+
+      - name: Collector Docker log parser smoke
+        run: ./scripts/collector-log-parser-smoke.sh
+
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
@@ -192,6 +198,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-migrate:smoke-$SHORT_SHA" .
+          docker build --target telemetry-collector \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-otel-collector:smoke-$SHORT_SHA" .
           docker build --target telemetry-docker-proxy \
             --build-arg VERSION="$VERSION" \
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
@@ -228,6 +239,8 @@ jobs:
           STEALTH_WORKER_IMAGE=stealth-worker:smoke-${SHORT_SHA}
           STEALTH_MIGRATE_IMAGE=stealth-migrate:smoke-${SHORT_SHA}
           STEALTH_CONSOLE_IMAGE=stealth-console:smoke-${SHORT_SHA}
+          OTEL_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${SHORT_SHA}
+          OTEL_DOCKER_COLLECTOR_IMAGE=otel/opentelemetry-collector-contrib:0.161.0
           STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=stealth-telemetry-docker-proxy:smoke-${SHORT_SHA}
           POSTGRES_DB=stealth
           POSTGRES_USER=stealth
@@ -440,6 +453,26 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAMESPACE }}/stealth-telemetry-docker-proxy:${{ env.VERSION }}
             ${{ env.IMAGE_NAMESPACE }}/stealth-telemetry-docker-proxy:sha-${{ env.SHORT_SHA }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push Stealth Collector image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: telemetry-collector
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-otel-collector:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-otel-collector:sha-${{ env.SHORT_SHA }}
           labels: |
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ env.COMMIT_SHA }}

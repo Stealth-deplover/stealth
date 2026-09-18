@@ -13,7 +13,9 @@ cat >"$temporary_dir/docker.log" <<'EOF'
 {"log":"hello stdout\n","stream":"stdout","time":"2026-09-18T02:12:44.123456789Z"}
 {"log":"plain stderr\n","stream":"stderr","time":"2026-09-18T02:12:45.123456789Z"}
 {"log":"{\"level\":\"error\",\"message\":\"structured\"}\n","stream":"stdout","time":"2026-09-18T02:12:46.123456789Z"}
+{"log":"{\"severity\":\"warn\",\"message\":\"structured alias\"}\n","stream":"stdout","time":"2026-09-18T02:12:46.500Z"}
 {"log":"trimmed timestamp\n","stream":"stdout","time":"2026-09-18T02:12:47Z"}
+{"log":"missing severity\n","time":"2026-09-18T02:12:48Z"}
 not-json-but-still-a-log-line
 EOF
 cat >"$temporary_dir/config.yaml" <<'EOF'
@@ -60,6 +62,12 @@ receivers:
         overwrite_text: true
         if: 'attributes.application != nil && attributes.application.level != nil'
         on_error: send
+      - type: severity_parser
+        id: application-severity-alias
+        parse_from: attributes.application.severity
+        overwrite_text: true
+        if: 'attributes.application != nil && attributes.application.level == nil && attributes.application.severity != nil'
+        on_error: send
 exporters:
   debug:
     verbosity: detailed
@@ -91,7 +99,7 @@ if [ "$status" -ne 124 ]; then
 	exit 1
 fi
 
-for expected in "hello stdout" "plain stderr" "structured" "trimmed timestamp" "not-json-but-still-a-log-line"; do
+for expected in "hello stdout" "plain stderr" "structured" "structured alias" "trimmed timestamp" "missing severity" "not-json-but-still-a-log-line"; do
 	if ! grep -F "$expected" "$output_file" >/dev/null 2>&1; then
 		printf 'collector parser smoke did not preserve %s\n' "$expected" >&2
 		sed -n '1,240p' "$output_file" >&2

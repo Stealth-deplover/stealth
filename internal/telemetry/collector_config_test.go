@@ -29,6 +29,7 @@ func TestDockerLogTimestampLayoutMatchesDockerJSON(t *testing.T) {
 func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
 	for _, expected := range []string{
+		"http_config:",
 		"layout_type: gotime",
 		"layout: '2006-01-02T15:04:05.999999999Z07:00'",
 		"id: stream-severity",
@@ -36,6 +37,7 @@ func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 		"warn: stderr",
 		"id: application-json",
 		"id: application-severity",
+		"id: application-severity-alias",
 		"on_error: send",
 	} {
 		if !strings.Contains(config, expected) {
@@ -47,13 +49,39 @@ func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	}
 }
 
-func TestProductionComposeUsesScratchCompatibleCollectorChecksAndProxy(t *testing.T) {
-	compose := readRepositoryFile(t, "compose.production.yaml")
-	if !strings.Contains(compose, `test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]`) {
-		t.Fatal("collector healthcheck is not exec-form against the published binary")
+func TestDockerStatsExplicitlyEnablesInfrastructureMetrics(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "docker-stats.yaml")
+	for _, expected := range []string{
+		"container.cpu.usage.total:",
+		"container.memory.usage.total:",
+		"container.network.io.usage.rx_bytes:",
+		"container.blockio.io_service_bytes_recursive:",
+		"container.state.status:",
+		"container.state.health.status:",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("Docker stats config is missing %q", expected)
+		}
 	}
-	if strings.Contains(compose, "otelcol-contrib validate --config=/etc/otelcol-contrib/config.yaml >/dev/null") {
-		t.Fatal("collector healthcheck regressed to shell syntax")
+	if strings.Count(config, "enabled: true") < 6 {
+		t.Fatal("Docker stats infrastructure metrics are not explicitly enabled")
+	}
+}
+
+func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *testing.T) {
+	compose := readRepositoryFile(t, "compose.production.yaml")
+	collector := serviceText(compose, "otel-collector")
+	if !strings.Contains(collector, `test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]`) {
+		t.Fatal("collector healthcheck does not probe the live health endpoint")
+	}
+	if strings.Contains(collector, "CMD-SHELL") || strings.Contains(collector, "otelcol-contrib validate") {
+		t.Fatal("collector healthcheck regressed to a shell or static config validation")
+	}
+	if !strings.Contains(readRepositoryFile(t, "telemetry", "otel-collector.yaml"), "health_check:") {
+		t.Fatal("collector configuration must enable the health_check extension")
+	}
+	if !strings.Contains(compose, `image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"`) {
+		t.Fatal("isolated Docker collector should use the upstream image independently")
 	}
 	if !strings.Contains(compose, "otelcol-state-init:") || !strings.Contains(compose, "chown -R 10001:10001 /var/lib/otelcol") {
 		t.Fatal("collector persistent-state ownership init is missing")
@@ -63,6 +91,11 @@ func TestProductionComposeUsesScratchCompatibleCollectorChecksAndProxy(t *testin
 	}
 	if strings.Contains(serviceText(compose, "telemetry-docker"), "/var/run/docker.sock:/var/run/docker.sock") {
 		t.Fatal("telemetry-docker directly mounts the Docker socket")
+	}
+
+	dockerfile := readRepositoryFile(t, "Dockerfile")
+	if !strings.Contains(dockerfile, "AS telemetry-collector") || !strings.Contains(dockerfile, "telemetry-collector-healthcheck") {
+		t.Fatal("Stealth Collector wrapper image is missing the live health probe")
 	}
 }
 

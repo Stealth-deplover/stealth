@@ -42,6 +42,39 @@ func (f *setupBootstrapFake) VerifyBootstrapCode(context.Context, []byte) (repos
 
 type setupManifestFake struct{}
 
+type lockedSetupResponseRecorder struct {
+	mu    sync.Mutex
+	inner *httptest.ResponseRecorder
+}
+
+func (r *lockedSetupResponseRecorder) Header() http.Header {
+	return r.inner.Header()
+}
+
+func (r *lockedSetupResponseRecorder) WriteHeader(statusCode int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inner.WriteHeader(statusCode)
+}
+
+func (r *lockedSetupResponseRecorder) Write(payload []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inner.Write(payload)
+}
+
+func (r *lockedSetupResponseRecorder) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.inner.Flush()
+}
+
+func (r *lockedSetupResponseRecorder) BodyString() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inner.Body.String()
+}
+
 func (setupManifestFake) ConvertManifest(context.Context, string) (githubauth.AppCredentials, error) {
 	return githubauth.AppCredentials{
 		ID:            42,
@@ -402,7 +435,7 @@ func TestSetupInstallEventsReloadDurableHostProgress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	request := httptest.NewRequest(http.MethodGet, "/v1/setup/install/events", nil).WithContext(ctx)
-	recorder := httptest.NewRecorder()
+	recorder := &lockedSetupResponseRecorder{inner: httptest.NewRecorder()}
 	done := make(chan struct{})
 	go func() {
 		server.setupInstallEvents(recorder, request)
@@ -410,10 +443,10 @@ func TestSetupInstallEventsReloadDurableHostProgress(t *testing.T) {
 	}()
 
 	deadline := time.Now().Add(time.Second)
-	for !strings.Contains(recorder.Body.String(), "event: snapshot") && time.Now().Before(deadline) {
+	for !strings.Contains(recorder.BodyString(), "event: snapshot") && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(recorder.Body.String(), "event: snapshot") {
+	if !strings.Contains(recorder.BodyString(), "event: snapshot") {
 		t.Fatal("SSE stream did not publish its durable snapshot")
 	}
 	if _, err := store.Update(context.Background(), func(state *setupstate.State) error {
@@ -422,7 +455,7 @@ func TestSetupInstallEventsReloadDurableHostProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(2 * time.Second)
-	for !strings.Contains(recorder.Body.String(), `"step":"Release images"`) && time.Now().Before(deadline) {
+	for !strings.Contains(recorder.BodyString(), `"step":"Release images"`) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
@@ -431,7 +464,7 @@ func TestSetupInstallEventsReloadDurableHostProgress(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("SSE stream did not close after browser disconnect")
 	}
-	body := recorder.Body.String()
+	body := recorder.BodyString()
 	if !strings.Contains(body, `event: progress`) || !strings.Contains(body, `"step":"Release images"`) {
 		t.Fatalf("durable host progress was not streamed after reconnect: %s", body)
 	}

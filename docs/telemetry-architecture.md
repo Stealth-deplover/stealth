@@ -44,9 +44,15 @@ The production Compose topology contains two Collector roles:
   host root bind is read-only for hostmetrics and masks the socket path.
 - `telemetry-docker-proxy` is the only telemetry service with a read-only
   Docker socket. It is attached only to an internal Compose network, has no
-  host port, and permits only the read endpoints required by the Docker stats
-  receiver. It strips container environment, mounts, command arguments, and
-  non-Compose labels from inspect responses.
+  host port, and permits only `GET`/`HEAD` requests to `/_ping`, `/version`,
+  `/events`, `/containers/json`, `/containers/<id>/json`, and
+  `/containers/<id>/stats`. The `/events` filter is restricted to container
+  lifecycle actions used by `docker_stats`: `destroy`, `die`, `pause`,
+  `rename`, `stop`, `start`, `unpause`, and `update`. Other query parameters
+  are limited to `all`, `limit`, `size`, and `filters` for container listing,
+  `size` for inspection, and `stream` or `one-shot` for stats. It strips
+  container environment, mounts, command arguments, and non-Compose labels
+  from inspect responses. It does not expose any mutation endpoint.
 - `telemetry-docker` is an internal metrics-only collector with no Docker
   socket. It talks to that proxy, has no HTTP/OTLP receiver, publishes no host
   port, and can only send Docker statistics to the main Collector over the
@@ -163,6 +169,14 @@ The minimum controls are:
   `TELEMETRY_MAX_QUERY_ROWS` for API reads;
 - `TELEMETRY_RETENTION` for signal TTL;
 - the Collector memory limiter and persistent sending queue for ingestion.
+
+The main `OTEL_COLLECTOR_IMAGE` is the Stealth wrapper image built from the
+pinned official `otel/opentelemetry-collector-contrib:0.161.0` image. The
+wrapper adds only `telemetry-collector-healthcheck`, a static Go HTTP probe,
+because the upstream image is scratch-based and contains no shell or HTTP
+client. `OTEL_DOCKER_COLLECTOR_IMAGE` remains the upstream image because the
+isolated Docker stats collector uses the exec-form config validation check and
+does not expose the main Collector health endpoint.
 
 There is no unlimited browser query path. Any future alerting or dashboard
 slice must use the same bounded `TelemetryStore` contract rather than

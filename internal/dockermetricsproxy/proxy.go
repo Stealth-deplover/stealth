@@ -1,10 +1,13 @@
 // Package dockermetricsproxy exposes the small, read-only Docker API surface
 // required by the OpenTelemetry docker_stats receiver. It is deliberately
 // separate from the worker, which is the only other production service that
-// currently needs Docker mutation authority.
+// currently needs Docker mutation authority. The allowlist is limited to
+// ping/version, filtered container events, container listing, container
+// inspection, and container stats.
 package dockermetricsproxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,7 +56,8 @@ func NewHandler(cfg Config) http.Handler {
 		},
 	}
 	return &handler{
-		client: &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		client:       &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		streamClient: &http.Client{Transport: transport},
 	}
 }
 
@@ -73,9 +77,12 @@ func Run(ctx context.Context, cfg Config) error {
 		Handler:           NewHandler(cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      35 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    64 << 10,
+		// Docker events is a long-lived read-only stream used by docker_stats
+		// to notice container lifecycle changes. The handler still bounds all
+		// request/response bodies except this explicitly allowlisted stream.
+		WriteTimeout:   0,
+		IdleTimeout:    30 * time.Second,
+		MaxHeaderBytes: 64 << 10,
 	}
 	go func() {
 		<-ctx.Done()
@@ -112,7 +119,8 @@ func Healthcheck(ctx context.Context, address string) error {
 }
 
 type handler struct {
-	client *http.Client
+	client       *http.Client
+	streamClient *http.Client
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -136,7 +144,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "could not create Docker request", http.StatusBadGateway)
 		return
 	}
-	response, err := h.client.Do(upstreamRequest)
+	client := h.client
+	if kind == endpointEvents {
+		client = h.streamClient
+	}
+	response, err := client.Do(upstreamRequest)
 	if err != nil {
 		http.Error(writer, "Docker daemon is unavailable", http.StatusBadGateway)
 		return
@@ -175,7 +187,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	copyHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
 	if request.Method != http.MethodHead {
-		if kind == endpointEvents {
+		if kind == endpointEvents && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
 			copyEventStream(writer, response.Body)
 		} else {
 			_, _ = io.CopyN(writer, response.Body, maxJSONResponse)
@@ -184,22 +196,44 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func copyEventStream(writer http.ResponseWriter, reader io.Reader) {
-	buffer := make([]byte, 32<<10)
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 32<<10), maxJSONResponse)
 	flusher, canFlush := writer.(http.Flusher)
-	for {
-		read, err := reader.Read(buffer)
-		if read > 0 {
-			if _, writeErr := writer.Write(buffer[:read]); writeErr != nil {
-				return
-			}
-			if canFlush {
-				flusher.Flush()
-			}
+	for scanner.Scan() {
+		var event dockerEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return
 		}
+		encoded, err := json.Marshal(event)
 		if err != nil {
 			return
 		}
+		encoded = append(encoded, '\n')
+		if _, writeErr := writer.Write(encoded); writeErr != nil {
+			return
+		}
+		if canFlush {
+			flusher.Flush()
+		}
 	}
+}
+
+// Docker event Actor.Attributes can contain arbitrary container labels. The
+// docker_stats receiver only needs lifecycle identity and timing, so never
+// forward those labels across the proxy boundary.
+type dockerEvent struct {
+	Status   string           `json:"status,omitempty"`
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"Type,omitempty"`
+	Action   string           `json:"Action,omitempty"`
+	Actor    dockerEventActor `json:"Actor,omitempty"`
+	Scope    string           `json:"scope,omitempty"`
+	Time     int64            `json:"time,omitempty"`
+	TimeNano int64            `json:"timeNano,omitempty"`
+}
+
+type dockerEventActor struct {
+	ID string `json:"ID,omitempty"`
 }
 
 func (h *handler) serveHealth(writer http.ResponseWriter, request *http.Request) {
@@ -274,11 +308,55 @@ func allowedQuery(kind endpointKind, query url.Values) bool {
 		endpointVersion:    {},
 		endpointEvents:     {"since": {}, "until": {}, "filters": {}},
 		endpointContainers: {"all": {}, "limit": {}, "size": {}, "filters": {}},
-		endpointInspect:    {"size": {}, "platform": {}, "checkpoints": {}, "timeout": {}},
+		endpointInspect:    {"size": {}},
 		endpointStats:      {"stream": {}, "one-shot": {}},
 	}
 	for key := range query {
 		if _, ok := allowed[kind][key]; !ok {
+			return false
+		}
+	}
+	if kind == endpointEvents {
+		return allowedEventFilters(query)
+	}
+	return true
+}
+
+var allowedDockerEventActions = map[string]struct{}{
+	"destroy": {},
+	"die":     {},
+	"pause":   {},
+	"rename":  {},
+	"stop":    {},
+	"start":   {},
+	"unpause": {},
+	"update":  {},
+}
+
+func allowedEventFilters(query url.Values) bool {
+	encoded, ok := query["filters"]
+	if !ok || len(encoded) != 1 {
+		return false
+	}
+	var filters map[string][]string
+	if err := json.Unmarshal([]byte(encoded[0]), &filters); err != nil {
+		return false
+	}
+	types, ok := filters["type"]
+	if !ok || len(types) != 1 || types[0] != "container" {
+		return false
+	}
+	actions, ok := filters["event"]
+	if !ok || len(actions) == 0 {
+		return false
+	}
+	for key := range filters {
+		if key != "type" && key != "event" {
+			return false
+		}
+	}
+	for _, action := range actions {
+		if _, ok := allowedDockerEventActions[action]; !ok {
 			return false
 		}
 	}
