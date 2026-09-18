@@ -206,6 +206,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/telemetry/errors/{fingerprint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Update the owner-managed lifecycle state of a redacted error fingerprint. Occurrences remain in ClickHouse. */
+        patch: operations["updateAdminTelemetryErrorStatus"];
+        trace?: never;
+    };
     "/v1/admin/telemetry/services": {
         parameters: {
             query?: never;
@@ -3108,6 +3125,8 @@ export interface components {
             service: string;
             error_type: string;
             message: string;
+            /** @enum {string} */
+            status: AdminErrorGroupStatus;
             /** Format: date-time */
             first_seen: string;
             /** Format: date-time */
@@ -3118,6 +3137,17 @@ export interface components {
         };
         AdminErrorGroupsResponse: {
             items: components["schemas"]["AdminErrorGroup"][];
+        };
+        UpdateAdminErrorGroupStatusRequest: {
+            /** @enum {string} */
+            status: UpdateAdminErrorGroupStatusRequestStatus;
+        };
+        AdminErrorGroupStatus: {
+            fingerprint: string;
+            /** @enum {string} */
+            status: AdminErrorGroupStatusStatus;
+            /** Format: date-time */
+            updated_at: string;
         };
         AdminServiceMapEdge: {
             source: string;
@@ -6276,6 +6306,36 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    updateAdminTelemetryErrorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fingerprint: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminErrorGroupStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated error group state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorGroupStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
         };
     };
     listAdminTelemetryServices: {
@@ -13659,6 +13719,24 @@ export enum AdminOperationKind {
 export enum AdminMetricKind {
     gauge = "gauge",
     sum = "sum"
+}
+export enum AdminErrorGroupStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
+}
+export enum UpdateAdminErrorGroupStatusRequestStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
+}
+export enum AdminErrorGroupStatusStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
 }
 export enum AdminInfrastructureMetricScope {
     host = "host",

@@ -98,6 +98,7 @@ type ErrorGroup struct {
 	Service         string    `json:"service"`
 	ErrorType       string    `json:"error_type"`
 	Message         string    `json:"message"`
+	Status          string    `json:"status"`
 	FirstSeen       time.Time `json:"first_seen"`
 	LastSeen        time.Time `json:"last_seen"`
 	OccurrenceCount uint64    `json:"occurrence_count"`
@@ -582,6 +583,7 @@ func (s *ClickHouseStore) QueryErrorGroups(ctx context.Context, query ErrorGroup
 		result.Items = append(result.Items, ErrorGroup{
 			Fingerprint: hex.EncodeToString(fingerprint[:]), Service: service,
 			ErrorType: normalizedErrorType(severity), Message: message,
+			Status:    "open",
 			FirstSeen: firstSeen, LastSeen: lastSeen, OccurrenceCount: count,
 			TraceID: traceID,
 		})

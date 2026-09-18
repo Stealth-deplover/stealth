@@ -168,6 +168,24 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/errors/{fingerprint}:
+    patch:
+      operationId: updateAdminTelemetryErrorStatus
+      description: Update the owner-managed lifecycle state of a redacted error fingerprint. Occurrences remain in ClickHouse.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: fingerprint, in: path, required: true, schema: { type: string, pattern: '^[0-9a-fA-F]{64}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAdminErrorGroupStatusRequest' }
+      responses:
+        '200': { description: Updated error group state, content: { application/json: { schema: { $ref: '#/components/schemas/AdminErrorGroupStatus' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/admin/telemetry/services:
     get:
       operationId: listAdminTelemetryServices
@@ -2848,8 +2866,10 @@ components:
     AdminMetricsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminMetric' } } } }
     AdminLogVolumeBucket: { type: object, additionalProperties: false, required: [timestamp, count], properties: { timestamp: { type: string, format: date-time }, count: { type: integer, format: int64, minimum: 0 } } }
     AdminLogVolumeResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminLogVolumeBucket' } } } }
-    AdminErrorGroup: { type: object, additionalProperties: false, required: [fingerprint, service, error_type, message, first_seen, last_seen, occurrence_count], properties: { fingerprint: { type: string }, service: { type: string }, error_type: { type: string }, message: { type: string }, first_seen: { type: string, format: date-time }, last_seen: { type: string, format: date-time }, occurrence_count: { type: integer, format: int64, minimum: 1 }, trace_id: { type: string } } }
+    AdminErrorGroup: { type: object, additionalProperties: false, required: [fingerprint, service, error_type, message, status, first_seen, last_seen, occurrence_count], properties: { fingerprint: { type: string }, service: { type: string }, error_type: { type: string }, message: { type: string }, status: { type: string, enum: [open, acknowledged, resolved, ignored] }, first_seen: { type: string, format: date-time }, last_seen: { type: string, format: date-time }, occurrence_count: { type: integer, format: int64, minimum: 1 }, trace_id: { type: string } } }
     AdminErrorGroupsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminErrorGroup' } } } }
+    UpdateAdminErrorGroupStatusRequest: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [open, acknowledged, resolved, ignored] } } }
+    AdminErrorGroupStatus: { type: object, additionalProperties: false, required: [fingerprint, status, updated_at], properties: { fingerprint: { type: string }, status: { type: string, enum: [open, acknowledged, resolved, ignored] }, updated_at: { type: string, format: date-time } } }
     AdminServiceMapEdge: { type: object, additionalProperties: false, required: [source, target, request_count, error_count, error_rate, p95_latency_ms], properties: { source: { type: string }, target: { type: string }, request_count: { type: integer, format: int64, minimum: 0 }, error_count: { type: integer, format: int64, minimum: 0 }, error_rate: { type: number, minimum: 0, maximum: 1 }, p95_latency_ms: { type: number, minimum: 0 } } }
     AdminServiceMapResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminServiceMapEdge' } } } }
     AdminInfrastructureMetric: { type: object, additionalProperties: false, required: [timestamp, scope, name, service, value], properties: { timestamp: { type: string, format: date-time }, scope: { type: string, enum: [host, containers, postgres, redis, services] }, name: { type: string }, service: { type: string }, value: { type: number }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }

@@ -88,6 +88,29 @@ export function useDeleteAdminAlert() {
   });
 }
 
+export function useUpdateAdminErrorStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      fingerprint,
+      status,
+    }: {
+      fingerprint: string;
+      status: components["schemas"]["UpdateAdminErrorGroupStatusRequest"]["status"];
+    }) =>
+      unwrap(
+        await api.PATCH("/v1/admin/telemetry/errors/{fingerprint}", {
+          params: { path: { fingerprint } },
+          body: { status },
+        }),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "telemetry", "errors"],
+      }),
+  });
+}
+
 export function useCreateAdminNotificationChannel() {
   const queryClient = useQueryClient();
   return useMutation({

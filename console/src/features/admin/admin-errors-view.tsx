@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAdminErrors, useAdminLogVolume } from "@/api/queries";
+import { useUpdateAdminErrorStatus } from "@/api/mutations/admin";
 import type { components } from "@/api/generated/schema";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -17,6 +18,8 @@ import { AdminShell } from "./admin-shell";
 import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
 
 type ErrorGroup = components["schemas"]["AdminErrorGroup"];
+type ErrorStatus =
+  components["schemas"]["UpdateAdminErrorGroupStatusRequest"]["status"];
 
 export function AdminErrorsView() {
   const timeRange = useAdminTimeRange();
@@ -32,6 +35,7 @@ export function AdminErrorsView() {
   const volume = useAdminLogVolume(query, {
     refetchInterval: timeRange.refreshInterval,
   });
+  const updateStatus = useUpdateAdminErrorStatus();
 
   return (
     <AdminShell>
@@ -99,13 +103,22 @@ export function AdminErrorsView() {
         </Card>
       ) : null}
       {errors.data?.items.length ? (
-        <ErrorGroupTable items={errors.data.items} />
+        <ErrorGroupTable
+          items={errors.data.items}
+          updateStatus={updateStatus}
+        />
       ) : null}
     </AdminShell>
   );
 }
 
-function ErrorGroupTable({ items }: { items: ErrorGroup[] }) {
+function ErrorGroupTable({
+  items,
+  updateStatus,
+}: {
+  items: ErrorGroup[];
+  updateStatus: ReturnType<typeof useUpdateAdminErrorStatus>;
+}) {
   return (
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
@@ -115,6 +128,7 @@ function ErrorGroupTable({ items }: { items: ErrorGroup[] }) {
               <th className="px-4 py-3 font-medium">Error</th>
               <th className="px-4 py-3 font-medium">Service</th>
               <th className="px-4 py-3 font-medium">Occurrences</th>
+              <th className="px-4 py-3 font-medium">State</th>
               <th className="px-4 py-3 font-medium">Last seen</th>
               <th className="px-4 py-3 font-medium">Trace</th>
             </tr>
@@ -140,6 +154,42 @@ function ErrorGroupTable({ items }: { items: ErrorGroup[] }) {
                 <td className="px-4 py-4 text-mist">{item.service}</td>
                 <td className="px-4 py-4 font-mono text-xs tabular-nums text-mist">
                   {item.occurrence_count.toLocaleString()}
+                </td>
+                <td className="px-4 py-4">
+                  <label>
+                    <span className="sr-only">
+                      State for {item.fingerprint}
+                    </span>
+                    <select
+                      value={item.status}
+                      disabled={updateStatus.isPending}
+                      onChange={(event) =>
+                        updateStatus.mutate({
+                          fingerprint: item.fingerprint,
+                          status: event.target.value as ErrorStatus,
+                        })
+                      }
+                      className="rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none disabled:opacity-50"
+                    >
+                      <option value="open">Open</option>
+                      <option value="acknowledged">Acknowledged</option>
+                      <option value="resolved">Resolved</option>
+                      <option value="ignored">Ignored</option>
+                    </select>
+                  </label>
+                  <div className="mt-2">
+                    <Badge
+                      variant={
+                        item.status === "resolved"
+                          ? "success"
+                          : item.status === "open"
+                            ? "warning"
+                            : "neutral"
+                      }
+                    >
+                      {item.status}
+                    </Badge>
+                  </div>
                 </td>
                 <td className="whitespace-nowrap px-4 py-4 text-xs text-fog">
                   {formatDate(item.last_seen)}

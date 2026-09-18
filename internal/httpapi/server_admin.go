@@ -13,6 +13,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/telemetry"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -50,6 +51,16 @@ type adminOperationsResponse struct {
 type adminAuditResponse struct {
 	Items      []domain.AuditEvent `json:"items"`
 	NextCursor string              `json:"next_cursor,omitempty"`
+}
+
+type adminErrorGroupStatusRequest struct {
+	Status string `json:"status"`
+}
+
+type adminErrorGroupStatusResponse struct {
+	Fingerprint string    `json:"fingerprint"`
+	Status      string    `json:"status"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (s *Server) requireInstanceAdmin(next http.Handler) http.Handler {
@@ -377,9 +388,55 @@ func (s *Server) adminTelemetryErrors(w http.ResponseWriter, r *http.Request) {
 		Search:  r.URL.Query().Get("query"),
 		Limit:   limit,
 	})
+	if err == nil && s.repo != nil && len(result.Items) > 0 {
+		fingerprints := make([]string, 0, len(result.Items))
+		for _, item := range result.Items {
+			fingerprints = append(fingerprints, item.Fingerprint)
+		}
+		statuses, statusErr := s.repo.ListAdminErrorGroupStatuses(r.Context(), fingerprints)
+		if statusErr != nil {
+			internalError(s, w, statusErr)
+			return
+		}
+		for index := range result.Items {
+			if status, exists := statuses[result.Items[index].Fingerprint]; exists {
+				result.Items[index].Status = status
+			}
+		}
+	}
 	if !s.writeTelemetryResultError(w, err) {
 		writeJSON(w, http.StatusOK, result)
 	}
+}
+
+func (s *Server) updateAdminTelemetryErrorStatus(w http.ResponseWriter, r *http.Request) {
+	if s.repo == nil {
+		internalError(s, w, errors.New("repository is unavailable"))
+		return
+	}
+	fingerprint := chi.URLParam(r, "fingerprint")
+	var request adminErrorGroupStatusRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	state, err := s.repo.UpdateAdminErrorGroupStatus(r.Context(), mustUUID(accountFrom(r).ID), fingerprint, request.Status)
+	if errors.Is(err, repository.ErrInvalidAdminErrorGroup) {
+		writeError(w, http.StatusBadRequest, "validation_error", "error group status is invalid")
+		return
+	}
+	if errors.Is(err, repository.ErrForbidden) {
+		writeError(w, http.StatusForbidden, "forbidden", "instance owner or admin permission is required")
+		return
+	}
+	if err != nil {
+		internalError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminErrorGroupStatusResponse{
+		Fingerprint: state.Fingerprint,
+		Status:      state.Status,
+		UpdatedAt:   state.UpdatedAt,
+	})
 }
 
 func (s *Server) adminTelemetryServices(w http.ResponseWriter, r *http.Request) {

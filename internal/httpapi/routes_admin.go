@@ -12,6 +12,7 @@ func (s *Server) registerAdminRoutes(r chi.Router) {
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/traces", s.adminTelemetryTraces)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/metrics", s.adminTelemetryMetrics)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/errors", s.adminTelemetryErrors)
+	r.With(s.requireInstanceAdmin).Patch("/admin/telemetry/errors/{fingerprint}", s.updateAdminTelemetryErrorStatus)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/services", s.adminTelemetryServices)
 	r.With(s.requireInstanceAdmin).Get("/admin/infrastructure/metrics", s.adminInfrastructureMetrics)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/sources", s.adminTelemetrySources)
