@@ -28,6 +28,9 @@ paths:
       operationId: getAdminOverview
       description: Return live instance component and telemetry-backend health. Requires an instance owner or instance admin role; organization membership is not sufficient.
       security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
       responses:
         '200': { description: Live instance overview, content: { application/json: { schema: { $ref: '#/components/schemas/AdminOverviewResponse' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }

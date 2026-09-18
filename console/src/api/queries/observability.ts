@@ -112,12 +112,16 @@ export function useAdminLogTail(
 }
 
 export function useAdminOverview(options?: {
+  query?: Pick<AdminTelemetryQuery, "from" | "to">;
   refetchInterval?: number | false;
 }) {
   return useQuery({
-    queryKey: queryKeys.adminOverview,
+    queryKey: [...queryKeys.adminOverview, options?.query ?? {}],
     queryFn: cancellableQuery((signal) =>
-      api.GET("/v1/admin/overview", { signal }),
+      api.GET("/v1/admin/overview", {
+        params: { query: options?.query ?? {} },
+        signal,
+      }),
     ),
     refetchInterval: options?.refetchInterval ?? 30_000,
   });

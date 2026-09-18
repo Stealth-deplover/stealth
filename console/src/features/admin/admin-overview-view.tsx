@@ -27,6 +27,7 @@ import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
 export function AdminOverviewView() {
   const timeRange = useAdminTimeRange();
   const overview = useAdminOverview({
+    query: timeRange.query,
     refetchInterval: timeRange.refreshInterval,
   });
   const sources = useAdminSources(

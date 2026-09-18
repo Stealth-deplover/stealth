@@ -6071,7 +6071,10 @@ export interface operations {
     };
     getAdminOverview: {
         parameters: {
-            query?: never;
+            query?: {
+                from?: string;
+                to?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
