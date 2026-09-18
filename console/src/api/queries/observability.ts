@@ -163,7 +163,7 @@ export function useAdminAuditEvents(
 
 export function useAdminLogs(
   query: AdminTelemetryQuery = {},
-  options?: { refetchInterval?: number | false },
+  options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
   return useQuery({
     queryKey: queryKeys.adminTelemetry("logs", query),
@@ -174,6 +174,7 @@ export function useAdminLogs(
       }),
     ),
     placeholderData: keepPreviousData,
+    enabled: options?.enabled ?? true,
     refetchInterval: options?.refetchInterval,
   });
 }

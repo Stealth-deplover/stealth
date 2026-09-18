@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
+import { Download, History, Search, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAdminLogTail, useAdminLogs } from "@/api/queries";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -18,36 +18,64 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
 import { AdminShell } from "./admin-shell";
+import { formatAdminLogQuery, parseAdminLogQuery } from "./admin-log-query";
+import { AdminQueryEditor } from "./admin-query-editor";
 import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
+
+const logQueryHistoryKey = "stealth.admin.log-query-history";
+
+function readLogQueryHistory(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(logQueryHistoryKey) ?? "[]",
+    );
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .slice(0, 8);
+  } catch {
+    return [];
+  }
+}
 
 export function AdminLogsView() {
   const timeRange = useAdminTimeRange();
   const searchParams = useSearchParams();
-  const [search, setSearch] = useState("");
-  const [service, setService] = useState("");
-  const [level, setLevel] = useState("");
-  const [traceID, setTraceID] = useState(
-    () => searchParams.get("trace_id") ?? "",
+  const initialQuery = useMemo(
+    () =>
+      formatAdminLogQuery({
+        trace_id: searchParams.get("trace_id") ?? "",
+      }),
+    [searchParams],
   );
+  const [draftQuery, setDraftQuery] = useState(initialQuery);
+  const [activeQuery, setActiveQuery] = useState(initialQuery);
+  const [queryHistory, setQueryHistory] = useState(readLogQueryHistory);
   const [tailEnabled, setTailEnabled] = useState(false);
+  const draftParse = useMemo(
+    () => parseAdminLogQuery(draftQuery),
+    [draftQuery],
+  );
+  const activeParse = useMemo(
+    () => parseAdminLogQuery(activeQuery),
+    [activeQuery],
+  );
   const query = useMemo(
     () => ({
       ...timeRange.query,
-      query: search,
-      service,
-      level,
-      trace_id: traceID,
+      ...activeParse.filters,
       limit: 100,
     }),
-    [level, search, service, timeRange.query, traceID],
+    [activeParse.filters, timeRange.query],
   );
   const logs = useAdminLogs(query, {
+    enabled: activeParse.valid,
     refetchInterval: timeRange.refreshInterval,
   });
-  const tail = useAdminLogTail(query, tailEnabled);
+  const tail = useAdminLogTail(query, tailEnabled && activeParse.valid);
   const displayItems = tailEnabled
     ? tail.items.length
       ? tail.items
@@ -97,46 +125,104 @@ export function AdminLogsView() {
         </div>
       ) : null}
       <Card className="mb-4">
-        <CardContent className="grid gap-3 p-4 md:grid-cols-[1fr_0.35fr_0.25fr_0.5fr]">
-          <label className="relative block">
-            <span className="sr-only">Search logs</span>
+        <CardContent className="space-y-3 p-4">
+          <div className="flex items-start gap-3">
             <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ash"
+              className="mt-3 size-4 shrink-0 text-ash"
               aria-hidden="true"
             />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search message text"
-              className="pl-9"
-            />
-          </label>
-          <label>
-            <span className="sr-only">Service</span>
-            <Input
-              value={service}
-              onChange={(event) => setService(event.target.value)}
-              placeholder="Service"
-            />
-          </label>
-          <label>
-            <span className="sr-only">Level</span>
-            <Input
-              value={level}
-              onChange={(event) => setLevel(event.target.value)}
-              placeholder="Level"
-            />
-          </label>
-          <label>
-            <span className="sr-only">Trace ID</span>
-            <Input
-              value={traceID}
-              onChange={(event) => setTraceID(event.target.value)}
-              placeholder="Trace ID"
-            />
-          </label>
+            <div className="min-w-0 flex-1">
+              <label className="mb-2 block text-xs uppercase tracking-[0.1em] text-fog">
+                Structured query
+              </label>
+              <AdminQueryEditor
+                value={draftQuery}
+                onChange={setDraftQuery}
+                onSubmit={() => applyLogQuery(draftQuery, draftParse.valid)}
+                invalid={!draftParse.valid}
+              />
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="default"
+              onClick={() => applyLogQuery(draftQuery, draftParse.valid)}
+              disabled={!draftParse.valid}
+            >
+              Apply
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-fog">
+            <p>
+              Use{" "}
+              <code className="font-mono text-mist">
+                service:api level:ERROR
+              </code>
+              , <code className="font-mono text-mist">trace_id:…</code>, or{" "}
+              <code className="font-mono text-mist">
+                message:&quot;timeout&quot;
+              </code>
+              . Press Ctrl/Cmd+Enter to apply.
+            </p>
+            <div className="flex items-center gap-2">
+              {queryHistory.length ? (
+                <label className="flex items-center gap-1.5">
+                  <History className="size-3.5" aria-hidden="true" />
+                  <span className="sr-only">Recent log queries</span>
+                  <select
+                    value=""
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next) setDraftQuery(next);
+                    }}
+                    className="max-w-[220px] rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none"
+                  >
+                    <option value="">History</option>
+                    {queryHistory.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setDraftQuery("");
+                  applyLogQuery("", true);
+                }}
+              >
+                <X className="size-3.5" aria-hidden="true" />
+                Clear
+              </Button>
+            </div>
+          </div>
+          {draftParse.diagnostics.map((diagnostic) => (
+            <p
+              key={`${diagnostic.from}-${diagnostic.message}`}
+              className="text-xs text-coral-red"
+            >
+              {diagnostic.message}
+            </p>
+          ))}
         </CardContent>
       </Card>
+      {logs.data?.items.length ? (
+        <div className="mb-3 flex justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => downloadLogs(logs.data?.items ?? [])}
+          >
+            <Download className="size-3.5" aria-hidden="true" />
+            Download current result
+          </Button>
+        </div>
+      ) : null}
       {logs.isPending ? <LoadingState rows={6} /> : null}
       {logs.error ? (
         <ErrorState
@@ -159,6 +245,50 @@ export function AdminLogsView() {
       ) : null}
     </AdminShell>
   );
+
+  function applyLogQuery(next: string, valid: boolean) {
+    if (!valid) return;
+    setActiveQuery(next);
+    const trimmed = next.trim();
+    if (!trimmed) return;
+    setQueryHistory((current) => {
+      const nextHistory = [
+        trimmed,
+        ...current.filter((item) => item !== trimmed),
+      ].slice(0, 8);
+      try {
+        window.localStorage.setItem(
+          logQueryHistoryKey,
+          JSON.stringify(nextHistory),
+        );
+      } catch {
+        // History is optional and must not block log exploration.
+      }
+      return nextHistory;
+    });
+  }
+}
+
+function downloadLogs(items: AdminLogItem[]) {
+  const payload = items.map((item) => ({
+    timestamp: item.timestamp,
+    service: item.service,
+    level: item.level ?? "unknown",
+    message: item.message,
+    trace_id: item.trace_id ?? null,
+    span_id: item.span_id ?? null,
+    attributes: item.attributes ?? {},
+    resource_attributes: item.resource_attributes ?? {},
+  }));
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `stealth-logs-${new Date().toISOString().replaceAll(":", "-")}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 type AdminLogItem = {
