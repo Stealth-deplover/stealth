@@ -1,7 +1,8 @@
 # Upgrade and rollback
 
 Stealth releases are coordinated application releases. Use the same version
-for `stealth-api`, `stealth-worker`, `stealth-migrate`, and `stealth-console`.
+for `stealth-api`, `stealth-worker`, `stealth-migrate`, `stealth-console`, and
+`stealth-telemetry-docker-proxy`.
 The `stealth-setup` image is only needed for a fresh browser installation or
 setup repair.
 The current deployment does not promise rolling upgrades between incompatible
@@ -43,9 +44,9 @@ worker, migration, Console, PostgreSQL, Redis, or proxy changes.
 
 ```bash
 docker compose --env-file .env.production -f compose.production.yaml pull
-docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis
+docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d --force-recreate api worker console proxy
+docker compose --env-file .env.production -f compose.production.yaml up -d --force-recreate api worker console proxy otel-collector telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 

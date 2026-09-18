@@ -45,12 +45,25 @@ if ! printf '%s\n' "$collector_block" | grep -F '/dev/null:/hostfs/var/run/docke
 fi
 
 docker_metrics_block=$(service_block telemetry-docker)
-if ! printf '%s\n' "$docker_metrics_block" | grep -F '/var/run/docker.sock:/var/run/docker.sock:ro' >/dev/null 2>&1; then
-	printf 'telemetry security check: isolated Docker metrics collector lost its explicit boundary\n' >&2
+if printf '%s\n' "$docker_metrics_block" | grep -E '/var/run/docker\.sock|privileged:[[:space:]]*true|group_add:' >/dev/null 2>&1; then
+	printf 'telemetry security check: Docker metrics collector has direct or elevated Docker authority\n' >&2
 	exit 1
 fi
 if printf '%s\n' "$docker_metrics_block" | grep -E '^[[:space:]]*ports:|^[[:space:]]*-[[:space:]]*"?[0-9.]+:' >/dev/null 2>&1; then
 	printf 'telemetry security check: Docker metrics collector exposes a network listener\n' >&2
+	exit 1
+fi
+docker_proxy_block=$(service_block telemetry-docker-proxy)
+if ! printf '%s\n' "$docker_proxy_block" | grep -F '/var/run/docker.sock:/var/run/docker.sock:ro' >/dev/null 2>&1; then
+	printf 'telemetry security check: restricted Docker proxy is missing its read-only socket boundary\n' >&2
+	exit 1
+fi
+if printf '%s\n' "$docker_proxy_block" | grep -E 'privileged:[[:space:]]*true|^[[:space:]]*ports:' >/dev/null 2>&1; then
+	printf 'telemetry security check: restricted Docker proxy is privileged or publicly published\n' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$docker_proxy_block" | grep -F 'expose: ["2375"]' >/dev/null 2>&1; then
+	printf 'telemetry security check: restricted Docker proxy is not on the internal metrics network\n' >&2
 	exit 1
 fi
 
@@ -60,6 +73,11 @@ for setup_file in compose.setup.yaml Dockerfile; do
 		exit 1
 	fi
 done
+
+if ! grep -F 'FROM runtime-base AS telemetry-docker-proxy' Dockerfile >/dev/null 2>&1 || ! grep -F 'telemetry-docker-proxy' Dockerfile >/dev/null 2>&1; then
+	printf 'telemetry security check: restricted Docker proxy image target is missing\n' >&2
+	exit 1
+fi
 
 setup_block=$(awk '
 	/^  setup:/ { found = 1; next }
@@ -87,4 +105,13 @@ if awk '
 	exit 1
 fi
 
-printf 'telemetry security check: Docker authority is limited to worker and isolated metrics collector\n'
+if grep -F 'endpoint: unix:///var/run/docker.sock' telemetry/docker-stats.yaml >/dev/null 2>&1; then
+	printf 'telemetry security check: Docker stats config still points at the raw socket\n' >&2
+	exit 1
+fi
+if ! grep -F 'telemetry-docker-proxy' telemetry/docker-stats.yaml >/dev/null 2>&1; then
+	printf 'telemetry security check: Docker stats proxy endpoint is missing\n' >&2
+	exit 1
+fi
+
+printf 'telemetry security check: Docker authority is limited to worker and restricted metrics proxy\n'

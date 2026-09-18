@@ -105,8 +105,8 @@ printed or sent in the setup URL. `FUNCTIONS_SECRET_KEY` is a separate security
 domain and is never used as a bootstrap-key fallback.
 
 The Compose and proxy files are downloaded from the same versioned Git tag as
-the CLI. The config pins API, setup, worker, migration, and Console images to
-the same GHCR release tag.
+the CLI. The config pins API, setup, worker, migration, Console, and the
+restricted telemetry Docker proxy images to the same GHCR release tag.
 
 An existing `config.env` or `VERSION` is never replaced by a normal reinstall.
 The command refuses to proceed and leaves volumes untouched. After a partial

@@ -118,7 +118,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 20s
-    networks: [stealth]
+    networks: [telemetry_store]
 
   otel-collector:
     image: "${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
@@ -152,14 +152,54 @@ services:
       - no-new-privileges:true
     mem_limit: "${OTEL_COLLECTOR_MEMORY_LIMIT:-512m}"
     depends_on:
+      otelcol-state-init:
+        condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "otelcol-contrib validate --config=/etc/otelcol-contrib/config.yaml >/dev/null"]
+      # The official contrib image is scratch-based and has no /bin/sh. Keep
+      # this in exec form and invoke the binary by its absolute path.
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
       interval: 30s
       timeout: 10s
       retries: 3
-    networks: [stealth]
+      start_period: 20s
+    networks:
+      stealth:
+      telemetry_store:
+      telemetry_docker:
+
+  otelcol-state-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    command: ["sh", "-ec", "mkdir -p /var/lib/otelcol/file_storage && chown -R 10001:10001 /var/lib/otelcol"]
+    user: "0:0"
+    network_mode: none
+    volumes:
+      - otelcol_state:/var/lib/otelcol
+
+  telemetry-docker-proxy:
+    image: "${STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE:?set STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE to a versioned image}"
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: "${OTEL_DOCKER_PROXY_MEMORY_LIMIT:-64m}"
+    expose: ["2375"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/telemetry-docker-proxy", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    networks: [telemetry_docker]
 
   telemetry-docker:
     image: "${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
@@ -167,9 +207,6 @@ services:
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./telemetry/docker-stats.yaml:/etc/otelcol-contrib/config.yaml:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    group_add:
-      - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
     read_only: true
     tmpfs:
       - /tmp
@@ -180,7 +217,15 @@ services:
     depends_on:
       otel-collector:
         condition: service_healthy
-    networks: [stealth]
+      telemetry-docker-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks: [telemetry_docker]
 
   migrate:
     image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
@@ -230,6 +275,7 @@ services:
     networks:
       stealth:
         aliases: [stealth-api]
+      telemetry_store:
 
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
@@ -253,7 +299,9 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
-    networks: [stealth]
+    networks:
+      stealth:
+      telemetry_store:
 
   console:
     image: "${STEALTH_CONSOLE_IMAGE:?set STEALTH_CONSOLE_IMAGE to a versioned image}"
@@ -323,3 +371,9 @@ networks:
     ipam:
       config:
         - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"
+  telemetry_store:
+    name: "${STEALTH_TELEMETRY_STORE_NETWORK_NAME:-stealth_telemetry_store}"
+    internal: true
+  telemetry_docker:
+    name: "${STEALTH_TELEMETRY_DOCKER_NETWORK_NAME:-stealth_telemetry_docker}"
+    internal: true

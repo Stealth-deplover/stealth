@@ -142,6 +142,14 @@ func displayServiceName(service string) string {
 		return "PostgreSQL"
 	case "redis":
 		return "Redis"
+	case "clickhouse":
+		return "ClickHouse"
+	case "otel-collector":
+		return "OTel Collector"
+	case "telemetry-docker-proxy":
+		return "Docker Metrics Proxy"
+	case "telemetry-docker":
+		return "Docker Metrics"
 	case "proxy":
 		return "Proxy"
 	case "setup":

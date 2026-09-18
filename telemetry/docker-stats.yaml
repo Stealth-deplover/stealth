@@ -1,11 +1,15 @@
-# This is the only production telemetry component with Docker API authority.
-# It has no OTLP receiver, no HTTP listener, no host port, and exports only
-# receiver-produced metrics to the unprivileged main collector.
+# This collector has no Docker socket. It talks to the internal
+# telemetry-docker-proxy, whose allowlist contains only the read endpoints
+# required by docker_stats. It has no OTLP receiver and exports only
+# receiver-produced metrics to the main collector.
 receivers:
   docker_stats:
-    endpoint: unix:///var/run/docker.sock
+    endpoint: http://telemetry-docker-proxy:2375
     collection_interval: 15s
     timeout: 5s
+    container_labels_to_metric_labels:
+      com.docker.compose.project: docker.compose.project
+      com.docker.compose.service: service.name
 
 processors:
   memory_limiter:
@@ -16,7 +20,7 @@ processors:
     attributes:
       - key: service.name
         value: stealth-container-metrics
-        action: upsert
+        action: insert
       - key: deployment.environment
         value: self-hosted
         action: upsert

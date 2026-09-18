@@ -10,6 +10,7 @@ ENV BUILD_LDFLAGS="-s -w -X github.com/Stealth-deplover/stealth/internal/buildin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-api ./cmd/api
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-worker ./cmd/worker
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-migrate ./cmd/migrate
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/telemetry-docker-proxy ./cmd/telemetry-docker-proxy
 
 FROM alpine:3.24 AS runtime-base
 ARG VERSION=dev
@@ -60,3 +61,15 @@ COPY --from=build /out/stealth-migrate /usr/local/bin/stealth-migrate
 USER stealth
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/stealth-migrate"]
+
+# The proxy is the only telemetry component with a read-only Docker socket.
+# It is not published by Compose and its handler permits only the Docker API
+# reads needed by docker_stats. The non-root user receives the host socket
+# group through Compose's numeric group_add setting.
+FROM runtime-base AS telemetry-docker-proxy
+COPY --from=build /out/telemetry-docker-proxy /usr/local/bin/telemetry-docker-proxy
+USER stealth
+EXPOSE 2375
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 CMD ["/usr/local/bin/telemetry-docker-proxy", "healthcheck"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/telemetry-docker-proxy"]

@@ -82,6 +82,10 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable
           TEST_REDIS_URL: redis://127.0.0.1:6379/0
+          TEST_CLICKHOUSE_ADDR: 127.0.0.1:9000
+          TEST_CLICKHOUSE_DATABASE: stealth_telemetry
+          TEST_CLICKHOUSE_USER: stealth
+          TEST_CLICKHOUSE_PASSWORD: ci-clickhouse-password
         run: go test ./internal/httpapi -run Integration -count=1
 
       - name: ClickHouse telemetry integration suite
@@ -94,6 +98,15 @@ jobs:
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
+
+      - name: Docker metrics proxy image build
+        run: docker build --target telemetry-docker-proxy -t stealth-telemetry-docker-proxy:ci .
+
+      - name: Telemetry security regression
+        run: ./scripts/telemetry-security-test.sh
+
+      - name: Collector Docker log parser smoke
+        run: ./scripts/collector-log-parser-smoke.sh
 
       - name: Setup security regression
         run: ./scripts/setup-security-test.sh

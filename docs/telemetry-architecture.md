@@ -42,10 +42,15 @@ The production Compose topology contains two Collector roles:
 - `otel-collector` receives OTLP, scrapes host/API/worker metrics, reads
   Docker JSON log files, and writes ClickHouse. It has no Docker socket. The
   host root bind is read-only for hostmetrics and masks the socket path.
-- `telemetry-docker` is an internal metrics-only collector. It is the only
-  telemetry service with a read-only Docker socket, has no HTTP/OTLP receiver,
-  publishes no host port, and can only send Docker statistics to the main
-  Collector over the private Compose network. It cannot execute commands.
+- `telemetry-docker-proxy` is the only telemetry service with a read-only
+  Docker socket. It is attached only to an internal Compose network, has no
+  host port, and permits only the read endpoints required by the Docker stats
+  receiver. It strips container environment, mounts, command arguments, and
+  non-Compose labels from inspect responses.
+- `telemetry-docker` is an internal metrics-only collector with no Docker
+  socket. It talks to that proxy, has no HTTP/OTLP receiver, publishes no host
+  port, and can only send Docker statistics to the main Collector over the
+  private Compose network. It cannot execute commands.
 
 The existing trusted worker still owns its Docker socket for the function and
 site runner. The API, Console, setup API, ClickHouse, and public proxy do not

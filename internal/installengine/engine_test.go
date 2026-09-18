@@ -116,6 +116,9 @@ func TestGenerateConfigAcceptsReleaseCandidateVersion(t *testing.T) {
 	if !strings.Contains(config, "STEALTH_API_IMAGE=ghcr.io/stealth-deplover/stealth-api:v0.3.0-rc.1") {
 		t.Fatal("generated config did not retain the RC version in image tags")
 	}
+	if !strings.Contains(config, "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=ghcr.io/stealth-deplover/stealth-telemetry-docker-proxy:v0.3.0-rc.1") {
+		t.Fatal("generated config did not include the versioned telemetry Docker proxy image")
+	}
 }
 
 func TestReleaseVersionValidationKeepsAutomaticUpdatesStableOnly(t *testing.T) {
@@ -150,7 +153,7 @@ func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
 	if !containsPair(calls[0].args, "--profile", "cloudflare") {
 		t.Fatalf("Cloudflare profile was not enabled: %#v", calls[0])
 	}
-	if got := calls[0].args[len(calls[0].args)-5:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "cloudflared"}) {
+	if got := calls[0].args[len(calls[0].args)-8:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "otel-collector", "telemetry-docker-proxy", "telemetry-docker", "cloudflared"}) {
 		t.Fatalf("Cloudflare service command = %#v", calls[0])
 	}
 }
@@ -171,14 +174,20 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 2 {
-		t.Fatalf("recorded calls = %#v, want migration and services only", calls)
+	if len(calls) != 4 {
+		t.Fatalf("recorded calls = %#v, want state init, telemetry dependency, migration, and services", calls)
 	}
-	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[0])
+	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
+		t.Fatalf("Collector state init command = %#v", calls[0])
 	}
-	if !contains(calls[1].args, "--no-deps") || contains(calls[1].args, "postgres") || contains(calls[1].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[1])
+	if !equalArgs(calls[1].args[len(calls[1].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[1])
+	}
+	if !equalArgs(calls[2].args[len(calls[2].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[2])
+	}
+	if !contains(calls[3].args, "--no-deps") || contains(calls[3].args, "postgres") || contains(calls[3].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[3])
 	}
 }
 
@@ -257,6 +266,22 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 	version, err := os.ReadFile(layout.VersionFile)
 	if err != nil || string(version) != "v1.2.3\n" {
 		t.Fatalf("VERSION = %q, %v", version, err)
+	}
+}
+
+func TestPrepareMigratesExistingConfigWithTelemetryDockerProxyImage(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	engine := New(Options{Runner: &fakeRunner{}})
+	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true}
+	if err := engine.Prepare(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values["STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"]; got != ImageName("stealth-telemetry-docker-proxy", "v1.2.3") {
+		t.Fatalf("migrated proxy image = %q", got)
 	}
 }
 

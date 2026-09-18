@@ -120,6 +120,21 @@ func TestAdminTelemetryHandlerDoesNotExposeBackendError(t *testing.T) {
 	}
 }
 
+func TestAdminTelemetryHandlerReportsOptionalBackendDegraded(t *testing.T) {
+	server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}}
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/logs", nil)
+	recorder := httptest.NewRecorder()
+
+	server.adminTelemetryLogs(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "telemetry_unavailable") || !strings.Contains(recorder.Body.String(), "telemetry backend is unavailable") {
+		t.Fatalf("degraded response = %s", recorder.Body.String())
+	}
+}
+
 func TestAdminTelemetryLogTailStreamsRedactedDomainRecords(t *testing.T) {
 	started := make(chan struct{}, 1)
 	store := &fakeAdminTelemetryStore{

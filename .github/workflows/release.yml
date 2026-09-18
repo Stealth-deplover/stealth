@@ -192,6 +192,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-migrate:smoke-$SHORT_SHA" .
+          docker build --target telemetry-docker-proxy \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-telemetry-docker-proxy:smoke-$SHORT_SHA" .
           docker build -f console/Dockerfile \
             --build-arg NEXT_PUBLIC_API_BASE_URL= \
             --build-arg VERSION="$VERSION" \
@@ -212,6 +217,7 @@ jobs:
           set -euo pipefail
           postgres_password="$(openssl rand -hex 24)"
           redis_password="$(openssl rand -hex 24)"
+          clickhouse_password="$(openssl rand -hex 24)"
           functions_secret_key="$(openssl rand -base64 32 | tr -d '\n')"
           bootstrap_cli_key="$(openssl rand -base64 32 | tr -d '\n')"
           metrics_token="$(openssl rand -hex 32)"
@@ -222,10 +228,14 @@ jobs:
           STEALTH_WORKER_IMAGE=stealth-worker:smoke-${SHORT_SHA}
           STEALTH_MIGRATE_IMAGE=stealth-migrate:smoke-${SHORT_SHA}
           STEALTH_CONSOLE_IMAGE=stealth-console:smoke-${SHORT_SHA}
+          STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=stealth-telemetry-docker-proxy:smoke-${SHORT_SHA}
           POSTGRES_DB=stealth
           POSTGRES_USER=stealth
           POSTGRES_PASSWORD=${postgres_password}
           REDIS_PASSWORD=${redis_password}
+          CLICKHOUSE_DATABASE=stealth_telemetry
+          CLICKHOUSE_USER=stealth
+          CLICKHOUSE_PASSWORD=${clickhouse_password}
           FUNCTIONS_SECRET_KEY=${functions_secret_key}
           BOOTSTRAP_CLI_KEY=${bootstrap_cli_key}
           GITHUB_APP_CLIENT_ID=smoke-client-id
@@ -234,12 +244,16 @@ jobs:
           TRUSTED_PROXY_CIDRS=172.31.0.0/24
           STEALTH_NETWORK_SUBNET=172.31.0.0/24
           STEALTH_NETWORK_NAME=stealth_release_smoke_network_${GITHUB_RUN_ID}
+          STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_release_smoke_telemetry_store_${GITHUB_RUN_ID}
+          STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_release_smoke_telemetry_docker_${GITHUB_RUN_ID}
           DOCKER_GID=${docker_gid}
           METRICS_TOKEN=${metrics_token}
           FUNCTIONS_RUNNER_ENABLED=true
           FUNCTIONS_RUNNER_STAGING_VOLUME=stealth_release_smoke_staging_${GITHUB_RUN_ID}
           POSTGRES_VOLUME_NAME=stealth_release_smoke_postgres_${GITHUB_RUN_ID}
           STORAGE_VOLUME_NAME=stealth_release_smoke_storage_${GITHUB_RUN_ID}
+          CLICKHOUSE_VOLUME_NAME=stealth_release_smoke_clickhouse_${GITHUB_RUN_ID}
+          OTELCOL_VOLUME_NAME=stealth_release_smoke_otelcol_${GITHUB_RUN_ID}
           PROXY_HTTP_BIND=127.0.0.1
           PROXY_HTTP_PORT=8080
           API_HOST_PORT=18080
@@ -406,6 +420,26 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAMESPACE }}/stealth-migrate:${{ env.VERSION }}
             ${{ env.IMAGE_NAMESPACE }}/stealth-migrate:sha-${{ env.SHORT_SHA }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT_SHA }}
+            org.opencontainers.image.created=${{ env.BUILD_TIME }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push telemetry Docker proxy image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: telemetry-docker-proxy
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT_SHA=${{ env.COMMIT_SHA }}
+            BUILD_TIME=${{ env.BUILD_TIME }}
+          tags: |
+            ${{ env.IMAGE_NAMESPACE }}/stealth-telemetry-docker-proxy:${{ env.VERSION }}
+            ${{ env.IMAGE_NAMESPACE }}/stealth-telemetry-docker-proxy:sha-${{ env.SHORT_SHA }}
           labels: |
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ env.COMMIT_SHA }}

@@ -35,19 +35,17 @@ receivers:
         - job_name: stealth-api
           scrape_interval: 15s
           metrics_path: /metrics
-          http_config:
-            http_headers:
-              X-Metrics-Token:
-                values: ["${env:METRICS_TOKEN}"]
+          http_headers:
+            X-Metrics-Token:
+              values: ["${env:METRICS_TOKEN}"]
           static_configs:
             - targets: [api:8080]
         - job_name: stealth-worker
           scrape_interval: 15s
           metrics_path: /metrics
-          http_config:
-            http_headers:
-              X-Metrics-Token:
-                values: ["${env:METRICS_TOKEN}"]
+          http_headers:
+            X-Metrics-Token:
+              values: ["${env:METRICS_TOKEN}"]
           static_configs:
             - targets: [worker:9091]
 
@@ -56,7 +54,7 @@ receivers:
     transport: tcp
     username: ${env:POSTGRES_USER}
     password: ${env:POSTGRES_PASSWORD}
-    databases: [${env:POSTGRES_DB}]
+    databases: ["${env:POSTGRES_DB}"]
     collection_interval: 15s
     tls:
       insecure: true
@@ -66,7 +64,7 @@ receivers:
     password: ${env:REDIS_PASSWORD}
     collection_interval: 15s
 
-  filelog/docker:
+  file_log/docker:
     include:
       - /hostfs/var/lib/docker/containers/*/*-json.log
     start_at: end
@@ -77,19 +75,48 @@ receivers:
         id: docker-json
         parse_from: body
         parse_to: attributes
+        on_error: send
       - type: move
         id: move-message
         from: attributes.log
         to: body
-      - type: move
-        id: move-level
-        from: attributes.level
-        to: severity_text
+        on_error: send
       - type: time_parser
         id: docker-time
         parse_from: attributes.time
-        layout: '%Y-%m-%dT%H:%M:%S.%LZ'
         layout_type: gotime
+        # Docker emits RFC3339Nano timestamps and may trim trailing zeros.
+        # Go's 9 placeholders accept zero through nine fractional digits.
+        layout: '2006-01-02T15:04:05.999999999Z07:00'
+        if: 'attributes.time != nil'
+        on_error: send
+      - type: severity_parser
+        id: stream-severity
+        parse_from: attributes.stream
+        mapping:
+          info: stdout
+          warn: stderr
+        overwrite_text: true
+        if: 'attributes.stream != nil'
+        on_error: send
+      - type: json_parser
+        id: application-json
+        parse_from: body
+        parse_to: attributes.application
+        if: 'body matches "^\\s*\\{.*\\}\\s*$"'
+        on_error: send
+      - type: severity_parser
+        id: application-severity
+        parse_from: attributes.application.level
+        overwrite_text: true
+        if: 'attributes.application != nil && attributes.application.level != nil'
+        on_error: send
+      - type: severity_parser
+        id: application-severity-alias
+        parse_from: attributes.application.severity
+        overwrite_text: true
+        if: 'attributes.application != nil && attributes.application.level == nil && attributes.application.severity != nil'
+        on_error: send
 
 processors:
   memory_limiter:
@@ -152,7 +179,7 @@ service:
   extensions: [health_check, file_storage]
   pipelines:
     logs:
-      receivers: [otlp, filelog/docker]
+      receivers: [otlp, file_log/docker]
       processors: [memory_limiter, resource, batch]
       exporters: [clickhouse]
     metrics:

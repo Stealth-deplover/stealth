@@ -14,7 +14,8 @@ TLS terminator / Nginx
                          ├── Redis
                          ├── ClickHouse (private telemetry store)
                          └── worker → Docker runner + persistent storage
-                                      └── telemetry-docker → OTel collector
+                                      └── telemetry-docker-proxy (read-only Docker API)
+                                          └── telemetry-docker → OTel collector
 OTLP / hostmetrics / Prometheus → otel-collector → ClickHouse
 ```
 
@@ -46,7 +47,7 @@ docker compose --env-file .env.production -f compose.production.yaml config
 docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-docker
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 
@@ -69,7 +70,8 @@ logs.
 Required production values:
 
 - `STEALTH_API_IMAGE`, `STEALTH_WORKER_IMAGE`, `STEALTH_MIGRATE_IMAGE`, and
-  `STEALTH_CONSOLE_IMAGE`, all on the same immutable release tag.
+  `STEALTH_CONSOLE_IMAGE`, and `STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE`, all on
+  the same immutable release tag.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
 - `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
@@ -83,7 +85,8 @@ Required production values:
   server-side; it does not ask the operator to enable Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
 - `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
-  Docker-backed function runner is enabled.
+  Docker-backed function runner is enabled. The same numeric group is used by
+  the internal telemetry proxy, but the proxy is not published to the host.
 
 Strongly recommended values:
 
@@ -144,6 +147,23 @@ The production Compose baseline keeps these named volumes:
   PostgreSQL volume and should be backed up with a telemetry-specific policy.
 - `stealth_otel_state`: the Collector's crash-safe sending queue and file-log
   offsets.
+
+The `telemetry-docker-proxy` service is the only telemetry service with a
+Docker socket mount. It is attached only to the internal telemetry network,
+has no host `ports` mapping, drops capabilities, and permits only read-only
+Docker API requests needed by `docker_stats`: `/_ping`, `/version`,
+`/containers/json`, `/containers/{id}/json`, `/containers/{id}/stats`, and
+`/events` (including their API-version prefixes). Mutation endpoints such as
+create, start, exec, stop, remove, and image operations are rejected. Inspect
+responses also remove environment, command, mounts, and non-Compose labels
+before they reach the collector. The worker's Docker socket remains a
+separate, existing trust boundary for function execution.
+
+The official OpenTelemetry Collector Contrib image is scratch-based and runs
+as UID 10001. `otelcol-state-init` owns only the named Collector state volume
+and assigns it to UID/GID 10001; the Collector itself remains non-root. Its
+Compose healthcheck uses exec-form `/otelcol-contrib validate` and does not
+assume `/bin/sh` exists.
 
 Redis is authenticated but intentionally has no volume in this baseline. It
 stores distributed rate-limit windows, not the durable job state. Losing Redis
