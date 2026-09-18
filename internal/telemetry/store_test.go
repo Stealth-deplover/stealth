@@ -185,6 +185,23 @@ func TestExplorerQueriesKeepFiltersOutOfSQL(t *testing.T) {
 	}
 }
 
+func TestSourcesQueryUsesDistinctClickHouseDateTypes(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.ListSources(context.Background(), SourcesQuery{
+		Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "{from:DateTime64(9)}") || !strings.Contains(conn.query, "{from_metrics:DateTime}") {
+		t.Fatalf("sources query did not keep signal date types distinct: %s", conn.query)
+	}
+	if len(conn.args) != 5 {
+		t.Fatalf("sources argument count = %d, want 5", len(conn.args))
+	}
+}
+
 func TestLogVolumeChoosesDeterministicBuckets(t *testing.T) {
 	now := time.Now().UTC()
 	checks := []struct {
