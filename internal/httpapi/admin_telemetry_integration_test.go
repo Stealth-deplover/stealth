@@ -112,6 +112,7 @@ func createAdminTelemetryTestTables(t *testing.T, ctx context.Context, connectio
 		`CREATE TABLE IF NOT EXISTS otel_logs (Timestamp DateTime64(9), TraceId String, SpanId String, SeverityText String, ServiceName String, Body String, LogAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,
 		`CREATE TABLE IF NOT EXISTS otel_traces (Timestamp DateTime64(9), TraceId String, SpanId String, ParentSpanId String, SpanName String, SpanKind String, ServiceName String, Duration UInt64, StatusCode String, StatusMessage String, SpanAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,
 		`CREATE TABLE IF NOT EXISTS otel_metrics_gauge (TimeUnix DateTime, MetricName String, ServiceName String, Value Float64, Attributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY TimeUnix`,
+		`CREATE TABLE IF NOT EXISTS otel_metrics_sum (TimeUnix DateTime, MetricName String, ServiceName String, Value Float64, Attributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY TimeUnix`,
 	} {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
