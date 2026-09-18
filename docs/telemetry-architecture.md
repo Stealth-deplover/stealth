@@ -1,10 +1,11 @@
 # Stealth telemetry architecture
 
-This document describes the first production telemetry boundary shipped with
-the Stealth control plane. It is intentionally explicit about what is real
-today and what remains a later product slice: the current pipeline stores and
-queries OTel logs, traces, and metric points; it does not invent an alert,
-monitor, incident, or dashboard record when that subsystem is not configured.
+This document describes the production telemetry boundary shipped with the
+Stealth control plane. It is intentionally explicit about what is real: the
+pipeline stores and queries OTel logs, traces, and metric points, while
+monitors, alert rules, incidents, notifications, and saved dashboards remain
+durable PostgreSQL control-plane records. The Console reports unavailable or
+empty telemetry explicitly; it does not manufacture samples.
 
 ## Data flow
 
@@ -16,7 +17,7 @@ future workloads ──┘                 │
                          OTel Collector Contrib
                           ├── hostmetrics
                           ├── Prometheus scrape
-                          ├── Docker file logs
+                          ├── Docker file logs (host-mounted read-only)
                           └── bounded batch + retry queue
                                      │
                                      ▼
@@ -103,6 +104,24 @@ The current query surface is deliberately domain-shaped:
 - `/v1/admin/telemetry/traces` supports service, trace ID, and minimum duration.
 - `/v1/admin/telemetry/metrics` returns real OTel gauge/sum points.
 - `/v1/admin/telemetry/sources` reports observed services and signal volume.
+- `/v1/admin/overview` combines control-plane health with real HTTP span
+  aggregates and host metric samples when those signals exist.
+- `/v1/admin/telemetry/logs/tail` provides a short-lived authenticated SSE
+  stream backed by repeated bounded queries; it is not a ClickHouse socket or
+  browser-side polling of an unbounded result.
+
+The monitoring worker executes HTTP, TCP, DNS, TLS, and heartbeat probes from
+the trusted worker boundary. Monitor failure, heartbeat, and certificate rules
+are evaluated transactionally with monitor results. Metric threshold, HTTP
+error-rate, latency percentile, log-match, service-health, and disk-pressure
+rules are evaluated by the worker against bounded ClickHouse aggregates. A
+ClickHouse outage leaves the last alert state unchanged until a real sample is
+available again.
+
+Saved dashboards persist typed panel definitions in PostgreSQL. The Console
+currently lets an owner create and edit metric time-series, recent-log, and
+monitor-status panels. Each panel uses the same authenticated domain query
+API and never accepts raw SQL.
 
 The API remains usable when ClickHouse or the Collector is unavailable. Admin
 pages report the telemetry backend as unavailable; core authentication,

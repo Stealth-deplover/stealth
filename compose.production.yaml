@@ -139,7 +139,7 @@ services:
       - ./telemetry/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
       - otelcol_state:/var/lib/otelcol
       - /:/hostfs:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro
       # The host root is needed by hostmetrics, but the Docker socket is
       # explicitly masked so this collector cannot become a second Docker API
       # client. Container statistics stay in telemetry-docker below.

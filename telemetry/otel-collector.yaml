@@ -68,7 +68,7 @@ receivers:
 
   filelog/docker:
     include:
-      - /var/lib/docker/containers/*/*-json.log
+      - /hostfs/var/lib/docker/containers/*/*-json.log
     start_at: end
     include_file_path: true
     storage: file_storage
