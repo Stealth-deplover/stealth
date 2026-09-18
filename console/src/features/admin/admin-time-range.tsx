@@ -114,10 +114,14 @@ export function useAdminTimeRange() {
     return () => window.clearInterval(timer);
   }, [selectedRefresh.milliseconds]);
 
-  const customRange = readStoredCustomRange();
+  const storedCustomRange = readStoredCustomRange();
+  const customFrom = storedCustomRange?.from;
+  const customTo = storedCustomRange?.to;
   const selectedRange = adminRanges.find((item) => item.key === rangeKey);
   const query = useMemo(() => {
-    if (rangeKey === "custom" && customRange) return customRange;
+    if (rangeKey === "custom" && customFrom && customTo) {
+      return { from: customFrom, to: customTo };
+    }
     const to = new Date();
     return {
       from: new Date(
@@ -127,7 +131,13 @@ export function useAdminTimeRange() {
     };
     // refreshTick intentionally invalidates the moving window when auto-refresh is on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customRange, rangeKey, selectedRange?.milliseconds, refreshTick]);
+  }, [
+    customFrom,
+    customTo,
+    rangeKey,
+    selectedRange?.milliseconds,
+    refreshTick,
+  ]);
 
   const persist = (key: string, value: string) => {
     try {

@@ -177,6 +177,29 @@ export function useCreateAdminDashboard() {
   });
 }
 
+export function useUpdateAdminDashboard(dashboardId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (
+      body: components["schemas"]["CreateAdminDashboardRequest"],
+    ) =>
+      unwrap(
+        await api.PUT("/v1/admin/dashboards/{dashboardID}", {
+          params: { path: { dashboardID: dashboardId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.adminDashboards,
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.adminDashboard(dashboardId),
+      });
+    },
+  });
+}
+
 export function useDeleteAdminDashboard() {
   const queryClient = useQueryClient();
   return useMutation({

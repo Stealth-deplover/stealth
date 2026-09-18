@@ -6,6 +6,7 @@ import { BarChart3, LayoutDashboard, Plus, Trash2 } from "lucide-react";
 import {
   useCreateAdminDashboard,
   useDeleteAdminDashboard,
+  useUpdateAdminDashboard,
 } from "@/api/mutations";
 import {
   useAdminDashboard,
@@ -53,13 +54,30 @@ export function AdminDashboardsView() {
   const timeRange = useAdminTimeRange();
   const dashboards = useAdminDashboards({ limit: 100 });
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [panelDialogOpen, setPanelDialogOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
   const remove = useDeleteAdminDashboard();
+  const update = useUpdateAdminDashboard(selectedId ?? "");
   const detail = useAdminDashboard(selectedId);
   const selectedPanels = useMemo(
     () => panelsFromDefinition(detail.data?.dashboard.definition),
     [detail.data?.dashboard.definition],
   );
+
+  function addPanel(panel: Panel) {
+    if (!selectedId || !detail.data) return;
+    update.mutate(
+      {
+        name: detail.data.dashboard.name,
+        description: detail.data.dashboard.description,
+        definition: {
+          ...detail.data.dashboard.definition,
+          panels: [...selectedPanels, panel],
+        },
+      },
+      { onSuccess: () => setPanelDialogOpen(false) },
+    );
+  }
 
   return (
     <AdminShell>
@@ -190,6 +208,24 @@ export function AdminDashboardsView() {
                   <Trash2 className="size-3.5" aria-hidden="true" /> Delete
                 </Button>
               </div>
+              <div className="flex justify-end">
+                <Dialog
+                  open={panelDialogOpen}
+                  onOpenChange={setPanelDialogOpen}
+                >
+                  <DialogTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={update.isPending}
+                    >
+                      <Plus className="size-3.5" aria-hidden="true" /> Add panel
+                    </Button>
+                  </DialogTrigger>
+                  <AddPanelDialog onAdd={addPanel} />
+                </Dialog>
+              </div>
               {selectedPanels.length ? (
                 <div className="grid gap-4 md:grid-cols-2">
                   {selectedPanels.map((panel) => (
@@ -209,6 +245,11 @@ export function AdminDashboardsView() {
               {remove.error ? (
                 <p className="text-sm text-coral-red" role="alert">
                   {errorMessage(remove.error)}
+                </p>
+              ) : null}
+              {update.error ? (
+                <p className="text-sm text-coral-red" role="alert">
+                  {errorMessage(update.error)}
                 </p>
               ) : null}
             </div>
@@ -257,8 +298,8 @@ function CreateDashboardDialog({
       <DialogHeader>
         <DialogTitle>New dashboard</DialogTitle>
         <DialogDescription>
-          Choose a real metric series for the first panel. More panels can be
-          added through the saved definition API.
+          Choose a real metric series for the first panel. Add more bounded
+          metric, log, or monitor panels after the dashboard is created.
         </DialogDescription>
       </DialogHeader>
       <form className="space-y-4" onSubmit={submit}>
@@ -311,6 +352,123 @@ function CreateDashboardDialog({
           </DialogClose>
           <Button type="submit" disabled={mutation.isPending}>
             {mutation.isPending ? "Creating…" : "Create dashboard"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function AddPanelDialog({ onAdd }: { onAdd: (panel: Panel) => void }) {
+  const [type, setType] = useState<Panel["type"]>("time_series");
+  const [title, setTitle] = useState("");
+  const [metric, setMetric] = useState("system.cpu.utilization");
+  const [service, setService] = useState("");
+  const [level, setLevel] = useState("");
+  const [query, setQuery] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const panel: Panel = {
+      id: `panel-${Date.now()}`,
+      type,
+      title: title.trim() || undefined,
+      ...(type === "time_series" ? { metric, service } : {}),
+      ...(type === "logs" ? { service, level, query } : {}),
+    };
+    onAdd(panel);
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Add dashboard panel</DialogTitle>
+        <DialogDescription>
+          Panels use the authenticated, bounded admin queries. No raw ClickHouse
+          SQL is accepted.
+        </DialogDescription>
+      </DialogHeader>
+      <form className="space-y-4" onSubmit={submit}>
+        <Field label="Panel type" htmlFor="dashboard-panel-type">
+          <select
+            id="dashboard-panel-type"
+            value={type}
+            onChange={(event) => setType(event.target.value)}
+            className="min-h-11 w-full rounded-md border border-graphite bg-carbon px-3.5 text-sm text-mist outline-none focus:border-acid-lime/70"
+          >
+            <option value="time_series">Metric time series</option>
+            <option value="logs">Recent logs</option>
+            <option value="monitor_status">Monitor status</option>
+          </select>
+        </Field>
+        <Field label="Title" htmlFor="dashboard-panel-title">
+          <Input
+            id="dashboard-panel-title"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Optional"
+          />
+        </Field>
+        {type === "time_series" ? (
+          <>
+            <Field
+              label="Metric name"
+              htmlFor="dashboard-panel-metric"
+              hint="Use the exact OTel metric name emitted by this instance."
+            >
+              <Input
+                id="dashboard-panel-metric"
+                value={metric}
+                onChange={(event) => setMetric(event.target.value)}
+                required
+              />
+            </Field>
+            <Field label="Service filter" htmlFor="dashboard-panel-service">
+              <Input
+                id="dashboard-panel-service"
+                value={service}
+                onChange={(event) => setService(event.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+          </>
+        ) : null}
+        {type === "logs" ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Search text" htmlFor="dashboard-panel-query">
+              <Input
+                id="dashboard-panel-query"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+            <Field label="Level" htmlFor="dashboard-panel-level">
+              <Input
+                id="dashboard-panel-level"
+                value={level}
+                onChange={(event) => setLevel(event.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+            <Field label="Service filter" htmlFor="dashboard-log-service">
+              <Input
+                id="dashboard-log-service"
+                value={service}
+                onChange={(event) => setService(event.target.value)}
+                placeholder="Optional"
+              />
+            </Field>
+          </div>
+        ) : null}
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="secondary">
+              Cancel
+            </Button>
+          </DialogClose>
+          <Button type="submit" disabled={type === "time_series" && !metric}>
+            Add panel
           </Button>
         </DialogFooter>
       </form>
