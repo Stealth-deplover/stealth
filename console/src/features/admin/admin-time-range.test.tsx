@@ -66,4 +66,46 @@ describe("admin time range preferences", () => {
       vi.useRealTimers();
     }
   });
+
+  it("persists and restores a bounded custom range", () => {
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("From (local time)"), {
+      target: { value: "2026-09-17T10:00" },
+    });
+    fireEvent.change(screen.getByLabelText("To (local time)"), {
+      target: { value: "2026-09-17T11:30" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByTestId("range")).toHaveTextContent("custom");
+    expect(window.localStorage.getItem("stealth.admin.time-range")).toBe(
+      "custom",
+    );
+    expect(window.localStorage.getItem("stealth.admin.custom-from")).toBe(
+      new Date("2026-09-17T10:00").toISOString(),
+    );
+    expect(window.localStorage.getItem("stealth.admin.custom-to")).toBe(
+      new Date("2026-09-17T11:30").toISOString(),
+    );
+  });
+
+  it("rejects a custom range whose end is not after its start", () => {
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.change(screen.getByLabelText("From (local time)"), {
+      target: { value: "2026-09-17T11:00" },
+    });
+    fireEvent.change(screen.getByLabelText("To (local time)"), {
+      target: { value: "2026-09-17T10:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Choose a valid time range.",
+    );
+    expect(screen.getByTestId("range")).toHaveTextContent("custom");
+  });
 });

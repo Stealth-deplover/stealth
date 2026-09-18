@@ -21,9 +21,13 @@ export const adminRefreshIntervals = [
 ] as const;
 
 type RangeKey = (typeof adminRanges)[number]["key"];
+type CustomRangeKey = "custom";
+type AnyRangeKey = RangeKey | CustomRangeKey;
 type RefreshKey = (typeof adminRefreshIntervals)[number]["key"];
 
 const rangeStorageKey = "stealth.admin.time-range";
+const customFromStorageKey = "stealth.admin.custom-from";
+const customToStorageKey = "stealth.admin.custom-to";
 const refreshStorageKey = "stealth.admin.refresh-interval";
 const preferenceEvent = "stealth-admin-preference-change";
 
@@ -37,15 +41,39 @@ function subscribeToPreferences(onChange: () => void) {
   };
 }
 
-function readStoredRange(): RangeKey {
+function readStoredRange(): AnyRangeKey {
   if (typeof window === "undefined") return "1h";
   try {
     const saved = window.localStorage.getItem(rangeStorageKey);
-    return adminRanges.some((item) => item.key === saved)
-      ? (saved as RangeKey)
+    return saved === "custom" || adminRanges.some((item) => item.key === saved)
+      ? (saved as AnyRangeKey)
       : "1h";
   } catch {
     return "1h";
+  }
+}
+
+function readStoredCustomRange() {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const from = window.localStorage.getItem(customFromStorageKey);
+    const to = window.localStorage.getItem(customToStorageKey);
+    if (!from || !to) return undefined;
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    if (
+      !Number.isFinite(fromDate.getTime()) ||
+      !Number.isFinite(toDate.getTime()) ||
+      toDate.getTime() <= fromDate.getTime()
+    ) {
+      return undefined;
+    }
+    if (toDate.getTime() - fromDate.getTime() > 30 * 24 * 60 * 60_000) {
+      return undefined;
+    }
+    return { from: fromDate.toISOString(), to: toDate.toISOString() };
+  } catch {
+    return undefined;
   }
 }
 
@@ -65,7 +93,7 @@ export function useAdminTimeRange() {
   const rangeKey = useSyncExternalStore(
     subscribeToPreferences,
     readStoredRange,
-    () => "1h" as RangeKey,
+    () => "1h" as AnyRangeKey,
   );
   const refreshKey = useSyncExternalStore(
     subscribeToPreferences,
@@ -86,16 +114,20 @@ export function useAdminTimeRange() {
     return () => window.clearInterval(timer);
   }, [selectedRefresh.milliseconds]);
 
-  const selectedRange = adminRanges.find((item) => item.key === rangeKey)!;
+  const customRange = readStoredCustomRange();
+  const selectedRange = adminRanges.find((item) => item.key === rangeKey);
   const query = useMemo(() => {
+    if (rangeKey === "custom" && customRange) return customRange;
     const to = new Date();
     return {
-      from: new Date(to.getTime() - selectedRange.milliseconds).toISOString(),
+      from: new Date(
+        to.getTime() - (selectedRange?.milliseconds ?? 60 * 60_000),
+      ).toISOString(),
       to: to.toISOString(),
     };
     // refreshTick intentionally invalidates the moving window when auto-refresh is on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRange.milliseconds, refreshTick]);
+  }, [customRange, rangeKey, selectedRange?.milliseconds, refreshTick]);
 
   const persist = (key: string, value: string) => {
     try {
@@ -112,7 +144,7 @@ export function useAdminTimeRange() {
     rangeKey,
     refreshKey,
     refreshInterval: selectedRefresh.milliseconds,
-    setRange: (next: RangeKey) => {
+    setRange: (next: AnyRangeKey) => {
       persist(rangeStorageKey, next);
     },
     setRefresh: (next: RefreshKey) => {
@@ -127,18 +159,57 @@ export function AdminTimeRange({
   onRangeChange,
   onRefreshChange,
 }: {
-  rangeKey: RangeKey;
+  rangeKey: AnyRangeKey;
   refreshKey: RefreshKey;
-  onRangeChange: (value: RangeKey) => void;
+  onRangeChange: (value: AnyRangeKey) => void;
   onRefreshChange: (value: RefreshKey) => void;
 }) {
+  const initialCustom = readStoredCustomRange();
+  const [customFrom, setCustomFrom] = useState(() =>
+    toDateTimeInput(
+      initialCustom?.from ?? new Date(Date.now() - 60 * 60_000).toISOString(),
+    ),
+  );
+  const [customTo, setCustomTo] = useState(() =>
+    toDateTimeInput(initialCustom?.to ?? new Date().toISOString()),
+  );
+  const [customError, setCustomError] = useState("");
+  const displayRanges = [
+    ...adminRanges,
+    { key: "custom" as const, label: "Custom" },
+  ];
+  const applyCustom = () => {
+    const from = new Date(customFrom);
+    const to = new Date(customTo);
+    if (
+      !Number.isFinite(from.getTime()) ||
+      !Number.isFinite(to.getTime()) ||
+      to.getTime() <= from.getTime()
+    ) {
+      setCustomError("Choose a valid time range.");
+      return;
+    }
+    if (to.getTime() - from.getTime() > 30 * 24 * 60 * 60_000) {
+      setCustomError("Custom range cannot exceed 30 days.");
+      return;
+    }
+    setCustomError("");
+    try {
+      window.localStorage.setItem(customFromStorageKey, from.toISOString());
+      window.localStorage.setItem(customToStorageKey, to.toISOString());
+    } catch {
+      // The range is still applied for this render; shared preference storage is optional.
+    }
+    window.dispatchEvent(new Event(preferenceEvent));
+    onRangeChange("custom");
+  };
   return (
     <div
       className="flex flex-wrap items-center gap-3"
       aria-label="Telemetry time range"
     >
       <div className="flex items-center gap-1 rounded-md border border-graphite bg-carbon p-1">
-        {adminRanges.map((item) => (
+        {displayRanges.map((item) => (
           <button
             key={item.key}
             type="button"
@@ -153,6 +224,40 @@ export function AdminTimeRange({
           </button>
         ))}
       </div>
+      {rangeKey === "custom" ? (
+        <div className="flex flex-wrap items-end gap-2 rounded-md border border-graphite bg-carbon p-2">
+          <label className="text-[11px] text-fog">
+            From (local time)
+            <input
+              type="datetime-local"
+              value={customFrom}
+              onChange={(event) => setCustomFrom(event.target.value)}
+              className="mt-1 block h-8 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+            />
+          </label>
+          <label className="text-[11px] text-fog">
+            To (local time)
+            <input
+              type="datetime-local"
+              value={customTo}
+              onChange={(event) => setCustomTo(event.target.value)}
+              className="mt-1 block h-8 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={applyCustom}
+            className="h-8 rounded-md bg-acid-lime px-3 text-xs font-medium text-void transition-colors duration-150 hover:bg-acid-lime/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60"
+          >
+            Apply
+          </button>
+          {customError ? (
+            <p className="basis-full text-[11px] text-coral-red" role="alert">
+              {customError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <label className="flex items-center gap-2 text-xs text-fog">
         Refresh
         <select
@@ -171,4 +276,11 @@ export function AdminTimeRange({
       </label>
     </div>
   );
+}
+
+function toDateTimeInput(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
