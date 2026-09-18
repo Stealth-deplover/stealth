@@ -35,17 +35,19 @@ receivers:
         - job_name: stealth-api
           scrape_interval: 15s
           metrics_path: /metrics
-          http_headers:
-            X-Metrics-Token:
-              values: ["${env:METRICS_TOKEN}"]
+          http_config:
+            http_headers:
+              X-Metrics-Token:
+                values: ["${env:METRICS_TOKEN}"]
           static_configs:
             - targets: [api:8080]
         - job_name: stealth-worker
           scrape_interval: 15s
           metrics_path: /metrics
-          http_headers:
-            X-Metrics-Token:
-              values: ["${env:METRICS_TOKEN}"]
+          http_config:
+            http_headers:
+              X-Metrics-Token:
+                values: ["${env:METRICS_TOKEN}"]
           static_configs:
             - targets: [worker:9091]
 

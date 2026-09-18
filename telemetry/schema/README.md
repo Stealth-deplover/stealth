@@ -1,7 +1,8 @@
 # Telemetry schema contract
 
-The production Collector is pinned to `otel/opentelemetry-collector-contrib:0.161.0`.
-Its ClickHouse exporter creates the OTel signal tables (`otel_logs`,
+The production Collector is built from the pinned
+`otel/opentelemetry-collector-contrib:0.161.0` base image. Its ClickHouse
+exporter creates the OTel signal tables (`otel_logs`,
 `otel_traces`, and the typed metric tables) on a fresh database. The exporter
 SQL templates and insert columns are part of that pinned dependency; do not
 copy an unpinned table definition into this repository.

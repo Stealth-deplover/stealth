@@ -1,8 +1,10 @@
 # Upgrade and rollback
 
 Stealth releases are coordinated application releases. Use the same version
-for `stealth-api`, `stealth-worker`, `stealth-migrate`, `stealth-console`, and
-`stealth-telemetry-docker-proxy`.
+for `stealth-api`, `stealth-worker`, `stealth-migrate`, `stealth-console`,
+`stealth-otel-collector`, and `stealth-telemetry-docker-proxy`. Keep
+`OTEL_DOCKER_COLLECTOR_IMAGE` on the matching upstream Collector Contrib
+release.
 The `stealth-setup` image is only needed for a fresh browser installation or
 setup repair.
 The current deployment does not promise rolling upgrades between incompatible
@@ -38,7 +40,8 @@ worker, migration, Console, PostgreSQL, Redis, or proxy changes.
 4. Pull the images and validate the rendered Compose file.
 5. Stop or coordinate workers if the release notes require a quiet queue.
 6. Start PostgreSQL/Redis if needed, then run the one-shot migration command.
-7. Recreate API, worker, Console, and proxy from the same release.
+7. Recreate API, worker, Console, proxy, and both Collector services from the
+   same release configuration.
 8. Verify `/healthz`, `/readyz`, `/version`, worker health, and the HTTP smoke
    script. Check logs for migration and worker claim errors.
 

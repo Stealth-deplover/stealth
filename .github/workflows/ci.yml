@@ -99,6 +99,9 @@ jobs:
       - name: Docker image build
         run: docker build --target api -t stealth-api .
 
+      - name: Stealth Collector image build
+        run: docker build --target telemetry-collector -t stealth-otel-collector:ci .
+
       - name: Docker metrics proxy image build
         run: docker build --target telemetry-docker-proxy -t stealth-telemetry-docker-proxy:ci .
 
