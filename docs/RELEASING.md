@@ -50,8 +50,9 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   `stealth_Linux_arm64.tar.gz`, and `checksums.txt`.
 - [ ] Verify `checksums.txt` contains a valid SHA-256 entry for both CLI
   archives and that the archive contents contain an executable `stealth` file.
-- [ ] Verify GHCR contains versioned API, worker, migration, Console, and
-      `stealth-telemetry-docker-proxy` images for the release.
+- [ ] Verify GHCR contains versioned API, worker, migration, Console,
+      `stealth-otel-collector`, and `stealth-telemetry-docker-proxy` images for
+      the release.
 
 ## Clean-host validation
 

@@ -121,7 +121,9 @@ services:
     networks: [telemetry_store]
 
   otel-collector:
-    image: "${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
+    # This release image is derived from the pinned upstream contrib image and
+    # adds only the scratch-compatible live health probe.
+    image: "${OTEL_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     environment:
@@ -157,9 +159,10 @@ services:
       clickhouse:
         condition: service_healthy
     healthcheck:
-      # The official contrib image is scratch-based and has no /bin/sh. Keep
-      # this in exec form and invoke the binary by its absolute path.
-      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
+      # The upstream image is scratch-based and has no /bin/sh, curl, or wget.
+      # Probe the live health_check extension with the small binary shipped in
+      # the Stealth Collector wrapper image.
+      test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -202,7 +205,7 @@ services:
     networks: [telemetry_docker]
 
   telemetry-docker:
-    image: "${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
+    image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:

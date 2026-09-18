@@ -20,10 +20,10 @@ func TestAllowedPathOnlyExposesDockerStatsReadSurface(t *testing.T) {
 	}{
 		{path: "/_ping", allow: true},
 		{path: "/v1.44/version", allow: true},
+		{path: "/events", allow: true},
 		{path: "/containers/json", allow: true},
 		{path: "/v1.44/containers/0123456789ab/stats", allow: true},
 		{path: "/containers/0123456789ab/json", allow: true},
-		{path: "/events", allow: true},
 		{path: "/containers/0123456789ab/exec", allow: false},
 		{path: "/containers/0123456789ab/start", allow: false},
 		{path: "/images/json", allow: false},
@@ -43,6 +43,39 @@ func TestAllowedQueryRejectsMutationAndCredentialLikeParameters(t *testing.T) {
 	}
 	if _, kind, ok := allowedPath("/containers/0123456789ab/stats"); !ok || allowedQuery(kind, url.Values{"exec": {"true"}}) {
 		t.Fatal("unexpected stats query was accepted")
+	}
+}
+
+func TestAllowedQueryKeepsDockerReadSurfaceNarrow(t *testing.T) {
+	_, eventsKind, ok := allowedPath("/events")
+	if !ok || !allowedQuery(eventsKind, url.Values{
+		"since":   {"2026-09-18T02:12:44Z"},
+		"filters": {`{"type":["container"],"event":["start","die"]}`},
+	}) {
+		t.Fatal("Docker stats event query was rejected")
+	}
+	if allowedQuery(eventsKind, url.Values{
+		"filters": {`{"type":["image"],"event":["pull"]}`},
+	}) {
+		t.Fatal("unneeded Docker event filter was accepted")
+	}
+	if allowedQuery(eventsKind, url.Values{
+		"filters": {`{"type":["container"],"event":["exec_start"]}`},
+	}) {
+		t.Fatal("unneeded Docker event action was accepted")
+	}
+
+	_, inspectKind, ok := allowedPath("/containers/0123456789ab/json")
+	if !ok || !allowedQuery(inspectKind, url.Values{"size": {"true"}}) {
+		t.Fatal("normal inspect size query was rejected")
+	}
+	if allowedQuery(inspectKind, url.Values{"platform": {"linux"}}) {
+		t.Fatal("unneeded inspect platform query was accepted")
+	}
+
+	_, containersKind, ok := allowedPath("/containers/json")
+	if !ok || !allowedQuery(containersKind, url.Values{"filters": {"{}"}}) {
+		t.Fatal("normal container filter query was rejected")
 	}
 }
 
@@ -75,6 +108,23 @@ func TestSanitizeContainersRemovesMountsAndUntrustedLabels(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "com.docker.compose.service") {
 		t.Fatalf("sanitized container list lost required Compose label: %s", output)
+	}
+}
+
+func TestCopyEventStreamRemovesActorAttributes(t *testing.T) {
+	input := `{"status":"start","id":"0123456789abcdef","Type":"container","Action":"start","Actor":{"ID":"0123456789abcdef","Attributes":{"com.docker.compose.service":"api","secret":"do-not-forward"}},"scope":"local","time":1726625564,"timeNano":1726625564123456789}` + "\n"
+	recorder := httptest.NewRecorder()
+	copyEventStream(recorder, strings.NewReader(input))
+
+	if strings.Contains(recorder.Body.String(), "do-not-forward") || strings.Contains(recorder.Body.String(), "Attributes") {
+		t.Fatalf("event stream leaked actor attributes: %s", recorder.Body.String())
+	}
+	var event dockerEvent
+	if err := json.Unmarshal(recorder.Body.Bytes(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Action != "start" || event.Actor.ID != "0123456789abcdef" || event.TimeNano == 0 {
+		t.Fatalf("sanitized event lost receiver fields: %#v", event)
 	}
 }
 

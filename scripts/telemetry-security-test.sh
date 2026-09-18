@@ -34,6 +34,14 @@ for service in api console proxy clickhouse; do
 	fi
 done
 
+for service in clickhouse otel-collector telemetry-docker telemetry-docker-proxy; do
+	block=$(service_block "$service")
+	if printf '%s\n' "$block" | grep -E '^[[:space:]]*ports:' >/dev/null 2>&1; then
+		printf 'telemetry security check: %s is publicly published\n' "$service" >&2
+		exit 1
+	fi
+done
+
 collector_block=$(service_block otel-collector)
 if printf '%s\n' "$collector_block" | grep -E 'privileged:[[:space:]]*true|^[[:space:]]*-[[:space:]]*/var/run/docker\.sock:' >/dev/null 2>&1; then
 	printf 'telemetry security check: main collector has Docker authority\n' >&2
@@ -76,6 +84,10 @@ done
 
 if ! grep -F 'FROM runtime-base AS telemetry-docker-proxy' Dockerfile >/dev/null 2>&1 || ! grep -F 'telemetry-docker-proxy' Dockerfile >/dev/null 2>&1; then
 	printf 'telemetry security check: restricted Docker proxy image target is missing\n' >&2
+	exit 1
+fi
+if ! grep -F 'AS telemetry-collector' Dockerfile >/dev/null 2>&1 || ! grep -F 'telemetry-collector-healthcheck' Dockerfile >/dev/null 2>&1; then
+	printf 'telemetry security check: live Collector health probe image target is missing\n' >&2
 	exit 1
 fi
 

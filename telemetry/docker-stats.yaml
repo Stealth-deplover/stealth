@@ -7,6 +7,21 @@ receivers:
     endpoint: http://telemetry-docker-proxy:2375
     collection_interval: 15s
     timeout: 5s
+    # Keep the infrastructure contract explicit across receiver releases.
+    # The health/state instruments are optional in the pinned receiver.
+    metrics:
+      container.cpu.usage.total:
+        enabled: true
+      container.memory.usage.total:
+        enabled: true
+      container.network.io.usage.rx_bytes:
+        enabled: true
+      container.blockio.io_service_bytes_recursive:
+        enabled: true
+      container.state.status:
+        enabled: true
+      container.state.health.status:
+        enabled: true
     container_labels_to_metric_labels:
       com.docker.compose.project: docker.compose.project
       com.docker.compose.service: service.name
