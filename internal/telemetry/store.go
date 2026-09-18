@@ -313,13 +313,17 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return LogsResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return LogsResult{}, err
+	}
 	rows, err := s.query(ctx, logsQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("level", boundedFilter(query.Level, 64)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return LogsResult{}, err
@@ -350,6 +354,10 @@ func (s *ClickHouseStore) QueryTraces(ctx context.Context, query TracesQuery) (T
 	if query.MinMs < 0 || query.MinMs > 24*60*60*1000 {
 		return TracesResult{}, fmt.Errorf("%w: min duration is outside the allowed range", ErrInvalidQuery)
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return TracesResult{}, err
+	}
 	minDuration := uint64(query.MinMs * float64(time.Millisecond))
 	rows, err := s.query(ctx, tracesQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
@@ -357,7 +365,7 @@ func (s *ClickHouseStore) QueryTraces(ctx context.Context, query TracesQuery) (T
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("trace_id", boundedFilter(query.TraceID, 64)),
 		clickhouse.Named("min_duration_ns", minDuration),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return TracesResult{}, err
@@ -385,12 +393,16 @@ func (s *ClickHouseStore) QueryMetrics(ctx context.Context, query MetricsQuery) 
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return MetricsResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return MetricsResult{}, err
+	}
 	rows, err := s.query(ctx, metricsQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.Seconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.Seconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("name", boundedFilter(query.Name, 256)),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return MetricsResult{}, err
@@ -417,10 +429,14 @@ func (s *ClickHouseStore) ListSources(ctx context.Context, query SourcesQuery) (
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return SourcesResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return SourcesResult{}, err
+	}
 	rows, err := s.query(ctx, sourcesQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return SourcesResult{}, err
@@ -453,9 +469,15 @@ func (s *ClickHouseStore) validate(queryRange TimeRange, limit int) error {
 	return nil
 }
 
+func clickHouseLimit(value int) (uint32, error) {
+	if value < 0 || uint64(value) > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: result limit cannot fit ClickHouse UInt32", ErrInvalidQuery)
+	}
+	return uint32(value), nil
+}
+
 func (s *ClickHouseStore) query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	queryContext, cancel := context.WithTimeout(ctx, s.maxQueryDuration)
-	defer cancel()
 	queryContext = clickhouse.Context(queryContext, clickhouse.WithSettings(clickhouse.Settings{
 		"max_execution_time":   uint64(s.maxQueryDuration / time.Second),
 		"max_result_rows":      uint64(s.maxQueryRows),
@@ -464,9 +486,29 @@ func (s *ClickHouseStore) query(ctx context.Context, query string, args ...any) 
 	}))
 	rows, err := s.conn.Query(queryContext, query, args...)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("query telemetry backend: %w", err)
 	}
-	return rows, nil
+	return &cancellableRows{Rows: rows, cancel: cancel}, nil
+}
+
+// cancellableRows keeps the query deadline alive while ClickHouse streams
+// rows. Cancelling the context in query() immediately after Query returned
+// would make real ClickHouse result sets fail with context.Canceled before
+// their first row was read. Every domain query defers Rows.Close, which
+// releases the timer and context once scanning is complete.
+type cancellableRows struct {
+	driver.Rows
+	cancel context.CancelFunc
+}
+
+func (r *cancellableRows) Close() error {
+	err := r.Rows.Close()
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	return err
 }
 
 func boundedFilter(value string, maximum int) string {

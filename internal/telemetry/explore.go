@@ -502,6 +502,10 @@ func (s *ClickHouseStore) QueryLogVolume(ctx context.Context, query LogVolumeQue
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return LogVolumeResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return LogVolumeResult{}, err
+	}
 	statement := logVolumeQueryFor(query.Range)
 	rows, err := s.query(ctx, statement,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
@@ -509,7 +513,7 @@ func (s *ClickHouseStore) QueryLogVolume(ctx context.Context, query LogVolumeQue
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("level", boundedFilter(query.Level, 64)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return LogVolumeResult{}, err
@@ -549,12 +553,16 @@ func (s *ClickHouseStore) QueryErrorGroups(ctx context.Context, query ErrorGroup
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return ErrorGroupsResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return ErrorGroupsResult{}, err
+	}
 	rows, err := s.query(ctx, errorGroupsQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return ErrorGroupsResult{}, err
@@ -596,10 +604,14 @@ func (s *ClickHouseStore) QueryServiceMap(ctx context.Context, query ServiceMapQ
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return ServiceMapResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return ServiceMapResult{}, err
+	}
 	rows, err := s.query(ctx, serviceMapQuery,
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return ServiceMapResult{}, err
@@ -626,6 +638,10 @@ func (s *ClickHouseStore) QueryInfrastructure(ctx context.Context, query Infrast
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return InfrastructureResult{}, err
 	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return InfrastructureResult{}, err
+	}
 	query.Scope = strings.TrimSpace(strings.ToLower(query.Scope))
 	if query.Scope != "" && query.Scope != "host" && query.Scope != "containers" && query.Scope != "postgres" && query.Scope != "redis" && query.Scope != "services" {
 		return InfrastructureResult{}, fmt.Errorf("%w: infrastructure scope is unsupported", ErrInvalidQuery)
@@ -634,7 +650,7 @@ func (s *ClickHouseStore) QueryInfrastructure(ctx context.Context, query Infrast
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.Seconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.Seconds),
 		clickhouse.Named("scope", query.Scope),
-		clickhouse.Named("limit", uint32(query.Limit)),
+		clickhouse.Named("limit", limit),
 	)
 	if err != nil {
 		return InfrastructureResult{}, err
