@@ -50,17 +50,17 @@ func TestAllowedQueryKeepsDockerReadSurfaceNarrow(t *testing.T) {
 	_, eventsKind, ok := allowedPath("/events")
 	if !ok || !allowedQuery(eventsKind, url.Values{
 		"since":   {"2026-09-18T02:12:44Z"},
-		"filters": {`{"type":["container"],"event":["start","die"]}`},
+		"filters": {`{"type":{"container":true},"event":{"start":true,"die":true}}`},
 	}) {
 		t.Fatal("Docker stats event query was rejected")
 	}
 	if allowedQuery(eventsKind, url.Values{
-		"filters": {`{"type":["image"],"event":["pull"]}`},
+		"filters": {`{"type":{"image":true},"event":{"pull":true}}`},
 	}) {
 		t.Fatal("unneeded Docker event filter was accepted")
 	}
 	if allowedQuery(eventsKind, url.Values{
-		"filters": {`{"type":["container"],"event":["exec_start"]}`},
+		"filters": {`{"type":{"container":true},"event":{"exec_start":true}}`},
 	}) {
 		t.Fatal("unneeded Docker event action was accepted")
 	}

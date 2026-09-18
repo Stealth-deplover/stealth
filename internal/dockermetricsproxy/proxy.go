@@ -338,12 +338,12 @@ func allowedEventFilters(query url.Values) bool {
 	if !ok || len(encoded) != 1 {
 		return false
 	}
-	var filters map[string][]string
+	var filters map[string]map[string]bool
 	if err := json.Unmarshal([]byte(encoded[0]), &filters); err != nil {
 		return false
 	}
 	types, ok := filters["type"]
-	if !ok || len(types) != 1 || types[0] != "container" {
+	if !ok || len(types) != 1 || !types["container"] {
 		return false
 	}
 	actions, ok := filters["event"]
@@ -355,7 +355,10 @@ func allowedEventFilters(query url.Values) bool {
 			return false
 		}
 	}
-	for _, action := range actions {
+	for action, enabled := range actions {
+		if !enabled {
+			return false
+		}
 		if _, ok := allowedDockerEventActions[action]; !ok {
 			return false
 		}
