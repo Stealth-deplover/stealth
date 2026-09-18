@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	defaultPollInterval = 1 * time.Second
-	defaultLeaseAge     = 2 * time.Minute
+	defaultPollInterval      = 1 * time.Second
+	defaultLeaseAge          = 2 * time.Minute
+	defaultAlertPollInterval = 15 * time.Second
 )
 
 type Persistence interface {
@@ -24,12 +25,14 @@ type Persistence interface {
 }
 
 type Worker struct {
-	Store        Persistence
-	Cipher       *functionsecret.Cipher
-	WorkerID     string
-	PollInterval time.Duration
-	LeaseAge     time.Duration
-	Logger       *slog.Logger
+	Store             Persistence
+	Cipher            *functionsecret.Cipher
+	WorkerID          string
+	PollInterval      time.Duration
+	LeaseAge          time.Duration
+	AlertPollInterval time.Duration
+	TelemetryAlerts   *TelemetryAlertEvaluator
+	Logger            *slog.Logger
 }
 
 func NewWorker(store Persistence, cipher *functionsecret.Cipher, workerID string, logger *slog.Logger) (*Worker, error) {
@@ -39,7 +42,7 @@ func NewWorker(store Persistence, cipher *functionsecret.Cipher, workerID string
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Worker{Store: store, Cipher: cipher, WorkerID: workerID, PollInterval: defaultPollInterval, LeaseAge: defaultLeaseAge, Logger: logger}, nil
+	return &Worker{Store: store, Cipher: cipher, WorkerID: workerID, PollInterval: defaultPollInterval, LeaseAge: defaultLeaseAge, AlertPollInterval: defaultAlertPollInterval, Logger: logger}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -56,6 +59,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	alertPoll := w.AlertPollInterval
+	if alertPoll <= 0 {
+		alertPoll = defaultAlertPollInterval
+	}
+	nextAlertPoll := time.Time{}
 	for {
 		if _, err := w.Store.RequeueStaleAdminMonitors(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			if w.Logger != nil {
@@ -72,12 +80,23 @@ func (w *Worker) Run(ctx context.Context) error {
 		// not immediately claim/process again: wait for the lease recovery path
 		// and avoid a hot loop while the database is unavailable.
 		if processed && err == nil {
-			continue
+			// Monitor checks are allowed to run back-to-back when the queue is
+			// busy. Telemetry aggregates use a separate lower cadence to keep
+			// ClickHouse load bounded.
+		} else {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+			}
 		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+		if w.TelemetryAlerts != nil && time.Now().After(nextAlertPoll) {
+			if _, alertErr := w.TelemetryAlerts.RunOnce(ctx); alertErr != nil && !errors.Is(alertErr, context.Canceled) && !errors.Is(alertErr, context.DeadlineExceeded) {
+				if w.Logger != nil {
+					w.Logger.Warn("telemetry alert evaluation failed", "error", safeWorkerError(alertErr))
+				}
+			}
+			nextAlertPoll = time.Now().Add(alertPoll)
 		}
 	}
 }

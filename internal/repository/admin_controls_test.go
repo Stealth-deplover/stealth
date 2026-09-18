@@ -14,7 +14,7 @@ func TestAdminAlertConditionRejectsArbitrarySQL(t *testing.T) {
 }
 
 func TestAdminAlertConditionAcceptsBoundedMetricRule(t *testing.T) {
-	raw := json.RawMessage(`{"operator":"gte","threshold":0.95,"name":"http.server.request.duration","service":"api"}`)
+	raw := json.RawMessage(`{"operator":"gte","threshold":0.95,"metric":"http.server.request.duration","service":"api","aggregation":"avg"}`)
 	if err := validateAdminAlertCondition("metric_threshold", raw); err != nil {
 		t.Fatalf("validateAdminAlertCondition() error = %v", err)
 	}
@@ -41,13 +41,23 @@ func TestAdminStatusComponentRequiresSafeStatusAndURL(t *testing.T) {
 	}
 }
 
-func TestAdminAlertRuleRejectsUnevaluatedKinds(t *testing.T) {
-	condition := json.RawMessage(`{"operator":"gt","threshold":1}`)
-	if _, err := normalizeAdminAlertRuleInput(AdminAlertRuleInput{
-		Name: "HTTP errors", Kind: "error_rate", Condition: condition,
-		Severity: "warning", Enabled: true,
-	}); !errors.Is(err, ErrInvalidAdminAlert) {
-		t.Fatalf("unevaluated alert error = %v, want invalid alert", err)
+func TestAdminAlertRuleAcceptsBoundedTelemetryKinds(t *testing.T) {
+	for kind, condition := range map[string]string{
+		"error_rate":       `{"operator":"gt","threshold":0.05,"service":"stealth-api"}`,
+		"latency":          `{"operator":"gte","threshold":500,"percentile":"p95"}`,
+		"log_match":        `{"operator":"gte","threshold":1,"search":"panic","level":"ERROR"}`,
+		"service_health":   `{"operator":"gt","threshold":0.1,"service":"stealth-api"}`,
+		"disk_pressure":    `{"operator":"gte","threshold":0.9}`,
+		"metric_threshold": `{"operator":"gte","threshold":0.95,"metric":"system.memory.utilization"}`,
+	} {
+		t.Run(kind, func(t *testing.T) {
+			if _, err := normalizeAdminAlertRuleInput(AdminAlertRuleInput{
+				Name: "Telemetry rule", Kind: kind, Condition: json.RawMessage(condition),
+				Severity: "warning", Enabled: true,
+			}); err != nil {
+				t.Fatalf("normalizeAdminAlertRuleInput() error = %v", err)
+			}
+		})
 	}
 }
 

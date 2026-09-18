@@ -238,3 +238,19 @@ func TestHTTPOverviewUsesBoundedTraceAggregate(t *testing.T) {
 		t.Fatalf("HTTP overview query is not a fixed aggregate: %s", conn.query)
 	}
 }
+
+func TestAlertQueriesKeepDimensionsOutOfSQL(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	injection := `api' OR 1=1 --`
+	if _, err := store.EvaluateAlert(context.Background(), AlertQuery{
+		Kind: "metric_threshold", Metric: injection, Service: injection,
+		Range: TimeRange{From: now.Add(-time.Minute), To: now},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conn.query, injection) || !strings.Contains(conn.query, "{metric:String}") || !strings.Contains(conn.query, "{service:String}") {
+		t.Fatalf("alert query embedded an untrusted dimension: %s", conn.query)
+	}
+}

@@ -13708,6 +13708,12 @@ export enum CreateAdminMonitorRequestRecord_type {
     TXT = "TXT"
 }
 export enum AdminAlertRuleKind {
+    metric_threshold = "metric_threshold",
+    error_rate = "error_rate",
+    latency = "latency",
+    log_match = "log_match",
+    service_health = "service_health",
+    disk_pressure = "disk_pressure",
     monitor_failure = "monitor_failure",
     heartbeat_failure = "heartbeat_failure",
     certificate_expiry = "certificate_expiry"
@@ -13748,6 +13754,12 @@ export enum AdminAlertEventState {
     resolved = "resolved"
 }
 export enum CreateAdminAlertRuleRequestKind {
+    metric_threshold = "metric_threshold",
+    error_rate = "error_rate",
+    latency = "latency",
+    log_match = "log_match",
+    service_health = "service_health",
+    disk_pressure = "disk_pressure",
     monitor_failure = "monitor_failure",
     heartbeat_failure = "heartbeat_failure",
     certificate_expiry = "certificate_expiry"

@@ -355,9 +355,12 @@ func validateAdminAlertCondition(kind string, raw json.RawMessage) error {
 		return fmt.Errorf("%w: arbitrary SQL is not accepted", ErrInvalidAdminAlert)
 	}
 	switch kind {
-	case "metric_threshold", "error_rate", "latency", "log_match":
+	case "metric_threshold", "error_rate", "latency", "log_match", "service_health", "disk_pressure":
 		if !conditionHasNumber(condition, "threshold") || !conditionHasString(condition, "operator", "gt", "gte", "lt", "lte") {
 			return fmt.Errorf("%w: telemetry alerts require operator and numeric threshold", ErrInvalidAdminAlert)
+		}
+		if err := validateTelemetryAlertCondition(kind, condition); err != nil {
+			return err
 		}
 	case "monitor_failure", "heartbeat_failure":
 		if !conditionHasUUID(condition, "monitor_id") {
@@ -366,14 +369,6 @@ func validateAdminAlertCondition(kind string, raw json.RawMessage) error {
 	case "certificate_expiry":
 		if !conditionHasUUID(condition, "monitor_id") || (!conditionHasNumber(condition, "days") && !conditionHasNumber(condition, "threshold")) {
 			return fmt.Errorf("%w: certificate alerts require monitor_id and days", ErrInvalidAdminAlert)
-		}
-	case "service_health":
-		if !conditionHasBoundedString(condition, "service", 128) {
-			return fmt.Errorf("%w: service health alerts require service", ErrInvalidAdminAlert)
-		}
-	case "disk_pressure":
-		if !conditionHasNumber(condition, "threshold") {
-			return fmt.Errorf("%w: disk pressure alerts require numeric threshold", ErrInvalidAdminAlert)
 		}
 	case "backup_failure", "job_failure":
 		if value, ok := condition["kind"]; ok && (!isString(value) || len(strings.TrimSpace(value.(string))) > 128) {
@@ -387,14 +382,52 @@ func validateAdminAlertCondition(kind string, raw json.RawMessage) error {
 
 func validAdminAlertKind(value string) bool {
 	switch value {
-	// These are the rule kinds currently evaluated by the monitoring worker.
-	// Keep the API closed over executable rules: accepting a definition that no
-	// worker can evaluate would create a durable, silently inert alert.
-	case "monitor_failure", "heartbeat_failure", "certificate_expiry":
+	case "metric_threshold", "error_rate", "latency", "log_match", "service_health", "disk_pressure", "monitor_failure", "heartbeat_failure", "certificate_expiry":
 		return true
 	default:
 		return false
 	}
+}
+
+func validateTelemetryAlertCondition(kind string, condition map[string]any) error {
+	if value, ok := condition["window_seconds"]; ok {
+		window, valid := value.(float64)
+		if !valid || window < 30 || window > 24*60*60 || math.Trunc(window) != window {
+			return fmt.Errorf("%w: telemetry alert window_seconds is invalid", ErrInvalidAdminAlert)
+		}
+	}
+	if value, ok := condition["service"]; ok && (!isString(value) || !validAdminControlText(strings.TrimSpace(value.(string)), 1, 128)) {
+		return fmt.Errorf("%w: service filter is invalid", ErrInvalidAdminAlert)
+	}
+	switch kind {
+	case "metric_threshold":
+		if !conditionHasBoundedString(condition, "metric", 256) {
+			return fmt.Errorf("%w: metric threshold alerts require metric", ErrInvalidAdminAlert)
+		}
+		if value, ok := condition["aggregation"]; ok && (!isString(value) || !conditionHasString(condition, "aggregation", "avg", "min", "max", "sum", "latest")) {
+			return fmt.Errorf("%w: metric aggregation is invalid", ErrInvalidAdminAlert)
+		}
+	case "latency":
+		if value, ok := condition["percentile"]; ok && (!isString(value) || !conditionHasString(condition, "percentile", "p50", "p95", "p99")) {
+			return fmt.Errorf("%w: latency percentile is invalid", ErrInvalidAdminAlert)
+		}
+	case "log_match":
+		if !conditionHasBoundedString(condition, "search", 256) && !conditionHasBoundedString(condition, "message", 256) {
+			return fmt.Errorf("%w: log match alerts require search text", ErrInvalidAdminAlert)
+		}
+		if value, ok := condition["level"]; ok && (!isString(value) || !validAdminControlText(strings.TrimSpace(value.(string)), 1, 64)) {
+			return fmt.Errorf("%w: log level is invalid", ErrInvalidAdminAlert)
+		}
+	case "service_health":
+		if !conditionHasBoundedString(condition, "service", 128) {
+			return fmt.Errorf("%w: service health alerts require service", ErrInvalidAdminAlert)
+		}
+	case "disk_pressure":
+		if value, ok := condition["metric"]; ok && (!isString(value) || !validAdminControlText(strings.TrimSpace(value.(string)), 1, 256)) {
+			return fmt.Errorf("%w: disk metric is invalid", ErrInvalidAdminAlert)
+		}
+	}
+	return nil
 }
 
 func conditionHasNumber(condition map[string]any, key string) bool {

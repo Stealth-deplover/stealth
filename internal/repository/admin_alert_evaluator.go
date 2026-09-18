@@ -46,12 +46,86 @@ func transitionAdminAlert(current string, pendingSince *time.Time, now time.Time
 	return adminAlertTransition{State: "normal"}
 }
 
+// EvaluateAdminAlert applies one observation to the durable alert state
+// machine. It is used by trusted workers for telemetry-backed rules. The
+// transition, event insertion, and notification enqueue happen in one
+// transaction so a firing or recovery cannot be observed without its
+// corresponding delivery work.
+func (r *Repository) EvaluateAdminAlert(ctx context.Context, ruleID uuid.UUID, trigger bool, value *float64, message string) error {
+	if r == nil || r.pool == nil || ruleID == uuid.Nil {
+		return ErrInvalidAdminAlert
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := evaluateAdminAlertTx(ctx, tx, ruleID, trigger, value, "", message); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func evaluateAdminAlertTx(ctx context.Context, tx pgx.Tx, ruleID uuid.UUID, trigger bool, value *float64, lastError, message string) (uuid.UUID, error) {
+	var state string
+	var forSeconds int
+	var pendingSince *time.Time
+	var enabled bool
+	if err := tx.QueryRow(ctx, `
+		SELECT state,for_seconds,pending_since,enabled
+		FROM admin_alert_rules WHERE id=$1 FOR UPDATE`, ruleID).Scan(&state, &forSeconds, &pendingSince, &enabled); err != nil {
+		if err == pgx.ErrNoRows {
+			return uuid.Nil, ErrNotFound
+		}
+		return uuid.Nil, err
+	}
+	if !enabled {
+		return uuid.Nil, nil
+	}
+	now := time.Now().UTC()
+	transition := transitionAdminAlert(state, pendingSince, now, trigger, forSeconds)
+	lastError = normalizeAdminMonitorError(lastError)
+	if _, err := tx.Exec(ctx, `
+		UPDATE admin_alert_rules
+		SET state=$2,pending_since=$3,last_evaluated_at=$4,last_value=$5,last_error=$6,updated_at=$4
+		WHERE id=$1`, ruleID, transition.State, transition.PendingSince, now, value, nullableError(lastError)); err != nil {
+		return uuid.Nil, err
+	}
+	if transition.EventState == "" {
+		return uuid.Nil, nil
+	}
+	eventID, err := uuid.NewV7()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	message = normalizeAdminAlertMessage(message)
+	if transition.EventState == "resolved" {
+		message = strings.TrimSpace(message)
+		if strings.HasSuffix(message, " is firing") {
+			message = strings.TrimSuffix(message, " is firing") + " recovered"
+		} else {
+			message += " recovered"
+		}
+		message = normalizeAdminAlertMessage(message)
+	}
+	if message == "" {
+		message = "Admin alert condition changed"
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO admin_alert_events (id,rule_id,state,value,message,occurred_at) VALUES ($1,$2,$3,$4,$5,$6)`, eventID, ruleID, transition.EventState, value, message, now); err != nil {
+		return uuid.Nil, err
+	}
+	if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {
+		return uuid.Nil, err
+	}
+	return eventID, nil
+}
+
 func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, input AdminMonitorCheckInput) error {
 	if monitorID == uuid.Nil {
 		return ErrInvalidAdminMonitor
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT id,kind,for_seconds,state,pending_since,condition
+		SELECT id,kind,condition
 		FROM admin_alert_rules
 		WHERE enabled AND kind IN ('monitor_failure','heartbeat_failure','certificate_expiry')
 		  AND condition->>'monitor_id'=$1
@@ -60,68 +134,60 @@ func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	eventIDs := make([]uuid.UUID, 0)
-	now := time.Now().UTC()
+	type monitorAlertRule struct {
+		id        uuid.UUID
+		kind      string
+		condition []byte
+	}
+	rules := make([]monitorAlertRule, 0)
 	for rows.Next() {
-		var ruleID uuid.UUID
-		var kind string
-		var forSeconds int
-		var state string
-		var pendingSince *time.Time
-		var conditionRaw []byte
-		if err := rows.Scan(&ruleID, &kind, &forSeconds, &state, &pendingSince, &conditionRaw); err != nil {
+		var rule monitorAlertRule
+		if err := rows.Scan(&rule.id, &rule.kind, &rule.condition); err != nil {
 			return err
 		}
-		var condition map[string]any
-		if err := json.Unmarshal(conditionRaw, &condition); err != nil {
-			return fmt.Errorf("decode admin alert condition: %w", err)
-		}
-		trigger := !input.Success
-		if kind == "certificate_expiry" && input.Success {
-			trigger = certificateExpiryTriggered(condition, input.Details)
-		}
-		transition := transitionAdminAlert(state, pendingSince, now, trigger, forSeconds)
-		var lastValue any
-		if input.LatencyMS >= 0 {
-			lastValue = float64(input.LatencyMS)
-		}
-		var lastError any
-		if strings.TrimSpace(input.Error) != "" {
-			lastError = normalizeAdminMonitorError(input.Error)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE admin_alert_rules
-			SET state=$2,pending_since=$3,last_evaluated_at=$4,last_value=$5,last_error=$6,updated_at=$4
-			WHERE id=$1`, ruleID, transition.State, transition.PendingSince, now, lastValue, lastError); err != nil {
-			return err
-		}
-		if transition.EventState != "" {
-			eventID, err := uuid.NewV7()
-			if err != nil {
-				return err
-			}
-			message := "Admin monitor condition is firing"
-			if transition.EventState == "resolved" {
-				message = "Admin monitor condition recovered"
-			}
-			if _, err := tx.Exec(ctx, `INSERT INTO admin_alert_events (id,rule_id,state,value,message,occurred_at) VALUES ($1,$2,$3,$4,$5,$6)`, eventID, ruleID, transition.EventState, lastValue, message, now); err != nil {
-				return err
-			}
-			eventIDs = append(eventIDs, eventID)
-		}
+		rules = append(rules, rule)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return err
 	}
 	rows.Close()
-	for _, eventID := range eventIDs {
-		if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {
+	for _, rule := range rules {
+		var condition map[string]any
+		if err := json.Unmarshal(rule.condition, &condition); err != nil {
+			return fmt.Errorf("decode admin alert condition: %w", err)
+		}
+		trigger := !input.Success
+		if rule.kind == "certificate_expiry" && input.Success {
+			trigger = certificateExpiryTriggered(condition, input.Details)
+		}
+		var lastValue *float64
+		if input.LatencyMS >= 0 {
+			value := float64(input.LatencyMS)
+			lastValue = &value
+		}
+		message := "Admin monitor condition is firing"
+		if rule.kind == "certificate_expiry" {
+			message = "Admin certificate condition is firing"
+		}
+		if _, err := evaluateAdminAlertTx(ctx, tx, rule.id, trigger, lastValue, input.Error, message); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalizeAdminAlertMessage(value string) string {
+	value = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '\x00' || r == '\r' || r == '\n' {
+			return ' '
+		}
+		return r
+	}, value))
+	if len(value) > 1000 {
+		return value[:1000]
+	}
+	return value
 }
 
 func certificateExpiryTriggered(condition map[string]any, details json.RawMessage) bool {
