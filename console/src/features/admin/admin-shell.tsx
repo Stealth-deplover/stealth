@@ -6,9 +6,15 @@ import {
   ClipboardList,
   DatabaseZap,
   Gauge,
+  BellRing,
+  CircleAlert,
+  LayoutDashboard,
   Logs,
+  Radar,
   RadioTower,
+  ServerCog,
   ShieldCheck,
+  Waypoints,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -16,10 +22,22 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/admin", label: "Overview", icon: Gauge },
   { href: "/admin/operations", label: "Operations", icon: ClipboardList },
+  { href: "/admin/monitoring", label: "Monitoring", icon: Radar },
+  { href: "/admin/alerts", label: "Alerts", icon: BellRing },
+  { href: "/admin/incidents", label: "Incidents", icon: CircleAlert },
+  { href: "/admin/dashboards", label: "Dashboards", icon: LayoutDashboard },
+  {
+    href: "/admin/infrastructure",
+    label: "Infrastructure",
+    icon: ServerCog,
+  },
   { href: "/admin/telemetry/metrics", label: "Metrics", icon: Activity },
   { href: "/admin/telemetry/logs", label: "Logs", icon: Logs },
+  { href: "/admin/telemetry/errors", label: "Errors", icon: CircleAlert },
   { href: "/admin/telemetry/traces", label: "Traces", icon: RadioTower },
+  { href: "/admin/telemetry/services", label: "Service map", icon: Waypoints },
   { href: "/admin/telemetry/sources", label: "Sources", icon: DatabaseZap },
+  { href: "/admin/status", label: "Status page", icon: Waypoints },
   { href: "/admin/audit", label: "Audit & security", icon: ShieldCheck },
 ];
 

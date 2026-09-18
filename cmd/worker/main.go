@@ -22,6 +22,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/messagingrunner"
+	"github.com/Stealth-deplover/stealth/internal/monitoring"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/realtimepublisher"
@@ -98,7 +99,7 @@ func main() {
 		logger.Error("function secret configuration error", "error", err)
 		os.Exit(1)
 	}
-	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher})
+	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher, AdminCipher: cipher})
 	var userStorage artifactcleanup.Cleaner
 	if cfg.StorageDriver == "s3" {
 		userStorage, err = storage.NewS3(storage.S3Options{
@@ -138,6 +139,13 @@ func main() {
 	}
 	realtimePublisher.PollInterval = cfg.FunctionsRunnerPoll
 	realtimePublisher.LeaseAge = cfg.FunctionsRunnerLeaseAge
+	monitorWorker, err := monitoring.NewWorker(repo, cipher, cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("admin monitoring worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	monitorWorker.PollInterval = cfg.FunctionsRunnerPoll
+	monitorWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	webhookWorker, err := webhookrunner.New(repo, cipher, cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("webhook worker configuration error", "error", err)
@@ -176,6 +184,7 @@ func main() {
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
+			{Name: "admin monitoring worker", Runner: monitorWorker},
 		}
 		if agentWorker != nil {
 			registrations = append(registrations, workersupervisor.Registration{Name: "Agent worker", Runner: agentWorker})
@@ -232,6 +241,7 @@ func main() {
 		{Name: "realtime publisher", Runner: realtimePublisher},
 		{Name: "webhook worker", Runner: webhookWorker},
 		{Name: "messaging worker", Runner: messagingWorker},
+		{Name: "admin monitoring worker", Runner: monitorWorker},
 		{Name: "worker metrics", Runner: workersupervisor.RunnerFunc(func(ctx context.Context) error {
 			return serveWorkerMetrics(ctx, metricsServer, logger)
 		})},

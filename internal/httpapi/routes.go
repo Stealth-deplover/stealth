@@ -28,6 +28,8 @@ func (s *Server) routes() http.Handler {
 			return
 		}
 		r.Post("/setup/handoff", s.completeSetupHandoff)
+		r.Post("/monitor-heartbeats/{monitorID}", s.recordAdminMonitorHeartbeat)
+		r.Get("/status-page", s.publicAdminStatusPage)
 		s.registerAdminRoutes(r)
 		s.registerAccountRoutes(r)
 		s.registerOrganizationRoutes(r)

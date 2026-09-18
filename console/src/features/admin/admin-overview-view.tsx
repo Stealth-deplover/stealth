@@ -29,15 +29,21 @@ export function AdminOverviewView() {
   );
 
   if (overview.isPending) {
-    return <LoadingState rows={5} />;
+    return (
+      <AdminShell>
+        <LoadingState rows={5} />
+      </AdminShell>
+    );
   }
   if (overview.error) {
     return (
-      <ErrorState
-        title="Could not load instance overview"
-        error={overview.error}
-        retry={() => overview.refetch()}
-      />
+      <AdminShell>
+        <ErrorState
+          title="Could not load instance overview"
+          error={overview.error}
+          retry={() => overview.refetch()}
+        />
+      </AdminShell>
     );
   }
   const data = overview.data;

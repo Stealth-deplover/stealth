@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAdminTraces } from "@/api/queries";
 import { ErrorState } from "@/components/feedback/error-state";
 import { LoadingState } from "@/components/feedback/loading-state";
@@ -14,8 +15,11 @@ import { AdminTimeRange, useAdminTimeRange } from "./admin-time-range";
 
 export function AdminTracesView() {
   const timeRange = useAdminTimeRange();
+  const searchParams = useSearchParams();
   const [service, setService] = useState("");
-  const [traceID, setTraceID] = useState("");
+  const [traceID, setTraceID] = useState(
+    () => searchParams.get("trace_id") ?? "",
+  );
   const query = useMemo(
     () => ({ ...timeRange.query, service, trace_id: traceID, limit: 100 }),
     [service, timeRange.query, traceID],

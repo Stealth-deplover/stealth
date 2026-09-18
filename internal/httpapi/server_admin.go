@@ -168,6 +168,32 @@ func (s *Server) adminTelemetryLogs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) adminTelemetryLogVolume(w http.ResponseWriter, r *http.Request) {
+	explorer, ok := s.telemetry.(telemetry.Explorer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := explorer.QueryLogVolume(r.Context(), telemetry.LogVolumeQuery{
+		Range:   queryRange,
+		Service: r.URL.Query().Get("service"),
+		Level:   r.URL.Query().Get("level"),
+		Search:  r.URL.Query().Get("query"),
+		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
 func (s *Server) adminTelemetryTraces(w http.ResponseWriter, r *http.Request) {
 	if s.telemetry == nil {
 		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
@@ -192,6 +218,75 @@ func (s *Server) adminTelemetryTraces(w http.ResponseWriter, r *http.Request) {
 		TraceID: r.URL.Query().Get("trace_id"),
 		MinMs:   minMS,
 		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTelemetryErrors(w http.ResponseWriter, r *http.Request) {
+	explorer, ok := s.telemetry.(telemetry.Explorer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := explorer.QueryErrorGroups(r.Context(), telemetry.ErrorGroupsQuery{
+		Range:   queryRange,
+		Service: r.URL.Query().Get("service"),
+		Search:  r.URL.Query().Get("query"),
+		Limit:   limit,
+	})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminTelemetryServices(w http.ResponseWriter, r *http.Request) {
+	explorer, ok := s.telemetry.(telemetry.Explorer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := explorer.QueryServiceMap(r.Context(), telemetry.ServiceMapQuery{Range: queryRange, Limit: limit})
+	if !s.writeTelemetryResultError(w, err) {
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func (s *Server) adminInfrastructureMetrics(w http.ResponseWriter, r *http.Request) {
+	explorer, ok := s.telemetry.(telemetry.InfrastructureExplorer)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "telemetry backend is unavailable")
+		return
+	}
+	queryRange, ok := s.adminTimeRange(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := s.adminLimit(w, r)
+	if !ok {
+		return
+	}
+	result, err := explorer.QueryInfrastructure(r.Context(), telemetry.InfrastructureQuery{
+		Range: queryRange,
+		Scope: r.URL.Query().Get("scope"),
+		Limit: limit,
 	})
 	if !s.writeTelemetryResultError(w, err) {
 		writeJSON(w, http.StatusOK, result)

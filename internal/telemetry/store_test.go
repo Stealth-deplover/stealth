@@ -154,3 +154,75 @@ func TestTelemetrySchemaMigrationRejectsUnsafeIdentifier(t *testing.T) {
 		t.Fatalf("migration error = %v, want ErrInvalidQuery", err)
 	}
 }
+
+func TestExplorerQueriesKeepFiltersOutOfSQL(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: 24 * time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	injection := `api' OR 1=1 --`
+
+	if _, err := store.QueryErrorGroups(context.Background(), ErrorGroupsQuery{
+		Range: TimeRange{From: now.Add(-time.Hour), To: now}, Service: injection, Search: injection, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conn.query, injection) || !strings.Contains(conn.query, "{service:String}") || !strings.Contains(conn.query, "{search:String}") {
+		t.Fatalf("error query embedded an untrusted filter: %s", conn.query)
+	}
+
+	if _, err := store.QueryServiceMap(context.Background(), ServiceMapQuery{Range: TimeRange{From: now.Add(-time.Hour), To: now}, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "quantileTDigest") || strings.Contains(conn.query, "1=1") {
+		t.Fatalf("service map query was not the fixed aggregate: %s", conn.query)
+	}
+
+	if _, err := store.QueryLogVolume(context.Background(), LogVolumeQuery{Range: TimeRange{From: now.Add(-time.Hour), To: now}, Service: injection, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "toStartOfInterval") || strings.Contains(conn.query, injection) {
+		t.Fatalf("log volume query embedded an untrusted filter: %s", conn.query)
+	}
+}
+
+func TestLogVolumeChoosesDeterministicBuckets(t *testing.T) {
+	now := time.Now().UTC()
+	checks := []struct {
+		name     string
+		duration time.Duration
+		want     string
+	}{
+		{name: "minute", duration: time.Hour, want: "INTERVAL 1 MINUTE"},
+		{name: "five minute", duration: 6 * time.Hour, want: "INTERVAL 5 MINUTE"},
+		{name: "quarter hour", duration: 24 * time.Hour, want: "INTERVAL 15 MINUTE"},
+		{name: "hour", duration: 7 * 24 * time.Hour, want: "INTERVAL 1 HOUR"},
+		{name: "day", duration: 30 * 24 * time.Hour, want: "INTERVAL 1 DAY"},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			query := logVolumeQueryFor(TimeRange{From: now.Add(-check.duration), To: now})
+			if !strings.Contains(query, check.want) {
+				t.Fatalf("bucket query = %s, want %q", query, check.want)
+			}
+		})
+	}
+}
+
+func TestInfrastructureQueryUsesFixedNamespacesAndValidatesScope(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryInfrastructure(context.Background(), InfrastructureQuery{
+		Range: TimeRange{From: now.Add(-time.Minute), To: now}, Scope: "host", Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "startsWith(MetricName, 'container.')") || !strings.Contains(conn.query, "{scope:String}") {
+		t.Fatalf("infrastructure query lost fixed namespace or typed scope: %s", conn.query)
+	}
+	if _, err := store.QueryInfrastructure(context.Background(), InfrastructureQuery{
+		Range: TimeRange{From: now.Add(-time.Minute), To: now}, Scope: "system', drop", Limit: 10,
+	}); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("invalid infrastructure scope error = %v, want ErrInvalidQuery", err)
+	}
+}

@@ -66,7 +66,7 @@ export function AdminAuditView() {
                     <td className="px-4 py-3">
                       <p className="text-mist">{event.target_type}</p>
                       <p className="mt-1 font-mono text-[11px] text-fog">
-                        {event.target_id ?? "—"}
+                        {event.target_id ?? "none"}
                       </p>
                     </td>
                     <td className="max-w-[360px] whitespace-pre-wrap break-words px-4 py-3 font-mono text-[11px] text-fog">

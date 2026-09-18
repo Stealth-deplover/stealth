@@ -120,6 +120,19 @@ export const queryKeys = {
   adminOperations: ["admin", "operations"] as const,
   adminAuditEvents: (query: unknown) =>
     ["admin", "audit-events", query] as const,
+  adminMonitors: ["admin", "monitors"] as const,
+  adminMonitor: (monitorId: string) => ["admin", "monitor", monitorId] as const,
+  adminAlerts: ["admin", "alerts"] as const,
+  adminAlert: (alertRuleId: string) => ["admin", "alert", alertRuleId] as const,
+  adminIncidents: ["admin", "incidents"] as const,
+  adminIncident: (incidentId: string) =>
+    ["admin", "incident", incidentId] as const,
+  adminDashboards: ["admin", "dashboards"] as const,
+  adminDashboard: (dashboardId: string) =>
+    ["admin", "dashboard", dashboardId] as const,
+  adminStatusPage: ["admin", "status-page"] as const,
   adminTelemetry: (signal: string, query: unknown) =>
     ["admin", "telemetry", signal, query] as const,
+  adminInfrastructure: (query: unknown) =>
+    ["admin", "infrastructure", query] as const,
 } as const;

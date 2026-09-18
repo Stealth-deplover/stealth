@@ -341,7 +341,22 @@ export function Sidebar({
           href: "/admin/telemetry/metrics",
           icon: Activity,
         },
+        {
+          label: "Admin infrastructure",
+          href: "/admin/infrastructure",
+          icon: Gauge,
+        },
         { label: "Admin logs", href: "/admin/telemetry/logs", icon: Cable },
+        {
+          label: "Admin monitoring",
+          href: "/admin/monitoring",
+          icon: Activity,
+        },
+        {
+          label: "Admin incidents",
+          href: "/admin/incidents",
+          icon: ShieldCheck,
+        },
         {
           label: "Admin audit",
           href: "/admin/audit",

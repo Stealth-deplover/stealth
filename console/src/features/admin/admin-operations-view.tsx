@@ -89,10 +89,10 @@ export function AdminOperationsView() {
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-xs tabular-nums text-mist">
                       {operation.duration_ms > 0
                         ? formatDuration(operation.duration_ms)
-                        : "—"}
+                        : "unknown"}
                     </td>
                     <td className="max-w-[320px] whitespace-pre-wrap break-words px-4 py-3 text-xs text-coral-red">
-                      {operation.error ?? "—"}
+                      {operation.error ?? "none"}
                     </td>
                   </tr>
                 ))}

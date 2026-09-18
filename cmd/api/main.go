@@ -91,7 +91,7 @@ func main() {
 		logger.Error("webhook secret configuration error", "error", err)
 		os.Exit(1)
 	}
-	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: webhookCipher})
+	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: webhookCipher, AdminCipher: webhookCipher})
 	telemetryStore, telemetryErr := telemetry.New(telemetry.Config{
 		Address:          cfg.TelemetryClickHouseAddr,
 		Database:         cfg.TelemetryClickHouseDatabase,
