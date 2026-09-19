@@ -151,7 +151,7 @@ print_docker_filelog_diagnostics() {
 				sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			printf 'Container read probe uid=10001:10001 DAC_READ_SEARCH:\n'
 			docker run --rm --log-driver=none --network none --user 10001:10001 \
-				--cap-drop ALL --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
+				--cap-drop ALL --cap-add DAC_READ_SEARCH \
 				--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
 				sh -ec 'id; grep Cap /proc/self/status; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			if [ -n "$project_name" ]; then
