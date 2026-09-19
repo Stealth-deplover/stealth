@@ -56,6 +56,14 @@ if ! printf '%s\n' "$collector_block" | grep -F '/dev/null:/hostfs/var/run/docke
 	printf 'telemetry security check: hostmetrics Docker socket mask is missing\n' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$collector_block" | grep -E '^[[:space:]]*-[[:space:]]*"?0"?[[:space:]]*$' >/dev/null 2>&1; then
+	printf 'telemetry security check: main collector cannot read root-owned Docker JSON logs\n' >&2
+	exit 1
+fi
+if printf '%s\n' "$collector_block" | grep -E '^[[:space:]]*user:[[:space:]]*"?0([:]0)?"?[[:space:]]*$|privileged:[[:space:]]*true' >/dev/null 2>&1; then
+	printf 'telemetry security check: main collector must remain non-root and unprivileged\n' >&2
+	exit 1
+fi
 
 docker_metrics_block=$(service_block telemetry-docker)
 if printf '%s\n' "$docker_metrics_block" | grep -E '/var/run/docker\.sock|privileged:[[:space:]]*true|group_add:' >/dev/null 2>&1; then
