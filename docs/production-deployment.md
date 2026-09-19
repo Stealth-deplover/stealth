@@ -170,10 +170,14 @@ boundary for function execution.
 The official OpenTelemetry Collector Contrib image is scratch-based and runs
 as UID 10001. `otelcol-state-init` owns only the named Collector state volume
 and assigns it to UID/GID 10001; the Collector itself remains non-root. The
-main Collector uses the Stealth wrapper image, which adds only a static Go
-probe for the live `health_check` endpoint because the upstream image has no
-shell or HTTP client. The isolated Docker stats Collector remains on the
-upstream image and uses exec-form config validation.
+main Collector uses the narrow `DAC_READ_SEARCH` capability because Docker's
+root-owned `json-file` directory and file modes otherwise prevent its direct
+file-log receiver from enumerating container logs; the host mount remains
+read-only and the Docker socket is masked. The main Collector uses the Stealth
+wrapper image, which adds only a static Go probe for the live `health_check`
+endpoint because the upstream image has no shell or HTTP client. The isolated
+Docker stats Collector remains on the upstream image and uses exec-form config
+validation.
 
 Redis is authenticated but intentionally has no volume in this baseline. It
 stores distributed rate-limit windows, not the durable job state. Losing Redis

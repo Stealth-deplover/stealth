@@ -148,14 +148,15 @@ services:
       - /dev/null:/hostfs/var/run/docker.sock:ro
     # Docker's json-file directories are root:root 0710 and the files are
     # root:root 0640 on Linux. The direct file_log receiver must enumerate and
-    # read that already read-only mount, so this service runs as root inside
-    # the container. It has no capabilities, cannot write the hostfs mount,
-    # and the Docker socket remains masked below.
-    user: "0:0"
+    # read that already read-only mount, so grant only DAC read/search while
+    # keeping the Collector itself non-root and the Docker socket masked.
+    user: "10001:10001"
     read_only: true
     tmpfs:
       - /tmp
     cap_drop: [ALL]
+    cap_add:
+      - DAC_READ_SEARCH
     security_opt:
       - no-new-privileges:true
     mem_limit: "${OTEL_COLLECTOR_MEMORY_LIMIT:-512m}"
