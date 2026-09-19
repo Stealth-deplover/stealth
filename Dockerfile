@@ -78,9 +78,18 @@ STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/telemetry-docker-proxy"]
 
 # The upstream Collector image is scratch-based and intentionally contains no
-# shell or HTTP client. This thin image keeps that base and adds only the
-# purpose-built HTTP probe used by Compose to query health_check.
+# shell or HTTP client. Prepare its pinned binary in a disposable Alpine stage
+# so the final image can keep the scratch runtime while carrying the narrow
+# file capability required to read Docker's root-owned json-file tree as the
+# non-root Collector user.
 FROM ${OTEL_COLLECTOR_BASE_IMAGE} AS telemetry-collector-base
-FROM telemetry-collector-base AS telemetry-collector
+FROM alpine:3.24 AS telemetry-collector-capability
+RUN apk add --no-cache libcap
+COPY --from=telemetry-collector-base /otelcol-contrib /otelcol-contrib
+RUN setcap cap_dac_read_search+ep /otelcol-contrib && getcap /otelcol-contrib
+
+FROM scratch AS telemetry-collector
+COPY --from=telemetry-collector-capability /otelcol-contrib /otelcol-contrib
 COPY --from=build /out/telemetry-collector-healthcheck /usr/local/bin/telemetry-collector-healthcheck
 USER 10001:10001
+ENTRYPOINT ["/otelcol-contrib"]

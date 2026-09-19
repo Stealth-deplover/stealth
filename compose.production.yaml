@@ -147,9 +147,10 @@ services:
       # client. Container statistics stay in telemetry-docker below.
       - /dev/null:/hostfs/var/run/docker.sock:ro
     # Docker's json-file directories are root:root 0710 and the files are
-    # root:root 0640 on Linux. The direct file_log receiver must enumerate and
-    # read that already read-only mount, so grant only DAC read/search while
-    # keeping the Collector itself non-root and the Docker socket masked.
+    # root:root 0640 on Linux. The pinned Collector binary carries only the
+    # DAC read/search file capability, so the direct file_log receiver can
+    # enumerate and read the already read-only mount while the process remains
+    # non-root and the Docker socket stays masked.
     user: "10001:10001"
     read_only: true
     tmpfs:
