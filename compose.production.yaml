@@ -43,7 +43,9 @@ x-backend-environment: &backend-environment
   FUNCTIONS_RUNNER_BUILD_TIMEOUT: "${FUNCTIONS_RUNNER_BUILD_TIMEOUT:-15m}"
   FUNCTIONS_RUNNER_STAGING_ROOT: /var/lib/stealth/runner-staging
   FUNCTIONS_RUNNER_STAGING_VOLUME: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
-  FUNCTIONS_RUNNER_METRICS_ADDR: 127.0.0.1:9091
+  # The worker metrics listener is not published to the host. It binds on the
+  # private Compose network so otel-collector can scrape it with METRICS_TOKEN.
+  FUNCTIONS_RUNNER_METRICS_ADDR: 0.0.0.0:9091
   FUNCTIONS_RUNNER_HELPER_IMAGE: "${FUNCTIONS_RUNNER_HELPER_IMAGE:-alpine:3.22}"
   FUNCTIONS_RUNNER_NODE_IMAGE: "${FUNCTIONS_RUNNER_NODE_IMAGE:-node:22-alpine}"
   FUNCTIONS_RUNNER_PYTHON_IMAGE: "${FUNCTIONS_RUNNER_PYTHON_IMAGE:-python:3.13-alpine}"
@@ -55,6 +57,17 @@ x-backend-environment: &backend-environment
   SITES_MAX_EXPANDED_BYTES: "${SITES_MAX_EXPANDED_BYTES:-256MiB}"
   SITES_MAX_FILES: "${SITES_MAX_FILES:-4096}"
   SITES_GIT_FETCH_CONCURRENCY: "${SITES_GIT_FETCH_CONCURRENCY:-4}"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}"
+  OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-0.1}"
+  CLICKHOUSE_ADDR: "${CLICKHOUSE_ADDR:-clickhouse:9000}"
+  CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE:-stealth_telemetry}"
+  CLICKHOUSE_USER: "${CLICKHOUSE_USER:-stealth}"
+  CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
+  OTEL_COLLECTOR_HEALTH_URL: "${OTEL_COLLECTOR_HEALTH_URL:-http://otel-collector:13133}"
+  TELEMETRY_MAX_QUERY_DURATION: "${TELEMETRY_MAX_QUERY_DURATION:-10s}"
+  TELEMETRY_MAX_QUERY_RANGE: "${TELEMETRY_MAX_QUERY_RANGE:-720h}"
+  TELEMETRY_MAX_QUERY_ROWS: "${TELEMETRY_MAX_QUERY_ROWS:-1000}"
+  TELEMETRY_RETENTION: "${TELEMETRY_RETENTION:-720h}"
 
 services:
   postgres:
@@ -88,6 +101,143 @@ services:
       start_period: 5s
     networks: [stealth]
 
+  clickhouse:
+    image: "${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:26.8.6.5}"
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: "${CLICKHOUSE_DATABASE:-stealth_telemetry}"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-stealth}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    mem_limit: "${CLICKHOUSE_MEMORY_LIMIT:-1g}"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user \"$${CLICKHOUSE_USER}\" --password \"$${CLICKHOUSE_PASSWORD}\" --query 'SELECT 1' | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks: [telemetry_store]
+
+  otel-collector:
+    # This release image is derived from the pinned upstream contrib image and
+    # adds only the scratch-compatible live health probe.
+    image: "${OTEL_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      CLICKHOUSE_ADDR: "${CLICKHOUSE_ADDR:-clickhouse:9000}"
+      CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE:-stealth_telemetry}"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-stealth}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
+      POSTGRES_DB: "${POSTGRES_DB:?set POSTGRES_DB}"
+      POSTGRES_USER: "${POSTGRES_USER:?set POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD}"
+      TELEMETRY_RETENTION: "${TELEMETRY_RETENTION:-720h}"
+    volumes:
+      - ./telemetry/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otelcol_state:/var/lib/otelcol
+      - /:/hostfs:ro
+      - /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro
+      # The host root is needed by hostmetrics, but the Docker socket is
+      # explicitly masked so this collector cannot become a second Docker API
+      # client. Container statistics stay in telemetry-docker below.
+      - /dev/null:/hostfs/var/run/docker.sock:ro
+    # Docker's json-file directories are root:root 0710 and the files are
+    # root:root 0640 on Linux. The pinned Collector binary carries only the
+    # DAC read/search file capability, so the direct file_log receiver can
+    # enumerate and read the already read-only mount while the process remains
+    # non-root and the Docker socket stays masked.
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add:
+      - DAC_READ_SEARCH
+    # no-new-privileges would clear the explicitly granted read/search
+    # capability when the scratch process starts as UID 10001.
+    mem_limit: "${OTEL_COLLECTOR_MEMORY_LIMIT:-512m}"
+    depends_on:
+      otelcol-state-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      # The upstream image is scratch-based and has no /bin/sh, curl, or wget.
+      # Probe the live health_check extension with the small binary shipped in
+      # the Stealth Collector wrapper image.
+      test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      stealth:
+      telemetry_store:
+      telemetry_docker:
+
+  otelcol-state-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    command: ["sh", "-ec", "mkdir -p /var/lib/otelcol/file_storage && chown -R 10001:10001 /var/lib/otelcol"]
+    user: "0:0"
+    network_mode: none
+    volumes:
+      - otelcol_state:/var/lib/otelcol
+
+  telemetry-docker-proxy:
+    image: "${STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE:?set STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE to a versioned image}"
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: "${OTEL_DOCKER_PROXY_MEMORY_LIMIT:-64m}"
+    expose: ["2375"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/telemetry-docker-proxy", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    networks: [telemetry_docker]
+
+  telemetry-docker:
+    image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./telemetry/docker-stats.yaml:/etc/otelcol-contrib/config.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: "${OTEL_DOCKER_COLLECTOR_MEMORY_LIMIT:-256m}"
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+      telemetry-docker-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks: [telemetry_docker]
+
   migrate:
     image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
     restart: "no"
@@ -107,6 +257,15 @@ services:
     restart: unless-stopped
     environment:
       <<: *backend-environment
+      CLICKHOUSE_ADDR: "${CLICKHOUSE_ADDR:-clickhouse:9000}"
+      CLICKHOUSE_DATABASE: "${CLICKHOUSE_DATABASE:-stealth_telemetry}"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-stealth}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}"
+      OTEL_COLLECTOR_HEALTH_URL: "${OTEL_COLLECTOR_HEALTH_URL:-http://otel-collector:13133}"
+      TELEMETRY_MAX_QUERY_DURATION: "${TELEMETRY_MAX_QUERY_DURATION:-10s}"
+      TELEMETRY_MAX_QUERY_RANGE: "${TELEMETRY_MAX_QUERY_RANGE:-720h}"
+      TELEMETRY_MAX_QUERY_ROWS: "${TELEMETRY_MAX_QUERY_ROWS:-1000}"
+      TELEMETRY_RETENTION: "${TELEMETRY_RETENTION:-720h}"
       BOOTSTRAP_CLI_KEY: "${BOOTSTRAP_CLI_KEY:?set BOOTSTRAP_CLI_KEY}"
       GITHUB_APP_CLIENT_ID: "${GITHUB_APP_CLIENT_ID:-}"
     volumes:
@@ -127,6 +286,7 @@ services:
     networks:
       stealth:
         aliases: [stealth-api]
+      telemetry_store:
 
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
@@ -150,7 +310,9 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
-    networks: [stealth]
+    networks:
+      stealth:
+      telemetry_store:
 
   console:
     image: "${STEALTH_CONSOLE_IMAGE:?set STEALTH_CONSOLE_IMAGE to a versioned image}"
@@ -209,6 +371,10 @@ volumes:
     name: "${STORAGE_VOLUME_NAME:-stealth_storage}"
   function_runner_staging:
     name: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
+  clickhouse_data:
+    name: "${CLICKHOUSE_VOLUME_NAME:-stealth_clickhouse_data}"
+  otelcol_state:
+    name: "${OTELCOL_VOLUME_NAME:-stealth_otelcol_state}"
 
 networks:
   stealth:
@@ -216,3 +382,9 @@ networks:
     ipam:
       config:
         - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"
+  telemetry_store:
+    name: "${STEALTH_TELEMETRY_STORE_NETWORK_NAME:-stealth_telemetry_store}"
+    internal: true
+  telemetry_docker:
+    name: "${STEALTH_TELEMETRY_DOCKER_NETWORK_NAME:-stealth_telemetry_docker}"
+    internal: true

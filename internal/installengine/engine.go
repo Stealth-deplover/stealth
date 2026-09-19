@@ -248,12 +248,23 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
-		services := make([]string, 0, 2)
+		if !plan.Setup {
+			// StepServices may use --no-deps for external PostgreSQL/Redis.
+			// Run the ownership init explicitly so that path never bypasses the
+			// non-root Collector's persistent file_storage preparation.
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "otelcol-state-init"); err != nil {
+				return err
+			}
+		}
+		services := make([]string, 0, 3)
 		if !plan.ExternalDatabase {
 			services = append(services, "postgres")
 		}
 		if !plan.ExternalRedis {
 			services = append(services, "redis")
+		}
+		if !plan.Setup {
+			services = append(services, "clickhouse")
 		}
 		if len(services) == 0 {
 			return nil
@@ -268,6 +279,8 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		services := []string{"api", "worker", "console", "proxy"}
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
+		} else {
+			services = append(services, "otel-collector", "telemetry-docker-proxy", "telemetry-docker")
 		}
 		if plan.Cloudflare {
 			services = append(services, "cloudflared")
@@ -322,6 +335,8 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 		}
 	} else if !FileIsPrivate(plan.Layout.EnvFile) {
 		return errors.New("existing configuration permissions are too broad; expected mode 0600")
+	} else if err := e.ensureTelemetryProxyImage(plan); err != nil {
+		return err
 	}
 	if err := e.ensureAsset(ctx, plan.Layout.ComposeFile, plan.Version, "compose.production.yaml", []byte("services:")); err != nil {
 		return fmt.Errorf("prepare production Compose file: %w", err)
@@ -336,6 +351,21 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 	}
 	if err := WriteAtomic(plan.Layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write version file: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) ensureTelemetryProxyImage(plan Plan) error {
+	values, err := ReadEnvFile(plan.Layout.EnvFile)
+	if err != nil {
+		return fmt.Errorf("read existing configuration for telemetry proxy migration: %w", err)
+	}
+	if strings.TrimSpace(values["STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"]) != "" {
+		return nil
+	}
+	values["STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"] = ImageName("stealth-telemetry-docker-proxy", plan.Version)
+	if err := WritePrivateFile(plan.Layout.EnvFile, FormatEnvFile(values)); err != nil {
+		return fmt.Errorf("add telemetry Docker proxy image to existing configuration: %w", err)
 	}
 	return nil
 }

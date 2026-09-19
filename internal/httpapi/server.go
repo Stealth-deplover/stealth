@@ -23,7 +23,9 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/storage"
+	"github.com/Stealth-deplover/stealth/internal/telemetry"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 const maxBodyBytes = 1 << 20
@@ -57,6 +59,8 @@ type Server struct {
 	githubManifest    githubauth.ManifestClient
 	cloudflareOAuth   CloudflareOAuthClient
 	cloudflareFactory CloudflareClientFactory
+	telemetry         telemetry.Store
+	redis             *redis.Client
 	// setupMu serializes setup transitions that can have external provider side
 	// effects. The durable setup-state store remains the source of truth; the
 	// host CLI owns installation execution and is not represented here.
@@ -84,6 +88,8 @@ type Dependencies struct {
 	GitHubManifest    githubauth.ManifestClient
 	CloudflareOAuth   CloudflareOAuthClient
 	CloudflareFactory CloudflareClientFactory
+	TelemetryStore    telemetry.Store
+	Redis             *redis.Client
 }
 
 // New builds the console API with production dependencies.
@@ -203,7 +209,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 			return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
 		}
 	}
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
 	return s.routes()
 }
 

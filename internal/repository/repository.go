@@ -12,6 +12,7 @@ type Repository struct {
 	*BootstrapRepository
 	txtResolver   SiteTXTResolver
 	webhookCipher *functionsecret.Cipher
+	adminCipher   *functionsecret.Cipher
 	// Messaging provider credentials and subscriber addresses use the same
 	// process-held AES-GCM key as webhook secrets. Keeping the cipher on the
 	// repository ensures reads can expose only safe metadata while trusted
@@ -24,6 +25,10 @@ type Repository struct {
 type Dependencies struct {
 	TXTResolver   SiteTXTResolver
 	WebhookCipher *functionsecret.Cipher
+	// AdminCipher protects instance-level monitor and notification settings.
+	// It is explicit so a deployment can rotate control-plane secrets without
+	// accidentally coupling them to a project webhook key in the future.
+	AdminCipher *functionsecret.Cipher
 }
 
 func New(pool *pgxpool.Pool) *Repository {
@@ -40,7 +45,15 @@ func NewWithDependencies(pool *pgxpool.Pool, deps Dependencies) *Repository {
 		txtResolver:         deps.TXTResolver,
 		webhookCipher:       deps.WebhookCipher,
 		messagingCipher:     deps.WebhookCipher,
+		adminCipher:         firstCipher(deps.AdminCipher, deps.WebhookCipher),
 	}
+}
+
+func firstCipher(primary, fallback *functionsecret.Cipher) *functionsecret.Cipher {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }
 
 // BootstrapStore returns the first-run persistence capability exposed by the
