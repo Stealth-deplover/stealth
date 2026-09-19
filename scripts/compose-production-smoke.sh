@@ -128,6 +128,38 @@ print_collector_self_telemetry() {
 	print_bounded_diagnostic "Collector self-telemetry (pinned release metric counters)" "$output"
 }
 
+print_docker_filelog_diagnostics() {
+	local output service_container project_name container_ids container_id log_path
+	service_container="$("${compose[@]}" ps -q api 2>/dev/null || true)"
+	project_name=""
+	if [ -n "$service_container" ]; then
+		project_name="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$service_container" 2>/dev/null || true)"
+	fi
+	output="$(
+		{
+			printf 'Docker default logging driver: '
+			docker info --format '{{.LoggingDriver}}' 2>&1 || true
+			printf 'Compose project: %s\n' "${project_name:-unknown}"
+			if [ -n "$project_name" ]; then
+				container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project_name" 2>/dev/null || true)"
+			else
+				container_ids="$service_container"
+			fi
+			for container_id in $container_ids; do
+				docker inspect --format '{{.Name}} log_driver={{.HostConfig.LogConfig.Type}} log_path={{.LogPath}} user={{.Config.User}} status={{.State.Status}}' "$container_id" 2>&1 || true
+				log_path="$(docker inspect --format '{{.LogPath}}' "$container_id" 2>/dev/null || true)"
+				if [ -n "$log_path" ] && [ -e "$log_path" ]; then
+					stat --format='log_file=%n mode=%A owner=%U:%G bytes=%s' "$log_path" 2>&1 || true
+				fi
+			done
+			printf 'Docker JSON log files (bounded):\n'
+			find /var/lib/docker/containers -maxdepth 2 -type f -name '*-json.log' \
+				-printf '%M %u:%g %s %p\n' 2>/dev/null | head -40 || true
+		}
+	)"
+	print_bounded_diagnostic "Docker file-log runtime (driver/path/permissions)" "$output"
+}
+
 print_telemetry_diagnostics() {
 	local table
 	printf 'Telemetry diagnostics for %s\n' "$1" >&2
@@ -145,6 +177,7 @@ print_telemetry_diagnostics() {
 	done
 	print_collector_export_diagnostics
 	print_collector_self_telemetry
+	print_docker_filelog_diagnostics
 }
 
 start_docker_filelog_smoke() {
