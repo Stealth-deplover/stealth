@@ -108,6 +108,13 @@ func TestAdminTelemetryQueriesRealClickHouseIntegration(t *testing.T) {
 
 func createAdminTelemetryTestTables(t *testing.T, ctx context.Context, connection driver.Conn) {
 	t.Helper()
+	// This is an intentionally small fixture for isolated Admin route tests.
+	// Production schema compatibility is covered by
+	// internal/telemetry/store_integration_test.go, which starts the pinned
+	// Collector and reads the tables it creates through ClickHouseStore.
+	if os.Getenv("TEST_OTEL_COLLECTOR_HTTP") != "" {
+		return
+	}
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS otel_logs (Timestamp DateTime64(9), TraceId String, SpanId String, SeverityText String, ServiceName String, Body String, LogAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,
 		`CREATE TABLE IF NOT EXISTS otel_traces (Timestamp DateTime64(9), TraceId String, SpanId String, ParentSpanId String, SpanName String, SpanKind String, ServiceName String, Duration UInt64, StatusCode String, StatusMessage String, SpanAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,

@@ -202,6 +202,29 @@ func TestSourcesQueryUsesDistinctClickHouseDateTypes(t *testing.T) {
 	}
 }
 
+func TestMetricQueryUsesExporterDateTimeForFractionalRanges(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	from := time.Date(2026, time.September, 19, 12, 0, 0, 123456789, time.FixedZone("test", 3600))
+	to := from.Add(1500 * time.Millisecond)
+	if _, err := store.QueryMetrics(context.Background(), MetricsQuery{
+		Range: TimeRange{From: from, To: to}, Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "{from:DateTime}") || !strings.Contains(conn.query, "{to:DateTime}") {
+		t.Fatalf("metric query did not use the exporter DateTime columns: %s", conn.query)
+	}
+	if len(conn.args) != 5 {
+		t.Fatalf("metric argument count = %d, want 5", len(conn.args))
+	}
+	for _, argument := range conn.args[:2] {
+		if _, ok := argument.(driver.NamedDateValue); !ok {
+			t.Fatalf("metric range argument %T was not a typed date value", argument)
+		}
+	}
+}
+
 func TestLogVolumeChoosesDeterministicBuckets(t *testing.T) {
 	now := time.Now().UTC()
 	checks := []struct {

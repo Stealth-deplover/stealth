@@ -1,7 +1,12 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -11,13 +16,14 @@ import (
 
 func TestClickHouseStoreIntegration(t *testing.T) {
 	address := os.Getenv("TEST_CLICKHOUSE_ADDR")
-	if address == "" {
-		t.Skip("set TEST_CLICKHOUSE_ADDR to run ClickHouse telemetry integration tests")
+	collectorHTTP := os.Getenv("TEST_OTEL_COLLECTOR_HTTP")
+	if address == "" || collectorHTTP == "" {
+		t.Skip("set TEST_CLICKHOUSE_ADDR and TEST_OTEL_COLLECTOR_HTTP to run the real Collector telemetry integration test")
 	}
 	database := valueOrDefault("TEST_CLICKHOUSE_DATABASE", "stealth_telemetry")
 	username := valueOrDefault("TEST_CLICKHOUSE_USER", "stealth")
 	password := os.Getenv("TEST_CLICKHOUSE_PASSWORD")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr:        []string{address},
@@ -36,81 +42,140 @@ func TestClickHouseStoreIntegration(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS otel_logs (Timestamp DateTime64(9), TraceId String, SpanId String, SeverityText String, ServiceName String, Body String, LogAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,
-		`CREATE TABLE IF NOT EXISTS otel_traces (Timestamp DateTime64(9), TraceId String, SpanId String, ParentSpanId String, SpanName String, SpanKind String, ServiceName String, Duration UInt64, StatusCode String, StatusMessage String, SpanAttributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY Timestamp`,
-		`CREATE TABLE IF NOT EXISTS otel_metrics_gauge (TimeUnix DateTime, MetricName String, ServiceName String, Value Float64, Attributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY TimeUnix`,
-		`CREATE TABLE IF NOT EXISTS otel_metrics_sum (TimeUnix DateTime, MetricName String, ServiceName String, Value Float64, Attributes Map(String, String), ResourceAttributes Map(String, String)) ENGINE = MergeTree ORDER BY TimeUnix`,
-		`TRUNCATE TABLE otel_logs`,
-		`TRUNCATE TABLE otel_traces`,
-		`TRUNCATE TABLE otel_metrics_gauge`,
-		`TRUNCATE TABLE otel_metrics_sum`,
-	} {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("ClickHouse statement %q: %v", statement, err)
+
+	marker := fmt.Sprintf("telemetry-integration-%d", time.Now().UnixNano())
+	timestamp := time.Now().UTC().Truncate(time.Second)
+	traceID := fmt.Sprintf("%032x", time.Now().UnixNano())
+	spanID := fmt.Sprintf("%016x", time.Now().UnixNano())
+	emitCollectorSignal(t, collectorHTTP, "logs", map[string]any{
+		"resourceLogs": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAttribute("service.name", "telemetry.integration"),
+				stringAttribute("smoke.marker", marker),
+			}},
+			"scopeLogs": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.integration"},
+				"logRecords": []any{map[string]any{
+					"timeUnixNano":         fmt.Sprintf("%d", timestamp.UnixNano()),
+					"observedTimeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+					"severityNumber":       17,
+					"severityText":         "ERROR",
+					"body":                 map[string]any{"stringValue": "password=super-secret " + marker},
+					"attributes":           []any{stringAttribute("smoke.marker", marker)},
+					"traceId":              traceID,
+					"spanId":               spanID,
+				}},
+			}},
+		}},
+	})
+	emitCollectorSignal(t, collectorHTTP, "traces", map[string]any{
+		"resourceSpans": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAttribute("service.name", "telemetry.integration"),
+				stringAttribute("smoke.marker", marker),
+			}},
+			"scopeSpans": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.integration"},
+				"spans": []any{map[string]any{
+					"traceId":           traceID,
+					"spanId":            spanID,
+					"name":              "GET /integration",
+					"kind":              "SPAN_KIND_SERVER",
+					"startTimeUnixNano": fmt.Sprintf("%d", timestamp.Add(-250*time.Millisecond).UnixNano()),
+					"endTimeUnixNano":   fmt.Sprintf("%d", timestamp.UnixNano()),
+					"attributes":        []any{stringAttribute("smoke.marker", marker)},
+					"status": map[string]any{
+						"code":    "STATUS_CODE_ERROR",
+						"message": "token=super-secret",
+					},
+				}},
+			}},
+		}},
+	})
+	emitCollectorSignal(t, collectorHTTP, "metrics", map[string]any{
+		"resourceMetrics": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAttribute("service.name", "telemetry.integration"),
+				stringAttribute("smoke.marker", marker),
+			}},
+			"scopeMetrics": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.integration"},
+				"metrics": []any{map[string]any{
+					"name":        "stealth.compose.smoke",
+					"description": "Real Collector schema compatibility test",
+					"unit":        "1",
+					"gauge": map[string]any{"dataPoints": []any{map[string]any{
+						"timeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+						"asDouble":     3.5,
+						"attributes":   []any{stringAttribute("smoke.marker", marker)},
+					}}},
+				}},
+			}},
+		}},
+	})
+
+	rangeQuery := TimeRange{From: timestamp.Add(-time.Minute), To: time.Now().UTC().Add(time.Minute)}
+	var logsResult LogsResult
+	var tracesResult TracesResult
+	var metricsResult MetricsResult
+	var sourcesResult SourcesResult
+	var lastErr error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		logsResult, lastErr = store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Service: "telemetry.integration", Search: marker, Limit: 10})
+		if lastErr == nil {
+			tracesResult, lastErr = store.QueryTraces(ctx, TracesQuery{Range: rangeQuery, Service: "telemetry.integration", TraceID: traceID, Limit: 10})
 		}
+		if lastErr == nil {
+			metricsResult, lastErr = store.QueryMetrics(ctx, MetricsQuery{Range: rangeQuery, Service: "telemetry.integration", Name: "stealth.compose.smoke", Limit: 10})
+		}
+		if lastErr == nil {
+			sourcesResult, lastErr = store.ListSources(ctx, SourcesQuery{Range: rangeQuery, Limit: 10})
+		}
+		if lastErr == nil && len(logsResult.Items) == 1 && len(tracesResult.Items) == 1 && len(metricsResult.Items) == 1 && len(sourcesResult.Items) >= 3 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
+	if lastErr != nil || len(logsResult.Items) != 1 || len(tracesResult.Items) != 1 || len(metricsResult.Items) != 1 || len(sourcesResult.Items) < 3 {
+		t.Fatalf("real Collector telemetry results = logs:%d traces:%d metrics:%d sources:%d, last error = %v", len(logsResult.Items), len(tracesResult.Items), len(metricsResult.Items), len(sourcesResult.Items), lastErr)
+	}
+	if logsResult.Items[0].TraceID != traceID || logsResult.Items[0].Body != "password=[REDACTED] "+marker || logsResult.Items[0].Attributes["smoke.marker"] != marker {
+		t.Fatalf("unexpected real Collector log result = %#v", logsResult.Items[0])
+	}
+	if tracesResult.Items[0].TraceID != traceID || tracesResult.Items[0].StatusMessage != "token=[REDACTED]" || tracesResult.Items[0].ResourceAttributes["smoke.marker"] != marker {
+		t.Fatalf("unexpected real Collector trace result = %#v", tracesResult.Items[0])
+	}
+	metric := metricsResult.Items[0]
+	if !metric.Timestamp.Equal(timestamp) || metric.Name != "stealth.compose.smoke" || metric.Service != "telemetry.integration" || metric.Value != 3.5 || metric.Kind != "gauge" || metric.Attributes["smoke.marker"] != marker || metric.ResourceAttributes["smoke.marker"] != marker {
+		t.Fatalf("unexpected real Collector metric result = %#v", metric)
+	}
+}
 
-	timestamp := time.Now().UTC().Add(-30 * time.Second).Truncate(time.Microsecond)
-	const traceID = "0123456789abcdef0123456789abcdef"
-	logs, err := conn.PrepareBatch(ctx, "INSERT INTO otel_logs (Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body, LogAttributes, ResourceAttributes)")
+func emitCollectorSignal(t *testing.T, collectorHTTP, signal string, payload map[string]any) {
+	t.Helper()
+	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := logs.Append(timestamp, traceID, "0123456789abcdef", "ERROR", "api", "password=super-secret", map[string]string{"password": "super-secret", "request_id": "req-integration"}, map[string]string{"deployment.id": "deployment-integration"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := logs.Send(); err != nil {
-		t.Fatal(err)
-	}
-
-	traces, err := conn.PrepareBatch(ctx, "INSERT INTO otel_traces (Timestamp, TraceId, SpanId, ParentSpanId, SpanName, SpanKind, ServiceName, Duration, StatusCode, StatusMessage, SpanAttributes, ResourceAttributes)")
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/v1/%s", collectorHTTP, signal), bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := traces.Append(timestamp, traceID, "0123456789abcdef", "", "GET /healthz", "Server", "api", uint64(250000000), "Error", "token=super-secret", map[string]string{"http.route": "/healthz"}, map[string]string{"deployment.id": "deployment-integration"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := traces.Send(); err != nil {
-		t.Fatal(err)
-	}
-
-	metrics, err := conn.PrepareBatch(ctx, "INSERT INTO otel_metrics_gauge (TimeUnix, MetricName, ServiceName, Value, Attributes, ResourceAttributes)")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("send OTLP %s: %v", signal, err)
 	}
-	if err := metrics.Append(timestamp, "stealth_api_http_requests_total", "api", 3.0, map[string]string{"status": "200"}, map[string]string{"deployment.id": "deployment-integration"}); err != nil {
-		t.Fatal(err)
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		t.Fatalf("send OTLP %s returned HTTP %d: %s", signal, response.StatusCode, responseBody)
 	}
-	if err := metrics.Send(); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	rangeQuery := TimeRange{From: timestamp.Add(-time.Minute), To: timestamp.Add(time.Minute)}
-	logsResult, err := store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Limit: 10})
-	if err != nil || len(logsResult.Items) != 1 {
-		t.Fatalf("logs result = %#v, err = %v", logsResult, err)
-	}
-	if logsResult.Items[0].TraceID != traceID || logsResult.Items[0].Body != "password=[REDACTED]" || logsResult.Items[0].Attributes["password"] != "[REDACTED]" {
-		t.Fatalf("unsafe or incomplete log result = %#v", logsResult.Items[0])
-	}
-
-	tracesResult, err := store.QueryTraces(ctx, TracesQuery{Range: rangeQuery, TraceID: traceID, Limit: 10})
-	if err != nil || len(tracesResult.Items) != 1 {
-		t.Fatalf("traces result = %#v, err = %v", tracesResult, err)
-	}
-	if tracesResult.Items[0].TraceID != traceID || tracesResult.Items[0].StatusMessage != "token=[REDACTED]" {
-		t.Fatalf("unsafe or incomplete trace result = %#v", tracesResult.Items[0])
-	}
-
-	metricsResult, err := store.QueryMetrics(ctx, MetricsQuery{Range: rangeQuery, Name: "stealth_api_http_requests_total", Limit: 10})
-	if err != nil || len(metricsResult.Items) != 1 || metricsResult.Items[0].Value != 3 {
-		t.Fatalf("metrics result = %#v, err = %v", metricsResult, err)
-	}
-	sourcesResult, err := store.ListSources(ctx, SourcesQuery{Range: rangeQuery, Limit: 10})
-	if err != nil || len(sourcesResult.Items) < 3 {
-		t.Fatalf("sources result = %#v, err = %v", sourcesResult, err)
-	}
+func stringAttribute(key, value string) map[string]any {
+	return map[string]any{"key": key, "value": map[string]any{"stringValue": value}}
 }
 
 func valueOrDefault(name, fallback string) string {

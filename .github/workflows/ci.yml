@@ -78,7 +78,7 @@ jobs:
       - name: Unit tests
         run: go test ./... -count=1
 
-      - name: PostgreSQL and Redis integration suite
+      - name: Real Collector and telemetry integration suites
         env:
           TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable
           TEST_REDIS_URL: redis://127.0.0.1:6379/0
@@ -86,15 +86,47 @@ jobs:
           TEST_CLICKHOUSE_DATABASE: stealth_telemetry
           TEST_CLICKHOUSE_USER: stealth
           TEST_CLICKHOUSE_PASSWORD: ci-clickhouse-password
-        run: go test ./internal/httpapi -run Integration -count=1
-
-      - name: ClickHouse telemetry integration suite
-        env:
-          TEST_CLICKHOUSE_ADDR: 127.0.0.1:9000
-          TEST_CLICKHOUSE_DATABASE: stealth_telemetry
-          TEST_CLICKHOUSE_USER: stealth
-          TEST_CLICKHOUSE_PASSWORD: ci-clickhouse-password
-        run: go test ./internal/telemetry -run Integration -count=1
+          TEST_OTEL_COLLECTOR_HTTP: http://127.0.0.1:4318
+        run: |
+          set -Eeuo pipefail
+          collector_state="$RUNNER_TEMP/stealth-otel-integration-state"
+          mkdir -p "$collector_state"
+          chmod 777 "$collector_state"
+          docker run --detach --name stealth-otel-integration --network host \
+            --env CLICKHOUSE_ADDR=127.0.0.1:9000 \
+            --env CLICKHOUSE_DATABASE="$TEST_CLICKHOUSE_DATABASE" \
+            --env CLICKHOUSE_USER="$TEST_CLICKHOUSE_USER" \
+            --env CLICKHOUSE_PASSWORD="$TEST_CLICKHOUSE_PASSWORD" \
+            --env METRICS_TOKEN=ci-metrics-token \
+            --env POSTGRES_DB=stealth \
+            --env POSTGRES_USER=stealth \
+            --env POSTGRES_PASSWORD=ci-postgres-password \
+            --env REDIS_PASSWORD=ci-redis-password \
+            --env TELEMETRY_RETENTION=720h \
+            --volume "$GITHUB_WORKSPACE/telemetry/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            --volume "$collector_state:/var/lib/otelcol" \
+            --volume /:/hostfs:ro \
+            --volume /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro \
+            otel/opentelemetry-collector-contrib:0.161.0 \
+            --config=/etc/otelcol-contrib/config.yaml >/dev/null
+          cleanup() {
+            local status=$?
+            if [ "$status" -ne 0 ]; then
+              docker logs --tail=160 stealth-otel-integration >&2 || true
+            fi
+            docker rm --force stealth-otel-integration >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:13133/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:13133/ >/dev/null
+          go test ./internal/httpapi -run Integration -count=1
+          go test ./internal/telemetry -run Integration -count=1
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
