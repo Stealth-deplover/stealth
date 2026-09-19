@@ -223,6 +223,17 @@ network_contains() {
 	printf '%s\n' "$networks" | grep -Fqx -- "$wanted"
 }
 
+telemetry_ingest_network_name() {
+	local configured
+	configured="$(awk -F= '$1 == "STEALTH_TELEMETRY_INGEST_NETWORK_NAME" { print substr($0, index($0, "=") + 1); exit }' "$env_file")"
+	configured="${configured%$'\r'}"
+	if [ -n "$configured" ]; then
+		printf '%s\n' "$configured"
+		return
+	fi
+	printf '%s\n' 'stealth_telemetry_ingest'
+}
+
 verify_telemetry_runtime_boundaries() {
 	local service container mounts caps networks
 	local collector_networks="" host_networks="" docker_logs_networks="" docker_metrics_networks="" docker_proxy_networks=""
@@ -317,13 +328,13 @@ verify_telemetry_runtime_boundaries() {
 		esac
 	done
 
-	if [ "$(network_count "$host_networks")" -ne 1 ]; then
-		printf 'host metrics Collector must join only the ingest network: %s\n' "$host_networks" >&2
+	ingest_network="$(telemetry_ingest_network_name)"
+	if [ "$(network_count "$host_networks")" -ne 1 ] || ! network_contains "$host_networks" "$ingest_network"; then
+		printf 'host metrics Collector must join only the configured ingest network: expected=%q actual=%q\n' "$ingest_network" "$host_networks" >&2
 		return 1
 	fi
-	ingest_network="$(printf '%s\n' "$host_networks" | awk 'NF { print; exit }')"
-	if [ -z "$ingest_network" ] || [ "$(network_count "$docker_logs_networks")" -ne 1 ] || [ "$docker_logs_networks" != "$ingest_network" ]; then
-		printf 'Docker log Collector must join only the host ingest network: %s\n' "$docker_logs_networks" >&2
+	if [ "$(network_count "$docker_logs_networks")" -ne 1 ] || ! network_contains "$docker_logs_networks" "$ingest_network"; then
+		printf 'Docker log Collector must join only the configured ingest network: expected=%q actual=%q\n' "$ingest_network" "$docker_logs_networks" >&2
 		return 1
 	fi
 	if [ "$(docker network inspect --format '{{.Internal}}' "$ingest_network")" != "true" ]; then
