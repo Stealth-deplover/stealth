@@ -19,6 +19,26 @@ idempotent ClickHouse statement. Before changing the Collector pin:
    in the same change;
 5. run the ClickHouse integration suite before upgrading a production volume.
 
+The runtime schema observed from the pinned `0.161.0` exporter is:
+
+- `otel_metrics_gauge`, `otel_metrics_sum`, `otel_metrics_histogram`,
+  `otel_metrics_summary`, and `otel_metrics_exp_histogram`;
+- metric timestamps are `TimeUnix DateTime` and start timestamps are
+  `StartTimeUnix DateTime`;
+- `MetricName` and `ServiceName` are `LowCardinality(String)`;
+- `ResourceAttributes`, `ScopeAttributes`, and `Attributes` are
+  `Map(LowCardinality(String), String)`;
+- gauge and sum values are `Value Float64`; sum rows additionally carry
+  `AggregationTemporality` and `IsMonotonic`;
+- histogram, summary, and exponential-histogram tables retain their typed
+  exporter-specific aggregate columns and still share the common identity and
+  attribute columns above.
+
+The production compatibility test starts the pinned Collector, emits OTLP
+logs, traces, and a gauge metric, and reads them through `ClickHouseStore`.
+The hand-written tables in the Admin HTTP integration fixture are only an
+isolated route/query fixture; they are not evidence of exporter compatibility.
+
 The API never accepts database/table identifiers from a browser. Operator
 configuration accepts only validated ClickHouse database identifiers, and all
 telemetry filters remain typed query parameters.

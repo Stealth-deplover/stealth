@@ -9,12 +9,17 @@ if [ ! -f "$compose_file" ]; then
 fi
 
 schema_version=$(tr -d '[:space:]' < telemetry/schema/VERSION 2>/dev/null || true)
-if [ -z "$schema_version" ] || ! grep -F "const CollectorSchemaVersion = \"$schema_version\"" internal/telemetry/schema.go >/dev/null 2>&1; then
+collector_version=$(sed -n 's/^const CollectorVersion = "\([^"]*\)"$/\1/p' internal/telemetry/schema.go | head -n 1)
+if [ -z "$schema_version" ] || [ -z "$collector_version" ] || [ "$schema_version" != "otel-clickhouse-exporter-$collector_version" ]; then
 	printf 'telemetry security check: schema version registry is missing or inconsistent\n' >&2
 	exit 1
 fi
-if ! grep -F "otel/opentelemetry-collector-contrib:${schema_version##*-}" "$compose_file" >/dev/null 2>&1; then
+if ! grep -F "otel/opentelemetry-collector-contrib:$collector_version" "$compose_file" >/dev/null 2>&1; then
 	printf 'telemetry security check: Collector image is not pinned to the schema version\n' >&2
+	exit 1
+fi
+if ! grep -F "ARG OTEL_COLLECTOR_BASE_IMAGE=otel/opentelemetry-collector-contrib:$collector_version" Dockerfile >/dev/null 2>&1; then
+	printf 'telemetry security check: main Collector base image is not pinned to the schema version\n' >&2
 	exit 1
 fi
 

@@ -83,6 +83,13 @@ func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *tes
 	if !strings.Contains(readRepositoryFile(t, "telemetry", "otel-collector.yaml"), "health_check:") {
 		t.Fatal("collector configuration must enable the health_check extension")
 	}
+	if !strings.Contains(readRepositoryFile(t, "telemetry", "otel-collector.yaml"), "host: 0.0.0.0") ||
+		!strings.Contains(readRepositoryFile(t, "telemetry", "otel-collector.yaml"), "port: 8888") {
+		t.Fatal("collector self-telemetry must be reachable on the private Compose network")
+	}
+	if strings.Contains(collector, "8888:") {
+		t.Fatal("collector self-telemetry must not be published to the host")
+	}
 	if !strings.Contains(compose, `image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"`) {
 		t.Fatal("isolated Docker collector should use the upstream image independently")
 	}

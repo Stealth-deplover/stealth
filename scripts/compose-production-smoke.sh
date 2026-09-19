@@ -67,15 +67,92 @@ wait_for_healthy() {
 
 clickhouse_query() {
 	local query="$1"
-	"${compose[@]}" exec -T clickhouse sh -ec 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "$1"' sh "$query"
+	# CLICKHOUSE_DB is set by the ClickHouse Compose service from the same
+	# CLICKHOUSE_DATABASE value used by the Collector and API. clickhouse-client
+	# otherwise defaults to the `default` database, where telemetry tables do
+	# not exist.
+	"${compose[@]}" exec -T clickhouse sh -ec 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --query "$1"' sh "$query"
+}
+
+last_telemetry_query=""
+last_telemetry_query_error=""
+last_telemetry_query_result=""
+
+print_bounded_diagnostic() {
+	local label="$1"
+	local output="$2"
+	local maximum="${SMOKE_DIAGNOSTIC_BYTES:-4000}"
+	printf '%s\n' "--- ${label} ---" >&2
+	if [ -n "$output" ]; then
+		printf '%s\n' "$output" | head -c "$maximum" >&2 || true
+		printf '\n' >&2
+	else
+		printf '<none>\n' >&2
+	fi
+}
+
+print_telemetry_diagnostic_query() {
+	local label="$1"
+	local query="$2"
+	local output
+	if output="$(clickhouse_query "$query" 2>&1)"; then
+		print_bounded_diagnostic "$label" "$output"
+	else
+		print_bounded_diagnostic "$label (query failed)" "$output"
+	fi
+}
+
+print_collector_export_diagnostics() {
+	local output
+	output="$(
+		"${compose[@]}" logs --no-log-prefix --tail=160 otel-collector 2>&1 |
+			grep -Ei 'error|warn|fail|retry|queue|export|metric' |
+			tail -80 || true
+	)"
+	print_bounded_diagnostic "Collector exporter warnings/errors (filtered, last 80 lines)" "$output"
+}
+
+print_collector_self_telemetry() {
+	local output
+	output="$(
+		"${compose[@]}" exec -T api sh -ec 'wget -qO- -T 5 http://otel-collector:8888/metrics' 2>&1 |
+			grep -E '^otelcol_(receiver_(accepted|refused|failed)_metric_points|exporter_((sent|enqueue_failed)_metric_points|queue_size|queue_capacity|in_flight_requests))' |
+			head -120 || true
+	)"
+	print_bounded_diagnostic "Collector self-telemetry (pinned release metric counters)" "$output"
+}
+
+print_telemetry_diagnostics() {
+	local table
+	printf 'Telemetry diagnostics for %s\n' "$1" >&2
+	print_bounded_diagnostic "last ClickHouse query" "$last_telemetry_query"
+	print_bounded_diagnostic "last ClickHouse query error" "${last_telemetry_query_error:-query succeeded; last result: ${last_telemetry_query_result:-unknown}}"
+	print_telemetry_diagnostic_query "SHOW TABLES" 'SHOW TABLES'
+	for table in otel_metrics_gauge otel_metrics_sum otel_metrics_histogram otel_metrics_summary otel_metrics_exp_histogram; do
+		print_telemetry_diagnostic_query "DESCRIBE TABLE ${table}" "DESCRIBE TABLE ${table}"
+		print_telemetry_diagnostic_query "recent row count ${table}" "SELECT count() FROM ${table} WHERE TimeUnix >= now() - INTERVAL 10 MINUTE"
+		print_telemetry_diagnostic_query "sample metric names ${table}" "SELECT MetricName, count() FROM ${table} WHERE TimeUnix >= now() - INTERVAL 10 MINUTE GROUP BY MetricName ORDER BY count() DESC LIMIT 20"
+	done
+	print_collector_export_diagnostics
+	print_collector_self_telemetry
 }
 
 wait_for_telemetry_rows() {
 	local name="$1"
 	local query="$2"
-	local value
+	local value output
+	last_telemetry_query="$query"
+	last_telemetry_query_error=""
+	last_telemetry_query_result=""
 	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
-		value="$(clickhouse_query "$query" 2>/dev/null | tr -d '[:space:]' || true)"
+		if output="$(clickhouse_query "$query" 2>&1)"; then
+			value="$(printf '%s' "$output" | tr -d '[:space:]')"
+			last_telemetry_query_error=""
+		else
+			value=""
+			last_telemetry_query_error="$output"
+		fi
+		last_telemetry_query_result="$value"
 		if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
 			printf '%s: %s rows\n' "$name" "$value"
 			return 0
@@ -83,6 +160,7 @@ wait_for_telemetry_rows() {
 		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
 	done
 	printf '%s telemetry query did not return rows\n' "$name" >&2
+	print_telemetry_diagnostics "$name"
 	return 1
 }
 

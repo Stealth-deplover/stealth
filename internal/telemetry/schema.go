@@ -9,11 +9,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// CollectorSchemaVersion is coupled to the pinned Collector Contrib image in
-// compose.production.yaml. The Collector owns the signal table DDL; this
-// versioned registry gives upgrades an idempotent control-plane checkpoint
-// without making the API concatenate operator input into SQL.
-const CollectorSchemaVersion = "otel-clickhouse-exporter-0.161.0"
+// CollectorVersion is coupled to the pinned Collector Contrib image in
+// compose.production.yaml. Keep this value aligned with the image tag and
+// update the schema adapter and compatibility integration test when upgrading.
+const CollectorVersion = "0.161.0"
+
+// CollectorSchemaVersion is the durable checkpoint for the ClickHouse schema
+// owned by the pinned Collector ClickHouse exporter.
+const CollectorSchemaVersion = "otel-clickhouse-exporter-" + CollectorVersion
 
 const schemaMigrationsTable = "telemetry_schema_migrations"
 
