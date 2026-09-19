@@ -18,8 +18,14 @@ compose=(docker compose --env-file "$env_file" -f "$compose_file")
 cookie_file="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-cookie.XXXXXX")"
 register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.XXXXXX")"
 auth_cookie_header=""
+filelog_smoke_pid=""
 cleanup() {
 	local exit_code=$?
+	if [ -n "$filelog_smoke_pid" ]; then
+		kill "$filelog_smoke_pid" 2>/dev/null || true
+		wait "$filelog_smoke_pid" 2>/dev/null || true
+		filelog_smoke_pid=""
+	fi
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
@@ -128,6 +134,10 @@ print_telemetry_diagnostics() {
 	print_bounded_diagnostic "last ClickHouse query" "$last_telemetry_query"
 	print_bounded_diagnostic "last ClickHouse query error" "${last_telemetry_query_error:-query succeeded; last result: ${last_telemetry_query_result:-unknown}}"
 	print_telemetry_diagnostic_query "SHOW TABLES" 'SHOW TABLES'
+	print_telemetry_diagnostic_query "DESCRIBE TABLE otel_logs" 'DESCRIBE TABLE otel_logs'
+	print_telemetry_diagnostic_query "recent log count otel_logs" "SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE"
+	print_telemetry_diagnostic_query "recent log severities otel_logs" "SELECT SeverityText, count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE GROUP BY SeverityText ORDER BY count() DESC LIMIT 20"
+	print_telemetry_diagnostic_query "recent log samples otel_logs" "SELECT Timestamp, SeverityText, ServiceName, substring(Body, 1, 240) FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE ORDER BY Timestamp DESC LIMIT 20"
 	for table in otel_metrics_gauge otel_metrics_sum otel_metrics_histogram otel_metrics_summary otel_metrics_exp_histogram; do
 		print_telemetry_diagnostic_query "DESCRIBE TABLE ${table}" "DESCRIBE TABLE ${table}"
 		print_telemetry_diagnostic_query "recent row count ${table}" "SELECT count() FROM ${table} WHERE TimeUnix >= now() - INTERVAL 10 MINUTE"
@@ -135,6 +145,27 @@ print_telemetry_diagnostics() {
 	done
 	print_collector_export_diagnostics
 	print_collector_self_telemetry
+}
+
+start_docker_filelog_smoke() {
+	local marker="$1"
+	# docker compose exec attaches to an exec session and does not write that
+	# session's output to the container's Docker JSON log. Run a short-lived
+	# process as the container's main process so file_log/docker observes the
+	# exact log driver path used in production.
+	"${compose[@]}" run --rm --no-deps --entrypoint sh api -ec '
+		printf "%s\n" "$1" >&2
+		sleep "$2"
+	' sh "$marker" "${SMOKE_FILELOG_HOLD_SECONDS:-180}" >/dev/null 2>&1 &
+	filelog_smoke_pid=$!
+}
+
+stop_docker_filelog_smoke() {
+	if [ -n "$filelog_smoke_pid" ]; then
+		kill "$filelog_smoke_pid" 2>/dev/null || true
+		wait "$filelog_smoke_pid" 2>/dev/null || true
+		filelog_smoke_pid=""
+	fi
 }
 
 wait_for_telemetry_rows() {
@@ -306,7 +337,7 @@ if [ "$role_count" != '1' ]; then
 fi
 
 filelog_marker="${smoke_marker}-docker-log"
-"${compose[@]}" exec -T api sh -ec 'printf "%s\n" "$1" >&2' sh "compose filelog smoke ${filelog_marker}"
+start_docker_filelog_smoke "compose filelog smoke ${filelog_marker}"
 
 log_payload="$(cat <<EOF
 {"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"compose-smoke"}},{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}]},"scopeLogs":[{"scope":{"name":"compose-smoke"},"logRecords":[{"timeUnixNano":"$timestamp_ns","observedTimeUnixNano":"$timestamp_ns","severityNumber":17,"severityText":"ERROR","body":{"stringValue":"compose smoke log $smoke_marker"},"attributes":[{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}],"traceId":"$trace_id","spanId":"$span_id"}]}]}]}
@@ -334,6 +365,7 @@ wait_for_telemetry_rows "smoke metric" "SELECT count() FROM otel_metrics_gauge W
 wait_for_telemetry_rows "smoke log" "SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND positionCaseInsensitiveUTF8(Body, '${smoke_marker}') > 0"
 wait_for_telemetry_rows "smoke trace" "SELECT count() FROM otel_traces WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND TraceId = '${trace_id}'"
 wait_for_telemetry_rows "Docker file log" "SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND SeverityText = 'WARN' AND positionCaseInsensitiveUTF8(Body, '${filelog_marker}') > 0"
+stop_docker_filelog_smoke
 
 wait_for_admin_rows "logs" "/v1/admin/telemetry/logs?from=${from}&to=${to}&service=compose-smoke&level=ERROR&query=${smoke_marker}&limit=10" "$smoke_marker"
 wait_for_admin_rows "traces" "/v1/admin/telemetry/traces?from=${from}&to=${to}&service=compose-smoke&trace_id=${trace_id}&limit=10" "$trace_id"
