@@ -155,7 +155,7 @@ print_docker_filelog_diagnostics() {
 				printf 'Container read probe uid=%s:\n' "$probe_uid"
 				docker run --rm --log-driver=none --network none --user "$probe_uid" \
 					--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
-					sh -ec 'find /hostfs -maxdepth 2 -type f -name "*-json.log" -printf "%M %u:%g %s %p\\n" 2>&1 | head -5' || true
+					sh -ec 'first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			done
 			printf 'Docker JSON log files (bounded):\n'
 			find /var/lib/docker/containers -maxdepth 2 -type f -name '*-json.log' \
