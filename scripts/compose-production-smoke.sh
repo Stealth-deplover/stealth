@@ -139,6 +139,16 @@ print_docker_filelog_diagnostics() {
 		{
 			docker info --format 'Docker root={{.DockerRootDir}} logging_driver={{.LoggingDriver}} security={{json .SecurityOptions}}' 2>&1 || true
 			printf 'Compose project: %s\n' "${project_name:-unknown}"
+			for probe_uid in 0:0 10001:10001; do
+				printf 'Container read probe uid=%s:\n' "$probe_uid"
+				docker run --rm --log-driver=none --network none --user "$probe_uid" \
+					--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
+					sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
+			done
+			printf 'Container read probe uid=10001:10001 supplementary group=0:\n'
+			docker run --rm --log-driver=none --network none --user 10001:10001 --group-add 0 \
+				--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
+				sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			if [ -n "$project_name" ]; then
 				container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project_name" 2>/dev/null || true)"
 			else
@@ -151,16 +161,6 @@ print_docker_filelog_diagnostics() {
 					stat --format='log_file=%n mode=%A owner=%U:%G bytes=%s' "$log_path" 2>&1 || true
 				fi
 			done
-			for probe_uid in 0:0 10001:10001; do
-				printf 'Container read probe uid=%s:\n' "$probe_uid"
-				docker run --rm --log-driver=none --network none --user "$probe_uid" \
-					--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
-					sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
-			done
-			printf 'Container read probe uid=10001:10001 supplementary group=0:\n'
-			docker run --rm --log-driver=none --network none --user 10001:10001 --group-add 0 \
-				--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
-				sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			printf 'Docker JSON log files (bounded):\n'
 			find /var/lib/docker/containers -maxdepth 2 -type f -name '*-json.log' \
 				-printf '%M %u:%g %s %p\n' 2>/dev/null | head -40 || true
