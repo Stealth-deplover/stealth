@@ -46,14 +46,17 @@ The production Compose topology contains separate Collector roles:
 - `otel-collector` receives OTLP, scrapes API/worker metrics, receives the
   isolated host and Docker signals over OTLP, and writes ClickHouse. It has no
   host filesystem mount, Docker log mount, Docker socket, or
-  `CAP_DAC_READ_SEARCH`.
+  `CAP_DAC_READ_SEARCH`. It joins the application network, private ClickHouse
+  network, and a dedicated private telemetry-ingest network.
 - `telemetry-host` runs only `hostmetrics` with `/:/hostfs:ro`. It has no
   Docker socket, Docker log mount, DAC bypass capability, or OTLP receiver,
-  and forwards metrics only to the main Collector.
+  and joins only the telemetry-ingest network to forward metrics to the main
+  Collector.
 - `telemetry-docker-logs` runs only the Docker `file_log` receiver. It sees
   only `/var/lib/docker/containers` through a read-only mount and uses the
   narrow `CAP_DAC_READ_SEARCH` capability required by root-owned Docker JSON
-  log directories. It has no host-root mount, Docker socket, or OTLP receiver.
+  log directories. It has no host-root mount, Docker socket, or OTLP receiver,
+  and joins only the telemetry-ingest network.
 - `telemetry-docker-proxy` is the only telemetry service with a read-only
   Docker socket. It is attached only to an internal Compose network, has no
   host port, and permits only `GET`/`HEAD` requests to `/_ping`, `/version`,
@@ -68,7 +71,8 @@ The production Compose topology contains separate Collector roles:
 - `telemetry-docker` is an internal metrics-only collector with no Docker
   socket. It talks to that proxy, has no HTTP/OTLP receiver, publishes no host
   port, and can only send Docker statistics to the main Collector over the
-  private Compose network. It cannot execute commands.
+  private telemetry-ingest network. It also joins the separate Docker-proxy
+  network, and cannot execute commands.
 
 No single telemetry process combines a broad host-root mount with
 `CAP_DAC_READ_SEARCH`. Host metrics, Docker file logs, and Docker API metrics

@@ -149,6 +149,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"SETUP_PROXY_HTTP_PORT":                "8081",
 		"SETUP_MODE":                           strconv.FormatBool(options.Setup),
 	}
+	values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] = "stealth_telemetry_ingest"
 	if options.Setup {
 		values["STEALTH_INSTALL_ROOT"] = options.InstallRoot
 		root := strings.TrimRight(options.InstallRoot, "/")

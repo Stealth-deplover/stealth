@@ -165,6 +165,7 @@ services:
     networks:
       stealth:
       telemetry_store:
+      telemetry_ingest:
 
   telemetry-host:
     image: "${OTEL_HOST_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"
@@ -190,7 +191,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks: [telemetry_store]
+    networks: [telemetry_ingest]
 
   telemetry-docker-logs:
     image: "${OTEL_DOCKER_LOGS_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-docker-logs:v0.2.2}"
@@ -221,7 +222,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks: [telemetry_store]
+    networks: [telemetry_ingest]
 
   otelcol-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
@@ -290,7 +291,7 @@ services:
       start_period: 20s
     networks:
       telemetry_docker:
-      telemetry_store:
+      telemetry_ingest:
 
   migrate:
     image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
@@ -440,6 +441,9 @@ networks:
         - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"
   telemetry_store:
     name: "${STEALTH_TELEMETRY_STORE_NETWORK_NAME:-stealth_telemetry_store}"
+    internal: true
+  telemetry_ingest:
+    name: "${STEALTH_TELEMETRY_INGEST_NETWORK_NAME:-stealth_telemetry_ingest}"
     internal: true
   telemetry_docker:
     name: "${STEALTH_TELEMETRY_DOCKER_NETWORK_NAME:-stealth_telemetry_docker}"

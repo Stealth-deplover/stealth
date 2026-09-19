@@ -209,8 +209,24 @@ start_docker_filelog_smoke() {
 	filelog_smoke_pid=$!
 }
 
+container_networks() {
+	docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$1" | sort
+}
+
+network_count() {
+	printf '%s\n' "$1" | awk 'NF { count++ } END { print count + 0 }'
+}
+
+network_contains() {
+	local networks="$1"
+	local wanted="$2"
+	printf '%s\n' "$networks" | grep -Fqx -- "$wanted"
+}
+
 verify_telemetry_runtime_boundaries() {
-	local service container mounts caps
+	local service container mounts caps networks
+	local collector_networks="" host_networks="" docker_logs_networks="" docker_metrics_networks="" docker_proxy_networks=""
+	local clickhouse_networks api_networks worker_networks ingest_network clickhouse_network proxy_network
 	for service in otel-collector telemetry-host telemetry-docker-logs telemetry-docker telemetry-docker-proxy; do
 		container="$("${compose[@]}" ps -q "$service")"
 		if [ -z "$container" ]; then
@@ -219,8 +235,10 @@ verify_telemetry_runtime_boundaries() {
 		fi
 		mounts="$(docker inspect --format '{{range .Mounts}}{{printf "%s->%s " .Source .Destination}}{{end}}' "$container")"
 		caps="$(docker inspect --format '{{json .HostConfig.CapAdd}}' "$container")"
+		networks="$(container_networks "$container")"
 		case "$service" in
 			otel-collector)
+				collector_networks="$networks"
 				case "$mounts" in
 					*'->/hostfs'*|*'/var/lib/docker/containers->/hostfs/var/lib/docker/containers'*|*'/var/run/docker.sock->'*)
 						printf 'main Collector has an unexpected host mount: %s\n' "$mounts" >&2
@@ -235,6 +253,7 @@ verify_telemetry_runtime_boundaries() {
 				 esac
 				;;
 			telemetry-host)
+				host_networks="$networks"
 				case "$mounts" in
 					*'/->/hostfs '*) ;;
 					*)
@@ -250,6 +269,7 @@ verify_telemetry_runtime_boundaries() {
 					esac
 				;;
 			telemetry-docker-logs)
+				docker_logs_networks="$networks"
 				case "$mounts" in
 					*'/var/lib/docker/containers->/hostfs/var/lib/docker/containers'*) ;;
 					*)
@@ -276,6 +296,7 @@ verify_telemetry_runtime_boundaries() {
 				 esac
 				;;
 			telemetry-docker)
+				docker_metrics_networks="$networks"
 				case "$mounts" in
 					*'/var/run/docker.sock->'*)
 						printf 'Docker metrics Collector has a Docker socket: %s\n' "$mounts" >&2
@@ -284,6 +305,7 @@ verify_telemetry_runtime_boundaries() {
 				 esac
 				;;
 			telemetry-docker-proxy)
+				docker_proxy_networks="$networks"
 				case "$mounts" in
 					*'/var/run/docker.sock->/var/run/docker.sock'*) ;;
 					*)
@@ -294,7 +316,55 @@ verify_telemetry_runtime_boundaries() {
 				;;
 		esac
 	done
-	printf 'Telemetry runtime privilege boundaries passed\n'
+
+	if [ "$(network_count "$host_networks")" -ne 1 ]; then
+		printf 'host metrics Collector must join only the ingest network: %s\n' "$host_networks" >&2
+		return 1
+	fi
+	ingest_network="$(printf '%s\n' "$host_networks" | awk 'NF { print; exit }')"
+	if [ -z "$ingest_network" ] || [ "$(network_count "$docker_logs_networks")" -ne 1 ] || [ "$docker_logs_networks" != "$ingest_network" ]; then
+		printf 'Docker log Collector must join only the host ingest network: %s\n' "$docker_logs_networks" >&2
+		return 1
+	fi
+	if [ "$(docker network inspect --format '{{.Internal}}' "$ingest_network")" != "true" ]; then
+		printf 'telemetry ingest network must be internal: %s\n' "$ingest_network" >&2
+		return 1
+	fi
+	if [ "$(network_count "$collector_networks")" -ne 3 ] || ! network_contains "$collector_networks" "$ingest_network"; then
+		printf 'main Collector network boundary is incorrect: %s\n' "$collector_networks" >&2
+		return 1
+	fi
+
+	container="$("${compose[@]}" ps -q clickhouse)"
+	clickhouse_networks="$(container_networks "$container")"
+	container="$("${compose[@]}" ps -q api)"
+	api_networks="$(container_networks "$container")"
+	container="$("${compose[@]}" ps -q worker)"
+	worker_networks="$(container_networks "$container")"
+	if [ "$(network_count "$clickhouse_networks")" -ne 1 ]; then
+		printf 'ClickHouse network boundary is incorrect: %s\n' "$clickhouse_networks" >&2
+		return 1
+	fi
+	clickhouse_network="$(printf '%s\n' "$clickhouse_networks" | awk 'NF { print; exit }')"
+	if ! network_contains "$collector_networks" "$clickhouse_network" || network_contains "$host_networks" "$clickhouse_network" || network_contains "$docker_logs_networks" "$clickhouse_network"; then
+		printf 'isolated Collectors share the ClickHouse network\n' >&2
+		return 1
+	fi
+	if network_contains "$api_networks" "$ingest_network" || network_contains "$worker_networks" "$ingest_network"; then
+		printf 'application services share the isolated telemetry ingest network\n' >&2
+		return 1
+	fi
+
+	if [ "$(network_count "$docker_proxy_networks")" -ne 1 ] || [ "$(network_count "$docker_metrics_networks")" -ne 2 ]; then
+		printf 'Docker metrics network count is incorrect: collector=%s proxy=%s\n' "$docker_metrics_networks" "$docker_proxy_networks" >&2
+		return 1
+	fi
+	proxy_network="$(printf '%s\n' "$docker_proxy_networks" | awk 'NF { print; exit }')"
+	if [ "$proxy_network" = "$ingest_network" ] || ! network_contains "$docker_metrics_networks" "$ingest_network" || ! network_contains "$docker_metrics_networks" "$proxy_network"; then
+		printf 'Docker metrics Collector does not isolate its proxy and ingest networks\n' >&2
+		return 1
+	fi
+	printf 'Telemetry runtime privilege and network boundaries passed\n'
 }
 
 stop_docker_filelog_smoke() {

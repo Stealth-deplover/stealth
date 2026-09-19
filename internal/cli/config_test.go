@@ -60,6 +60,9 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 	if values["GITHUB_APP_CLIENT_ID"] != testGitHubAppClientID {
 		t.Fatalf("GITHUB_APP_CLIENT_ID = %q, want installer value", values["GITHUB_APP_CLIENT_ID"])
 	}
+	if values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] != "stealth_telemetry_ingest" {
+		t.Fatalf("STEALTH_TELEMETRY_INGEST_NETWORK_NAME = %q, want private ingest network", values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"])
+	}
 	key, err := base64.StdEncoding.DecodeString(values["FUNCTIONS_SECRET_KEY"])
 	if err != nil || len(key) != 32 {
 		t.Fatalf("FUNCTIONS_SECRET_KEY is not a 32-byte base64 secret: %v", err)

@@ -114,13 +114,26 @@ func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *tes
 			t.Fatalf("main Collector still contains %q", forbidden)
 		}
 	}
+	if !strings.Contains(collector, "telemetry_ingest:") {
+		t.Fatal("main Collector must join the private telemetry ingest network")
+	}
 	hostMetrics := serviceText(compose, "telemetry-host")
 	if !strings.Contains(hostMetrics, "/:/hostfs:ro") || strings.Contains(hostMetrics, "DAC_READ_SEARCH") || strings.Contains(hostMetrics, "/var/run/docker.sock") {
 		t.Fatal("host metrics Collector privilege boundary is incorrect")
 	}
+	if !strings.Contains(hostMetrics, "networks: [telemetry_ingest]") || strings.Contains(hostMetrics, "telemetry_store") || strings.Contains(hostMetrics, "telemetry_docker") {
+		t.Fatal("host metrics Collector network boundary is incorrect")
+	}
 	dockerLogs := serviceText(compose, "telemetry-docker-logs")
 	if !strings.Contains(dockerLogs, "/var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro") || strings.Contains(dockerLogs, "/:/hostfs") || strings.Contains(dockerLogs, "/var/run/docker.sock") {
 		t.Fatal("Docker log Collector mount boundary is incorrect")
+	}
+	if !strings.Contains(dockerLogs, "networks: [telemetry_ingest]") || strings.Contains(dockerLogs, "telemetry_store") || strings.Contains(dockerLogs, "telemetry_docker") {
+		t.Fatal("Docker log Collector network boundary is incorrect")
+	}
+	dockerMetrics := serviceText(compose, "telemetry-docker")
+	if !strings.Contains(dockerMetrics, "telemetry_ingest:") || !strings.Contains(dockerMetrics, "telemetry_docker:") || strings.Contains(dockerMetrics, "telemetry_store") {
+		t.Fatal("Docker metrics Collector network boundary is incorrect")
 	}
 	if !strings.Contains(compose, `image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"`) {
 		t.Fatal("isolated Docker metrics collector should use the capability-free wrapper image")
@@ -145,6 +158,9 @@ func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *tes
 	}
 	if strings.Contains(serviceText(compose, "telemetry-docker"), "/var/run/docker.sock:/var/run/docker.sock") {
 		t.Fatal("telemetry-docker directly mounts the Docker socket")
+	}
+	if !strings.Contains(compose, "telemetry_ingest:\n    name: \"${STEALTH_TELEMETRY_INGEST_NETWORK_NAME:-stealth_telemetry_ingest}\"\n    internal: true") {
+		t.Fatal("private telemetry ingest network definition is missing")
 	}
 
 	dockerfile := readRepositoryFile(t, "Dockerfile")

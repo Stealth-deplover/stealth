@@ -265,6 +265,7 @@ jobs:
           STEALTH_NETWORK_SUBNET=172.31.0.0/24
           STEALTH_NETWORK_NAME=stealth_release_smoke_network_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_release_smoke_telemetry_store_${GITHUB_RUN_ID}
+          STEALTH_TELEMETRY_INGEST_NETWORK_NAME=stealth_release_smoke_telemetry_ingest_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_release_smoke_telemetry_docker_${GITHUB_RUN_ID}
           DOCKER_GID=${docker_gid}
           METRICS_TOKEN=${metrics_token}

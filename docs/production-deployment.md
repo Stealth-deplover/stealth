@@ -207,7 +207,9 @@ the latter owns only the Docker JSON-log mount and its narrow file capability.
 `telemetry-docker` remains separate because the adjacent
 `telemetry-docker-proxy` is the only telemetry process that reads
 `/var/run/docker.sock`. All three isolated collectors forward to the main
-Collector over the internal telemetry network and expose no host port. See the
+Collector over a dedicated internal telemetry-ingest network and expose no
+host port. The host and Docker-log collectors join only that network; the
+Docker-metrics collector also joins its separate Docker-proxy network. See the
 [telemetry architecture guide](telemetry-architecture.md) for the schema pin,
 query boundary, retention, and security separation.
 

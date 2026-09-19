@@ -64,6 +64,10 @@ if ! printf '%s\n' "$collector_block" | grep -F 'no-new-privileges:true' >/dev/n
 	printf 'telemetry security check: main Collector must retain no-new-privileges\n' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$collector_block" | grep -E '^[[:space:]]*telemetry_ingest:' >/dev/null 2>&1; then
+	printf 'telemetry security check: main Collector is missing the private telemetry ingest network\n' >&2
+	exit 1
+fi
 
 host_metrics_block=$(service_block telemetry-host)
 if ! printf '%s\n' "$host_metrics_block" | grep -F '/:/hostfs:ro' >/dev/null 2>&1; then
@@ -76,6 +80,11 @@ if printf '%s\n' "$host_metrics_block" | grep -E '/var/lib/docker/containers|/va
 fi
 if ! printf '%s\n' "$host_metrics_block" | grep -F 'no-new-privileges:true' >/dev/null 2>&1; then
 	printf 'telemetry security check: host metrics Collector must retain no-new-privileges\n' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$host_metrics_block" | grep -F 'networks: [telemetry_ingest]' >/dev/null 2>&1 ||
+	printf '%s\n' "$host_metrics_block" | grep -E 'telemetry_store|telemetry_docker|^[[:space:]]*stealth:' >/dev/null 2>&1; then
+	printf 'telemetry security check: host metrics Collector is outside the narrow ingest network\n' >&2
 	exit 1
 fi
 
@@ -100,6 +109,11 @@ if printf '%s\n' "$docker_logs_block" | grep -F 'no-new-privileges:true' >/dev/n
 	printf 'telemetry security check: Docker log Collector cannot use no-new-privileges with its file capability\n' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$docker_logs_block" | grep -F 'networks: [telemetry_ingest]' >/dev/null 2>&1 ||
+	printf '%s\n' "$docker_logs_block" | grep -E 'telemetry_store|telemetry_docker|^[[:space:]]*stealth:' >/dev/null 2>&1; then
+	printf 'telemetry security check: Docker log Collector is outside the narrow ingest network\n' >&2
+	exit 1
+fi
 
 docker_metrics_block=$(service_block telemetry-docker)
 if printf '%s\n' "$docker_metrics_block" | grep -E '/var/run/docker\.sock|privileged:[[:space:]]*true|group_add:|DAC_READ_SEARCH' >/dev/null 2>&1; then
@@ -108,6 +122,12 @@ if printf '%s\n' "$docker_metrics_block" | grep -E '/var/run/docker\.sock|privil
 fi
 if printf '%s\n' "$docker_metrics_block" | grep -E '^[[:space:]]*ports:|^[[:space:]]*-[[:space:]]*"?[0-9.]+:' >/dev/null 2>&1; then
 	printf 'telemetry security check: Docker metrics collector exposes a network listener\n' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$docker_metrics_block" | grep -E '^[[:space:]]*telemetry_ingest:' >/dev/null 2>&1 ||
+	! printf '%s\n' "$docker_metrics_block" | grep -E '^[[:space:]]*telemetry_docker:' >/dev/null 2>&1 ||
+	printf '%s\n' "$docker_metrics_block" | grep -F 'telemetry_store' >/dev/null 2>&1; then
+	printf 'telemetry security check: Docker metrics collector network boundary is incorrect\n' >&2
 	exit 1
 fi
 docker_proxy_block=$(service_block telemetry-docker-proxy)
@@ -121,6 +141,16 @@ if printf '%s\n' "$docker_proxy_block" | grep -E 'privileged:[[:space:]]*true|^[
 fi
 if ! printf '%s\n' "$docker_proxy_block" | grep -F 'expose: ["2375"]' >/dev/null 2>&1; then
 	printf 'telemetry security check: restricted Docker proxy is not on the internal metrics network\n' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$docker_proxy_block" | grep -F 'networks: [telemetry_docker]' >/dev/null 2>&1 ||
+	printf '%s\n' "$docker_proxy_block" | grep -E 'telemetry_ingest|telemetry_store' >/dev/null 2>&1; then
+	printf 'telemetry security check: restricted Docker proxy network boundary is incorrect\n' >&2
+	exit 1
+fi
+if ! grep -F 'telemetry_ingest:' "$compose_file" >/dev/null 2>&1 ||
+	! grep -F 'STEALTH_TELEMETRY_INGEST_NETWORK_NAME' "$compose_file" >/dev/null 2>&1; then
+	printf 'telemetry security check: private telemetry ingest network is missing\n' >&2
 	exit 1
 fi
 
