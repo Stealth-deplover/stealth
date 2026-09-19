@@ -149,13 +149,18 @@ print_docker_filelog_diagnostics() {
 			docker run --rm --log-driver=none --network none --user 10001:10001 --group-add 0 \
 				--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
 				sh -ec 'id; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
+			printf 'Container read probe uid=10001:10001 DAC_READ_SEARCH:\n'
+			docker run --rm --log-driver=none --network none --user 10001:10001 \
+				--cap-drop ALL --cap-add DAC_READ_SEARCH --security-opt no-new-privileges \
+				--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
+				sh -ec 'id; grep Cap /proc/self/status; first="$(find /hostfs -maxdepth 2 -type f -name "*-json.log" -print -quit 2>/dev/null || true)"; if [ -n "$first" ]; then stat -c "%A %a %U:%G %s %n" "$first"; stat -c "parent=%A %a %U:%G %n" "$(dirname "$first")"; else printf "no readable Docker JSON log file\\n"; fi' || true
 			if [ -n "$project_name" ]; then
 				container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project_name" 2>/dev/null || true)"
 			else
 				container_ids="$service_container"
 			fi
 			for container_id in $container_ids; do
-				docker inspect --format '{{.Name}} log_driver={{.HostConfig.LogConfig.Type}} log_path={{.LogPath}} user={{.Config.User}} groups={{json .HostConfig.GroupAdd}} status={{.State.Status}}' "$container_id" 2>&1 || true
+				docker inspect --format '{{.Name}} log_driver={{.HostConfig.LogConfig.Type}} log_path={{.LogPath}} user={{.Config.User}} groups={{json .HostConfig.GroupAdd}} caps={{json .HostConfig.CapAdd}} status={{.State.Status}}' "$container_id" 2>&1 || true
 				log_path="$(docker inspect --format '{{.LogPath}}' "$container_id" 2>/dev/null || true)"
 				if [ -n "$log_path" ] && [ -e "$log_path" ]; then
 					stat --format='log_file=%n mode=%A owner=%U:%G bytes=%s' "$log_path" 2>&1 || true
