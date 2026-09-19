@@ -89,6 +89,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	if setupImage == "" {
 		setupImage = ImageName("stealth-setup", options.Version)
 	}
+	collectorImage := ImageName("stealth-otel-collector", options.Version)
 	databaseURL := options.DatabaseURL
 	if databaseURL == "" {
 		databaseURL = "postgres://stealth:" + postgresPassword + "@postgres:5432/stealth?sslmode=disable"
@@ -109,6 +110,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"STEALTH_MIGRATE_IMAGE":                ImageName("stealth-migrate", options.Version),
 		"STEALTH_CONSOLE_IMAGE":                ImageName("stealth-console", options.Version),
 		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": ImageName("stealth-telemetry-docker-proxy", options.Version),
+		"OTEL_COLLECTOR_IMAGE":                 collectorImage,
+		"OTEL_HOST_COLLECTOR_IMAGE":            collectorImage,
+		"OTEL_DOCKER_COLLECTOR_IMAGE":          collectorImage,
+		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     ImageName("stealth-otel-docker-logs", options.Version),
 		"POSTGRES_DB":                          "stealth",
 		"POSTGRES_USER":                        "stealth",
 		"POSTGRES_PASSWORD":                    postgresPassword,
@@ -170,7 +175,7 @@ func validateConfigValues(values map[string]string) error {
 			return fmt.Errorf("generated configuration value for %s is empty", key)
 		}
 	}
-	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"} {
+	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE"} {
 		if !validImageReference(values[key]) {
 			return fmt.Errorf("generated image reference for %s is invalid", key)
 		}

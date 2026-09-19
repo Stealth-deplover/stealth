@@ -146,6 +146,10 @@ func displayServiceName(service string) string {
 		return "ClickHouse"
 	case "otel-collector":
 		return "OTel Collector"
+	case "telemetry-host":
+		return "Host Metrics"
+	case "telemetry-docker-logs":
+		return "Docker Logs"
 	case "telemetry-docker-proxy":
 		return "Docker Metrics Proxy"
 	case "telemetry-docker":

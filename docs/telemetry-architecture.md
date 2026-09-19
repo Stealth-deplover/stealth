@@ -14,10 +14,10 @@ Stealth API ───────┐
 Stealth worker ────┤  OTLP/HTTP or OTLP/gRPC (private network)
 future workloads ──┘                 │
                                      ▼
-                         OTel Collector Contrib
-                          ├── hostmetrics
+                         Main OTel Collector Contrib
+                          ├── OTLP receiver
                           ├── Prometheus scrape
-                          ├── Docker file logs (host-mounted read-only)
+                          ├── PostgreSQL / Redis receivers
                           └── bounded batch + retry queue
                                      │
                                      ▼
@@ -27,6 +27,10 @@ future workloads ──┘                 │
                                      │
                                      ▼
                               Stealth Console
+
+Host metrics Collector ───────────────┘
+Docker file-log Collector ────────────┘
+Docker metrics Collector ── restricted Docker proxy
 ```
 
 The API and worker use the standard OpenTelemetry SDK where instrumentation
@@ -37,11 +41,19 @@ API.
 
 ## Service and privilege boundary
 
-The production Compose topology contains two Collector roles:
+The production Compose topology contains separate Collector roles:
 
-- `otel-collector` receives OTLP, scrapes host/API/worker metrics, reads
-  Docker JSON log files, and writes ClickHouse. It has no Docker socket. The
-  host root bind is read-only for hostmetrics and masks the socket path.
+- `otel-collector` receives OTLP, scrapes API/worker metrics, receives the
+  isolated host and Docker signals over OTLP, and writes ClickHouse. It has no
+  host filesystem mount, Docker log mount, Docker socket, or
+  `CAP_DAC_READ_SEARCH`.
+- `telemetry-host` runs only `hostmetrics` with `/:/hostfs:ro`. It has no
+  Docker socket, Docker log mount, DAC bypass capability, or OTLP receiver,
+  and forwards metrics only to the main Collector.
+- `telemetry-docker-logs` runs only the Docker `file_log` receiver. It sees
+  only `/var/lib/docker/containers` through a read-only mount and uses the
+  narrow `CAP_DAC_READ_SEARCH` capability required by root-owned Docker JSON
+  log directories. It has no host-root mount, Docker socket, or OTLP receiver.
 - `telemetry-docker-proxy` is the only telemetry service with a read-only
   Docker socket. It is attached only to an internal Compose network, has no
   host port, and permits only `GET`/`HEAD` requests to `/_ping`, `/version`,
@@ -58,9 +70,14 @@ The production Compose topology contains two Collector roles:
   port, and can only send Docker statistics to the main Collector over the
   private Compose network. It cannot execute commands.
 
+No single telemetry process combines a broad host-root mount with
+`CAP_DAC_READ_SEARCH`. Host metrics, Docker file logs, and Docker API metrics
+therefore have separate privilege boundaries while retaining the same
+OTLP-to-ClickHouse path.
+
 The existing trusted worker still owns its Docker socket for the function and
 site runner. The API, Console, setup API, ClickHouse, and public proxy do not
-receive it. ClickHouse and both Collector listeners are internal Compose
+receive it. ClickHouse and all Collector listeners are internal Compose
 services; no ClickHouse or OTLP port is published by default.
 
 This boundary reduces the authority of web-facing services but does not make
@@ -163,20 +180,20 @@ pin is changed.
 The minimum controls are:
 
 - `CLICKHOUSE_MEMORY_LIMIT` for the ClickHouse container;
-- `OTEL_COLLECTOR_MEMORY_LIMIT` and
+- `OTEL_COLLECTOR_MEMORY_LIMIT`, `OTEL_HOST_COLLECTOR_MEMORY_LIMIT`,
+  `OTEL_DOCKER_LOGS_COLLECTOR_MEMORY_LIMIT`, and
   `OTEL_DOCKER_COLLECTOR_MEMORY_LIMIT` for Collector processes;
 - `TELEMETRY_MAX_QUERY_DURATION`, `TELEMETRY_MAX_QUERY_RANGE`, and
   `TELEMETRY_MAX_QUERY_ROWS` for API reads;
 - `TELEMETRY_RETENTION` for signal TTL;
 - the Collector memory limiter and persistent sending queue for ingestion.
 
-The main `OTEL_COLLECTOR_IMAGE` is the Stealth wrapper image built from the
-pinned official `otel/opentelemetry-collector-contrib:0.161.0` image. The
-wrapper adds only `telemetry-collector-healthcheck`, a static Go HTTP probe,
-because the upstream image is scratch-based and contains no shell or HTTP
-client. `OTEL_DOCKER_COLLECTOR_IMAGE` remains the upstream image because the
-isolated Docker stats collector uses the exec-form config validation check and
-does not expose the main Collector health endpoint.
+The main `OTEL_COLLECTOR_IMAGE`, `OTEL_HOST_COLLECTOR_IMAGE`, and
+`OTEL_DOCKER_COLLECTOR_IMAGE` use the capability-free Stealth wrapper built
+from the pinned official `otel/opentelemetry-collector-contrib:0.161.0`
+image. `OTEL_DOCKER_LOGS_COLLECTOR_IMAGE` uses the dedicated Docker-log
+wrapper. All four services use the live health-check probe and none publishes
+a host port.
 
 There is no unlimited browser query path. Any future alerting or dashboard
 slice must use the same bounded `TelemetryStore` contract rather than

@@ -105,8 +105,6 @@ jobs:
             --env TELEMETRY_RETENTION=720h \
             --volume "$GITHUB_WORKSPACE/telemetry/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
             --volume "$collector_state:/var/lib/otelcol" \
-            --volume /:/hostfs:ro \
-            --volume /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro \
             otel/opentelemetry-collector-contrib:0.161.0 \
             --config=/etc/otelcol-contrib/config.yaml >/dev/null
           cleanup() {
@@ -133,6 +131,9 @@ jobs:
 
       - name: Stealth Collector image build
         run: docker build --target telemetry-collector -t stealth-otel-collector:ci .
+
+      - name: Stealth Docker log Collector image build
+        run: docker build --target telemetry-docker-logs -t stealth-otel-docker-logs:ci .
 
       - name: Docker metrics proxy image build
         run: docker build --target telemetry-docker-proxy -t stealth-telemetry-docker-proxy:ci .

@@ -22,6 +22,7 @@ func newInstallLayout(root string) InstallLayout {
 		EnvFile:          filepath.Join(root, "config.env"),
 		ComposeFile:      filepath.Join(root, "compose.production.yaml"),
 		SetupComposeFile: filepath.Join(root, "compose.setup.yaml"),
+		TelemetryDir:     filepath.Join(root, "telemetry"),
 		ProxyFile:        filepath.Join(root, "console", "deploy", "nginx.conf"),
 		VersionFile:      filepath.Join(root, "VERSION"),
 		StateDir:         filepath.Join(root, "state"),

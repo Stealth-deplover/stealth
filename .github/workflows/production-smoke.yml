@@ -24,7 +24,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Build local API, setup, worker, migration, Collector, proxy, and Console images
+      - name: Build local API, setup, worker, isolated Collectors, proxy, and Console images
         shell: bash
         run: |
           set -euo pipefail
@@ -53,6 +53,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-otel-collector:smoke-${GITHUB_RUN_ID}" .
+          docker build --target telemetry-docker-logs \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-otel-docker-logs:smoke-${GITHUB_RUN_ID}" .
           docker build --target telemetry-docker-proxy \
             --build-arg VERSION="$VERSION" \
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
@@ -85,7 +90,9 @@ jobs:
           STEALTH_MIGRATE_IMAGE=stealth-migrate:smoke-${GITHUB_RUN_ID}
           STEALTH_CONSOLE_IMAGE=stealth-console:smoke-${GITHUB_RUN_ID}
           OTEL_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${GITHUB_RUN_ID}
-          OTEL_DOCKER_COLLECTOR_IMAGE=otel/opentelemetry-collector-contrib:0.161.0
+          OTEL_HOST_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${GITHUB_RUN_ID}
+          OTEL_DOCKER_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${GITHUB_RUN_ID}
+          OTEL_DOCKER_LOGS_COLLECTOR_IMAGE=stealth-otel-docker-logs:smoke-${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=stealth-telemetry-docker-proxy:smoke-${GITHUB_RUN_ID}
           POSTGRES_DB=stealth
           POSTGRES_USER=stealth
@@ -112,6 +119,7 @@ jobs:
           STORAGE_VOLUME_NAME=stealth_pr_smoke_storage_${GITHUB_RUN_ID}
           CLICKHOUSE_VOLUME_NAME=stealth_pr_smoke_clickhouse_${GITHUB_RUN_ID}
           OTELCOL_VOLUME_NAME=stealth_pr_smoke_otelcol_${GITHUB_RUN_ID}
+          OTEL_DOCKER_LOGS_VOLUME_NAME=stealth_pr_smoke_otel_docker_logs_${GITHUB_RUN_ID}
           PROXY_HTTP_BIND=127.0.0.1
           PROXY_HTTP_PORT=8080
           API_HOST_PORT=18080

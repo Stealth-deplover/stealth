@@ -14,9 +14,11 @@ TLS terminator / Nginx
                          ├── Redis
                          ├── ClickHouse (private telemetry store)
                          └── worker → Docker runner + persistent storage
-                                      └── telemetry-docker-proxy (read-only Docker API)
-                                          └── telemetry-docker → OTel collector
-OTLP / hostmetrics / Prometheus → otel-collector → ClickHouse
+                                      ├── telemetry-docker-proxy (read-only Docker API)
+                                      │   └── telemetry-docker → otel-collector
+                                      ├── telemetry-host → otel-collector
+                                      └── telemetry-docker-logs → otel-collector
+OTLP / Prometheus → otel-collector → ClickHouse
 ```
 
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
@@ -47,7 +49,7 @@ docker compose --env-file .env.production -f compose.production.yaml config
 docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-docker-proxy telemetry-docker
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 
@@ -70,10 +72,13 @@ logs.
 Required production values:
 
 - `STEALTH_API_IMAGE`, `STEALTH_WORKER_IMAGE`, `STEALTH_MIGRATE_IMAGE`,
-  `STEALTH_CONSOLE_IMAGE`, `OTEL_COLLECTOR_IMAGE`, and
+  `STEALTH_CONSOLE_IMAGE`, `OTEL_COLLECTOR_IMAGE`,
+  `OTEL_HOST_COLLECTOR_IMAGE`, `OTEL_DOCKER_COLLECTOR_IMAGE`,
+  `OTEL_DOCKER_LOGS_COLLECTOR_IMAGE`, and
   `STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE`, all on the same immutable release
-  tag. `OTEL_DOCKER_COLLECTOR_IMAGE` is pinned separately to the matching
-  upstream Collector Contrib release.
+  tag. The four Collector images are built from the pinned
+  `otel/opentelemetry-collector-contrib:0.161.0` base; the Docker-log image is
+  the only one with the narrow file capability.
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
 - `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
@@ -148,7 +153,9 @@ The production Compose baseline keeps these named volumes:
 - `stealth_clickhouse_data`: ClickHouse logs, metrics, and traces. It is not a
   PostgreSQL volume and should be backed up with a telemetry-specific policy.
 - `stealth_otelcol_state`: the Collector's crash-safe sending queue and file-log
-  offsets.
+  offsets for the main Collector.
+- `stealth_otel_docker_logs_state`: Docker file-log offsets for the isolated
+  Docker-log Collector.
 
 The `telemetry-docker-proxy` service is the only telemetry service with a
 Docker socket mount. It is attached only to the internal telemetry network,
@@ -168,18 +175,16 @@ collector. The worker's Docker socket remains a separate, existing trust
 boundary for function execution.
 
 The official OpenTelemetry Collector Contrib image is scratch-based and runs
-as UID 10001. `otelcol-state-init` owns only the named Collector state volume
-and assigns it to UID/GID 10001; the Collector itself remains non-root. The
-Stealth Collector image keeps the pinned scratch binary and gives it only the
-narrow `DAC_READ_SEARCH` file capability because Docker's root-owned
-`json-file` directory and file modes otherwise prevent its direct file-log
-receiver from enumerating container logs. The host mount remains read-only and
-the Docker socket is masked. The main Collector intentionally does not set
-`no-new-privileges`, because that would clear this explicitly granted file
-capability for the non-root process; it has no other capabilities. The image
-adds only a static Go probe for the live `health_check` endpoint because the
-upstream image has no shell or HTTP client. The isolated Docker stats Collector remains on the
-upstream image and uses exec-form config validation.
+as UID 10001. The main Collector, host-metrics Collector, and Docker-metrics
+Collector use a capability-free Stealth wrapper with a static Go probe for the
+live `health_check` endpoint and retain `no-new-privileges:true`.
+
+Docker file logs use a dedicated scratch wrapper with the pinned binary's
+narrow `DAC_READ_SEARCH` file capability. Only `telemetry-docker-logs` uses
+that image; it mounts only `/var/lib/docker/containers:ro`, so the capability
+cannot be combined with a broad host-root mount. That service intentionally
+omits `no-new-privileges` so the file capability can become effective for UID
+10001. Host metrics use a separate `/:/hostfs:ro` mount without the capability.
 
 Redis is authenticated but intentionally has no volume in this baseline. It
 stores distributed rate-limit windows, not the durable job state. Losing Redis
@@ -196,12 +201,15 @@ bundled single PostgreSQL, Redis, or local storage services.
 
 ClickHouse and the Collector are internal-only services. The standard Compose
 file does not publish ports `9000`, `4317`, `4318`, or `13133` to the host.
-`telemetry-docker` is intentionally separate from the main Collector because
-the adjacent `telemetry-docker-proxy` is the only telemetry process that reads
-`/var/run/docker.sock`. The stats Collector has only its `docker_stats`
-receiver and an OTLP exporter on the internal network; neither service has a
-public listener. See the [telemetry architecture guide](telemetry-architecture.md)
-for the schema pin, query boundary, retention, and backup separation.
+`telemetry-host` and `telemetry-docker-logs` are intentionally separate from
+the main Collector: the former owns only the read-only host-root mount, while
+the latter owns only the Docker JSON-log mount and its narrow file capability.
+`telemetry-docker` remains separate because the adjacent
+`telemetry-docker-proxy` is the only telemetry process that reads
+`/var/run/docker.sock`. All three isolated collectors forward to the main
+Collector over the internal telemetry network and expose no host port. See the
+[telemetry architecture guide](telemetry-architecture.md) for the schema pin,
+query boundary, retention, and security separation.
 
 ## First-run onboarding
 

@@ -66,6 +66,7 @@ type Layout struct {
 	EnvFile          string
 	ComposeFile      string
 	SetupComposeFile string
+	TelemetryDir     string
 	ProxyFile        string
 	VersionFile      string
 	StateDir         string
@@ -89,6 +90,7 @@ func NewLayout(root string) (Layout, error) {
 		EnvFile:          filepath.Join(clean, "config.env"),
 		ComposeFile:      filepath.Join(clean, "compose.production.yaml"),
 		SetupComposeFile: filepath.Join(clean, "compose.setup.yaml"),
+		TelemetryDir:     filepath.Join(clean, "telemetry"),
 		ProxyFile:        filepath.Join(clean, "console", "deploy", "nginx.conf"),
 		VersionFile:      filepath.Join(clean, "VERSION"),
 		StateDir:         filepath.Join(clean, "state"),
@@ -280,7 +282,7 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
-			services = append(services, "otel-collector", "telemetry-docker-proxy", "telemetry-docker")
+			services = append(services, "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker")
 		}
 		if plan.Cloudflare {
 			services = append(services, "cloudflared")
@@ -335,7 +337,7 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 		}
 	} else if !FileIsPrivate(plan.Layout.EnvFile) {
 		return errors.New("existing configuration permissions are too broad; expected mode 0600")
-	} else if err := e.ensureTelemetryProxyImage(plan); err != nil {
+	} else if err := e.ensureTelemetryImages(plan); err != nil {
 		return err
 	}
 	if err := e.ensureAsset(ctx, plan.Layout.ComposeFile, plan.Version, "compose.production.yaml", []byte("services:")); err != nil {
@@ -349,23 +351,50 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 	if err := e.ensureAsset(ctx, plan.Layout.ProxyFile, plan.Version, "console/deploy/nginx.conf", []byte("server {")); err != nil {
 		return fmt.Errorf("prepare proxy configuration: %w", err)
 	}
+	for _, asset := range []struct {
+		name   string
+		marker []byte
+	}{
+		{name: "otel-collector.yaml", marker: []byte("receivers:")},
+		{name: "host-metrics.yaml", marker: []byte("hostmetrics:")},
+		{name: "docker-logs.yaml", marker: []byte("file_log/docker:")},
+		{name: "docker-stats.yaml", marker: []byte("docker_stats:")},
+	} {
+		path := filepath.Join(plan.Layout.TelemetryDir, asset.name)
+		if err := e.ensureAsset(ctx, path, plan.Version, "telemetry/"+asset.name, asset.marker); err != nil {
+			return fmt.Errorf("prepare telemetry configuration %s: %w", asset.name, err)
+		}
+	}
 	if err := WriteAtomic(plan.Layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write version file: %w", err)
 	}
 	return nil
 }
 
-func (e *Engine) ensureTelemetryProxyImage(plan Plan) error {
+func (e *Engine) ensureTelemetryImages(plan Plan) error {
 	values, err := ReadEnvFile(plan.Layout.EnvFile)
 	if err != nil {
-		return fmt.Errorf("read existing configuration for telemetry proxy migration: %w", err)
+		return fmt.Errorf("read existing configuration for telemetry image migration: %w", err)
 	}
-	if strings.TrimSpace(values["STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"]) != "" {
+	updates := map[string]string{
+		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": ImageName("stealth-telemetry-docker-proxy", plan.Version),
+		"OTEL_COLLECTOR_IMAGE":                 ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_HOST_COLLECTOR_IMAGE":            ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_DOCKER_COLLECTOR_IMAGE":          ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     ImageName("stealth-otel-docker-logs", plan.Version),
+	}
+	changed := false
+	for key, value := range updates {
+		if strings.TrimSpace(values[key]) == "" {
+			values[key] = value
+			changed = true
+		}
+	}
+	if !changed {
 		return nil
 	}
-	values["STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE"] = ImageName("stealth-telemetry-docker-proxy", plan.Version)
 	if err := WritePrivateFile(plan.Layout.EnvFile, FormatEnvFile(values)); err != nil {
-		return fmt.Errorf("add telemetry Docker proxy image to existing configuration: %w", err)
+		return fmt.Errorf("add telemetry images to existing configuration: %w", err)
 	}
 	return nil
 }

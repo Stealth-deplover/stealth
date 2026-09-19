@@ -26,10 +26,10 @@ func TestDockerLogTimestampLayoutMatchesDockerJSON(t *testing.T) {
 	}
 }
 
-func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
-	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
+func TestDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "docker-logs.yaml")
 	for _, expected := range []string{
-		"http_headers:",
+		"poll_interval: 200ms",
 		"layout_type: gotime",
 		"layout: '2006-01-02T15:04:05.999999999Z07:00'",
 		"id: stream-severity",
@@ -47,8 +47,27 @@ func TestCollectorDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	if strings.Contains(config, "layout: '%Y-") {
 		t.Fatal("collector config still uses a strptime layout with gotime")
 	}
-	if strings.Contains(config, "http_config:") {
-		t.Fatal("Prometheus receiver config must use its inline http_headers field")
+	if strings.Contains(configSection(config, "receivers:", "processors:"), "\n  otlp:") {
+		t.Fatal("Docker log collector must not expose an OTLP receiver")
+	}
+}
+
+func TestMainCollectorDoesNotOwnHostCollectors(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
+	for _, forbidden := range []string{"hostmetrics:", "file_log/docker:", "/hostfs"} {
+		if strings.Contains(config, forbidden) {
+			t.Fatalf("main collector still contains %q", forbidden)
+		}
+	}
+}
+
+func TestHostMetricsCollectorUsesReadOnlyHostRootWithoutOTLPReceiver(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "host-metrics.yaml")
+	if !strings.Contains(config, "hostmetrics:") || !strings.Contains(config, "root_path: /hostfs") {
+		t.Fatal("host metrics collector is missing its hostmetrics root path")
+	}
+	if strings.Contains(configSection(config, "receivers:", "processors:"), "\n  otlp:") {
+		t.Fatal("host metrics collector must not expose an OTLP receiver")
 	}
 }
 
@@ -90,11 +109,36 @@ func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *tes
 	if strings.Contains(collector, "8888:") {
 		t.Fatal("collector self-telemetry must not be published to the host")
 	}
-	if !strings.Contains(compose, `image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"`) {
-		t.Fatal("isolated Docker collector should use the upstream image independently")
+	for _, forbidden := range []string{"/:/hostfs", "/var/lib/docker/containers", "DAC_READ_SEARCH", "/var/run/docker.sock"} {
+		if strings.Contains(collector, forbidden) {
+			t.Fatalf("main Collector still contains %q", forbidden)
+		}
+	}
+	hostMetrics := serviceText(compose, "telemetry-host")
+	if !strings.Contains(hostMetrics, "/:/hostfs:ro") || strings.Contains(hostMetrics, "DAC_READ_SEARCH") || strings.Contains(hostMetrics, "/var/run/docker.sock") {
+		t.Fatal("host metrics Collector privilege boundary is incorrect")
+	}
+	dockerLogs := serviceText(compose, "telemetry-docker-logs")
+	if !strings.Contains(dockerLogs, "/var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro") || strings.Contains(dockerLogs, "/:/hostfs") || strings.Contains(dockerLogs, "/var/run/docker.sock") {
+		t.Fatal("Docker log Collector mount boundary is incorrect")
+	}
+	if !strings.Contains(compose, `image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"`) {
+		t.Fatal("isolated Docker metrics collector should use the capability-free wrapper image")
+	}
+	for _, service := range []string{"telemetry-host", "telemetry-docker-logs"} {
+		block := serviceText(compose, service)
+		if !strings.Contains(block, `test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]`) {
+			t.Fatalf("%s does not probe the live health endpoint", service)
+		}
+	}
+	if !strings.Contains(compose, `image: "${OTEL_DOCKER_LOGS_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-docker-logs:v0.2.2}"`) {
+		t.Fatal("Docker log collector should use its dedicated image")
 	}
 	if !strings.Contains(compose, "otelcol-state-init:") || !strings.Contains(compose, "chown -R 10001:10001 /var/lib/otelcol") {
 		t.Fatal("collector persistent-state ownership init is missing")
+	}
+	if !strings.Contains(compose, "telemetry-docker-logs-state-init:") {
+		t.Fatal("Docker log collector persistent-state ownership init is missing")
 	}
 	if !strings.Contains(compose, "telemetry-docker-proxy:") || !strings.Contains(compose, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 		t.Fatal("restricted Docker metrics proxy is missing")
@@ -104,8 +148,12 @@ func TestProductionComposeUsesLiveScratchCompatibleCollectorCheckAndProxy(t *tes
 	}
 
 	dockerfile := readRepositoryFile(t, "Dockerfile")
-	if !strings.Contains(dockerfile, "AS telemetry-collector") || !strings.Contains(dockerfile, "telemetry-collector-healthcheck") {
-		t.Fatal("Stealth Collector wrapper image is missing the live health probe")
+	if !strings.Contains(dockerfile, "FROM scratch AS telemetry-collector") || !strings.Contains(dockerfile, "FROM scratch AS telemetry-docker-logs") || !strings.Contains(dockerfile, "telemetry-collector-healthcheck") {
+		t.Fatal("Stealth Collector wrapper image targets are missing the live health probe")
+	}
+	mainImage := dockerfile[strings.Index(dockerfile, "FROM scratch AS telemetry-collector"):]
+	if strings.Contains(mainImage[:strings.Index(mainImage, "FROM alpine:3.24 AS telemetry-docker-logs-capability")], "cap_dac_read_search") {
+		t.Fatal("main Collector image target carries the Docker log capability")
 	}
 }
 
@@ -137,4 +185,16 @@ func serviceText(compose, service string) string {
 		}
 	}
 	return builder.String()
+}
+
+func configSection(config, header, nextHeader string) string {
+	start := strings.Index(config, header)
+	if start == -1 {
+		return ""
+	}
+	section := config[start:]
+	if end := strings.Index(section, "\n"+nextHeader); end != -1 {
+		section = section[:end]
+	}
+	return section
 }

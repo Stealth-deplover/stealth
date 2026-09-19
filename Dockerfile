@@ -78,18 +78,26 @@ STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/telemetry-docker-proxy"]
 
 # The upstream Collector image is scratch-based and intentionally contains no
-# shell or HTTP client. Prepare its pinned binary in a disposable Alpine stage
-# so the final image can keep the scratch runtime while carrying the narrow
-# file capability required to read Docker's root-owned json-file tree as the
-# non-root Collector user.
+# shell or HTTP client. The capability-free wrapper is used by the main,
+# host-metrics, and Docker-metrics collectors.
 FROM ${OTEL_COLLECTOR_BASE_IMAGE} AS telemetry-collector-base
-FROM alpine:3.24 AS telemetry-collector-capability
+FROM scratch AS telemetry-collector
+COPY --from=telemetry-collector-base /otelcol-contrib /otelcol-contrib
+COPY --from=build /out/telemetry-collector-healthcheck /usr/local/bin/telemetry-collector-healthcheck
+USER 10001:10001
+ENTRYPOINT ["/otelcol-contrib"]
+
+# Docker's json-file directories are commonly root-owned and require a narrow
+# DAC read/search capability for file_log to enumerate them. Keep that
+# capability in a dedicated image so it cannot be accidentally reused by the
+# main or host-metrics Collector.
+FROM alpine:3.24 AS telemetry-docker-logs-capability
 RUN apk add --no-cache libcap
 COPY --from=telemetry-collector-base /otelcol-contrib /otelcol-contrib
 RUN setcap cap_dac_read_search+ep /otelcol-contrib && getcap /otelcol-contrib
 
-FROM scratch AS telemetry-collector
-COPY --from=telemetry-collector-capability /otelcol-contrib /otelcol-contrib
+FROM scratch AS telemetry-docker-logs
+COPY --from=telemetry-docker-logs-capability /otelcol-contrib /otelcol-contrib
 COPY --from=build /out/telemetry-collector-healthcheck /usr/local/bin/telemetry-collector-healthcheck
 USER 10001:10001
 ENTRYPOINT ["/otelcol-contrib"]

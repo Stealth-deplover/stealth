@@ -1,0 +1,106 @@
+# Docker file logs run in a dedicated collector with the narrow host mount
+# below. It has no OTLP receiver and forwards parsed records to the main
+# Collector over the private telemetry network.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
+    fsync: true
+
+receivers:
+  file_log/docker:
+    include:
+      - /hostfs/var/lib/docker/containers/*/*-json.log
+    poll_interval: 200ms
+    start_at: end
+    include_file_path: true
+    storage: file_storage
+    operators:
+      - type: json_parser
+        id: docker-json
+        parse_from: body
+        parse_to: attributes
+        on_error: send
+      - type: move
+        id: move-message
+        from: attributes.log
+        to: body
+        on_error: send
+      - type: time_parser
+        id: docker-time
+        parse_from: attributes.time
+        layout_type: gotime
+        # Docker emits RFC3339Nano timestamps and may trim trailing zeros.
+        # Go's 9 placeholders accept zero through nine fractional digits.
+        layout: '2006-01-02T15:04:05.999999999Z07:00'
+        if: 'attributes.time != nil'
+        on_error: send
+      - type: severity_parser
+        id: stream-severity
+        parse_from: attributes.stream
+        mapping:
+          info: stdout
+          warn: stderr
+        overwrite_text: true
+        if: 'attributes.stream != nil'
+        on_error: send
+      - type: json_parser
+        id: application-json
+        parse_from: body
+        parse_to: attributes.application
+        if: 'body matches "^\\s*\\{.*\\}\\s*$"'
+        on_error: send
+      - type: severity_parser
+        id: application-severity
+        parse_from: attributes.application.level
+        overwrite_text: true
+        if: 'attributes.application != nil && attributes.application.level != nil'
+        on_error: send
+      - type: severity_parser
+        id: application-severity-alias
+        parse_from: attributes.application.severity
+        overwrite_text: true
+        if: 'attributes.application != nil && attributes.application.level == nil && attributes.application.severity != nil'
+        on_error: send
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 160
+    spike_limit_mib: 40
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: self-hosted
+        action: upsert
+      - key: service.name
+        value: stealth-host
+        action: insert
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 1024
+
+exporters:
+  otlp:
+    endpoint: otel-collector:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 256
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    logs:
+      receivers: [file_log/docker]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]

@@ -29,7 +29,7 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init otel-collector telemetry-docker-proxy telemetry-docker api worker migrate console proxy >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -111,11 +111,11 @@ print_telemetry_diagnostic_query() {
 print_collector_export_diagnostics() {
 	local output
 	output="$(
-		"${compose[@]}" logs --no-log-prefix --tail=160 otel-collector 2>&1 |
+		"${compose[@]}" logs --no-log-prefix --tail=160 otel-collector telemetry-host telemetry-docker-logs telemetry-docker 2>&1 |
 			grep -Ei 'error|warn|fail|retry|queue|export|metric' |
 			tail -80 || true
 	)"
-	print_bounded_diagnostic "Collector exporter warnings/errors (filtered, last 80 lines)" "$output"
+	print_bounded_diagnostic "Collector exporter warnings/errors (all Collector services, filtered, last 80 lines)" "$output"
 }
 
 print_collector_self_telemetry() {
@@ -207,6 +207,94 @@ start_docker_filelog_smoke() {
 		sleep "$3"
 	' sh "$marker" "${SMOKE_FILELOG_DISCOVERY_DELAY_SECONDS:-5}" "${SMOKE_FILELOG_HOLD_SECONDS:-180}" >/dev/null 2>&1 &
 	filelog_smoke_pid=$!
+}
+
+verify_telemetry_runtime_boundaries() {
+	local service container mounts caps
+	for service in otel-collector telemetry-host telemetry-docker-logs telemetry-docker telemetry-docker-proxy; do
+		container="$("${compose[@]}" ps -q "$service")"
+		if [ -z "$container" ]; then
+			printf 'missing telemetry container: %s\n' "$service" >&2
+			return 1
+		fi
+		mounts="$(docker inspect --format '{{range .Mounts}}{{printf "%s->%s " .Source .Destination}}{{end}}' "$container")"
+		caps="$(docker inspect --format '{{json .HostConfig.CapAdd}}' "$container")"
+		case "$service" in
+			otel-collector)
+				case "$mounts" in
+					*'->/hostfs'*|*'/var/lib/docker/containers->/hostfs/var/lib/docker/containers'*|*'/var/run/docker.sock->'*)
+						printf 'main Collector has an unexpected host mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+				esac
+				case "$caps" in
+					*DAC_READ_SEARCH*)
+						printf 'main Collector has DAC_READ_SEARCH: %s\n' "$caps" >&2
+						return 1
+					;;
+				 esac
+				;;
+			telemetry-host)
+				case "$mounts" in
+					*'/->/hostfs '*) ;;
+					*)
+						printf 'host metrics Collector has an unexpected mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+				esac
+				case "$caps" in
+					*DAC_READ_SEARCH*)
+						printf 'host metrics Collector has DAC_READ_SEARCH: %s\n' "$caps" >&2
+						return 1
+					;;
+					esac
+				;;
+			telemetry-docker-logs)
+				case "$mounts" in
+					*'/var/lib/docker/containers->/hostfs/var/lib/docker/containers'*) ;;
+					*)
+						printf 'Docker log Collector is missing its narrow host mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+				 esac
+				case "$mounts" in
+					*'/->/hostfs '*)
+						printf 'Docker log Collector has an overly broad host-root mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+					*'/var/run/docker.sock->'*)
+						printf 'Docker log Collector has an overly broad mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+				esac
+				case "$caps" in
+					*DAC_READ_SEARCH*) ;;
+					*)
+						printf 'Docker log Collector lacks DAC_READ_SEARCH: %s\n' "$caps" >&2
+						return 1
+					;;
+				 esac
+				;;
+			telemetry-docker)
+				case "$mounts" in
+					*'/var/run/docker.sock->'*)
+						printf 'Docker metrics Collector has a Docker socket: %s\n' "$mounts" >&2
+						return 1
+					;;
+				 esac
+				;;
+			telemetry-docker-proxy)
+				case "$mounts" in
+					*'/var/run/docker.sock->/var/run/docker.sock'*) ;;
+					*)
+						printf 'Docker proxy is missing its socket mount: %s\n' "$mounts" >&2
+						return 1
+					;;
+				 esac
+				;;
+		esac
+	done
+	printf 'Telemetry runtime privilege boundaries passed\n'
 }
 
 stop_docker_filelog_smoke() {
@@ -309,6 +397,9 @@ wait_for_healthy clickhouse
 seal_bootstrap_for_smoke
 "${compose[@]}" up -d otel-collector telemetry-docker-proxy telemetry-docker
 wait_for_healthy otel-collector
+"${compose[@]}" up -d telemetry-host telemetry-docker-logs
+wait_for_healthy telemetry-host
+wait_for_healthy telemetry-docker-logs
 wait_for_healthy telemetry-docker-proxy
 wait_for_healthy telemetry-docker
 "${compose[@]}" up -d api worker console proxy
@@ -316,6 +407,7 @@ wait_for_healthy api
 wait_for_healthy worker
 wait_for_healthy console
 wait_for_healthy proxy
+verify_telemetry_runtime_boundaries
 
 api_endpoint="$("${compose[@]}" port api 8080 | head -n 1)"
 console_endpoint="$("${compose[@]}" port console 3000 | head -n 1)"
@@ -436,6 +528,10 @@ done
 # Docker healthcheck, which the Compose stack provides for its core services.
 wait_for_telemetry_rows "container.state.status" "SELECT count() FROM (SELECT MetricName, Attributes FROM otel_metrics_gauge WHERE TimeUnix >= now() - INTERVAL 10 MINUTE UNION ALL SELECT MetricName, Attributes FROM otel_metrics_sum WHERE TimeUnix >= now() - INTERVAL 10 MINUTE) WHERE MetricName = 'container.state.status' AND Attributes['container.state.status'] != ''"
 wait_for_telemetry_rows "container.state.health.status" "SELECT count() FROM (SELECT MetricName, Attributes, ResourceAttributes FROM otel_metrics_gauge WHERE TimeUnix >= now() - INTERVAL 10 MINUTE UNION ALL SELECT MetricName, Attributes, ResourceAttributes FROM otel_metrics_sum WHERE TimeUnix >= now() - INTERVAL 10 MINUTE) WHERE MetricName = 'container.state.health.status' AND mapContains(ResourceAttributes, 'container.id') AND Attributes['container.state.health.state'] != ''"
+
+# hostmetrics' CPU scraper emits the pinned system.cpu.time sum metric. This
+# proves the isolated host collector reaches ClickHouse through main OTLP.
+wait_for_telemetry_rows "host metrics" "SELECT count() FROM otel_metrics_sum WHERE TimeUnix >= now() - INTERVAL 10 MINUTE AND MetricName = 'system.cpu.time'"
 
 verify_collector_storage
 

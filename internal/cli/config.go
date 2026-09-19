@@ -118,7 +118,7 @@ func configCheckDetail(path string, private bool) string {
 
 func validLogService(service string) bool {
 	switch service {
-	case "api", "worker", "console", "proxy", "postgres", "redis", "clickhouse", "otel-collector", "telemetry-docker-proxy", "telemetry-docker", "migrate", "setup", "setup-console", "setup-proxy", "cloudflared":
+	case "api", "worker", "console", "proxy", "postgres", "redis", "clickhouse", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "migrate", "setup", "setup-console", "setup-proxy", "cloudflared":
 		return true
 	default:
 		return false

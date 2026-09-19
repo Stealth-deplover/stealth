@@ -61,6 +61,10 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		layout.ComposeFile:      "services:\n",
 		layout.SetupComposeFile: "services:\n",
 		layout.ProxyFile:        "server {\n}\n",
+		filepath.Join(layout.TelemetryDir, "otel-collector.yaml"): "receivers:\n",
+		filepath.Join(layout.TelemetryDir, "host-metrics.yaml"):   "hostmetrics:\n",
+		filepath.Join(layout.TelemetryDir, "docker-logs.yaml"):    "file_log/docker:\n",
+		filepath.Join(layout.TelemetryDir, "docker-stats.yaml"):   "docker_stats:\n",
 	} {
 		if err := installengine.WriteAtomic(path, []byte(contents), 0o644); err != nil {
 			t.Fatal(err)

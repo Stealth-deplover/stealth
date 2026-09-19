@@ -2,6 +2,10 @@
 # telemetry-docker-proxy, whose allowlist contains only the read endpoints
 # required by docker_stats. It has no OTLP receiver and exports only
 # receiver-produced metrics to the main collector.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 receivers:
   docker_stats:
     endpoint: http://telemetry-docker-proxy:2375
@@ -59,6 +63,7 @@ exporters:
       max_elapsed_time: 0s
 
 service:
+  extensions: [health_check]
   pipelines:
     metrics:
       receivers: [docker_stats]

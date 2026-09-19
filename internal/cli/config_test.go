@@ -79,6 +79,19 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 			_, _ = writer.Write([]byte("services:\n  api:\n    image: test\n"))
 			return
 		}
+		if strings.Contains(request.URL.Path, "/telemetry/") {
+			marker := "receivers:\n"
+			switch {
+			case strings.HasSuffix(request.URL.Path, "host-metrics.yaml"):
+				marker = "hostmetrics:\n"
+			case strings.HasSuffix(request.URL.Path, "docker-logs.yaml"):
+				marker = "file_log/docker:\n"
+			case strings.HasSuffix(request.URL.Path, "docker-stats.yaml"):
+				marker = "docker_stats:\n"
+			}
+			_, _ = writer.Write([]byte(marker))
+			return
+		}
 		_, _ = writer.Write([]byte("server {\n}"))
 	}))
 	t.Cleanup(server.Close)

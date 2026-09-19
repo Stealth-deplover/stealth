@@ -140,26 +140,13 @@ services:
     volumes:
       - ./telemetry/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
       - otelcol_state:/var/lib/otelcol
-      - /:/hostfs:ro
-      - /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro
-      # The host root is needed by hostmetrics, but the Docker socket is
-      # explicitly masked so this collector cannot become a second Docker API
-      # client. Container statistics stay in telemetry-docker below.
-      - /dev/null:/hostfs/var/run/docker.sock:ro
-    # Docker's json-file directories are root:root 0710 and the files are
-    # root:root 0640 on Linux. The pinned Collector binary carries only the
-    # DAC read/search file capability, so the direct file_log receiver can
-    # enumerate and read the already read-only mount while the process remains
-    # non-root and the Docker socket stays masked.
     user: "10001:10001"
     read_only: true
     tmpfs:
       - /tmp
     cap_drop: [ALL]
-    cap_add:
-      - DAC_READ_SEARCH
-    # no-new-privileges would clear the explicitly granted read/search
-    # capability when the scratch process starts as UID 10001.
+    security_opt:
+      - no-new-privileges:true
     mem_limit: "${OTEL_COLLECTOR_MEMORY_LIMIT:-512m}"
     depends_on:
       otelcol-state-init:
@@ -178,7 +165,63 @@ services:
     networks:
       stealth:
       telemetry_store:
-      telemetry_docker:
+
+  telemetry-host:
+    image: "${OTEL_HOST_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./telemetry/host-metrics.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - /:/hostfs:ro
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: "${OTEL_HOST_COLLECTOR_MEMORY_LIMIT:-256m}"
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks: [telemetry_store]
+
+  telemetry-docker-logs:
+    image: "${OTEL_DOCKER_LOGS_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-docker-logs:v0.2.2}"
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./telemetry/docker-logs.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otel_docker_logs_state:/var/lib/otelcol
+      - /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add:
+      - DAC_READ_SEARCH
+    # no-new-privileges would prevent the dedicated binary's file capability
+    # from becoming effective for the non-root process.
+    mem_limit: "${OTEL_DOCKER_LOGS_COLLECTOR_MEMORY_LIMIT:-256m}"
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+      telemetry-docker-logs-state-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks: [telemetry_store]
 
   otelcol-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
@@ -188,6 +231,15 @@ services:
     network_mode: none
     volumes:
       - otelcol_state:/var/lib/otelcol
+
+  telemetry-docker-logs-state-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    command: ["sh", "-ec", "mkdir -p /var/lib/otelcol/file_storage && chown -R 10001:10001 /var/lib/otelcol"]
+    user: "0:0"
+    network_mode: none
+    volumes:
+      - otel_docker_logs_state:/var/lib/otelcol
 
   telemetry-docker-proxy:
     image: "${STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE:?set STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE to a versioned image}"
@@ -213,7 +265,7 @@ services:
     networks: [telemetry_docker]
 
   telemetry-docker:
-    image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.161.0}"
+    image: "${OTEL_DOCKER_COLLECTOR_IMAGE:-ghcr.io/stealth-deplover/stealth-otel-collector:v0.2.2}"
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
@@ -231,12 +283,14 @@ services:
       telemetry-docker-proxy:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml"]
+      test: ["CMD", "/usr/local/bin/telemetry-collector-healthcheck", "http://127.0.0.1:13133/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks: [telemetry_docker]
+    networks:
+      telemetry_docker:
+      telemetry_store:
 
   migrate:
     image: "${STEALTH_MIGRATE_IMAGE:?set STEALTH_MIGRATE_IMAGE to a versioned image}"
@@ -375,6 +429,8 @@ volumes:
     name: "${CLICKHOUSE_VOLUME_NAME:-stealth_clickhouse_data}"
   otelcol_state:
     name: "${OTELCOL_VOLUME_NAME:-stealth_otelcol_state}"
+  otel_docker_logs_state:
+    name: "${OTEL_DOCKER_LOGS_VOLUME_NAME:-stealth_otel_docker_logs_state}"
 
 networks:
   stealth:

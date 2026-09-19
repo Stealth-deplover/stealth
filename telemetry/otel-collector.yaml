@@ -17,18 +17,6 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
-  hostmetrics:
-    collection_interval: 15s
-    root_path: /hostfs
-    scrapers:
-      cpu: {}
-      disk: {}
-      filesystem: {}
-      load: {}
-      memory: {}
-      network: {}
-      paging: {}
-
   prometheus:
     config:
       scrape_configs:
@@ -63,60 +51,6 @@ receivers:
     endpoint: redis:6379
     password: ${env:REDIS_PASSWORD}
     collection_interval: 15s
-
-  file_log/docker:
-    include:
-      - /hostfs/var/lib/docker/containers/*/*-json.log
-    start_at: end
-    include_file_path: true
-    storage: file_storage
-    operators:
-      - type: json_parser
-        id: docker-json
-        parse_from: body
-        parse_to: attributes
-        on_error: send
-      - type: move
-        id: move-message
-        from: attributes.log
-        to: body
-        on_error: send
-      - type: time_parser
-        id: docker-time
-        parse_from: attributes.time
-        layout_type: gotime
-        # Docker emits RFC3339Nano timestamps and may trim trailing zeros.
-        # Go's 9 placeholders accept zero through nine fractional digits.
-        layout: '2006-01-02T15:04:05.999999999Z07:00'
-        if: 'attributes.time != nil'
-        on_error: send
-      - type: severity_parser
-        id: stream-severity
-        parse_from: attributes.stream
-        mapping:
-          info: stdout
-          warn: stderr
-        overwrite_text: true
-        if: 'attributes.stream != nil'
-        on_error: send
-      - type: json_parser
-        id: application-json
-        parse_from: body
-        parse_to: attributes.application
-        if: 'body matches "^\\s*\\{.*\\}\\s*$"'
-        on_error: send
-      - type: severity_parser
-        id: application-severity
-        parse_from: attributes.application.level
-        overwrite_text: true
-        if: 'attributes.application != nil && attributes.application.level != nil'
-        on_error: send
-      - type: severity_parser
-        id: application-severity-alias
-        parse_from: attributes.application.severity
-        overwrite_text: true
-        if: 'attributes.application != nil && attributes.application.level == nil && attributes.application.severity != nil'
-        on_error: send
 
 processors:
   memory_limiter:
@@ -191,11 +125,11 @@ service:
   extensions: [health_check, file_storage]
   pipelines:
     logs:
-      receivers: [otlp, file_log/docker]
+      receivers: [otlp]
       processors: [memory_limiter, resource, batch]
       exporters: [clickhouse]
     metrics:
-      receivers: [otlp, hostmetrics, prometheus, postgresql, redis]
+      receivers: [otlp, prometheus, postgresql, redis]
       processors: [memory_limiter, resource, batch]
       exporters: [clickhouse]
     traces:

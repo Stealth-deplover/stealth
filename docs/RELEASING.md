@@ -51,8 +51,10 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
 - [ ] Verify `checksums.txt` contains a valid SHA-256 entry for both CLI
   archives and that the archive contents contain an executable `stealth` file.
 - [ ] Verify GHCR contains versioned API, worker, migration, Console,
-      `stealth-otel-collector`, and `stealth-telemetry-docker-proxy` images for
-      the release.
+      `stealth-otel-collector`, `stealth-otel-docker-logs`, and
+      `stealth-telemetry-docker-proxy` images for the release. The host,
+      Docker-log, and Docker-metrics services use the two Collector images
+      according to their documented privilege boundaries.
 
 ## Clean-host validation
 

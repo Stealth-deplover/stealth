@@ -1,0 +1,58 @@
+# Host metrics run in a capability-free collector. The only host visibility
+# this process receives is the read-only root mount needed by hostmetrics.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  hostmetrics:
+    collection_interval: 15s
+    root_path: /hostfs
+    scrapers:
+      cpu: {}
+      disk: {}
+      filesystem: {}
+      load: {}
+      memory: {}
+      network: {}
+      paging: {}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 160
+    spike_limit_mib: 40
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: self-hosted
+        action: upsert
+      - key: service.name
+        value: stealth-host
+        action: insert
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 1024
+
+exporters:
+  otlp:
+    endpoint: otel-collector:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 256
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]
