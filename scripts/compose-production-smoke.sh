@@ -154,9 +154,11 @@ start_docker_filelog_smoke() {
 	# process as the container's main process so file_log/docker observes the
 	# exact log driver path used in production.
 	"${compose[@]}" run --rm --no-deps --entrypoint sh api -ec '
-		printf "%s\n" "$1" >&2
+		printf "compose filelog probe ready\n" >&2
 		sleep "$2"
-	' sh "$marker" "${SMOKE_FILELOG_HOLD_SECONDS:-180}" >/dev/null 2>&1 &
+		printf "%s\n" "$1" >&2
+		sleep "$3"
+	' sh "$marker" "${SMOKE_FILELOG_DISCOVERY_DELAY_SECONDS:-5}" "${SMOKE_FILELOG_HOLD_SECONDS:-180}" >/dev/null 2>&1 &
 	filelog_smoke_pid=$!
 }
 
