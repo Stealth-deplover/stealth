@@ -272,13 +272,15 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 	if !safeDirectory(layout.Root) {
 		return nil
 	}
+	consoleName := filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile)))
+	telemetryName := filepath.Base(layout.TelemetryDir)
 	allowed := map[string]bool{
-		filepath.Base(layout.EnvFile):                               true,
-		filepath.Base(layout.ComposeFile):                           true,
-		filepath.Base(layout.TelemetryDir):                          true,
-		filepath.Base(layout.VersionFile):                           true,
-		filepath.Base(layout.StateDir):                              true,
-		filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile))): true,
+		filepath.Base(layout.EnvFile):     true,
+		filepath.Base(layout.ComposeFile): true,
+		telemetryName:                     true,
+		filepath.Base(layout.VersionFile): true,
+		filepath.Base(layout.StateDir):    true,
+		consoleName:                       true,
 	}
 	var unknown []string
 	entries, err := os.ReadDir(layout.Root)
@@ -291,36 +293,35 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 			unknown = append(unknown, filepath.Join(layout.Root, name))
 			continue
 		}
-		if name != filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile))) {
-			continue
-		}
-		consoleDir := filepath.Join(layout.Root, name)
-		if !entry.IsDir() {
-			unknown = append(unknown, consoleDir)
-			continue
-		}
-		deployDir := filepath.Dir(layout.ProxyFile)
-		consoleEntries, consoleErr := os.ReadDir(consoleDir)
-		if consoleErr != nil {
-			unknown = append(unknown, consoleDir+" (cannot inspect: "+consoleErr.Error()+")")
-			continue
-		}
-		for _, consoleEntry := range consoleEntries {
-			if consoleEntry.Name() != filepath.Base(deployDir) {
-				unknown = append(unknown, filepath.Join(consoleDir, consoleEntry.Name()))
+		switch name {
+		case consoleName:
+			consoleDir := filepath.Join(layout.Root, name)
+			if !entry.IsDir() {
+				unknown = append(unknown, consoleDir)
+				continue
 			}
-		}
-		deployEntries, deployErr := os.ReadDir(deployDir)
-		if deployErr != nil && !errors.Is(deployErr, os.ErrNotExist) {
-			unknown = append(unknown, deployDir+" (cannot inspect: "+deployErr.Error()+")")
-			continue
-		}
-		for _, deployEntry := range deployEntries {
-			if deployEntry.Name() != filepath.Base(layout.ProxyFile) {
-				unknown = append(unknown, filepath.Join(deployDir, deployEntry.Name()))
+			deployDir := filepath.Dir(layout.ProxyFile)
+			consoleEntries, consoleErr := os.ReadDir(consoleDir)
+			if consoleErr != nil {
+				unknown = append(unknown, consoleDir+" (cannot inspect: "+consoleErr.Error()+")")
+				continue
 			}
-		}
-		if name == filepath.Base(layout.TelemetryDir) {
+			for _, consoleEntry := range consoleEntries {
+				if consoleEntry.Name() != filepath.Base(deployDir) {
+					unknown = append(unknown, filepath.Join(consoleDir, consoleEntry.Name()))
+				}
+			}
+			deployEntries, deployErr := os.ReadDir(deployDir)
+			if deployErr != nil && !errors.Is(deployErr, os.ErrNotExist) {
+				unknown = append(unknown, deployDir+" (cannot inspect: "+deployErr.Error()+")")
+				continue
+			}
+			for _, deployEntry := range deployEntries {
+				if deployEntry.Name() != filepath.Base(layout.ProxyFile) {
+					unknown = append(unknown, filepath.Join(deployDir, deployEntry.Name()))
+				}
+			}
+		case telemetryName:
 			telemetryDir := filepath.Join(layout.Root, name)
 			if !entry.IsDir() {
 				unknown = append(unknown, telemetryDir)
