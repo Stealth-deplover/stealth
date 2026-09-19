@@ -40,20 +40,21 @@ type uninstallVolume struct {
 }
 
 type uninstallPlan struct {
-	layout          InstallLayout
-	mode            uninstallMode
-	config          map[string]string
-	configPresent   bool
-	configErr       error
-	composePresent  bool
-	proxyPresent    bool
-	versionPresent  bool
-	statePresent    bool
-	partial         bool
-	unsafeReason    string
-	unknownEntries  []string
-	volumes         []uninstallVolume
-	externalStorage bool
+	layout           InstallLayout
+	mode             uninstallMode
+	config           map[string]string
+	configPresent    bool
+	configErr        error
+	composePresent   bool
+	proxyPresent     bool
+	telemetryPresent bool
+	versionPresent   bool
+	statePresent     bool
+	partial          bool
+	unsafeReason     string
+	unknownEntries   []string
+	volumes          []uninstallVolume
+	externalStorage  bool
 }
 
 func (a *App) runUninstall(args []string) int {
@@ -160,13 +161,14 @@ func parseUninstallOptions(args []string, errOut io.Writer) (uninstallOptions, e
 
 func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan {
 	plan := uninstallPlan{
-		layout:         layout,
-		mode:           mode,
-		config:         make(map[string]string),
-		composePresent: safeRegularFile(layout.ComposeFile),
-		proxyPresent:   safeRegularFile(layout.ProxyFile),
-		versionPresent: safeRegularFile(layout.VersionFile),
-		statePresent:   safeDirectory(layout.StateDir),
+		layout:           layout,
+		mode:             mode,
+		config:           make(map[string]string),
+		composePresent:   safeRegularFile(layout.ComposeFile),
+		proxyPresent:     safeRegularFile(layout.ProxyFile),
+		telemetryPresent: safeDirectory(layout.TelemetryDir),
+		versionPresent:   safeRegularFile(layout.VersionFile),
+		statePresent:     safeDirectory(layout.StateDir),
 	}
 
 	if pathPresent(layout.Root) && !safeDirectory(layout.Root) {
@@ -177,6 +179,7 @@ func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan 
 		layout.EnvFile,
 		layout.ComposeFile,
 		layout.ProxyFile,
+		layout.TelemetryDir,
 		layout.VersionFile,
 		layout.StateDir,
 		filepath.Dir(layout.ProxyFile),
@@ -269,12 +272,15 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 	if !safeDirectory(layout.Root) {
 		return nil
 	}
+	consoleName := filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile)))
+	telemetryName := filepath.Base(layout.TelemetryDir)
 	allowed := map[string]bool{
-		filepath.Base(layout.EnvFile):                               true,
-		filepath.Base(layout.ComposeFile):                           true,
-		filepath.Base(layout.VersionFile):                           true,
-		filepath.Base(layout.StateDir):                              true,
-		filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile))): true,
+		filepath.Base(layout.EnvFile):     true,
+		filepath.Base(layout.ComposeFile): true,
+		telemetryName:                     true,
+		filepath.Base(layout.VersionFile): true,
+		filepath.Base(layout.StateDir):    true,
+		consoleName:                       true,
 	}
 	var unknown []string
 	entries, err := os.ReadDir(layout.Root)
@@ -287,33 +293,51 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 			unknown = append(unknown, filepath.Join(layout.Root, name))
 			continue
 		}
-		if name != filepath.Base(filepath.Dir(filepath.Dir(layout.ProxyFile))) {
-			continue
-		}
-		consoleDir := filepath.Join(layout.Root, name)
-		if !entry.IsDir() {
-			unknown = append(unknown, consoleDir)
-			continue
-		}
-		deployDir := filepath.Dir(layout.ProxyFile)
-		consoleEntries, consoleErr := os.ReadDir(consoleDir)
-		if consoleErr != nil {
-			unknown = append(unknown, consoleDir+" (cannot inspect: "+consoleErr.Error()+")")
-			continue
-		}
-		for _, consoleEntry := range consoleEntries {
-			if consoleEntry.Name() != filepath.Base(deployDir) {
-				unknown = append(unknown, filepath.Join(consoleDir, consoleEntry.Name()))
+		switch name {
+		case consoleName:
+			consoleDir := filepath.Join(layout.Root, name)
+			if !entry.IsDir() {
+				unknown = append(unknown, consoleDir)
+				continue
 			}
-		}
-		deployEntries, deployErr := os.ReadDir(deployDir)
-		if deployErr != nil && !errors.Is(deployErr, os.ErrNotExist) {
-			unknown = append(unknown, deployDir+" (cannot inspect: "+deployErr.Error()+")")
-			continue
-		}
-		for _, deployEntry := range deployEntries {
-			if deployEntry.Name() != filepath.Base(layout.ProxyFile) {
-				unknown = append(unknown, filepath.Join(deployDir, deployEntry.Name()))
+			deployDir := filepath.Dir(layout.ProxyFile)
+			consoleEntries, consoleErr := os.ReadDir(consoleDir)
+			if consoleErr != nil {
+				unknown = append(unknown, consoleDir+" (cannot inspect: "+consoleErr.Error()+")")
+				continue
+			}
+			for _, consoleEntry := range consoleEntries {
+				if consoleEntry.Name() != filepath.Base(deployDir) {
+					unknown = append(unknown, filepath.Join(consoleDir, consoleEntry.Name()))
+				}
+			}
+			deployEntries, deployErr := os.ReadDir(deployDir)
+			if deployErr != nil && !errors.Is(deployErr, os.ErrNotExist) {
+				unknown = append(unknown, deployDir+" (cannot inspect: "+deployErr.Error()+")")
+				continue
+			}
+			for _, deployEntry := range deployEntries {
+				if deployEntry.Name() != filepath.Base(layout.ProxyFile) {
+					unknown = append(unknown, filepath.Join(deployDir, deployEntry.Name()))
+				}
+			}
+		case telemetryName:
+			telemetryDir := filepath.Join(layout.Root, name)
+			if !entry.IsDir() {
+				unknown = append(unknown, telemetryDir)
+				continue
+			}
+			telemetryEntries, telemetryErr := os.ReadDir(telemetryDir)
+			if telemetryErr != nil {
+				unknown = append(unknown, telemetryDir+" (cannot inspect: "+telemetryErr.Error()+")")
+				continue
+			}
+			for _, telemetryEntry := range telemetryEntries {
+				switch telemetryEntry.Name() {
+				case "otel-collector.yaml", "host-metrics.yaml", "docker-logs.yaml", "docker-stats.yaml":
+				default:
+					unknown = append(unknown, filepath.Join(telemetryDir, telemetryEntry.Name()))
+				}
 			}
 		}
 	}
@@ -395,6 +419,7 @@ type uninstallAsset struct {
 func (p uninstallPlan) localAssets(includeConfig bool) []uninstallAsset {
 	assets := []uninstallAsset{
 		{label: "compose.production.yaml", path: p.layout.ComposeFile, present: p.composePresent},
+		{label: "telemetry/", path: p.layout.TelemetryDir, present: p.telemetryPresent},
 		{label: "console/deploy/nginx.conf", path: p.layout.ProxyFile, present: p.proxyPresent},
 		{label: "VERSION", path: p.layout.VersionFile, present: p.versionPresent},
 		{label: "state/", path: p.layout.StateDir, present: p.statePresent},

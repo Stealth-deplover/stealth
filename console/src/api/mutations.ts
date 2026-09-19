@@ -10,3 +10,4 @@ export * from "./mutations/webhooks";
 export * from "./mutations/api-keys";
 export * from "./mutations/agents";
 export * from "./mutations/settings";
+export * from "./mutations/admin";

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/adminnotification"
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
@@ -21,7 +23,9 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
+	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/messagingrunner"
+	"github.com/Stealth-deplover/stealth/internal/monitoring"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/realtime"
 	"github.com/Stealth-deplover/stealth/internal/realtimepublisher"
@@ -29,6 +33,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/runtime"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/storage"
+	"github.com/Stealth-deplover/stealth/internal/telemetry"
 	"github.com/Stealth-deplover/stealth/internal/webhookrunner"
 	"github.com/Stealth-deplover/stealth/internal/workersupervisor"
 )
@@ -98,7 +103,23 @@ func main() {
 		logger.Error("function secret configuration error", "error", err)
 		os.Exit(1)
 	}
-	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher})
+	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher, AdminCipher: cipher})
+	telemetryStore, telemetryErr := telemetry.New(telemetry.Config{
+		Address:          cfg.TelemetryClickHouseAddr,
+		Database:         cfg.TelemetryClickHouseDatabase,
+		Username:         cfg.TelemetryClickHouseUser,
+		Password:         cfg.TelemetryClickHousePassword,
+		MaxQueryDuration: cfg.TelemetryMaxQueryDuration,
+		MaxQueryRange:    cfg.TelemetryMaxQueryRange,
+		MaxQueryRows:     cfg.TelemetryMaxQueryRows,
+		Retention:        cfg.TelemetryRetention,
+	})
+	if telemetryErr != nil && !errors.Is(telemetryErr, telemetry.ErrDisabled) {
+		logger.Warn("telemetry alert store configuration error", "error", telemetryErr)
+	}
+	if telemetryStore != nil {
+		defer telemetryStore.Close()
+	}
 	var userStorage artifactcleanup.Cleaner
 	if cfg.StorageDriver == "s3" {
 		userStorage, err = storage.NewS3(storage.S3Options{
@@ -138,6 +159,28 @@ func main() {
 	}
 	realtimePublisher.PollInterval = cfg.FunctionsRunnerPoll
 	realtimePublisher.LeaseAge = cfg.FunctionsRunnerLeaseAge
+	monitorWorker, err := monitoring.NewWorker(repo, cipher, cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("admin monitoring worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	if telemetryStore != nil {
+		telemetryAlerts, alertErr := monitoring.NewTelemetryAlertEvaluator(repo, telemetryStore, logger)
+		if alertErr != nil {
+			logger.Warn("telemetry alert evaluator is unavailable", "error", alertErr)
+		} else {
+			monitorWorker.TelemetryAlerts = telemetryAlerts
+		}
+	}
+	monitorWorker.PollInterval = cfg.FunctionsRunnerPoll
+	monitorWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
+	notificationWorker, err := adminnotification.New(repo, cipher, mailer.NewFromConfig(cfg, logger), cfg.FunctionsWorkerID, logger)
+	if err != nil {
+		logger.Error("admin notification worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	notificationWorker.PollInterval = cfg.FunctionsRunnerPoll
+	notificationWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	webhookWorker, err := webhookrunner.New(repo, cipher, cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("webhook worker configuration error", "error", err)
@@ -176,6 +219,8 @@ func main() {
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
+			{Name: "admin monitoring worker", Runner: monitorWorker},
+			{Name: "admin notification worker", Runner: notificationWorker},
 		}
 		if agentWorker != nil {
 			registrations = append(registrations, workersupervisor.Registration{Name: "Agent worker", Runner: agentWorker})
@@ -232,6 +277,8 @@ func main() {
 		{Name: "realtime publisher", Runner: realtimePublisher},
 		{Name: "webhook worker", Runner: webhookWorker},
 		{Name: "messaging worker", Runner: messagingWorker},
+		{Name: "admin monitoring worker", Runner: monitorWorker},
+		{Name: "admin notification worker", Runner: notificationWorker},
 		{Name: "worker metrics", Runner: workersupervisor.RunnerFunc(func(ctx context.Context) error {
 			return serveWorkerMetrics(ctx, metricsServer, logger)
 		})},

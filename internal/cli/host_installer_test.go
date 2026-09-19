@@ -61,6 +61,10 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		layout.ComposeFile:      "services:\n",
 		layout.SetupComposeFile: "services:\n",
 		layout.ProxyFile:        "server {\n}\n",
+		filepath.Join(layout.TelemetryDir, "otel-collector.yaml"): "receivers:\n",
+		filepath.Join(layout.TelemetryDir, "host-metrics.yaml"):   "hostmetrics:\n",
+		filepath.Join(layout.TelemetryDir, "docker-logs.yaml"):    "file_log/docker:\n",
+		filepath.Join(layout.TelemetryDir, "docker-stats.yaml"):   "docker_stats:\n",
 	} {
 		if err := installengine.WriteAtomic(path, []byte(contents), 0o644); err != nil {
 			t.Fatal(err)
@@ -114,8 +118,11 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 6 {
-		t.Fatalf("host Docker calls = %#v, want production steps plus setup cleanup", runner.calls)
+	if len(runner.calls) != 8 {
+		t.Fatalf("host Docker calls = %#v, want both Collector state inits, production steps, and setup cleanup", runner.calls)
+	}
+	if got := runner.command(3).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
+		t.Fatalf("Docker log Collector state init command = %#v", got)
 	}
 	if got := runner.command(len(runner.calls) - 1).args; !equalStrings(got, []string{"compose", "--env-file", fixture.layout.EnvFile, "-f", fixture.layout.SetupComposeFile, "rm", "-sf", "setup", "setup-console", "setup-proxy"}) {
 		t.Fatalf("setup cleanup command = %#v", got)

@@ -104,6 +104,9 @@ flowchart TD
 The API owns authentication, tenant boundaries, and the REST contract. The
 Console has no second business-logic backend. The worker owns asynchronous
 builds, execution, delivery, realtime publication, and optional Agent runs.
+The private OTel Collector and ClickHouse services form the instance-owner
+telemetry boundary; the browser reaches telemetry only through authenticated
+instance-admin API routes. See [Telemetry architecture](docs/telemetry-architecture.md).
 
 ## Documentation
 
@@ -137,7 +140,7 @@ managed-service availability.
 | Storage                          | Beta         | Buckets/files, quotas, local or S3-compatible drivers                                                          |
 | Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |
 | Webhooks                         | Beta         | Signed delivery, transactional outbox, retries, SSRF protections                                               |
-| Observability                    | Beta         | Health/readiness, metrics, traces, realtime events, audit records                                              |
+| Observability                    | Beta         | Health/readiness, protected Prometheus metrics, OTel traces/logs/metrics pipeline, bounded owner query surface, realtime events, audit records |
 | Self-host installer              | Experimental | Interactive CLI and release artifacts are published; full clean-host validation remains release-gated, and upgrade remains a documented operator runbook |
 | Agents                           | Experimental | Configuration, catalog, durable runs, logs, and cancellation; provider execution remains queue-only by default |
 | Production hardening             | Beta         | Leases, bounded retries, rate limits, proxy trust, smoke checks; HA and exactly-once execution are not claimed |

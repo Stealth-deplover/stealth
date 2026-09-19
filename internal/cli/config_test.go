@@ -60,6 +60,9 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 	if values["GITHUB_APP_CLIENT_ID"] != testGitHubAppClientID {
 		t.Fatalf("GITHUB_APP_CLIENT_ID = %q, want installer value", values["GITHUB_APP_CLIENT_ID"])
 	}
+	if values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] != "stealth_telemetry_ingest" {
+		t.Fatalf("STEALTH_TELEMETRY_INGEST_NETWORK_NAME = %q, want private ingest network", values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"])
+	}
 	key, err := base64.StdEncoding.DecodeString(values["FUNCTIONS_SECRET_KEY"])
 	if err != nil || len(key) != 32 {
 		t.Fatalf("FUNCTIONS_SECRET_KEY is not a 32-byte base64 secret: %v", err)
@@ -77,6 +80,19 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
 			_, _ = writer.Write([]byte("services:\n  api:\n    image: test\n"))
+			return
+		}
+		if strings.Contains(request.URL.Path, "/telemetry/") {
+			marker := "receivers:\n"
+			switch {
+			case strings.HasSuffix(request.URL.Path, "host-metrics.yaml"):
+				marker = "hostmetrics:\n"
+			case strings.HasSuffix(request.URL.Path, "docker-logs.yaml"):
+				marker = "file_log/docker:\n"
+			case strings.HasSuffix(request.URL.Path, "docker-stats.yaml"):
+				marker = "docker_stats:\n"
+			}
+			_, _ = writer.Write([]byte(marker))
 			return
 		}
 		_, _ = writer.Write([]byte("server {\n}"))

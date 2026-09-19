@@ -53,6 +53,477 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return live instance component and telemetry-backend health. Requires an instance owner or instance admin role; organization membership is not sufficient. */
+        get: operations["getAdminOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List durable deployments, executions, Agent runs, artifact cleanup jobs, and database backups through one safe instance-owner projection. */
+        get: operations["listAdminOperations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/audit-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List instance-level audit records. Organization-scoped audit data remains on the organization audit endpoint. */
+        get: operations["listAdminAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query structured logs through a bounded, parameterized server-side query. Raw ClickHouse SQL is not accepted. */
+        get: operations["listAdminTelemetryLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/logs/tail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stream bounded redacted log records over an authenticated server-sent event connection. The server owns the ClickHouse query and closes idle streams after a bounded lifetime. */
+        get: operations["streamAdminTelemetryLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query distributed spans through a bounded, parameterized server-side query. */
+        get: operations["listAdminTelemetryTraces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Query real OTel metric points through a bounded server-side query. */
+        get: operations["listAdminTelemetryMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/log-volume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return bounded time buckets for log volume using the selected filters. */
+        get: operations["listAdminTelemetryLogVolume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return grouped error log occurrences from the bounded telemetry window. */
+        get: operations["listAdminTelemetryErrors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/errors/{fingerprint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Update the owner-managed lifecycle state of a redacted error fingerprint. Occurrences remain in ClickHouse. */
+        patch: operations["updateAdminTelemetryErrorStatus"];
+        trace?: never;
+    };
+    "/v1/admin/telemetry/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return service dependencies derived from real trace peer attributes. */
+        get: operations["listAdminTelemetryServices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/infrastructure/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return bounded host, container, PostgreSQL, Redis, and service metrics collected by the private telemetry pipeline. */
+        get: operations["listAdminInfrastructureMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/telemetry/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List services and signal types observed in the bounded telemetry window. */
+        get: operations["listAdminTelemetrySources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/monitors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List persisted instance monitors. Secrets are never returned. */
+        get: operations["listAdminMonitors"];
+        put?: never;
+        /** @description Create an encrypted instance monitor. Heartbeat tokens are returned once. */
+        post: operations["createAdminMonitor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/monitors/{monitorID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read one monitor and its bounded recent checks. Secrets are never returned. */
+        get: operations["getAdminMonitor"];
+        /** @description Replace an encrypted instance monitor definition. A heartbeat token is rotated and returned once. */
+        put: operations["updateAdminMonitor"];
+        post?: never;
+        /** @description Delete a monitor and its bounded check history. */
+        delete: operations["deleteAdminMonitor"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/monitor-heartbeats/{monitorID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Record a heartbeat with the one-time monitor token. The token is accepted only in the X-Stealth-Heartbeat header and is never logged or returned. */
+        post: operations["recordAdminMonitorHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/status-page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read the owner-published status page. Private status pages return not found. */
+        get: operations["getPublicAdminStatusPage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded instance alert rules. */
+        get: operations["listAdminAlertRules"];
+        put?: never;
+        /** @description Create a constrained alert rule; arbitrary SQL is not accepted. */
+        post: operations["createAdminAlertRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/alerts/{alertRuleID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminAlertRule"];
+        put: operations["updateAdminAlertRule"];
+        post?: never;
+        delete: operations["deleteAdminAlertRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminNotificationChannels"];
+        put?: never;
+        post: operations["createAdminNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/notifications/{channelID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminNotificationChannel"];
+        put: operations["updateAdminNotificationChannel"];
+        post?: never;
+        delete: operations["deleteAdminNotificationChannel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/notifications/{channelID}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Queue a redacted test notification for an enabled, configured channel. The trusted worker performs delivery. */
+        post: operations["testAdminNotificationChannel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminIncidents"];
+        put?: never;
+        post: operations["createAdminIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/incidents/{incidentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminIncident"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateAdminIncident"];
+        trace?: never;
+    };
+    "/v1/admin/incidents/{incidentID}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addAdminIncidentEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/dashboards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminDashboards"];
+        put?: never;
+        post: operations["createAdminDashboard"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/dashboards/{dashboardID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminDashboard"];
+        put: operations["updateAdminDashboard"];
+        post?: never;
+        delete: operations["deleteAdminDashboard"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/status-page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminStatusPage"];
+        put: operations["updateAdminStatusPage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bootstrap/status": {
         parameters: {
             query?: never;
@@ -2513,6 +2984,562 @@ export interface components {
             /** @enum {string} */
             status: StatusStatus;
         };
+        AdminComponentStatus: {
+            name: string;
+            /** @enum {string} */
+            status: AdminComponentStatusStatus;
+        };
+        AdminTelemetryStatus: {
+            /** @enum {string} */
+            status: AdminTelemetryStatusStatus;
+        };
+        AdminOverviewResponse: {
+            /** @enum {string} */
+            instance_status: AdminOverviewResponseInstance_status;
+            /** Format: date-time */
+            checked_at: string;
+            components: components["schemas"]["AdminComponentStatus"][];
+            telemetry: components["schemas"]["AdminTelemetryStatus"];
+            http?: components["schemas"]["AdminHTTPOverview"];
+            operations?: components["schemas"]["AdminOperationSummary"];
+        };
+        AdminHTTPOverview: {
+            request_rate: number;
+            error_rate: number;
+            p50_latency_ms: number;
+            p95_latency_ms: number;
+            p99_latency_ms: number;
+            /** Format: int64 */
+            sample_count: number;
+        };
+        AdminOperationSummary: {
+            /** Format: int64 */
+            active_deployments: number;
+            /** Format: int64 */
+            queued_jobs: number;
+            /** Format: int64 */
+            running_jobs: number;
+            /** Format: int64 */
+            failed_jobs: number;
+        };
+        AdminOperation: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: AdminOperationKind;
+            name: string;
+            /** Format: uuid */
+            project_id?: string | null;
+            project_name?: string | null;
+            status: string;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: int64 */
+            duration_ms: number;
+            error?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminOperationsResponse: {
+            items: components["schemas"]["AdminOperation"][];
+        };
+        AdminAuditEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            organization_id?: string | null;
+            /** Format: uuid */
+            actor_account_id?: string | null;
+            /** Format: email */
+            actor_email?: string | null;
+            action: string;
+            target_type: string;
+            /** Format: uuid */
+            target_id?: string | null;
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminAuditResponse: {
+            items: components["schemas"]["AdminAuditEvent"][];
+            /** Format: uuid */
+            next_cursor?: string;
+        };
+        AdminLog: {
+            /** Format: date-time */
+            timestamp: string;
+            trace_id?: string;
+            span_id?: string;
+            level?: string;
+            service: string;
+            message: string;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminLogsResponse: {
+            items: components["schemas"]["AdminLog"][];
+        };
+        AdminTraceSpan: {
+            /** Format: date-time */
+            timestamp: string;
+            trace_id: string;
+            span_id: string;
+            parent_span_id?: string;
+            name: string;
+            kind: string;
+            service: string;
+            /** Format: int64 */
+            duration_ns: number;
+            status: string;
+            status_message?: string;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminTracesResponse: {
+            items: components["schemas"]["AdminTraceSpan"][];
+        };
+        AdminMetric: {
+            /** Format: date-time */
+            timestamp: string;
+            name: string;
+            service: string;
+            value: number;
+            /** @enum {string} */
+            kind: AdminMetricKind;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminMetricsResponse: {
+            items: components["schemas"]["AdminMetric"][];
+        };
+        AdminLogVolumeBucket: {
+            /** Format: date-time */
+            timestamp: string;
+            /** Format: int64 */
+            count: number;
+        };
+        AdminLogVolumeResponse: {
+            items: components["schemas"]["AdminLogVolumeBucket"][];
+        };
+        AdminErrorGroup: {
+            fingerprint: string;
+            service: string;
+            error_type: string;
+            message: string;
+            /** @enum {string} */
+            status: AdminErrorGroupStatus;
+            /** Format: date-time */
+            first_seen: string;
+            /** Format: date-time */
+            last_seen: string;
+            /** Format: int64 */
+            occurrence_count: number;
+            trace_id?: string;
+        };
+        AdminErrorGroupsResponse: {
+            items: components["schemas"]["AdminErrorGroup"][];
+        };
+        UpdateAdminErrorGroupStatusRequest: {
+            /** @enum {string} */
+            status: UpdateAdminErrorGroupStatusRequestStatus;
+        };
+        AdminErrorGroupStatus: {
+            fingerprint: string;
+            /** @enum {string} */
+            status: AdminErrorGroupStatusStatus;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminServiceMapEdge: {
+            source: string;
+            target: string;
+            /** Format: int64 */
+            request_count: number;
+            /** Format: int64 */
+            error_count: number;
+            error_rate: number;
+            p95_latency_ms: number;
+        };
+        AdminServiceMapResponse: {
+            items: components["schemas"]["AdminServiceMapEdge"][];
+        };
+        AdminInfrastructureMetric: {
+            /** Format: date-time */
+            timestamp: string;
+            /** @enum {string} */
+            scope: AdminInfrastructureMetricScope;
+            name: string;
+            service: string;
+            value: number;
+            attributes?: {
+                [key: string]: string;
+            };
+            resource_attributes?: {
+                [key: string]: string;
+            };
+        };
+        AdminInfrastructureMetricsResponse: {
+            items: components["schemas"]["AdminInfrastructureMetric"][];
+        };
+        AdminTelemetrySource: {
+            service: string;
+            /** @enum {string} */
+            signal: AdminTelemetrySourceSignal;
+            /** Format: date-time */
+            last_received: string;
+            /** Format: int64 */
+            volume: number;
+        };
+        AdminSourcesResponse: {
+            items: components["schemas"]["AdminTelemetrySource"][];
+        };
+        AdminMonitor: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: AdminMonitorKind;
+            target: string;
+            interval_seconds: number;
+            timeout_ms: number;
+            enabled: boolean;
+            config: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            status: AdminMonitorStatus;
+            /** Format: date-time */
+            last_checked_at?: string | null;
+            /** Format: date-time */
+            last_success_at?: string | null;
+            /** Format: date-time */
+            last_failure_at?: string | null;
+            last_latency_ms?: number | null;
+            last_status_code?: number | null;
+            last_error?: string | null;
+            /** Format: date-time */
+            last_heartbeat_at?: string | null;
+            /** Format: date-time */
+            next_check_at: string;
+            secret_configured: boolean;
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminMonitorCheck: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            monitor_id: string;
+            /** Format: date-time */
+            checked_at: string;
+            success: boolean;
+            latency_ms: number;
+            status_code?: number | null;
+            error?: string | null;
+            details: {
+                [key: string]: unknown;
+            };
+        };
+        AdminMonitorsResponse: {
+            items: components["schemas"]["AdminMonitor"][];
+        };
+        AdminMonitorResponse: {
+            monitor: components["schemas"]["AdminMonitor"];
+            checks?: components["schemas"]["AdminMonitorCheck"][];
+            heartbeat_token?: string;
+            heartbeat_endpoint?: string;
+        };
+        CreateAdminMonitorRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: CreateAdminMonitorRequestKind;
+            target: string;
+            /** @default 60 */
+            interval_seconds: number;
+            /** @default 5000 */
+            timeout_ms: number;
+            /** @default true */
+            enabled: boolean;
+            /** @enum {string} */
+            method?: CreateAdminMonitorRequestMethod;
+            headers?: {
+                [key: string]: string;
+            };
+            body?: string;
+            /** @default 200 */
+            expected_status: number;
+            body_contains?: string;
+            latency_threshold_ms?: number;
+            host?: string;
+            port?: number;
+            /** @enum {string} */
+            record_type?: CreateAdminMonitorRequestRecord_type;
+            expected_values?: string[];
+            grace_seconds?: number;
+            certificate_expiry_days?: number;
+        };
+        UpdateAdminMonitorRequest: components["schemas"]["CreateAdminMonitorRequest"];
+        AdminAlertRule: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: AdminAlertRuleKind;
+            condition: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            severity: AdminAlertRuleSeverity;
+            for_seconds: number;
+            enabled: boolean;
+            /** @enum {string} */
+            state: AdminAlertRuleState;
+            /** Format: date-time */
+            pending_since?: string | null;
+            /** Format: date-time */
+            last_evaluated_at?: string | null;
+            last_value?: number | null;
+            last_error?: string | null;
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminNotificationChannel: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            kind: AdminNotificationChannelKind;
+            enabled: boolean;
+            secret_configured: boolean;
+            /** Format: date-time */
+            last_delivery_at?: string | null;
+            /** @enum {string|null} */
+            last_delivery_status?: AdminNotificationChannelLast_delivery_status;
+            last_error?: string | null;
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminNotificationChannelsResponse: {
+            items: components["schemas"]["AdminNotificationChannel"][];
+        };
+        CreateAdminNotificationChannelRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: CreateAdminNotificationChannelRequestKind;
+            /** @default true */
+            enabled: boolean;
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        AdminNotificationTestResponse: {
+            /** Format: uuid */
+            delivery_id: string;
+            /** @enum {string} */
+            status: AdminNotificationTestResponseStatus;
+        };
+        AdminAlertEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            rule_id: string;
+            /** @enum {string} */
+            state: AdminAlertEventState;
+            value?: number | null;
+            message: string;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        AdminAlertRulesResponse: {
+            items: components["schemas"]["AdminAlertRule"][];
+        };
+        AdminAlertRuleResponse: {
+            rule: components["schemas"]["AdminAlertRule"];
+            events?: components["schemas"]["AdminAlertEvent"][];
+        };
+        CreateAdminAlertRuleRequest: {
+            name: string;
+            /** @enum {string} */
+            kind: CreateAdminAlertRuleRequestKind;
+            condition: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            severity: CreateAdminAlertRuleRequestSeverity;
+            /** @default 0 */
+            for_seconds: number;
+            /** @default true */
+            enabled: boolean;
+        };
+        AdminIncident: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** @enum {string} */
+            severity: AdminIncidentSeverity;
+            /** @enum {string} */
+            status: AdminIncidentStatus;
+            services: string[];
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            resolved_at?: string | null;
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            events: components["schemas"]["AdminIncidentEvent"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminIncidentEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            incident_id: string;
+            /** @enum {string} */
+            kind: AdminIncidentEventKind;
+            message: string;
+            /** Format: uuid */
+            actor_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminIncidentsResponse: {
+            items: components["schemas"]["AdminIncident"][];
+        };
+        AdminIncidentResponse: {
+            incident: components["schemas"]["AdminIncident"];
+        };
+        CreateAdminIncidentRequest: {
+            title: string;
+            /** @enum {string} */
+            severity: CreateAdminIncidentRequestSeverity;
+            /**
+             * @default investigating
+             * @enum {string}
+             */
+            status: CreateAdminIncidentRequestStatus;
+            services: string[];
+            message?: string;
+        };
+        UpdateAdminIncidentRequest: {
+            title?: string;
+            /** @enum {string} */
+            severity?: UpdateAdminIncidentRequestSeverity;
+            /** @enum {string} */
+            status?: UpdateAdminIncidentRequestStatus;
+            services?: string[];
+            message?: string;
+        };
+        AddAdminIncidentEventRequest: {
+            /** @enum {string} */
+            kind: AddAdminIncidentEventRequestKind;
+            message: string;
+        };
+        AdminDashboard: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string;
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            created_by_account_id?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminDashboardsResponse: {
+            items: components["schemas"]["AdminDashboard"][];
+        };
+        AdminDashboardResponse: {
+            dashboard: components["schemas"]["AdminDashboard"];
+        };
+        CreateAdminDashboardRequest: {
+            name: string;
+            description?: string;
+            /** @description Saved panel definition using typed panel and query fields; arbitrary SQL is rejected by the API. */
+            definition: {
+                [key: string]: unknown;
+            };
+        };
+        AdminStatusPageComponent: {
+            name: string;
+            /** @enum {string} */
+            status: AdminStatusPageComponentStatus;
+            description?: string;
+            /** Format: uri */
+            url?: string;
+        };
+        AdminStatusPage: {
+            name: string;
+            description: string;
+            is_public: boolean;
+            components: components["schemas"]["AdminStatusPageComponent"][];
+            published_incidents: string[];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        UpdateAdminStatusPageRequest: {
+            name: string;
+            description?: string;
+            is_public: boolean;
+            components: components["schemas"]["AdminStatusPageComponent"][];
+            published_incidents: string[];
+        };
+        AdminPublicIncident: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** @enum {string} */
+            severity: AdminPublicIncidentSeverity;
+            /** @enum {string} */
+            status: AdminPublicIncidentStatus;
+            services: string[];
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            resolved_at?: string | null;
+        };
+        AdminPublicStatusPage: {
+            name: string;
+            description: string;
+            components: components["schemas"]["AdminStatusPageComponent"][];
+            incidents: components["schemas"]["AdminPublicIncident"][];
+            /** Format: date-time */
+            updated_at: string;
+        };
         BuildInfo: {
             version: string;
             commit: string;
@@ -4955,6 +5982,11 @@ export interface components {
         VariableID: string;
         DeploymentID: string;
         ExecutionID: string;
+        MonitorID: string;
+        AlertRuleID: string;
+        AdminIncidentID: string;
+        DashboardID: string;
+        NotificationChannelID: string;
         BootstrapCLIProof: string;
         /** @description Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied. */
         SetupCSRF: "1";
@@ -5035,6 +6067,1180 @@ export interface operations {
                     "application/json": components["schemas"]["BuildInfo"];
                 };
             };
+        };
+    };
+    getAdminOverview: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live instance overview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOverviewResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminOperations: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable operations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminAuditEvents: {
+        parameters: {
+            query?: {
+                before?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance audit records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAuditResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminTelemetryLogs: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                level?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLogsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    streamAdminTelemetryLogs: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                level?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted log events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryTraces: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                trace_id?: string;
+                min_duration_ms?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trace spans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTracesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryMetrics: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                name?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metric points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMetricsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryLogVolume: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                level?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Log volume buckets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLogVolumeResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetryErrors: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                service?: string;
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grouped errors */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorGroupsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    updateAdminTelemetryErrorStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fingerprint: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminErrorGroupStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated error group state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminErrorGroupStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminTelemetryServices: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trace-derived service map edges */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminServiceMapResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminInfrastructureMetrics: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                scope?: PathsV1AdminInfrastructureMetricsGetParametersQueryScope;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Infrastructure metric points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminInfrastructureMetricsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminTelemetrySources: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Telemetry sources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSourcesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAdminMonitors: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance monitors */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMonitorsResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAdminMonitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Created monitor */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMonitorResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAdminMonitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitorID: components["parameters"]["MonitorID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Monitor detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMonitorResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminMonitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitorID: components["parameters"]["MonitorID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminMonitorRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated monitor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminMonitorResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminMonitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitorID: components["parameters"]["MonitorID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Monitor deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    recordAdminMonitorHeartbeat: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Stealth-Heartbeat": string;
+            };
+            path: {
+                monitorID: components["parameters"]["MonitorID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat accepted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getPublicAdminStatusPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published status page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPublicStatusPage"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminAlertRules: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert rules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertRulesResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAdminAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminAlertRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Alert rule created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertRuleResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAdminAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alertRuleID: components["parameters"]["AlertRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert rule and recent events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertRuleResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alertRuleID: components["parameters"]["AlertRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminAlertRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Alert rule updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertRuleResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminAlertRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alertRuleID: components["parameters"]["AlertRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert rule deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAdminNotificationChannels: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannelsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminNotificationChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Notification channel created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminNotificationChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Notification channel updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationChannel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification channel deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    testAdminNotificationChannel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channelID: components["parameters"]["NotificationChannelID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Test delivery queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNotificationTestResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAdminIncidents: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance incidents */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIncidentsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAdminIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminIncidentRequest"];
+            };
+        };
+        responses: {
+            /** @description Incident created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIncidentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAdminIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incidentID: components["parameters"]["AdminIncidentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Instance incident */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIncidentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incidentID: components["parameters"]["AdminIncidentID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminIncidentRequest"];
+            };
+        };
+        responses: {
+            /** @description Incident updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIncidentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    addAdminIncidentEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incidentID: components["parameters"]["AdminIncidentID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddAdminIncidentEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Timeline event */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminIncidentEvent"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listAdminDashboards: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved dashboards */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboardsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAdminDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminDashboardRequest"];
+            };
+        };
+        responses: {
+            /** @description Dashboard created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboardResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAdminDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboardID: components["parameters"]["DashboardID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved dashboard */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboardResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAdminDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboardID: components["parameters"]["DashboardID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAdminDashboardRequest"];
+            };
+        };
+        responses: {
+            /** @description Dashboard updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboardResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAdminDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dashboardID: components["parameters"]["DashboardID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dashboard deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getAdminStatusPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status page configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStatusPage"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateAdminStatusPage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminStatusPageRequest"];
+            };
+        };
+        responses: {
+            /** @description Status page updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStatusPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getBootstrapStatus: {
@@ -11522,6 +13728,13 @@ export interface operations {
         };
     };
 }
+export enum PathsV1AdminInfrastructureMetricsGetParametersQueryScope {
+    host = "host",
+    containers = "containers",
+    postgres = "postgres",
+    redis = "redis",
+    services = "services"
+}
 export enum PathsV1ProjectsProjectIDUsageMeteringGetParametersQueryFormat {
     json = "json",
     csv = "csv"
@@ -11533,6 +13746,230 @@ export enum PathsV1ProjectsProjectIDDatabasesDatabaseIDTablesTableIDExportGetPar
 export enum StatusStatus {
     ok = "ok",
     ready = "ready"
+}
+export enum AdminComponentStatusStatus {
+    healthy = "healthy",
+    unavailable = "unavailable",
+    unknown = "unknown"
+}
+export enum AdminTelemetryStatusStatus {
+    healthy = "healthy",
+    unavailable = "unavailable"
+}
+export enum AdminOverviewResponseInstance_status {
+    healthy = "healthy",
+    degraded = "degraded"
+}
+export enum AdminOperationKind {
+    function_deployment = "function_deployment",
+    site_deployment = "site_deployment",
+    function_execution = "function_execution",
+    agent_run = "agent_run",
+    artifact_cleanup = "artifact_cleanup",
+    database_backup = "database_backup"
+}
+export enum AdminMetricKind {
+    gauge = "gauge",
+    sum = "sum"
+}
+export enum AdminErrorGroupStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
+}
+export enum UpdateAdminErrorGroupStatusRequestStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
+}
+export enum AdminErrorGroupStatusStatus {
+    open = "open",
+    acknowledged = "acknowledged",
+    resolved = "resolved",
+    ignored = "ignored"
+}
+export enum AdminInfrastructureMetricScope {
+    host = "host",
+    containers = "containers",
+    postgres = "postgres",
+    redis = "redis",
+    services = "services"
+}
+export enum AdminTelemetrySourceSignal {
+    logs = "logs",
+    traces = "traces",
+    metrics = "metrics"
+}
+export enum AdminMonitorKind {
+    http = "http",
+    tcp = "tcp",
+    dns = "dns",
+    tls = "tls",
+    heartbeat = "heartbeat"
+}
+export enum AdminMonitorStatus {
+    unknown = "unknown",
+    healthy = "healthy",
+    degraded = "degraded",
+    failing = "failing",
+    paused = "paused"
+}
+export enum CreateAdminMonitorRequestKind {
+    http = "http",
+    tcp = "tcp",
+    dns = "dns",
+    tls = "tls",
+    heartbeat = "heartbeat"
+}
+export enum CreateAdminMonitorRequestMethod {
+    GET = "GET",
+    HEAD = "HEAD",
+    POST = "POST",
+    PUT = "PUT",
+    PATCH = "PATCH",
+    OPTIONS = "OPTIONS"
+}
+export enum CreateAdminMonitorRequestRecord_type {
+    A = "A",
+    AAAA = "AAAA",
+    CNAME = "CNAME",
+    TXT = "TXT"
+}
+export enum AdminAlertRuleKind {
+    metric_threshold = "metric_threshold",
+    error_rate = "error_rate",
+    latency = "latency",
+    log_match = "log_match",
+    service_health = "service_health",
+    disk_pressure = "disk_pressure",
+    monitor_failure = "monitor_failure",
+    heartbeat_failure = "heartbeat_failure",
+    certificate_expiry = "certificate_expiry"
+}
+export enum AdminAlertRuleSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum AdminAlertRuleState {
+    normal = "normal",
+    pending = "pending",
+    firing = "firing",
+    resolved = "resolved",
+    muted = "muted"
+}
+export enum AdminNotificationChannelKind {
+    email = "email",
+    webhook = "webhook",
+    slack = "slack",
+    discord = "discord",
+    telegram = "telegram"
+}
+export enum AdminNotificationChannelLast_delivery_status {
+    success = "success",
+    failed = "failed",
+    null = "null"
+}
+export enum CreateAdminNotificationChannelRequestKind {
+    email = "email",
+    webhook = "webhook",
+    slack = "slack",
+    discord = "discord",
+    telegram = "telegram"
+}
+export enum AdminNotificationTestResponseStatus {
+    pending = "pending"
+}
+export enum AdminAlertEventState {
+    firing = "firing",
+    resolved = "resolved"
+}
+export enum CreateAdminAlertRuleRequestKind {
+    metric_threshold = "metric_threshold",
+    error_rate = "error_rate",
+    latency = "latency",
+    log_match = "log_match",
+    service_health = "service_health",
+    disk_pressure = "disk_pressure",
+    monitor_failure = "monitor_failure",
+    heartbeat_failure = "heartbeat_failure",
+    certificate_expiry = "certificate_expiry"
+}
+export enum CreateAdminAlertRuleRequestSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum AdminIncidentSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum AdminIncidentStatus {
+    investigating = "investigating",
+    identified = "identified",
+    monitoring = "monitoring",
+    resolved = "resolved"
+}
+export enum AdminIncidentEventKind {
+    alert = "alert",
+    deployment = "deployment",
+    restart = "restart",
+    backup = "backup",
+    configuration = "configuration",
+    monitor = "monitor",
+    note = "note"
+}
+export enum CreateAdminIncidentRequestSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum CreateAdminIncidentRequestStatus {
+    investigating = "investigating",
+    identified = "identified",
+    monitoring = "monitoring",
+    resolved = "resolved"
+}
+export enum UpdateAdminIncidentRequestSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum UpdateAdminIncidentRequestStatus {
+    investigating = "investigating",
+    identified = "identified",
+    monitoring = "monitoring",
+    resolved = "resolved"
+}
+export enum AddAdminIncidentEventRequestKind {
+    alert = "alert",
+    deployment = "deployment",
+    restart = "restart",
+    backup = "backup",
+    configuration = "configuration",
+    monitor = "monitor",
+    note = "note"
+}
+export enum AdminStatusPageComponentStatus {
+    operational = "operational",
+    degraded = "degraded",
+    partial_outage = "partial_outage",
+    major_outage = "major_outage",
+    maintenance = "maintenance"
+}
+export enum AdminPublicIncidentSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
+}
+export enum AdminPublicIncidentStatus {
+    investigating = "investigating",
+    identified = "identified",
+    monitoring = "monitoring",
+    resolved = "resolved"
 }
 export enum GitHubPollResponseStatus {
     pending = "pending",

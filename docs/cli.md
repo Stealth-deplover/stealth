@@ -88,6 +88,7 @@ location is required. The CLI writes:
 ├── config.env                 # generated secrets, mode 0600
 ├── compose.production.yaml
 ├── compose.setup.yaml
+├── telemetry/             # versioned Collector configurations
 ├── console/deploy/nginx.conf
 ├── VERSION
 └── state/
@@ -104,9 +105,10 @@ Keep both values with the rest of `config.env`. The bootstrap key is never
 printed or sent in the setup URL. `FUNCTIONS_SECRET_KEY` is a separate security
 domain and is never used as a bootstrap-key fallback.
 
-The Compose and proxy files are downloaded from the same versioned Git tag as
-the CLI. The config pins API, setup, worker, migration, and Console images to
-the same GHCR release tag.
+The Compose, Collector, and proxy files are downloaded from the same versioned
+Git tag as the CLI. The config pins API, setup, worker, migration, Console,
+the capability-free Collector image, the dedicated Docker-log Collector image,
+and the restricted telemetry Docker proxy image to the same GHCR release tag.
 
 An existing `config.env` or `VERSION` is never replaced by a normal reinstall.
 The command refuses to proceed and leaves volumes untouched. After a partial

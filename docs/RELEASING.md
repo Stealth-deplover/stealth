@@ -26,7 +26,7 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   go build -o /tmp/stealth ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/stealth-linux-amd64 ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/stealth-linux-arm64 ./cmd/stealth
-  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh
+  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/collector-log-parser-smoke.sh
   ./scripts/bootstrap_test.sh
   docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
   ```
@@ -50,8 +50,11 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   `stealth_Linux_arm64.tar.gz`, and `checksums.txt`.
 - [ ] Verify `checksums.txt` contains a valid SHA-256 entry for both CLI
   archives and that the archive contents contain an executable `stealth` file.
-- [ ] Verify GHCR contains versioned API, worker, migration, and Console
-  images for the release.
+- [ ] Verify GHCR contains versioned API, worker, migration, Console,
+      `stealth-otel-collector`, `stealth-otel-docker-logs`, and
+      `stealth-telemetry-docker-proxy` images for the release. The host,
+      Docker-log, and Docker-metrics services use the two Collector images
+      according to their documented privilege boundaries.
 
 ## Clean-host validation
 

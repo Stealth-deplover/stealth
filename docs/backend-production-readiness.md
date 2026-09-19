@@ -39,9 +39,10 @@ claiming the same eligible row concurrently.
   function/site stores, and the configured rate limiter. Optional provider
   integrations do not make readiness fail.
 - Prometheus output is disabled unless `METRICS_TOKEN` is set. When enabled,
-  `/metrics` requires `X-Metrics-Token`; the worker listener defaults to
-  loopback and should remain on a private network. `/healthz` on the worker
-  listener remains the process liveness probe.
+  `/metrics` requires `X-Metrics-Token`; the production Compose worker
+  listener binds only to the private Compose network so the OTel Collector can
+  scrape it. It has no host port. `/healthz` on the worker listener remains
+  the process liveness probe.
 - Every API request gets a validated or generated `X-Request-ID`. The value is
   returned in the response and is present in request, panic, internal-error,
   and trace-index logs. Client-IP forwarding is disabled unless the direct

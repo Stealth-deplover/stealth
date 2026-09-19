@@ -1,7 +1,11 @@
 # Upgrade and rollback
 
 Stealth releases are coordinated application releases. Use the same version
-for `stealth-api`, `stealth-worker`, `stealth-migrate`, and `stealth-console`.
+for `stealth-api`, `stealth-worker`, `stealth-migrate`, `stealth-console`,
+`stealth-otel-collector`, `stealth-otel-docker-logs`, and
+`stealth-telemetry-docker-proxy`. The host-metrics and Docker-metrics
+collectors use the capability-free `stealth-otel-collector` image; the
+Docker-log collector uses the dedicated `stealth-otel-docker-logs` image.
 The `stealth-setup` image is only needed for a fresh browser installation or
 setup repair.
 The current deployment does not promise rolling upgrades between incompatible
@@ -37,15 +41,17 @@ worker, migration, Console, PostgreSQL, Redis, or proxy changes.
 4. Pull the images and validate the rendered Compose file.
 5. Stop or coordinate workers if the release notes require a quiet queue.
 6. Start PostgreSQL/Redis if needed, then run the one-shot migration command.
-7. Recreate API, worker, Console, and proxy from the same release.
+7. Recreate API, worker, Console, proxy, the main Collector, host-metrics
+   Collector, Docker-log Collector, Docker-metrics Collector, and proxy from
+   the same release configuration.
 8. Verify `/healthz`, `/readyz`, `/version`, worker health, and the HTTP smoke
    script. Check logs for migration and worker claim errors.
 
 ```bash
 docker compose --env-file .env.production -f compose.production.yaml pull
-docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis
+docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d --force-recreate api worker console proxy
+docker compose --env-file .env.production -f compose.production.yaml up -d --force-recreate api worker console proxy otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 

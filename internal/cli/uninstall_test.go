@@ -250,6 +250,38 @@ func TestPurgeRefusesUnlabeledExistingVolume(t *testing.T) {
 	}
 }
 
+func TestPurgeRefusesUnexpectedTelemetryAsset(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	for _, name := range []string{"otel-collector.yaml", "host-metrics.yaml", "docker-logs.yaml", "docker-stats.yaml"} {
+		if err := writeAtomic(filepath.Join(layout.TelemetryDir, name), []byte("receivers:\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unexpected := filepath.Join(layout.TelemetryDir, "operator-note.txt")
+	if err := writeAtomic(unexpected, []byte("do not remove\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	plan := buildUninstallPlan(layout, uninstallPurge)
+	if !containsArgs(plan.unknownEntries, unexpected) || plan.canPurge() {
+		t.Fatalf("telemetry layout guard = %#v, canPurge=%t", plan.unknownEntries, plan.canPurge())
+	}
+
+	runner := &uninstallTestRunner{}
+	var out, errOut strings.Builder
+	app := NewApp(strings.NewReader(""), &out, &errOut)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--purge", "--yes"}); got != 1 {
+		t.Fatalf("exit code = %d, want 1; stdout=%q stderr=%q", got, out.String(), errOut.String())
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("purge with an unexpected telemetry asset invoked Docker: %#v", runner.calls)
+	}
+	if !pathPresent(unexpected) {
+		t.Fatal("purge removed the unrecognized telemetry asset")
+	}
+}
+
 func TestPurgeDryRunMakesNoChanges(t *testing.T) {
 	layout := writeUninstallFixture(t)
 	runner := &uninstallTestRunner{}

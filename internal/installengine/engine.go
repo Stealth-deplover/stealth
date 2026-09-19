@@ -66,6 +66,7 @@ type Layout struct {
 	EnvFile          string
 	ComposeFile      string
 	SetupComposeFile string
+	TelemetryDir     string
 	ProxyFile        string
 	VersionFile      string
 	StateDir         string
@@ -89,6 +90,7 @@ func NewLayout(root string) (Layout, error) {
 		EnvFile:          filepath.Join(clean, "config.env"),
 		ComposeFile:      filepath.Join(clean, "compose.production.yaml"),
 		SetupComposeFile: filepath.Join(clean, "compose.setup.yaml"),
+		TelemetryDir:     filepath.Join(clean, "telemetry"),
 		ProxyFile:        filepath.Join(clean, "console", "deploy", "nginx.conf"),
 		VersionFile:      filepath.Join(clean, "VERSION"),
 		StateDir:         filepath.Join(clean, "state"),
@@ -248,12 +250,27 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
-		services := make([]string, 0, 2)
+		if !plan.Setup {
+			// StepServices may use --no-deps for external PostgreSQL/Redis.
+			// Run both ownership init services explicitly so that path never
+			// bypasses either non-root Collector's persistent file_storage
+			// preparation.
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "otelcol-state-init"); err != nil {
+				return err
+			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"); err != nil {
+				return err
+			}
+		}
+		services := make([]string, 0, 3)
 		if !plan.ExternalDatabase {
 			services = append(services, "postgres")
 		}
 		if !plan.ExternalRedis {
 			services = append(services, "redis")
+		}
+		if !plan.Setup {
+			services = append(services, "clickhouse")
 		}
 		if len(services) == 0 {
 			return nil
@@ -268,6 +285,8 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		services := []string{"api", "worker", "console", "proxy"}
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
+		} else {
+			services = append(services, "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker")
 		}
 		if plan.Cloudflare {
 			services = append(services, "cloudflared")
@@ -322,6 +341,8 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 		}
 	} else if !FileIsPrivate(plan.Layout.EnvFile) {
 		return errors.New("existing configuration permissions are too broad; expected mode 0600")
+	} else if err := e.ensureTelemetryImages(plan); err != nil {
+		return err
 	}
 	if err := e.ensureAsset(ctx, plan.Layout.ComposeFile, plan.Version, "compose.production.yaml", []byte("services:")); err != nil {
 		return fmt.Errorf("prepare production Compose file: %w", err)
@@ -334,8 +355,50 @@ func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
 	if err := e.ensureAsset(ctx, plan.Layout.ProxyFile, plan.Version, "console/deploy/nginx.conf", []byte("server {")); err != nil {
 		return fmt.Errorf("prepare proxy configuration: %w", err)
 	}
+	for _, asset := range []struct {
+		name   string
+		marker []byte
+	}{
+		{name: "otel-collector.yaml", marker: []byte("receivers:")},
+		{name: "host-metrics.yaml", marker: []byte("hostmetrics:")},
+		{name: "docker-logs.yaml", marker: []byte("file_log/docker:")},
+		{name: "docker-stats.yaml", marker: []byte("docker_stats:")},
+	} {
+		path := filepath.Join(plan.Layout.TelemetryDir, asset.name)
+		if err := e.ensureAsset(ctx, path, plan.Version, "telemetry/"+asset.name, asset.marker); err != nil {
+			return fmt.Errorf("prepare telemetry configuration %s: %w", asset.name, err)
+		}
+	}
 	if err := WriteAtomic(plan.Layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write version file: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) ensureTelemetryImages(plan Plan) error {
+	values, err := ReadEnvFile(plan.Layout.EnvFile)
+	if err != nil {
+		return fmt.Errorf("read existing configuration for telemetry image migration: %w", err)
+	}
+	updates := map[string]string{
+		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": ImageName("stealth-telemetry-docker-proxy", plan.Version),
+		"OTEL_COLLECTOR_IMAGE":                 ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_HOST_COLLECTOR_IMAGE":            ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_DOCKER_COLLECTOR_IMAGE":          ImageName("stealth-otel-collector", plan.Version),
+		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     ImageName("stealth-otel-docker-logs", plan.Version),
+	}
+	changed := false
+	for key, value := range updates {
+		if strings.TrimSpace(values[key]) == "" {
+			values[key] = value
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := WritePrivateFile(plan.Layout.EnvFile, FormatEnvFile(values)); err != nil {
+		return fmt.Errorf("add telemetry images to existing configuration: %w", err)
 	}
 	return nil
 }

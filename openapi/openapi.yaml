@@ -23,6 +23,431 @@ paths:
       description: Safe build metadata for release and operator checks. No configuration or secrets are returned.
       responses:
         '200': { description: Build metadata, content: { application/json: { schema: { $ref: '#/components/schemas/BuildInfo' } } } }
+  /v1/admin/overview:
+    get:
+      operationId: getAdminOverview
+      description: Return live instance component and telemetry-backend health. Requires an instance owner or instance admin role; organization membership is not sufficient.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Live instance overview, content: { application/json: { schema: { $ref: '#/components/schemas/AdminOverviewResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/operations:
+    get:
+      operationId: listAdminOperations
+      description: List durable deployments, executions, Agent runs, artifact cleanup jobs, and database backups through one safe instance-owner projection.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Durable operations, content: { application/json: { schema: { $ref: '#/components/schemas/AdminOperationsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/audit-events:
+    get:
+      operationId: listAdminAuditEvents
+      description: List instance-level audit records. Organization-scoped audit data remains on the organization audit endpoint.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: before, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Instance audit records, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAuditResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/telemetry/logs:
+    get:
+      operationId: listAdminTelemetryLogs
+      description: Query structured logs through a bounded, parameterized server-side query. Raw ClickHouse SQL is not accepted.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: level, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Logs, content: { application/json: { schema: { $ref: '#/components/schemas/AdminLogsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/logs/tail:
+    get:
+      operationId: streamAdminTelemetryLogs
+      description: Stream bounded redacted log records over an authenticated server-sent event connection. The server owns the ClickHouse query and closes idle streams after a bounded lifetime.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: level, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 250, default: 100 } }
+      responses:
+        '200': { description: Redacted log events, content: { text/event-stream: { schema: { type: string } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/traces:
+    get:
+      operationId: listAdminTelemetryTraces
+      description: Query distributed spans through a bounded, parameterized server-side query.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: trace_id, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: min_duration_ms, in: query, schema: { type: number, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Trace spans, content: { application/json: { schema: { $ref: '#/components/schemas/AdminTracesResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/metrics:
+    get:
+      operationId: listAdminTelemetryMetrics
+      description: Query real OTel metric points through a bounded server-side query.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: name, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Metric points, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMetricsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/log-volume:
+    get:
+      operationId: listAdminTelemetryLogVolume
+      description: Return bounded time buckets for log volume using the selected filters.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: level, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Log volume buckets, content: { application/json: { schema: { $ref: '#/components/schemas/AdminLogVolumeResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/errors:
+    get:
+      operationId: listAdminTelemetryErrors
+      description: Return grouped error log occurrences from the bounded telemetry window.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: service, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: query, in: query, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Grouped errors, content: { application/json: { schema: { $ref: '#/components/schemas/AdminErrorGroupsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/errors/{fingerprint}:
+    patch:
+      operationId: updateAdminTelemetryErrorStatus
+      description: Update the owner-managed lifecycle state of a redacted error fingerprint. Occurrences remain in ClickHouse.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: fingerprint, in: path, required: true, schema: { type: string, pattern: '^[0-9a-fA-F]{64}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAdminErrorGroupStatusRequest' }
+      responses:
+        '200': { description: Updated error group state, content: { application/json: { schema: { $ref: '#/components/schemas/AdminErrorGroupStatus' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/telemetry/services:
+    get:
+      operationId: listAdminTelemetryServices
+      description: Return service dependencies derived from real trace peer attributes.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Trace-derived service map edges, content: { application/json: { schema: { $ref: '#/components/schemas/AdminServiceMapResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/infrastructure/metrics:
+    get:
+      operationId: listAdminInfrastructureMetrics
+      description: Return bounded host, container, PostgreSQL, Redis, and service metrics collected by the private telemetry pipeline.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: scope, in: query, schema: { type: string, enum: [host, containers, postgres, redis, services] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Infrastructure metric points, content: { application/json: { schema: { $ref: '#/components/schemas/AdminInfrastructureMetricsResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/telemetry/sources:
+    get:
+      operationId: listAdminTelemetrySources
+      description: List services and signal types observed in the bounded telemetry window.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+      responses:
+        '200': { description: Telemetry sources, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSourcesResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/admin/monitors:
+    get:
+      operationId: listAdminMonitors
+      description: List persisted instance monitors. Secrets are never returned.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+      responses:
+        '200': { description: Instance monitors, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMonitorsResponse' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      operationId: createAdminMonitor
+      description: Create an encrypted instance monitor. Heartbeat tokens are returned once.
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminMonitorRequest' } } } }
+      responses:
+        '201': { description: Created monitor, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMonitorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/monitors/{monitorID}:
+    get:
+      operationId: getAdminMonitor
+      description: Read one monitor and its bounded recent checks. Secrets are never returned.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/MonitorID' }]
+      responses:
+        '200': { description: Monitor detail, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMonitorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateAdminMonitor
+      description: Replace an encrypted instance monitor definition. A heartbeat token is rotated and returned once.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/MonitorID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateAdminMonitorRequest' } } } }
+      responses:
+        '200': { description: Updated monitor, content: { application/json: { schema: { $ref: '#/components/schemas/AdminMonitorResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteAdminMonitor
+      description: Delete a monitor and its bounded check history.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/MonitorID' }]
+      responses:
+        '204': { description: Monitor deleted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/monitor-heartbeats/{monitorID}:
+    post:
+      operationId: recordAdminMonitorHeartbeat
+      description: Record a heartbeat with the one-time monitor token. The token is accepted only in the X-Stealth-Heartbeat header and is never logged or returned.
+      security: [{}]
+      parameters:
+        - { $ref: '#/components/parameters/MonitorID' }
+        - { name: X-Stealth-Heartbeat, in: header, required: true, schema: { type: string, minLength: 32, maxLength: 256, writeOnly: true } }
+      responses:
+        '204': { description: Heartbeat accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /v1/status-page:
+    get:
+      operationId: getPublicAdminStatusPage
+      description: Read the owner-published status page. Private status pages return not found.
+      security: [{}]
+      responses:
+        '200': { description: Published status page, content: { application/json: { schema: { $ref: '#/components/schemas/AdminPublicStatusPage' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/alerts:
+    get:
+      operationId: listAdminAlertRules
+      description: List bounded instance alert rules.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Alert rules, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertRulesResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+    post:
+      operationId: createAdminAlertRule
+      description: Create a constrained alert rule; arbitrary SQL is not accepted.
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminAlertRuleRequest' } } } }
+      responses: { '201': { description: Alert rule created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertRuleResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+  /v1/admin/alerts/{alertRuleID}:
+    get:
+      operationId: getAdminAlertRule
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AlertRuleID' }]
+      responses: { '200': { description: Alert rule and recent events, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertRuleResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      operationId: updateAdminAlertRule
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AlertRuleID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminAlertRuleRequest' } } } }
+      responses: { '200': { description: Alert rule updated, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertRuleResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      operationId: deleteAdminAlertRule
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AlertRuleID' }]
+      responses: { '204': { description: Alert rule deleted }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/notifications:
+    get:
+      operationId: listAdminNotificationChannels
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Notification channels, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationChannelsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    post:
+      operationId: createAdminNotificationChannel
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminNotificationChannelRequest' } } } }
+      responses: { '201': { description: Notification channel created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /v1/admin/notifications/{channelID}:
+    get:
+      operationId: getAdminNotificationChannel
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
+      responses: { '200': { description: Notification channel, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      operationId: updateAdminNotificationChannel
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminNotificationChannelRequest' } } } }
+      responses: { '200': { description: Notification channel updated, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      operationId: deleteAdminNotificationChannel
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
+      responses: { '204': { description: Notification channel deleted }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/notifications/{channelID}/test:
+    post:
+      operationId: testAdminNotificationChannel
+      description: Queue a redacted test notification for an enabled, configured channel. The trusted worker performs delivery.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/NotificationChannelID' }]
+      responses: { '202': { description: Test delivery queued, content: { application/json: { schema: { $ref: '#/components/schemas/AdminNotificationTestResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/incidents:
+    get:
+      operationId: listAdminIncidents
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Instance incidents, content: { application/json: { schema: { $ref: '#/components/schemas/AdminIncidentsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+    post:
+      operationId: createAdminIncident
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminIncidentRequest' } } } }
+      responses: { '201': { description: Incident created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminIncidentResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+  /v1/admin/incidents/{incidentID}:
+    get:
+      operationId: getAdminIncident
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AdminIncidentID' }]
+      responses: { '200': { description: Instance incident, content: { application/json: { schema: { $ref: '#/components/schemas/AdminIncidentResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    patch:
+      operationId: updateAdminIncident
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AdminIncidentID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateAdminIncidentRequest' } } } }
+      responses: { '200': { description: Incident updated, content: { application/json: { schema: { $ref: '#/components/schemas/AdminIncidentResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/incidents/{incidentID}/events:
+    post:
+      operationId: addAdminIncidentEvent
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AdminIncidentID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddAdminIncidentEventRequest' } } } }
+      responses: { '201': { description: Timeline event, content: { application/json: { schema: { $ref: '#/components/schemas/AdminIncidentEvent' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/dashboards:
+    get:
+      operationId: listAdminDashboards
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Saved dashboards, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDashboardsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+    post:
+      operationId: createAdminDashboard
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminDashboardRequest' } } } }
+      responses: { '201': { description: Dashboard created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDashboardResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+  /v1/admin/dashboards/{dashboardID}:
+    get:
+      operationId: getAdminDashboard
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/DashboardID' }]
+      responses: { '200': { description: Saved dashboard, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDashboardResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    put:
+      operationId: updateAdminDashboard
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/DashboardID' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminDashboardRequest' } } } }
+      responses: { '200': { description: Dashboard updated, content: { application/json: { schema: { $ref: '#/components/schemas/AdminDashboardResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+    delete:
+      operationId: deleteAdminDashboard
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/DashboardID' }]
+      responses: { '204': { description: Dashboard deleted }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' } }
+  /v1/admin/status-page:
+    get:
+      operationId: getAdminStatusPage
+      security: [{ sessionCookie: [] }]
+      responses: { '200': { description: Status page configuration, content: { application/json: { schema: { $ref: '#/components/schemas/AdminStatusPage' } } } }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+    put:
+      operationId: updateAdminStatusPage
+      security: [{ sessionCookie: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateAdminStatusPageRequest' } } } }
+      responses: { '200': { description: Status page updated, content: { application/json: { schema: { $ref: '#/components/schemas/AdminStatusPage' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
   /v1/bootstrap/status:
     get:
       operationId: getBootstrapStatus
@@ -2403,6 +2828,11 @@ components:
     VariableID: { name: variableID, in: path, required: true, schema: { type: string, format: uuid } }
     DeploymentID: { name: deploymentID, in: path, required: true, schema: { type: string, format: uuid } }
     ExecutionID: { name: executionID, in: path, required: true, schema: { type: string, format: uuid } }
+    MonitorID: { name: monitorID, in: path, required: true, schema: { type: string, format: uuid } }
+    AlertRuleID: { name: alertRuleID, in: path, required: true, schema: { type: string, format: uuid } }
+    AdminIncidentID: { name: incidentID, in: path, required: true, schema: { type: string, format: uuid } }
+    DashboardID: { name: dashboardID, in: path, required: true, schema: { type: string, format: uuid } }
+    NotificationChannelID: { name: channelID, in: path, required: true, schema: { type: string, format: uuid } }
     BootstrapCLIProof: { name: X-Stealth-Bootstrap-Proof, in: header, required: true, schema: { type: string, minLength: 43, maxLength: 43, pattern: '^[A-Za-z0-9_-]{43}$' } }
     SetupCSRF: { name: X-Stealth-Setup, in: header, required: true, description: Required on setup mutations. The setup Console sends the fixed value 1 and the server additionally checks the browser origin when supplied., schema: { type: string, const: '1' } }
     RowCursor: { name: cursor, in: query, description: Opaque cursor returned by a previous row page; use it unchanged, schema: { type: string, minLength: 1, maxLength: 512 } }
@@ -2429,6 +2859,64 @@ components:
     ValidationError: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
   schemas:
     Status: { type: object, required: [status], properties: { status: { type: string, enum: [ok, ready] } } }
+    AdminComponentStatus: { type: object, additionalProperties: false, required: [name, status], properties: { name: { type: string, minLength: 1, maxLength: 64 }, status: { type: string, enum: [healthy, unavailable, unknown] } } }
+    AdminTelemetryStatus: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [healthy, unavailable] } } }
+    AdminOverviewResponse: { type: object, additionalProperties: false, required: [instance_status, checked_at, components, telemetry], properties: { instance_status: { type: string, enum: [healthy, degraded] }, checked_at: { type: string, format: date-time }, components: { type: array, items: { $ref: '#/components/schemas/AdminComponentStatus' } }, telemetry: { $ref: '#/components/schemas/AdminTelemetryStatus' }, http: { $ref: '#/components/schemas/AdminHTTPOverview' }, operations: { $ref: '#/components/schemas/AdminOperationSummary' } } }
+    AdminHTTPOverview: { type: object, additionalProperties: false, required: [request_rate, error_rate, p50_latency_ms, p95_latency_ms, p99_latency_ms, sample_count], properties: { request_rate: { type: number, minimum: 0 }, error_rate: { type: number, minimum: 0, maximum: 1 }, p50_latency_ms: { type: number, minimum: 0 }, p95_latency_ms: { type: number, minimum: 0 }, p99_latency_ms: { type: number, minimum: 0 }, sample_count: { type: integer, format: int64, minimum: 0 } } }
+    AdminOperationSummary: { type: object, additionalProperties: false, required: [active_deployments, queued_jobs, running_jobs, failed_jobs], properties: { active_deployments: { type: integer, format: int64, minimum: 0 }, queued_jobs: { type: integer, format: int64, minimum: 0 }, running_jobs: { type: integer, format: int64, minimum: 0 }, failed_jobs: { type: integer, format: int64, minimum: 0 } } }
+    AdminOperation: { type: object, additionalProperties: false, required: [id, kind, name, status, duration_ms, created_at], properties: { id: { type: string, format: uuid }, kind: { type: string, enum: [function_deployment, site_deployment, function_execution, agent_run, artifact_cleanup, database_backup] }, name: { type: string }, project_id: { type: [string, 'null'], format: uuid }, project_name: { type: [string, 'null'] }, status: { type: string }, started_at: { type: [string, 'null'], format: date-time }, finished_at: { type: [string, 'null'], format: date-time }, duration_ms: { type: integer, format: int64, minimum: 0 }, error: { type: [string, 'null'] }, created_at: { type: string, format: date-time } } }
+    AdminOperationsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminOperation' } } } }
+    AdminAuditEvent: { type: object, additionalProperties: false, required: [id, action, target_type, metadata, created_at], properties: { id: { type: string, format: uuid }, organization_id: { type: [string, 'null'], format: uuid }, actor_account_id: { type: [string, 'null'], format: uuid }, actor_email: { type: [string, 'null'], format: email }, action: { type: string }, target_type: { type: string }, target_id: { type: [string, 'null'], format: uuid }, metadata: { type: object, additionalProperties: true }, created_at: { type: string, format: date-time } } }
+    AdminAuditResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAuditEvent' } }, next_cursor: { type: string, format: uuid } } }
+    AdminLog: { type: object, additionalProperties: false, required: [timestamp, service, message], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, level: { type: string }, service: { type: string }, message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminLogsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminLog' } } } }
+    AdminTraceSpan: { type: object, additionalProperties: false, required: [timestamp, trace_id, span_id, name, kind, service, duration_ns, status], properties: { timestamp: { type: string, format: date-time }, trace_id: { type: string }, span_id: { type: string }, parent_span_id: { type: string }, name: { type: string }, kind: { type: string }, service: { type: string }, duration_ns: { type: integer, format: int64, minimum: 0 }, status: { type: string }, status_message: { type: string }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminTracesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminTraceSpan' } } } }
+    AdminMetric: { type: object, additionalProperties: false, required: [timestamp, name, service, value, kind], properties: { timestamp: { type: string, format: date-time }, name: { type: string }, service: { type: string }, value: { type: number }, kind: { type: string, enum: [gauge, sum] }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminMetricsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminMetric' } } } }
+    AdminLogVolumeBucket: { type: object, additionalProperties: false, required: [timestamp, count], properties: { timestamp: { type: string, format: date-time }, count: { type: integer, format: int64, minimum: 0 } } }
+    AdminLogVolumeResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminLogVolumeBucket' } } } }
+    AdminErrorGroup: { type: object, additionalProperties: false, required: [fingerprint, service, error_type, message, status, first_seen, last_seen, occurrence_count], properties: { fingerprint: { type: string }, service: { type: string }, error_type: { type: string }, message: { type: string }, status: { type: string, enum: [open, acknowledged, resolved, ignored] }, first_seen: { type: string, format: date-time }, last_seen: { type: string, format: date-time }, occurrence_count: { type: integer, format: int64, minimum: 1 }, trace_id: { type: string } } }
+    AdminErrorGroupsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminErrorGroup' } } } }
+    UpdateAdminErrorGroupStatusRequest: { type: object, additionalProperties: false, required: [status], properties: { status: { type: string, enum: [open, acknowledged, resolved, ignored] } } }
+    AdminErrorGroupStatus: { type: object, additionalProperties: false, required: [fingerprint, status, updated_at], properties: { fingerprint: { type: string }, status: { type: string, enum: [open, acknowledged, resolved, ignored] }, updated_at: { type: string, format: date-time } } }
+    AdminServiceMapEdge: { type: object, additionalProperties: false, required: [source, target, request_count, error_count, error_rate, p95_latency_ms], properties: { source: { type: string }, target: { type: string }, request_count: { type: integer, format: int64, minimum: 0 }, error_count: { type: integer, format: int64, minimum: 0 }, error_rate: { type: number, minimum: 0, maximum: 1 }, p95_latency_ms: { type: number, minimum: 0 } } }
+    AdminServiceMapResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminServiceMapEdge' } } } }
+    AdminInfrastructureMetric: { type: object, additionalProperties: false, required: [timestamp, scope, name, service, value], properties: { timestamp: { type: string, format: date-time }, scope: { type: string, enum: [host, containers, postgres, redis, services] }, name: { type: string }, service: { type: string }, value: { type: number }, attributes: { type: object, additionalProperties: { type: string } }, resource_attributes: { type: object, additionalProperties: { type: string } } } }
+    AdminInfrastructureMetricsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminInfrastructureMetric' } } } }
+    AdminTelemetrySource: { type: object, additionalProperties: false, required: [service, signal, last_received, volume], properties: { service: { type: string }, signal: { type: string, enum: [logs, traces, metrics] }, last_received: { type: string, format: date-time }, volume: { type: integer, format: int64, minimum: 0 } } }
+    AdminSourcesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminTelemetrySource' } } } }
+    AdminMonitor: { type: object, additionalProperties: false, required: [id, name, kind, target, interval_seconds, timeout_ms, enabled, config, status, next_check_at, secret_configured, created_at, updated_at], properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [http, tcp, dns, tls, heartbeat] }, target: { type: string }, interval_seconds: { type: integer, minimum: 5, maximum: 86400 }, timeout_ms: { type: integer, minimum: 100, maximum: 120000 }, enabled: { type: boolean }, config: { type: object, additionalProperties: true }, status: { type: string, enum: [unknown, healthy, degraded, failing, paused] }, last_checked_at: { type: [string, 'null'], format: date-time }, last_success_at: { type: [string, 'null'], format: date-time }, last_failure_at: { type: [string, 'null'], format: date-time }, last_latency_ms: { type: [integer, 'null'], minimum: 0 }, last_status_code: { type: [integer, 'null'], minimum: 100, maximum: 599 }, last_error: { type: [string, 'null'], maxLength: 1000 }, last_heartbeat_at: { type: [string, 'null'], format: date-time }, next_check_at: { type: string, format: date-time }, secret_configured: { type: boolean }, created_by_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
+    AdminMonitorCheck: { type: object, additionalProperties: false, required: [id, monitor_id, checked_at, success, latency_ms, details], properties: { id: { type: string, format: uuid }, monitor_id: { type: string, format: uuid }, checked_at: { type: string, format: date-time }, success: { type: boolean }, latency_ms: { type: integer, minimum: 0 }, status_code: { type: [integer, 'null'], minimum: 100, maximum: 599 }, error: { type: [string, 'null'], maxLength: 1000 }, details: { type: object, additionalProperties: true } } }
+    AdminMonitorsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminMonitor' } } } }
+    AdminMonitorResponse: { type: object, additionalProperties: false, required: [monitor], properties: { monitor: { $ref: '#/components/schemas/AdminMonitor' }, checks: { type: array, items: { $ref: '#/components/schemas/AdminMonitorCheck' } }, heartbeat_token: { type: string, writeOnly: true }, heartbeat_endpoint: { type: string } } }
+    CreateAdminMonitorRequest: { type: object, additionalProperties: false, required: [name, kind, target], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [http, tcp, dns, tls, heartbeat] }, target: { type: string, minLength: 1, maxLength: 2048 }, interval_seconds: { type: integer, minimum: 5, maximum: 86400, default: 60 }, timeout_ms: { type: integer, minimum: 100, maximum: 120000, default: 5000 }, enabled: { type: boolean, default: true }, method: { type: string, enum: [GET, HEAD, POST, PUT, PATCH, OPTIONS] }, headers: { type: object, additionalProperties: { type: string, maxLength: 4096 }, writeOnly: true }, body: { type: string, maxLength: 1048576, writeOnly: true }, expected_status: { type: integer, minimum: 100, maximum: 599, default: 200 }, body_contains: { type: string, maxLength: 512, writeOnly: true }, latency_threshold_ms: { type: integer, minimum: 0, maximum: 120000 }, host: { type: string, maxLength: 253 }, port: { type: integer, minimum: 1, maximum: 65535 }, record_type: { type: string, enum: [A, AAAA, CNAME, TXT] }, expected_values: { type: array, maxItems: 32, items: { type: string, maxLength: 512 } }, grace_seconds: { type: integer, minimum: 0, maximum: 604800 }, certificate_expiry_days: { type: integer, minimum: 0, maximum: 3650 } } }
+    UpdateAdminMonitorRequest: { $ref: '#/components/schemas/CreateAdminMonitorRequest' }
+    AdminAlertRule: { type: object, additionalProperties: false, required: [id, name, kind, condition, severity, for_seconds, enabled, state, created_at, updated_at], properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [metric_threshold, error_rate, latency, log_match, service_health, disk_pressure, monitor_failure, heartbeat_failure, certificate_expiry] }, condition: { type: object, additionalProperties: true }, severity: { type: string, enum: [info, warning, critical] }, for_seconds: { type: integer, minimum: 0, maximum: 86400 }, enabled: { type: boolean }, state: { type: string, enum: [normal, pending, firing, resolved, muted] }, pending_since: { type: [string, 'null'], format: date-time }, last_evaluated_at: { type: [string, 'null'], format: date-time }, last_value: { type: [number, 'null'] }, last_error: { type: [string, 'null'], maxLength: 1000 }, created_by_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
+    AdminNotificationChannel: { type: object, additionalProperties: false, required: [id, name, kind, enabled, secret_configured, created_at, updated_at], properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [email, webhook, slack, discord, telegram] }, enabled: { type: boolean }, secret_configured: { type: boolean }, last_delivery_at: { type: [string, 'null'], format: date-time }, last_delivery_status: { type: [string, 'null'], enum: [success, failed, 'null'] }, last_error: { type: [string, 'null'], maxLength: 1000 }, created_by_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
+    AdminNotificationChannelsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }
+    CreateAdminNotificationChannelRequest: { type: object, additionalProperties: false, required: [name, kind, config], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [email, webhook, slack, discord, telegram] }, enabled: { type: boolean, default: true }, config: { type: object, additionalProperties: true, writeOnly: true } } }
+    AdminNotificationTestResponse: { type: object, additionalProperties: false, required: [delivery_id, status], properties: { delivery_id: { type: string, format: uuid }, status: { type: string, enum: [pending] } } }
+    AdminAlertEvent: { type: object, additionalProperties: false, required: [id, rule_id, state, message, occurred_at], properties: { id: { type: string, format: uuid }, rule_id: { type: string, format: uuid }, state: { type: string, enum: [firing, resolved] }, value: { type: [number, 'null'] }, message: { type: string, maxLength: 1000 }, occurred_at: { type: string, format: date-time } } }
+    AdminAlertRulesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAlertRule' } } } }
+    AdminAlertRuleResponse: { type: object, additionalProperties: false, required: [rule], properties: { rule: { $ref: '#/components/schemas/AdminAlertRule' }, events: { type: array, items: { $ref: '#/components/schemas/AdminAlertEvent' } } } }
+    CreateAdminAlertRuleRequest: { type: object, additionalProperties: false, required: [name, kind, condition, severity], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [metric_threshold, error_rate, latency, log_match, service_health, disk_pressure, monitor_failure, heartbeat_failure, certificate_expiry] }, condition: { type: object, additionalProperties: true, maxProperties: 16 }, severity: { type: string, enum: [info, warning, critical] }, for_seconds: { type: integer, minimum: 0, maximum: 86400, default: 0 }, enabled: { type: boolean, default: true } } }
+    AdminIncident: { type: object, additionalProperties: false, required: [id, title, severity, status, services, started_at, events, created_at, updated_at], properties: { id: { type: string, format: uuid }, title: { type: string }, severity: { type: string, enum: [info, warning, critical] }, status: { type: string, enum: [investigating, identified, monitoring, resolved] }, services: { type: array, items: { type: string } }, started_at: { type: string, format: date-time }, resolved_at: { type: [string, 'null'], format: date-time }, created_by_account_id: { type: [string, 'null'], format: uuid }, events: { type: array, items: { $ref: '#/components/schemas/AdminIncidentEvent' } }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
+    AdminIncidentEvent: { type: object, additionalProperties: false, required: [id, incident_id, kind, message, created_at], properties: { id: { type: string, format: uuid }, incident_id: { type: string, format: uuid }, kind: { type: string, enum: [alert, deployment, restart, backup, configuration, monitor, note] }, message: { type: string, maxLength: 2000 }, actor_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time } } }
+    AdminIncidentsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminIncident' } } } }
+    AdminIncidentResponse: { type: object, additionalProperties: false, required: [incident], properties: { incident: { $ref: '#/components/schemas/AdminIncident' } } }
+    CreateAdminIncidentRequest: { type: object, additionalProperties: false, required: [title, severity, services], properties: { title: { type: string, minLength: 3, maxLength: 240 }, severity: { type: string, enum: [info, warning, critical] }, status: { type: string, enum: [investigating, identified, monitoring, resolved], default: investigating }, services: { type: array, minItems: 1, maxItems: 32, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 128 } }, message: { type: string, maxLength: 2000 } } }
+    UpdateAdminIncidentRequest: { type: object, additionalProperties: false, minProperties: 1, properties: { title: { type: string, minLength: 3, maxLength: 240 }, severity: { type: string, enum: [info, warning, critical] }, status: { type: string, enum: [investigating, identified, monitoring, resolved] }, services: { type: array, minItems: 1, maxItems: 32, uniqueItems: true, items: { type: string, minLength: 1, maxLength: 128 } }, message: { type: string, maxLength: 2000 } } }
+    AddAdminIncidentEventRequest: { type: object, additionalProperties: false, required: [kind, message], properties: { kind: { type: string, enum: [alert, deployment, restart, backup, configuration, monitor, note] }, message: { type: string, minLength: 1, maxLength: 2000 } } }
+    AdminDashboard: { type: object, additionalProperties: false, required: [id, name, description, definition, created_at, updated_at], properties: { id: { type: string, format: uuid }, name: { type: string }, description: { type: string }, definition: { type: object, additionalProperties: true }, created_by_account_id: { type: [string, 'null'], format: uuid }, created_at: { type: string, format: date-time }, updated_at: { type: string, format: date-time } } }
+    AdminDashboardsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminDashboard' } } } }
+    AdminDashboardResponse: { type: object, additionalProperties: false, required: [dashboard], properties: { dashboard: { $ref: '#/components/schemas/AdminDashboard' } } }
+    CreateAdminDashboardRequest: { type: object, additionalProperties: false, required: [name, definition], properties: { name: { type: string, minLength: 1, maxLength: 120 }, description: { type: string, maxLength: 2000 }, definition: { type: object, additionalProperties: true, description: 'Saved panel definition using typed panel and query fields; arbitrary SQL is rejected by the API.' } } }
+    AdminStatusPageComponent: { type: object, additionalProperties: false, required: [name, status], properties: { name: { type: string, minLength: 1, maxLength: 80 }, status: { type: string, enum: [operational, degraded, partial_outage, major_outage, maintenance] }, description: { type: string, maxLength: 400 }, url: { type: string, format: uri, maxLength: 2048 } } }
+    AdminStatusPage: { type: object, additionalProperties: false, required: [name, description, is_public, components, published_incidents, updated_at], properties: { name: { type: string }, description: { type: string }, is_public: { type: boolean }, components: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/AdminStatusPageComponent' } }, published_incidents: { type: array, maxItems: 64, items: { type: string, format: uuid } }, updated_at: { type: string, format: date-time } } }
+    UpdateAdminStatusPageRequest: { type: object, additionalProperties: false, required: [name, is_public, components, published_incidents], properties: { name: { type: string, minLength: 1, maxLength: 160 }, description: { type: string, maxLength: 4000 }, is_public: { type: boolean }, components: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/AdminStatusPageComponent' } }, published_incidents: { type: array, maxItems: 64, uniqueItems: true, items: { type: string, format: uuid } } } }
+    AdminPublicIncident: { type: object, additionalProperties: false, required: [id, title, severity, status, services, started_at], properties: { id: { type: string, format: uuid }, title: { type: string }, severity: { type: string, enum: [info, warning, critical] }, status: { type: string, enum: [investigating, identified, monitoring, resolved] }, services: { type: array, items: { type: string } }, started_at: { type: string, format: date-time }, resolved_at: { type: [string, 'null'], format: date-time } } }
+    AdminPublicStatusPage: { type: object, additionalProperties: false, required: [name, description, components, incidents, updated_at], properties: { name: { type: string }, description: { type: string }, components: { type: array, items: { $ref: '#/components/schemas/AdminStatusPageComponent' } }, incidents: { type: array, items: { $ref: '#/components/schemas/AdminPublicIncident' } }, updated_at: { type: string, format: date-time } } }
     BuildInfo: { type: object, required: [version, commit, build_time], properties: { version: { type: string }, commit: { type: string }, build_time: { type: string } } }
     BootstrapStatusResponse: { type: object, additionalProperties: false, required: [setup_required], properties: { setup_required: { type: boolean, description: Whether the first Instance Owner still needs to be created. } } }
     BootstrapSessionResponse: { type: object, additionalProperties: false, required: [setup_code, expires_at], properties: { setup_code: { type: string, minLength: 22, maxLength: 22, pattern: '^STEALTH-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$', description: One-time code shown only to the CLI operator. }, expires_at: { type: string, format: date-time } } }

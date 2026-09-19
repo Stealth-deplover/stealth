@@ -1,0 +1,71 @@
+# This collector has no Docker socket. It talks to the internal
+# telemetry-docker-proxy, whose allowlist contains only the read endpoints
+# required by docker_stats. It has no OTLP receiver and exports only
+# receiver-produced metrics to the main collector.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  docker_stats:
+    endpoint: http://telemetry-docker-proxy:2375
+    collection_interval: 15s
+    timeout: 5s
+    # Keep the infrastructure contract explicit across receiver releases.
+    # The health/state instruments are optional in the pinned receiver.
+    metrics:
+      container.cpu.usage.total:
+        enabled: true
+      container.memory.usage.total:
+        enabled: true
+      container.network.io.usage.rx_bytes:
+        enabled: true
+      container.blockio.io_service_bytes_recursive:
+        enabled: true
+      container.state.status:
+        enabled: true
+      container.state.health.status:
+        enabled: true
+    container_labels_to_metric_labels:
+      com.docker.compose.project: docker.compose.project
+      com.docker.compose.service: service.name
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 160
+    spike_limit_mib: 40
+  resource:
+    attributes:
+      - key: service.name
+        value: stealth-container-metrics
+        action: insert
+      - key: deployment.environment
+        value: self-hosted
+        action: upsert
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 1024
+
+exporters:
+  otlp:
+    endpoint: otel-collector:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 256
+    retry_on_failure:
+      enabled: true
+      initial_interval: 2s
+      max_interval: 30s
+      max_elapsed_time: 0s
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [docker_stats]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]
