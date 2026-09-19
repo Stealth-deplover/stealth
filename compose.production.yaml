@@ -146,11 +146,12 @@ services:
       # explicitly masked so this collector cannot become a second Docker API
       # client. Container statistics stay in telemetry-docker below.
       - /dev/null:/hostfs/var/run/docker.sock:ro
-    # Docker's json-file logs are root:root 0640 on Linux. Keep the Collector
-    # non-root while granting only the supplementary group needed to read the
-    # already read-only container-log mount; the Docker socket remains masked.
-    group_add:
-      - "0"
+    # Docker's json-file directories are root:root 0710 and the files are
+    # root:root 0640 on Linux. The direct file_log receiver must enumerate and
+    # read that already read-only mount, so this service runs as root inside
+    # the container. It has no capabilities, cannot write the hostfs mount,
+    # and the Docker socket remains masked below.
+    user: "0:0"
     read_only: true
     tmpfs:
       - /tmp
