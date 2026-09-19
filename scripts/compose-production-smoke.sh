@@ -129,7 +129,7 @@ print_collector_self_telemetry() {
 }
 
 print_docker_filelog_diagnostics() {
-	local output service_container project_name container_ids container_id log_path
+	local output service_container project_name container_ids container_id log_path probe_uid
 	service_container="$("${compose[@]}" ps -q api 2>/dev/null || true)"
 	project_name=""
 	if [ -n "$service_container" ]; then
@@ -137,8 +137,7 @@ print_docker_filelog_diagnostics() {
 	fi
 	output="$(
 		{
-			printf 'Docker default logging driver: '
-			docker info --format '{{.LoggingDriver}}' 2>&1 || true
+			docker info --format 'Docker root={{.DockerRootDir}} logging_driver={{.LoggingDriver}} security={{json .SecurityOptions}}' 2>&1 || true
 			printf 'Compose project: %s\n' "${project_name:-unknown}"
 			if [ -n "$project_name" ]; then
 				container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=$project_name" 2>/dev/null || true)"
@@ -151,6 +150,12 @@ print_docker_filelog_diagnostics() {
 				if [ -n "$log_path" ] && [ -e "$log_path" ]; then
 					stat --format='log_file=%n mode=%A owner=%U:%G bytes=%s' "$log_path" 2>&1 || true
 				fi
+			done
+			for probe_uid in 0:0 10001:10001; do
+				printf 'Container read probe uid=%s:\n' "$probe_uid"
+				docker run --rm --log-driver=none --network none --user "$probe_uid" \
+					--volume /var/lib/docker/containers:/hostfs:ro alpine:3.24 \
+					sh -ec 'find /hostfs -maxdepth 2 -type f -name "*-json.log" -printf "%M %u:%g %s %p\\n" 2>&1 | head -5' || true
 			done
 			printf 'Docker JSON log files (bounded):\n'
 			find /var/lib/docker/containers -maxdepth 2 -type f -name '*-json.log' \
