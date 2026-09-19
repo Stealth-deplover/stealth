@@ -252,9 +252,13 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	case StepDependencies:
 		if !plan.Setup {
 			// StepServices may use --no-deps for external PostgreSQL/Redis.
-			// Run the ownership init explicitly so that path never bypasses the
-			// non-root Collector's persistent file_storage preparation.
+			// Run both ownership init services explicitly so that path never
+			// bypasses either non-root Collector's persistent file_storage
+			// preparation.
 			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "otelcol-state-init"); err != nil {
+				return err
+			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"); err != nil {
 				return err
 			}
 		}

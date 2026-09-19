@@ -194,20 +194,23 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 4 {
-		t.Fatalf("recorded calls = %#v, want state init, telemetry dependency, migration, and services", calls)
+	if len(calls) != 5 {
+		t.Fatalf("recorded calls = %#v, want both state inits, telemetry dependency, migration, and services", calls)
 	}
 	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
 		t.Fatalf("Collector state init command = %#v", calls[0])
 	}
-	if !equalArgs(calls[1].args[len(calls[1].args)-3:], []string{"up", "-d", "clickhouse"}) {
-		t.Fatalf("telemetry dependency command = %#v", calls[1])
+	if !equalArgs(calls[1].args[len(calls[1].args)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
+		t.Fatalf("Docker log Collector state init command = %#v", calls[1])
 	}
-	if !equalArgs(calls[2].args[len(calls[2].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[2])
+	if !equalArgs(calls[2].args[len(calls[2].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[2])
 	}
-	if !contains(calls[3].args, "--no-deps") || contains(calls[3].args, "postgres") || contains(calls[3].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[3])
+	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[3])
+	}
+	if !contains(calls[4].args, "--no-deps") || contains(calls[4].args, "postgres") || contains(calls[4].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[4])
 	}
 }
 
