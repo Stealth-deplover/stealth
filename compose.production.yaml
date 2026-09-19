@@ -157,8 +157,8 @@ services:
     cap_drop: [ALL]
     cap_add:
       - DAC_READ_SEARCH
-    security_opt:
-      - no-new-privileges:true
+    # no-new-privileges would clear the explicitly granted read/search
+    # capability when the scratch process starts as UID 10001.
     mem_limit: "${OTEL_COLLECTOR_MEMORY_LIMIT:-512m}"
     depends_on:
       otelcol-state-init:
