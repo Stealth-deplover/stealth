@@ -3,12 +3,15 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +29,7 @@ import (
 func TestAdminTelemetryQueriesRealClickHouseIntegration(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	clickHouseAddress := os.Getenv("TEST_CLICKHOUSE_ADDR")
+	collectorHTTP := os.Getenv("TEST_OTEL_COLLECTOR_HTTP")
 	if databaseURL == "" || clickHouseAddress == "" {
 		t.Skip("set TEST_DATABASE_URL and TEST_CLICKHOUSE_ADDR to run Admin telemetry integration tests")
 	}
@@ -104,6 +108,129 @@ func TestAdminTelemetryQueriesRealClickHouseIntegration(t *testing.T) {
 	if len(metrics.Items) != 1 || metrics.Items[0].Name != "smoke_metric" {
 		t.Fatalf("Admin metrics result = %+v", metrics)
 	}
+	if collectorHTTP == "" {
+		return
+	}
+
+	marker := fmt.Sprintf("admin-telemetry-redaction-%d", time.Now().UnixNano())
+	secret := "STEALTH_AUD01_ADMIN_SECRET_123456"
+	redactionTraceID := fmt.Sprintf("%032x", time.Now().UnixNano())
+	collectorTimestamp := time.Now().UTC().Truncate(time.Second)
+	emitAdminTelemetrySignal(t, collectorHTTP, "logs", map[string]any{
+		"resourceLogs": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAdminTelemetryAttribute("service.name", "telemetry.admin.integration"),
+				stringAdminTelemetryAttribute("smoke.marker", marker),
+				stringAdminTelemetryAttribute("client_secret", secret),
+			}},
+			"scopeLogs": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.admin.integration"},
+				"logRecords": []any{map[string]any{
+					"timeUnixNano": fmt.Sprintf("%d", collectorTimestamp.UnixNano()),
+					"body":         map[string]any{"stringValue": "password=" + secret + " " + marker},
+					"attributes": []any{
+						stringAdminTelemetryAttribute("smoke.marker", marker),
+						stringAdminTelemetryAttribute("message", "authorization: Bearer "+secret),
+					},
+				}},
+			}},
+		}},
+	})
+	emitAdminTelemetrySignal(t, collectorHTTP, "traces", map[string]any{
+		"resourceSpans": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAdminTelemetryAttribute("service.name", "telemetry.admin.integration"),
+				stringAdminTelemetryAttribute("smoke.marker", marker),
+				stringAdminTelemetryAttribute("access_token", secret),
+			}},
+			"scopeSpans": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.admin.integration"},
+				"spans": []any{map[string]any{
+					"traceId":           redactionTraceID,
+					"spanId":            "admin-redaction-span",
+					"name":              "GET /admin?token=" + secret,
+					"kind":              "SPAN_KIND_SERVER",
+					"startTimeUnixNano": fmt.Sprintf("%d", collectorTimestamp.Add(-time.Millisecond).UnixNano()),
+					"endTimeUnixNano":   fmt.Sprintf("%d", collectorTimestamp.UnixNano()),
+					"attributes": []any{
+						stringAdminTelemetryAttribute("smoke.marker", marker),
+						stringAdminTelemetryAttribute("api_key", secret),
+					},
+					"status": map[string]any{"message": "token=" + secret},
+				}},
+			}},
+		}},
+	})
+	emitAdminTelemetrySignal(t, collectorHTTP, "metrics", map[string]any{
+		"resourceMetrics": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAdminTelemetryAttribute("service.name", "telemetry.admin.integration"),
+				stringAdminTelemetryAttribute("smoke.marker", marker),
+				stringAdminTelemetryAttribute("refresh_token", secret),
+			}},
+			"scopeMetrics": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.admin.integration"},
+				"metrics": []any{map[string]any{
+					"name": "admin.redaction.metric",
+					"gauge": map[string]any{"dataPoints": []any{map[string]any{
+						"timeUnixNano": fmt.Sprintf("%d", collectorTimestamp.UnixNano()),
+						"asDouble":     1.0,
+						"attributes": []any{
+							stringAdminTelemetryAttribute("smoke.marker", marker),
+							stringAdminTelemetryAttribute("private_key", secret),
+						},
+					}}},
+				}},
+			}},
+		}},
+	})
+
+	adminRedactionQuery := "?from=" + url.QueryEscape(collectorTimestamp.Add(-time.Minute).Format(time.RFC3339Nano)) + "&to=" + url.QueryEscape(time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano))
+	var redactedLogs telemetry.LogsResult
+	var redactedTraces telemetry.TracesResult
+	var redactedMetrics telemetry.MetricsResult
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		requestJSON(t, ownerClient, http.MethodGet, server.URL+"/v1/admin/telemetry/logs"+adminRedactionQuery+"&query="+url.QueryEscape(marker), nil, http.StatusOK, &redactedLogs)
+		requestJSON(t, ownerClient, http.MethodGet, server.URL+"/v1/admin/telemetry/traces"+adminRedactionQuery+"&trace_id="+url.QueryEscape(redactionTraceID), nil, http.StatusOK, &redactedTraces)
+		requestJSON(t, ownerClient, http.MethodGet, server.URL+"/v1/admin/telemetry/metrics"+adminRedactionQuery+"&name=admin.redaction.metric", nil, http.StatusOK, &redactedMetrics)
+		if len(redactedLogs.Items) == 1 && len(redactedTraces.Items) == 1 && len(redactedMetrics.Items) == 1 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if len(redactedLogs.Items) != 1 || len(redactedTraces.Items) != 1 || len(redactedMetrics.Items) != 1 {
+		t.Fatalf("Admin ingest redaction results = logs:%d traces:%d metrics:%d", len(redactedLogs.Items), len(redactedTraces.Items), len(redactedMetrics.Items))
+	}
+	if strings.Contains(fmt.Sprintf("%+v", redactedLogs.Items[0]), secret) || strings.Contains(fmt.Sprintf("%+v", redactedTraces.Items[0]), secret) || strings.Contains(fmt.Sprintf("%+v", redactedMetrics.Items[0]), secret) {
+		t.Fatalf("Admin API returned an ingest secret: logs=%+v traces=%+v metrics=%+v", redactedLogs.Items[0], redactedTraces.Items[0], redactedMetrics.Items[0])
+	}
+}
+
+func emitAdminTelemetrySignal(t *testing.T, collectorHTTP, signal string, payload map[string]any) {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/v1/%s", collectorHTTP, signal), bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatalf("send Admin redaction %s signal: %v", signal, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		t.Fatalf("send Admin redaction %s signal returned HTTP %d: %s", signal, response.StatusCode, body)
+	}
+}
+
+func stringAdminTelemetryAttribute(key, value string) map[string]any {
+	return map[string]any{"key": key, "value": map[string]any{"stringValue": value}}
 }
 
 func createAdminTelemetryTestTables(t *testing.T, ctx context.Context, connection driver.Conn) {

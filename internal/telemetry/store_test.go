@@ -120,6 +120,18 @@ func TestTelemetryOutputRedactsSensitiveFields(t *testing.T) {
 	if got := redactText("Authorization: Bearer abc.def"); !strings.Contains(got, "[REDACTED]") || strings.Contains(got, "abc.def") {
 		t.Fatalf("authorization was not redacted: %q", got)
 	}
+	for _, value := range []string{
+		`refresh_token=top-secret`,
+		`https://user:top-secret@example.test/health`,
+		`{"password":"top-secret"}`,
+	} {
+		if got := redactText(value); strings.Contains(got, "top-secret") {
+			t.Fatalf("sensitive value survived redaction: input=%q output=%q", value, got)
+		}
+	}
+	if got := redactAttributes(map[string]string{"client_secret": "top-secret"})["client_secret"]; got != "[REDACTED]" {
+		t.Fatalf("client secret was not redacted: %q", got)
+	}
 }
 
 func TestTelemetrySchemaMigrationUsesPinnedVersionAndSafeIdentifier(t *testing.T) {

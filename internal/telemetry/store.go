@@ -526,8 +526,9 @@ func boundedFilter(value string, maximum int) string {
 	return value
 }
 
-var sensitiveKeyPattern = regexp.MustCompile(`(?i)(pass(word)?|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|client[_-]?secret)`)
-var sensitiveTextPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/-]+|((?:password|secret|token|api[_-]?key|authorization)\s*[:=]\s*(?:bearer\s+)?)` + "[^\\s,;]+")
+var sensitiveKeyPattern = regexp.MustCompile(`(?i)(^|[._-])(password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)([._-]|$)`)
+var sensitiveTextPattern = regexp.MustCompile(`(?i)((?:bearer|basic)\s+|(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)['"]?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)(["']?)[^\s,;{}"']+`)
+var sensitiveURLPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/\s]+:)[^@/\s]+`)
 
 func redactAttributes(attributes map[string]string) map[string]string {
 	if len(attributes) == 0 {
@@ -548,5 +549,6 @@ func redactText(value string) string {
 	if value == "" {
 		return value
 	}
-	return sensitiveTextPattern.ReplaceAllString(value, `$1$2[REDACTED]`)
+	value = sensitiveTextPattern.ReplaceAllString(value, `$1$2[REDACTED]`)
+	return sensitiveURLPattern.ReplaceAllString(value, `$1[REDACTED]`)
 }

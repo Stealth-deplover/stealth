@@ -160,8 +160,8 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:13133/ >/dev/null
-          go test ./internal/httpapi -run Integration -count=1
-          go test ./internal/telemetry -run Integration -count=1
+          go test ./internal/httpapi -run Integration -count=1 -v
+          go test ./internal/telemetry -run Integration -count=1 -v
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .

@@ -61,6 +61,35 @@ func TestMainCollectorDoesNotOwnHostCollectors(t *testing.T) {
 	}
 }
 
+func TestMainCollectorRedactsSignalsBeforeClickHouse(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
+	for _, expected := range []string{
+		"redaction/telemetry:",
+		"transform/telemetry:",
+		"blocked_key_patterns:",
+		"blocked_values:",
+		"summary: silent",
+		"context: span",
+		"context: spanevent",
+		"context: metric",
+		"replace_pattern(span.status.message",
+		"replace_pattern(span.name",
+		"replace_pattern(metric.description",
+		"exporters: [clickhouse]",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("main collector redaction contract is missing %q", expected)
+		}
+	}
+	for _, pipeline := range []string{
+		"processors: [memory_limiter, redaction/telemetry, transform/telemetry, resource, batch]",
+	} {
+		if strings.Count(config, pipeline) != 3 {
+			t.Fatalf("expected all three ClickHouse pipelines to use %q exactly three times", pipeline)
+		}
+	}
+}
+
 func TestHostMetricsCollectorUsesReadOnlyHostRootWithoutOTLPReceiver(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "host-metrics.yaml")
 	if !strings.Contains(config, "hostmetrics:") || !strings.Contains(config, "root_path: /hostfs") {

@@ -95,6 +95,15 @@ exporter (`0.161.0`) owns the OTel-compatible signal tables and uses a
 persistent sending queue backed by `otelcol_state`. The ClickHouse data volume
 is separate from PostgreSQL and is retained in `clickhouse_data`.
 
+Before the ClickHouse exporter, the main Collector applies the pinned Contrib
+redaction processor to every logs, traces, and metrics pipeline. It removes or
+masks sensitive attribute keys and common secret-bearing values in resource,
+scope, datapoint, span-event, and log-body data. A small transform also covers
+scalar fields such as span names, span status messages, and metric metadata.
+The Admin API keeps its existing response redaction as defense in depth for
+legacy rows. The raw secret must therefore be absent before an exporter
+`INSERT`, not merely hidden from the Console.
+
 The exporter tables are named:
 
 | Signal | Tables |

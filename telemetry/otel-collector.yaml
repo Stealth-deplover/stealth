@@ -57,6 +57,48 @@ processors:
     check_interval: 1s
     limit_mib: 384
     spike_limit_mib: 96
+  # This is the persistence boundary. Redact attributes, resource/scope
+  # attributes, span events, and log bodies before any signal reaches
+  # ClickHouse. API-side redaction remains defense in depth for legacy rows.
+  redaction/telemetry:
+    allow_all_keys: true
+    redact_all_types: true
+    blocked_key_patterns:
+      - '(?i)(^|[._-])(password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)([._-]|$)'
+    blocked_values:
+      - '(?i)(?:bearer|basic)[[:space:]]+[A-Za-z0-9._~+/-]+=*'
+      - '(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[''\"]?[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+'
+      - '(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[''\"]?[[:space:]]*[:=][[:space:]]*[^[:space:],;]+'
+      - '(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@'
+    summary: silent
+  # The redaction processor covers structured fields and log bodies. These
+  # scalar trace/metric fields are also persisted by the ClickHouse exporter
+  # and need the same common-form secret scrub.
+  transform/telemetry:
+    error_mode: silent
+    trace_statements:
+      - context: span
+        statements:
+          - replace_pattern(span.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(span.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(span.name, "(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@", "[REDACTED]")
+          - replace_pattern(span.status.message, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(span.status.message, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(span.status.message, "(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@", "[REDACTED]")
+      - context: spanevent
+        statements:
+          - replace_pattern(spanevent.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(spanevent.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(spanevent.name, "(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@", "[REDACTED]")
+    metric_statements:
+      - context: metric
+        statements:
+          - replace_pattern(metric.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(metric.name, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(metric.name, "(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@", "[REDACTED]")
+          - replace_pattern(metric.description, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*(?:bearer|basic)[[:space:]]+[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(metric.description, "(?i)(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)[[:space:]]*[:=][[:space:]]*[^[:space:],;]+", "[REDACTED]")
+          - replace_pattern(metric.description, "(?i)[a-z][a-z0-9+.-]*://[^:/[:space:]]+:[^@/[:space:]]+@", "[REDACTED]")
   resource:
     attributes:
       - key: deployment.environment
@@ -126,13 +168,13 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
+      processors: [memory_limiter, redaction/telemetry, transform/telemetry, resource, batch]
       exporters: [clickhouse]
     metrics:
       receivers: [otlp, prometheus, postgresql, redis]
-      processors: [memory_limiter, resource, batch]
+      processors: [memory_limiter, redaction/telemetry, transform/telemetry, resource, batch]
       exporters: [clickhouse]
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
+      processors: [memory_limiter, redaction/telemetry, transform/telemetry, resource, batch]
       exporters: [clickhouse]
