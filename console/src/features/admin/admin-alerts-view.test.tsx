@@ -1,6 +1,51 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AdminAlertsView } from "./admin-alerts-view";
+
+const fetchNextPage = vi.hoisted(() => vi.fn());
+const useAdminAlertEvents = vi.hoisted(() =>
+  vi.fn(() => ({
+    data: {
+      pages: [
+        {
+          items: [
+            {
+              id: "event-deleted",
+              rule_id: "rule-deleted",
+              rule_name: "Deleted CPU threshold",
+              rule_kind: "metric_threshold",
+              severity: "critical",
+              state: "firing",
+              value: 91,
+              message: "CPU threshold exceeded",
+              occurred_at: "2026-09-20T00:00:00Z",
+              source_rule_exists: false,
+            },
+            {
+              id: "event-active",
+              rule_id: "rule-active",
+              rule_name: "Active API threshold",
+              rule_kind: "service_health",
+              severity: "warning",
+              state: "resolved",
+              value: null,
+              message: "API recovered",
+              occurred_at: "2026-09-20T00:01:00Z",
+              source_rule_exists: true,
+            },
+          ],
+          next_cursor: "cursor-for-older-history",
+        },
+      ],
+    },
+    error: null,
+    fetchNextPage,
+    hasNextPage: true,
+    isFetchingNextPage: false,
+    isPending: false,
+    refetch: vi.fn(),
+  })),
+);
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/admin/alerts",
@@ -20,39 +65,7 @@ vi.mock("@/api/mutations", () => ({
 }));
 
 vi.mock("@/api/queries", () => ({
-  useAdminAlertEvents: () => ({
-    data: {
-      items: [
-        {
-          id: "event-deleted",
-          rule_id: "rule-deleted",
-          rule_name: "Deleted CPU threshold",
-          rule_kind: "metric_threshold",
-          severity: "critical",
-          state: "firing",
-          value: 91,
-          message: "CPU threshold exceeded",
-          occurred_at: "2026-09-20T00:00:00Z",
-          source_rule_exists: false,
-        },
-        {
-          id: "event-active",
-          rule_id: "rule-active",
-          rule_name: "Active API threshold",
-          rule_kind: "service_health",
-          severity: "warning",
-          state: "resolved",
-          value: null,
-          message: "API recovered",
-          occurred_at: "2026-09-20T00:01:00Z",
-          source_rule_exists: true,
-        },
-      ],
-    },
-    error: null,
-    isPending: false,
-    refetch: vi.fn(),
-  }),
+  useAdminAlertEvents,
   useAdminAlerts: () => ({
     data: {
       items: [
@@ -85,6 +98,10 @@ vi.mock("@/api/queries", () => ({
 vi.mock("./admin-time-range", () => ({
   AdminTimeRange: () => null,
   useAdminTimeRange: () => ({
+    query: {
+      from: "2026-09-20T00:00:00.000Z",
+      to: "2026-09-20T01:00:00.000Z",
+    },
     rangeKey: "1h",
     refreshKey: "30s",
     customRange: undefined,
@@ -112,5 +129,15 @@ describe("AdminAlertsView", () => {
     expect(
       within(tables[1]).getByText("Deleted CPU threshold"),
     ).toBeInTheDocument();
+    expect(useAdminAlertEvents).toHaveBeenCalledWith(
+      {
+        from: "2026-09-20T00:00:00.000Z",
+        to: "2026-09-20T01:00:00.000Z",
+        limit: 50,
+      },
+      { refetchInterval: false },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
   });
 });

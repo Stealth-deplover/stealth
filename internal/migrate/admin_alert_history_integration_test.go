@@ -92,14 +92,67 @@ func TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration(t 
 	}
 }
 
+func TestAdminAlertHistoryGlobalIndexMigrationIntegration(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set TEST_DATABASE_URL to run PostgreSQL integration tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Release)
+
+	schema := fmt.Sprintf("aud04_history_global_idx_%d", time.Now().UnixNano())
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	})
+	if _, err := conn.Exec(ctx, "SET search_path TO "+schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyMigrationsBefore(ctx, conn, files, "000048_admin_alert_history_global_idx.up.sql"); err != nil {
+		t.Fatal(err)
+	}
+	migrationSQL, err := files.ReadFile("migrations/000048_admin_alert_history_global_idx.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, string(migrationSQL)); err != nil {
+		t.Fatal(err)
+	}
+	var indexDefinition string
+	if err := conn.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname=current_schema() AND indexname='admin_alert_events_time_id_idx'`).Scan(&indexDefinition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexDefinition, "(occurred_at DESC, id DESC)") {
+		t.Fatalf("global alert history index definition = %q, want occurred_at/id ordering", indexDefinition)
+	}
+}
+
 func applyMigrationsBeforeAlertHistory(ctx context.Context, conn *pgxpool.Conn, embedded fs.FS) error {
+	return applyMigrationsBefore(ctx, conn, embedded, "000047_admin_alert_history.up.sql")
+}
+
+func applyMigrationsBefore(ctx context.Context, conn *pgxpool.Conn, embedded fs.FS, before string) error {
 	entries, err := fs.ReadDir(embedded, "migrations")
 	if err != nil {
 		return err
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".up.sql") && entry.Name() < "000047_admin_alert_history.up.sql" {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".up.sql") && entry.Name() < before {
 			names = append(names, entry.Name())
 		}
 	}

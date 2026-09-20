@@ -97,16 +97,20 @@ jobs:
             done
           }
           run_and_require_tests ./internal/repository \
-            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration)$' \
+            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration)$' \
             TestDeleteAlertRuleAfterNotificationDeliveryIntegration \
             TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration \
             TestDeleteAlertRuleNeverFiredIntegration \
             TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration \
             TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration \
-            TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration
+            TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration \
+            TestQueryAdminAlertEventsGlobalCursorPaginationIntegration \
+            TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration \
+            TestQueryAdminAlertEventsTimeRangeIntegration
           run_and_require_tests ./internal/migrate \
-            '^TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration$' \
-            TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration
+            '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration)$' \
+            TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration \
+            TestAdminAlertHistoryGlobalIndexMigrationIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestDeleteAdminAlertRulePreservesHistoryIntegration$' \
             TestDeleteAdminAlertRulePreservesHistoryIntegration

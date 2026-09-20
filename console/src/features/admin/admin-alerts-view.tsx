@@ -44,12 +44,18 @@ export function AdminAlertsView() {
     { refetchInterval: timeRange.refreshInterval },
   );
   const history = useAdminAlertEvents(
-    { limit: 50 },
+    {
+      from: timeRange.query.from,
+      to: timeRange.query.to,
+      limit: 50,
+    },
     { refetchInterval: timeRange.refreshInterval },
   );
   const remove = useDeleteAdminAlert();
   const [dialogOpen, setDialogOpen] = useState(false);
   const monitors = useAdminMonitors({ limit: 100 });
+  const historyItems =
+    history.data?.pages.flatMap((page) => page?.items ?? []) ?? [];
 
   return (
     <AdminShell>
@@ -206,10 +212,10 @@ export function AdminAlertsView() {
             />
           </div>
         ) : null}
-        {history.data && !history.data.items.length ? (
+        {history.data && !historyItems.length ? (
           <p className="p-6 text-sm text-fog">No alert history recorded yet.</p>
         ) : null}
-        {history.data?.items.length ? (
+        {historyItems.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-sm">
               <thead className="border-b border-graphite bg-white/[0.02] text-xs uppercase tracking-[0.1em] text-fog">
@@ -222,7 +228,7 @@ export function AdminAlertsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-graphite">
-                {history.data.items.map((event) => (
+                {historyItems.map((event) => (
                   <tr
                     key={event.id}
                     className="align-top hover:bg-white/[0.025]"
@@ -263,6 +269,19 @@ export function AdminAlertsView() {
                 ))}
               </tbody>
             </table>
+          </div>
+        ) : null}
+        {history.hasNextPage ? (
+          <div className="border-t border-graphite p-4">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => history.fetchNextPage()}
+              disabled={history.isFetchingNextPage}
+            >
+              {history.isFetchingNextPage ? "Loading older…" : "Load older"}
+            </Button>
           </div>
         ) : null}
       </section>
