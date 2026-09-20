@@ -8,6 +8,7 @@ import { useUpdateAdminStatusPage } from "@/api/mutations";
 import type { components } from "@/api/generated/schema";
 import { AdminStatusPageComponentStatus } from "@/api/generated/schema";
 import { ErrorState, errorMessage } from "@/components/feedback/error-state";
+import { InlineError } from "@/components/feedback/inline-error";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -238,7 +239,9 @@ export function AdminStatusPageView() {
           </CardHeader>
           <CardContent className="space-y-3">
             {incidents.error ? (
-              <p className="text-sm text-fog">Incident list unavailable.</p>
+              <InlineError>
+                Incident list is unavailable. Refresh this page to retry.
+              </InlineError>
             ) : null}
             {incidents.data?.items.length
               ? incidents.data.items.map((incident) => {

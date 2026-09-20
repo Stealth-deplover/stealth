@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -39,8 +45,12 @@ import {
   type SetupStep,
 } from "./browser-setup-model";
 
-function fieldError(message: string | undefined) {
-  return message ? <p className="text-xs text-rose-300">{message}</p> : null;
+function fieldError(id: string, message: string | undefined) {
+  return message ? (
+    <p id={id} className="text-xs text-rose-300" role="alert">
+      {message}
+    </p>
+  ) : null;
 }
 
 function safeError(error: unknown) {
@@ -178,17 +188,37 @@ function Field({
   label: string;
   hint?: string;
   error?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
+  const hintID = `${id}-hint`;
+  const errorID = `${id}-error`;
+  const control =
+    error &&
+    isValidElement<{
+      "aria-describedby"?: string;
+      "aria-invalid"?: boolean;
+    }>(children)
+      ? cloneElement(children, {
+          "aria-describedby": hint ? `${hintID} ${errorID}` : errorID,
+          "aria-invalid": true,
+        })
+      : children;
+
   return (
     <div className="space-y-2">
       <Label htmlFor={id}>{label}</Label>
-      {children}
-      {hint ? <p className="text-xs leading-5 text-slate-600">{hint}</p> : null}
-      {fieldError(error)}
+      {control}
+      {hint ? (
+        <p id={hintID} className="text-xs leading-5 text-slate-600">
+          {hint}
+        </p>
+      ) : null}
+      {fieldError(errorID, error)}
     </div>
   );
 }
+
+export { Field as BrowserSetupField };
 
 function StageHeader({
   eyebrow,
@@ -671,19 +701,18 @@ export function BrowserSetupView() {
                   id="instance-name"
                   label="Instance name"
                   hint="This label stays inside your installation."
+                  error={configForm.formState.errors.instance_name?.message}
                 >
                   <Input
                     id="instance-name"
                     {...configForm.register("instance_name")}
                   />
-                  {fieldError(
-                    configForm.formState.errors.instance_name?.message,
-                  )}
                 </Field>
                 <Field
                   id="public-url"
                   label="Public Console URL"
                   hint="Use the final URL, without a path, query, or fragment."
+                  error={configForm.formState.errors.public_url?.message}
                 >
                   <Input
                     id="public-url"
@@ -691,7 +720,6 @@ export function BrowserSetupView() {
                     placeholder="https://console.example.com"
                     {...configForm.register("public_url")}
                   />
-                  {fieldError(configForm.formState.errors.public_url?.message)}
                 </Field>
               </div>
               <StageActions
@@ -797,31 +825,36 @@ export function BrowserSetupView() {
                     </div>
                   ) : (
                     <form onSubmit={saveManualGitHub} className="space-y-5">
-                      <Field id="github-client-id" label="Client ID">
+                      <Field
+                        id="github-client-id"
+                        label="Client ID"
+                        error={manualForm.formState.errors.client_id?.message}
+                      >
                         <Input
                           id="github-client-id"
                           autoComplete="off"
                           {...manualForm.register("client_id")}
                         />
-                        {fieldError(
-                          manualForm.formState.errors.client_id?.message,
-                        )}
                       </Field>
-                      <Field id="github-client-secret" label="Client secret">
+                      <Field
+                        id="github-client-secret"
+                        label="Client secret"
+                        error={
+                          manualForm.formState.errors.client_secret?.message
+                        }
+                      >
                         <Input
                           id="github-client-secret"
                           type="password"
                           autoComplete="new-password"
                           {...manualForm.register("client_secret")}
                         />
-                        {fieldError(
-                          manualForm.formState.errors.client_secret?.message,
-                        )}
                       </Field>
                       <Field
                         id="github-private-key"
                         label="Private key"
                         hint="Paste the complete PEM value. It is submitted only to the setup API."
+                        error={manualForm.formState.errors.private_key?.message}
                       >
                         <Textarea
                           id="github-private-key"
@@ -829,9 +862,6 @@ export function BrowserSetupView() {
                           spellCheck={false}
                           {...manualForm.register("private_key")}
                         />
-                        {fieldError(
-                          manualForm.formState.errors.private_key?.message,
-                        )}
                       </Field>
                       <Field
                         id="github-webhook-secret"

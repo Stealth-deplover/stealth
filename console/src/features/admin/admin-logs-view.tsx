@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Download, History, Search, X } from "lucide-react";
+import { ChevronRight, Download, History, Search, X } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAdminLogTail, useAdminLogs } from "@/api/queries";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -14,6 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -39,6 +40,28 @@ function readLogQueryHistory(): string[] {
   } catch {
     return [];
   }
+}
+
+export function AdminLogTailStatus({
+  connected,
+  error,
+}: {
+  connected: boolean;
+  error: string | null;
+}) {
+  return (
+    <div
+      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fog"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span>
+        {connected ? "Streaming new records" : "Connecting to live stream"}
+      </span>
+      {error ? <span className="text-coral-red">{error}</span> : null}
+    </div>
+  );
 }
 
 export function AdminLogsView() {
@@ -106,23 +129,16 @@ export function AdminLogsView() {
             <AdminTimeRange
               rangeKey={timeRange.rangeKey}
               refreshKey={timeRange.refreshKey}
+              customRange={timeRange.customRange}
               onRangeChange={timeRange.setRange}
               onRefreshChange={timeRange.setRefresh}
+              onCustomRangeChange={timeRange.setCustomRange}
             />
           </div>
         }
       />
       {tailEnabled ? (
-        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fog">
-          <span>
-            {tail.connected
-              ? "Streaming new records"
-              : "Connecting to live stream"}
-          </span>
-          {tail.error ? (
-            <span className="text-coral-red">{tail.error}</span>
-          ) : null}
-        </div>
+        <AdminLogTailStatus connected={tail.connected} error={tail.error} />
       ) : null}
       <Card className="mb-4">
         <CardContent className="space-y-3 p-4">
@@ -175,7 +191,7 @@ export function AdminLogsView() {
                       const next = event.target.value;
                       if (next) setDraftQuery(next);
                     }}
-                    className="max-w-[220px] rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none"
+                    className="min-h-11 max-w-[220px] rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none"
                   >
                     <option value="">History</option>
                     {queryHistory.map((item) => (
@@ -302,7 +318,7 @@ type AdminLogItem = {
   resource_attributes?: Record<string, string>;
 };
 
-function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
+export function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<AdminLogItem | null>(null);
   // TanStack Virtual intentionally exposes an imperative virtualizer instance;
@@ -328,7 +344,8 @@ function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
         >
           <div
             role="row"
-            className="sticky top-0 z-10 grid grid-cols-[150px_130px_90px_minmax(300px,1fr)_170px] border-b border-graphite bg-carbon text-xs uppercase tracking-[0.1em] text-fog"
+            aria-rowindex={1}
+            className="sticky top-0 z-10 grid grid-cols-[150px_130px_90px_minmax(300px,1fr)_170px_116px] border-b border-graphite bg-carbon text-xs uppercase tracking-[0.1em] text-fog"
           >
             <div role="columnheader" className="px-4 py-3 font-medium">
               Time
@@ -345,8 +362,12 @@ function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
             <div role="columnheader" className="px-4 py-3 font-medium">
               Trace
             </div>
+            <div role="columnheader" className="px-4 py-3 font-medium">
+              Detail
+            </div>
           </div>
           <div
+            role="rowgroup"
             style={{
               height: `${virtualizer.getTotalSize()}px`,
               position: "relative",
@@ -355,37 +376,54 @@ function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const item = items[virtualRow.index];
               return (
-                <button
+                <div
                   key={virtualRow.key}
-                  type="button"
                   role="row"
-                  className="absolute left-0 grid h-[72px] w-full grid-cols-[150px_130px_90px_minmax(300px,1fr)_170px] border-b border-graphite text-left align-top transition-colors duration-150 hover:bg-white/[0.025] focus-visible:bg-white/[0.04]"
+                  aria-rowindex={virtualRow.index + 2}
+                  className="absolute left-0 grid h-[72px] w-full grid-cols-[150px_130px_90px_minmax(300px,1fr)_170px_116px] border-b border-graphite text-left align-top transition-colors duration-150 hover:bg-white/[0.025]"
                   style={{
                     top: 0,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  onClick={() => setSelected(item)}
-                  aria-label={`Open log from ${item.service}`}
                 >
-                  <span className="whitespace-nowrap px-4 py-3 font-mono text-xs text-fog">
+                  <span
+                    role="cell"
+                    className="whitespace-nowrap px-4 py-3 font-mono text-xs text-fog"
+                  >
                     {formatDate(item.timestamp)}
                   </span>
-                  <span className="truncate px-4 py-3 text-mist">
+                  <span role="cell" className="truncate px-4 py-3 text-mist">
                     {item.service}
                   </span>
-                  <span className="px-4 py-3">
+                  <span role="cell" className="px-4 py-3">
                     <Badge variant="neutral">{item.level ?? "unknown"}</Badge>
                   </span>
                   <span
+                    role="cell"
                     className="truncate px-4 py-3 text-mist"
                     title={item.message}
                   >
                     {item.message}
                   </span>
-                  <span className="truncate px-4 py-3 font-mono text-xs text-fog">
+                  <span
+                    role="cell"
+                    className="truncate px-4 py-3 font-mono text-xs text-fog"
+                  >
                     {item.trace_id ?? "none"}
                   </span>
-                </button>
+                  <span role="cell" className="px-2 py-3">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setSelected(item)}
+                      aria-label={`Open log from ${item.service}`}
+                    >
+                      Open{" "}
+                      <ChevronRight className="size-3.5" aria-hidden="true" />
+                    </Button>
+                  </span>
+                </div>
               );
             })}
           </div>
@@ -395,13 +433,15 @@ function VirtualizedLogTable({ items }: { items: AdminLogItem[] }) {
         open={selected !== null}
         onOpenChange={(open) => !open && setSelected(null)}
       >
-        <DialogHeader>
-          <DialogTitle>Log detail</DialogTitle>
-          <DialogDescription>
-            Structured fields are redacted at the telemetry query boundary.
-          </DialogDescription>
-        </DialogHeader>
-        {selected ? <LogDetail item={selected} /> : null}
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Log detail</DialogTitle>
+            <DialogDescription>
+              Structured fields are redacted at the telemetry query boundary.
+            </DialogDescription>
+          </DialogHeader>
+          {selected ? <LogDetail item={selected} /> : null}
+        </DialogContent>
       </Dialog>
     </>
   );

@@ -83,23 +83,19 @@ export function AdminIncidentsView() {
               </thead>
               <tbody className="divide-y divide-graphite">
                 {incidents.data.items.map((incident) => (
-                  <tr
-                    key={incident.id}
-                    tabIndex={0}
-                    className="cursor-pointer hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-acid-lime/70"
-                    onClick={() => setSelectedId(incident.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedId(incident.id);
-                      }
-                    }}
-                  >
+                  <tr key={incident.id} className="hover:bg-white/[0.025]">
                     <td className="px-4 py-4">
-                      <p className="text-mist">{incident.title}</p>
-                      <p className="mt-1 font-mono text-[11px] text-fog">
-                        {incident.id}
-                      </p>
+                      <button
+                        type="button"
+                        className="-m-2 flex min-h-11 w-full flex-col items-start justify-center rounded-md p-2 text-left transition-colors duration-150 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/70"
+                        onClick={() => setSelectedId(incident.id)}
+                        aria-label={`Open incident: ${incident.title}`}
+                      >
+                        <span className="text-mist">{incident.title}</span>
+                        <span className="mt-1 font-mono text-[11px] text-fog">
+                          {incident.id}
+                        </span>
+                      </button>
                     </td>
                     <td className="px-4 py-4">
                       <Badge

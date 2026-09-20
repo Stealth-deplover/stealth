@@ -124,7 +124,7 @@ function LogToolbar({
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Filter current view"
-          className="h-8 pl-8 text-xs"
+          className="min-h-11 pl-8 text-xs"
           aria-label="Filter current log view"
         />
       </div>

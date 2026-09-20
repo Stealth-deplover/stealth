@@ -16,6 +16,7 @@ import {
 } from "@/api/queries";
 import { PathsV1AdminInfrastructureMetricsGetParametersQueryScope } from "@/api/generated/schema";
 import { ErrorState } from "@/components/feedback/error-state";
+import { InlineError } from "@/components/feedback/inline-error";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -78,8 +79,10 @@ export function AdminOverviewView() {
           <AdminTimeRange
             rangeKey={timeRange.rangeKey}
             refreshKey={timeRange.refreshKey}
+            customRange={timeRange.customRange}
             onRangeChange={timeRange.setRange}
             onRefreshChange={timeRange.setRefresh}
+            onCustomRangeChange={timeRange.setCustomRange}
           />
         }
       />
@@ -236,7 +239,9 @@ export function AdminOverviewView() {
           <CardContent>
             {sources.isPending ? <LoadingState rows={2} /> : null}
             {sources.error ? (
-              <p className="text-sm text-fog">Telemetry sources unavailable.</p>
+              <InlineError>
+                Telemetry sources are unavailable. Open Sources to retry.
+              </InlineError>
             ) : null}
             {!sources.isPending &&
             !sources.error &&

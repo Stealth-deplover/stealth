@@ -80,24 +80,25 @@ export function AdminInfrastructureView() {
           <AdminTimeRange
             rangeKey={timeRange.rangeKey}
             refreshKey={timeRange.refreshKey}
+            customRange={timeRange.customRange}
             onRangeChange={timeRange.setRange}
             onRefreshChange={timeRange.setRefresh}
+            onCustomRangeChange={timeRange.setCustomRange}
           />
         }
       />
       <div
         className="mb-4 flex flex-wrap gap-2"
-        role="tablist"
+        role="group"
         aria-label="Infrastructure scope"
       >
         {scopes.map((item) => (
           <button
             key={item.value}
             type="button"
-            role="tab"
-            aria-selected={scope === item.value}
+            aria-pressed={scope === item.value}
             onClick={() => setScope(item.value)}
-            className={`rounded-md border px-3 py-2 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60 ${scope === item.value ? "border-smoke bg-white/[0.08] text-paper" : "border-graphite text-fog hover:border-smoke hover:text-mist"}`}
+            className={`min-h-11 rounded-md border px-3 py-2 text-sm transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60 ${scope === item.value ? "border-smoke bg-white/[0.08] text-paper" : "border-graphite text-fog hover:border-smoke hover:text-mist"}`}
           >
             {item.label}
           </button>

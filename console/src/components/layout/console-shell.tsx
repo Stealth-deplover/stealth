@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCurrentAccount } from "@/api/queries";
 import { ApiError } from "@/api/client";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
@@ -44,22 +45,25 @@ function ConsoleShellContent({
   if (account.isPending)
     return (
       <div className="flex min-h-screen items-center justify-center bg-void">
-        <div className="w-72 space-y-3">
+        <LoadingState label="Loading account…" className="w-72">
           <Skeleton className="mx-auto size-12 rounded-2xl" />
-          <Skeleton className="h-4 w-40 mx-auto" />
-          <Skeleton className="h-3 w-56 mx-auto" />
-        </div>
+          <Skeleton className="mx-auto h-4 w-40" />
+          <Skeleton className="mx-auto h-3 w-56" />
+        </LoadingState>
       </div>
     );
   if (unauthorized)
     return (
       <div className="flex min-h-screen items-center justify-center bg-void">
-        <div className="w-72 space-y-3">
+        <LoadingState
+          label="Session expired. Returning to sign in…"
+          className="w-72"
+        >
           <Skeleton className="mx-auto size-12 rounded-2xl" />
           <p className="text-center text-xs text-slate-500">
             Session expired. Returning to sign in…
           </p>
-        </div>
+        </LoadingState>
       </div>
     );
   if (account.error)

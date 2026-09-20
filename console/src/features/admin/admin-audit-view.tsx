@@ -81,7 +81,7 @@ export function AdminAuditView() {
             <div className="border-t border-graphite p-4">
               <button
                 type="button"
-                className="text-xs text-mist underline-offset-4 hover:text-paper hover:underline"
+                className="inline-flex min-h-11 items-center px-2 text-xs text-mist underline-offset-4 hover:text-paper hover:underline"
                 onClick={() => setBefore(audit.data?.next_cursor)}
               >
                 Load older activity

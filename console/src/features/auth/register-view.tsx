@@ -64,9 +64,13 @@ export function RegisterView() {
               type="email"
               autoComplete="email"
               {...form.register("email")}
+              aria-invalid={form.formState.errors.email ? true : undefined}
+              aria-describedby={
+                form.formState.errors.email ? "register-email-error" : undefined
+              }
             />
             {form.formState.errors.email ? (
-              <p className="text-xs text-rose-300">
+              <p id="register-email-error" className="text-xs text-rose-300">
                 {form.formState.errors.email.message}
               </p>
             ) : null}
@@ -78,16 +82,25 @@ export function RegisterView() {
               type="password"
               autoComplete="new-password"
               {...form.register("password")}
+              aria-invalid={form.formState.errors.password ? true : undefined}
+              aria-describedby={
+                form.formState.errors.password
+                  ? "register-password-error"
+                  : undefined
+              }
             />
             <p className="text-xs text-slate-600">Minimum 12 characters.</p>
             {form.formState.errors.password ? (
-              <p className="text-xs text-rose-300">
+              <p id="register-password-error" className="text-xs text-rose-300">
                 {form.formState.errors.password.message}
               </p>
             ) : null}
           </div>
           {mutation.error ? (
-            <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200">
+            <p
+              role="alert"
+              className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200"
+            >
               {errorMessage(mutation.error)}
             </p>
           ) : null}

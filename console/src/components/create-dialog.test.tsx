@@ -206,4 +206,53 @@ describe("CreateDialog", () => {
     expect(model).toHaveValue("model-x");
     expect(within(model).getAllByRole("option")).toHaveLength(1);
   });
+
+  it("emits native names and autocomplete hints for generated fields", () => {
+    render(
+      <CreateDialog
+        triggerLabel="Create account"
+        submitLabel="Create account"
+        pendingLabel="Creating account…"
+        title="Create an account"
+        description="Configure an account boundary."
+        fields={[
+          {
+            name: "email",
+            label: "Email",
+            type: "email",
+            autoComplete: "email",
+          },
+          {
+            name: "role",
+            label: "Role",
+            type: "select",
+            options: [{ value: "admin", label: "Admin" }],
+          },
+          {
+            name: "permissions",
+            label: "Permissions",
+            type: "multiselect",
+            options: [{ value: "read", label: "Read" }],
+          },
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+    const dialog = screen.getByRole("dialog");
+
+    expect(
+      within(dialog).getByRole("textbox", { name: "Email" }),
+    ).toHaveAttribute("name", "email");
+    expect(
+      within(dialog).getByRole("textbox", { name: "Email" }),
+    ).toHaveAttribute("autocomplete", "email");
+    expect(
+      within(dialog).getByRole("combobox", { name: "Role" }),
+    ).toHaveAttribute("name", "role");
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Read" }),
+    ).toHaveAttribute("name", "permissions");
+  });
 });

@@ -42,8 +42,10 @@ export function AdminTracesView() {
           <AdminTimeRange
             rangeKey={timeRange.rangeKey}
             refreshKey={timeRange.refreshKey}
+            customRange={timeRange.customRange}
             onRangeChange={timeRange.setRange}
             onRefreshChange={timeRange.setRefresh}
+            onCustomRangeChange={timeRange.setCustomRange}
           />
         }
       />
@@ -122,7 +124,7 @@ export function AdminTracesView() {
                       <button
                         type="button"
                         onClick={() => setTraceID(item.trace_id)}
-                        className="rounded border border-transparent focus-visible:border-acid-lime/70 focus-visible:outline-none"
+                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded border border-transparent px-2 focus-visible:border-acid-lime/70 focus-visible:outline-none"
                         aria-label={`Open trace ${item.trace_id}`}
                       >
                         <Badge

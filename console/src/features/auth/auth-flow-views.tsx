@@ -194,16 +194,27 @@ export function PasswordRecoveryView() {
               type="password"
               autoComplete="new-password"
               {...passwordForm.register("password")}
+              aria-invalid={
+                passwordForm.formState.errors.password ? true : undefined
+              }
+              aria-describedby={
+                passwordForm.formState.errors.password
+                  ? "recovery-password-error"
+                  : undefined
+              }
             />
             <p className="text-xs text-slate-600">Minimum 12 characters.</p>
             {passwordForm.formState.errors.password ? (
-              <p className="text-xs text-rose-300">
+              <p id="recovery-password-error" className="text-xs text-rose-300">
                 {passwordForm.formState.errors.password.message}
               </p>
             ) : null}
           </div>
           {confirm.error ? (
-            <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200">
+            <p
+              role="alert"
+              className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200"
+            >
               {errorMessage(confirm.error)}
             </p>
           ) : null}
@@ -250,15 +261,26 @@ export function PasswordRecoveryView() {
               type="email"
               autoComplete="email"
               {...recoveryForm.register("email")}
+              aria-invalid={
+                recoveryForm.formState.errors.email ? true : undefined
+              }
+              aria-describedby={
+                recoveryForm.formState.errors.email
+                  ? "recovery-email-error"
+                  : undefined
+              }
             />
             {recoveryForm.formState.errors.email ? (
-              <p className="text-xs text-rose-300">
+              <p id="recovery-email-error" className="text-xs text-rose-300">
                 {recoveryForm.formState.errors.email.message}
               </p>
             ) : null}
           </div>
           {request.error ? (
-            <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200">
+            <p
+              role="alert"
+              className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200"
+            >
               {errorMessage(request.error)}
             </p>
           ) : null}
