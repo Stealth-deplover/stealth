@@ -32,8 +32,10 @@ gave the collectors live health probes, and constrained telemetry Docker API
 access behind a read-only proxy. It did not resolve the unrelated application,
 query, frontend, lifecycle, and data-retention findings below.
 
-This PR does not remediate any finding. Product, SQL, Collector, Compose,
-installer, workflow, frontend, and test changes belong in separate focused PRs.
+The counts above describe the original post-PR-#83 audit baseline at the
+audited SHA. Subsequent focused remediation work is recorded in the individual
+finding sections below; those statuses remain pending until their PRs merge.
+Unrelated findings are not changed by the remediation work.
 
 ## Validation sources
 
@@ -326,77 +328,62 @@ union; that is tracked as AUD-14.
 
 ### AUD-08 — Monitor SSRF policy omits special-use ranges
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Medium
 - **Area:** Monitor destination validation / SSRF defense
-- **Current-head evidence:** `resolvePublicHost` in
-  `internal/monitoring/checker.go` rejects loopback, RFC1918 private,
-  link-local, unspecified, and multicast IPs. It does not explicitly reject
-  all special-use ranges, including CGNAT `100.64.0.0/10`, benchmark
-  `198.18.0.0/15`, documentation/test ranges, reserved ranges, metadata
-  endpoints where applicable, or every IPv4-mapped IPv6 representation. DNS
-  results are checked after lookup, but the policy is not expressed as a
-  complete table-driven public-destination policy.
-- **Minimal proof path:** Resolve or use an IP literal/DNS answer in each
-  omitted special-use class and inspect the current acceptance result. Add
-  IPv4-mapped IPv6 forms to the same matrix.
-- **Impact:** A monitor destination may reach non-public or infrastructure-only
-  address space that the product's public-destination policy intends to block.
-- **Recommended remediation:** Define an explicit approved public-address
-  policy for IPv4 and IPv6, including all required special-use and metadata
-  ranges, and apply it consistently to literals and DNS answers.
-- **Recommended regression test:** Table-driven tests for every range above,
-  mapped forms, redirects, and DNS answers, with an allowlist test for ordinary
-  public addresses.
+- **Original root cause:** `isPublicIP` relied only on the standard library's
+  broad private/loopback/link-local checks, and mixed public/private DNS
+  answers were reduced to their public subset.
+- **Fix evidence in PR #89:** `monitorDeniedPrefixes` provides an explicit
+  IPv4/IPv6 special-use policy, normalizes IPv4-mapped IPv6 addresses, and
+  rejects any non-public answer rather than filtering it out. Dial-time DNS
+  resolution applies the same policy, including redirect targets.
+- **Regression coverage:** `TestMonitorPublicAddressPolicyRejectsSpecialUseAndMappedPrivateIPs`
+  and `TestResolvePublicHostRejectsMixedDNSAnswers` cover the range matrix,
+  mapped forms, and mixed DNS answers.
+- **Residual risk:** The deny table must be reviewed if the monitor egress
+  policy or relevant IANA special-purpose allocations change.
 
 ### AUD-09 — DNS validation uses a detached background context
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Medium
 - **Area:** Monitor and notification URL validation
-- **Current-head evidence:** `validatePublicURL` and
-  `ValidatePublicHTTPSURL` call `resolvePublicHost` with
-  `context.Background()`. The monitor probe itself has a timeout context, and
-  `safeDialContext` can receive a caller context, but the preflight DNS lookup
-  is detached from the monitor/request deadline.
-- **Minimal proof path:** Point validation at a deliberately slow or
-  nonresponsive resolver and cancel the request or let the configured probe
-  timeout expire. The detached lookup can continue after the caller has
-  returned and consume resolver/worker resources.
-- **Impact:** Slow DNS can outlive configured timeouts, tie up monitor or
-  notification workers, and reduce the effectiveness of cancellation under
-  load.
-- **Recommended remediation:** Thread the request, worker, or probe context
-  through every resolver call and use a context-aware resolver seam for tests.
-- **Recommended regression test:** A blocking resolver test that asserts
-  cancellation at the caller deadline and verifies no resolver goroutine or
-  worker remains active after validation returns.
+- **Original root cause:** URL preflight validation detached DNS lookup with
+  `context.Background()` even when the monitor or notification worker had a
+  deadline.
+- **Fix evidence in PR #89:** monitor validation and notification webhook
+  validation now accept and pass the caller context through the resolver;
+  redirect validation uses the redirected request context as well.
+- **Regression coverage:** `TestMonitorURLValidationHonorsResolverCancellationAndDeadline`
+  uses a blocking resolver seam and verifies both cancellation and deadline
+  termination.
+- **Residual risk:** Resolver behavior remains dependent on the host resolver,
+  but no application-owned preflight lookup intentionally outlives its caller.
 
 ### AUD-10 — Monitor URL query strings are rejected and DNS matching semantics are implicit
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Low
 - **Area:** Monitor URL/API contract
-- **Current-head evidence:** `validatePublicURL` rejects any non-empty
-  `RawQuery`, so a normal monitor URL such as
-  `https://example.test/health?region=eu` is not accepted. The notification
-  HTTPS validator does not apply that same query rejection, making the URL
-  contract inconsistent. DNS result matching uses `sameValues`, which requires
-  every expected value to appear but allows additional actual values; the API
-  schema/frontend wording do not make the exact-set versus subset contract
-  explicit.
-- **Minimal proof path:** Create an HTTP monitor with a valid query string and
-  observe validation rejection. Create a DNS monitor where the resolver
-  returns expected plus extra values and observe subset acceptance.
-- **Impact:** Valid HTTP checks cannot express query-based health endpoints;
-  DNS checks may not enforce the operator's intended exact-answer policy.
-- **Recommended remediation:** Permit query components while retaining
-  userinfo, fragment, scheme, SSRF, and redirect protections. Explicitly
-  document and choose DNS exact-set, subset, or contains-any semantics, then
-  align API, frontend, and checker behavior.
-- **Recommended regression test:** URL matrix tests for paths/queries and
-  security exclusions, plus DNS tests for exact, missing, extra, and duplicate
-  values.
+- **Original root cause:** monitor HTTP validation rejected every non-empty
+  query while the notification validator allowed queries; DNS matching allowed
+  additional records without stating that subset contract.
+- **Fix evidence in PR #89:** HTTP monitor targets now allow query components
+  while still rejecting credentials and fragments. DNS matching is explicitly
+  documented as subset semantics in the OpenAPI schema and Console hint:
+  every configured expected value must be present, while additional records
+  are allowed.
+- **Regression coverage:** `TestMonitorURLValidationAllowsQueriesAndRejectsUnsafeComponents`
+  covers query, userinfo, fragment, and scheme cases;
+  `TestExpectedDNSValuesUseDocumentedSubsetSemantics` covers present, missing,
+  extra, and normalized values.
+- **Residual risk:** DNS operators who require exact answer-set semantics must
+  configure every expected value; this PR intentionally preserves the existing
+  compatible subset behavior rather than silently changing it.
 
 ### AUD-11 — Custom admin time range still depends on localStorage for active state
 
