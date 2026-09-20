@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,6 +50,13 @@ func TestDeleteAdminAlertRulePreservesHistoryIntegration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO instance_roles (account_id,role) VALUES ($1,'instance_admin')`, accountID); err != nil {
 		t.Fatal(err)
 	}
+	var emptyHistory struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+uuid.Must(uuid.NewV7()).String()+"/events?limit=10", nil, http.StatusOK, &emptyHistory)
+	if len(emptyHistory.Items) != 0 {
+		t.Fatalf("history for an unknown rule = %d items, want empty", len(emptyHistory.Items))
+	}
 	channelID := uuid.Must(uuid.NewV7())
 	var ruleID uuid.UUID
 	t.Cleanup(func() {
@@ -90,31 +98,84 @@ func TestDeleteAdminAlertRulePreservesHistoryIntegration(t *testing.T) {
 	if err := repo.EvaluateAdminAlert(ctx, ruleID, true, &value, "HTTP alert history is firing"); err != nil {
 		t.Fatal(err)
 	}
-	var eventID uuid.UUID
-	if err := pool.QueryRow(ctx, `SELECT id FROM admin_alert_events WHERE rule_id=$1`, ruleID).Scan(&eventID); err != nil {
+	var firingEventID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM admin_alert_events WHERE rule_id=$1 AND state='firing'`, ruleID).Scan(&firingEventID); err != nil {
+		t.Fatal(err)
+	}
+	value = 10
+	if err := repo.EvaluateAdminAlert(ctx, ruleID, false, &value, "HTTP alert history is resolved"); err != nil {
+		t.Fatal(err)
+	}
+	var resolvedEventID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM admin_alert_events WHERE rule_id=$1 AND state='resolved'`, ruleID).Scan(&resolvedEventID); err != nil {
 		t.Fatal(err)
 	}
 
 	requestJSON(t, client, http.MethodDelete, server.URL+"/v1/admin/alerts/"+ruleID.String(), nil, http.StatusNoContent, nil)
 	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String(), nil, http.StatusNotFound, nil)
+	var history struct {
+		Items []struct {
+			ID               string    `json:"id"`
+			RuleID           string    `json:"rule_id"`
+			RuleName         string    `json:"rule_name"`
+			RuleKind         string    `json:"rule_kind"`
+			Severity         string    `json:"severity"`
+			State            string    `json:"state"`
+			Value            *float64  `json:"value"`
+			Message          string    `json:"message"`
+			OccurredAt       time.Time `json:"occurred_at"`
+			SourceRuleExists bool      `json:"source_rule_exists"`
+		} `json:"items"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String()+"/events?limit=10", nil, http.StatusOK, &history)
+	if len(history.Items) != 2 {
+		t.Fatalf("HTTP alert history items = %d, want 2", len(history.Items))
+	}
+	seenStates := map[string]bool{}
+	for _, event := range history.Items {
+		if event.RuleID != ruleID.String() || event.RuleName != "HTTP alert history" || event.RuleKind != "metric_threshold" || event.Severity != "critical" || event.SourceRuleExists {
+			t.Fatalf("HTTP alert history event = %#v, want deleted-rule snapshot", event)
+		}
+		seenStates[event.State] = true
+	}
+	if !seenStates["firing"] || !seenStates["resolved"] {
+		t.Fatalf("HTTP alert history states = %#v, want firing and resolved", seenStates)
+	}
+	var recent struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alert-events?limit=100", nil, http.StatusOK, &recent)
+	foundRecent := false
+	for _, event := range recent.Items {
+		if event.ID == firingEventID.String() || event.ID == resolvedEventID.String() {
+			foundRecent = true
+			break
+		}
+	}
+	if !foundRecent {
+		t.Fatalf("global alert history did not include retained events %s/%s", firingEventID, resolvedEventID)
+	}
 
 	events, err := repo.ListAdminAlertEvents(ctx, ruleID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].ID != eventID.String() || events[0].RuleID != ruleID.String() {
-		t.Fatalf("history query = %#v, want retained event %s", events, eventID)
+	if len(events) != 2 || events[0].RuleID != ruleID.String() || events[1].RuleID != ruleID.String() {
+		t.Fatalf("history query = %#v, want retained events %s/%s", events, firingEventID, resolvedEventID)
 	}
-	var deliveries, deleteAudits int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_deliveries WHERE alert_event_id=$1 AND channel_id=$2`, eventID, channelID).Scan(&deliveries); err != nil {
+	var deliveries int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM admin_notification_deliveries WHERE alert_event_id IN ($1,$2) AND channel_id=$3`, firingEventID, resolvedEventID, channelID).Scan(&deliveries); err != nil {
 		t.Fatal(err)
 	}
+	var auditName, auditKind, auditSeverity string
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM audit_events
-		WHERE actor_account_id=$1 AND action='admin.alert.delete' AND target_id=$2`, accountID, ruleID).Scan(&deleteAudits); err != nil {
+		SELECT metadata->>'name',metadata->>'kind',metadata->>'severity' FROM audit_events
+		WHERE actor_account_id=$1 AND action='admin.alert.delete' AND target_id=$2`, accountID, ruleID).Scan(&auditName, &auditKind, &auditSeverity); err != nil {
 		t.Fatal(err)
 	}
-	if deliveries != 1 || deleteAudits != 1 {
-		t.Fatalf("retained deliveries=%d delete_audits=%d, want 1/1", deliveries, deleteAudits)
+	if deliveries != 2 || auditName != "HTTP alert history" || auditKind != "metric_threshold" || auditSeverity != "critical" {
+		t.Fatalf("retained deliveries=%d delete audit=%q/%q/%q, want 2 and safe rule metadata", deliveries, auditName, auditKind, auditSeverity)
 	}
 }

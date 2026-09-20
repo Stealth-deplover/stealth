@@ -237,28 +237,46 @@ func (r *Repository) DeleteAdminAlertRule(ctx context.Context, accountID, id uui
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return err
 	}
+	var name, kind, severity string
+	if err := tx.QueryRow(ctx, `
+		SELECT name,kind,severity
+		FROM admin_alert_rules
+		WHERE id=$1
+		FOR UPDATE`, id).Scan(&name, &kind, &severity); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
 	result, err := tx.Exec(ctx, `DELETE FROM admin_alert_rules WHERE id=$1`, id)
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
+	if result.RowsAffected() != 1 {
 		return ErrNotFound
 	}
-	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.alert.delete", "admin_alert_rule", id, map[string]any{}); err != nil {
+	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.alert.delete", "admin_alert_rule", id, map[string]any{
+		"name":     name,
+		"kind":     kind,
+		"severity": severity,
+	}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
+
+const adminAlertEventProjection = `
+	e.id::text,e.rule_id_snapshot::text,e.rule_name_snapshot,e.rule_kind_snapshot,e.severity_snapshot,
+	e.state,e.value,e.message,e.occurred_at,(e.rule_id IS NOT NULL)`
 
 func (r *Repository) ListAdminAlertEvents(ctx context.Context, ruleID uuid.UUID, limit int) ([]domain.AdminAlertEvent, error) {
 	if ruleID == uuid.Nil || limit < 1 || limit > adminAlertMaxLimit {
 		return nil, ErrInvalidAdminAlert
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text,COALESCE(rule_id,rule_id_snapshot)::text,state,value,message,occurred_at
-		FROM admin_alert_events
-		WHERE rule_id=$1 OR rule_id_snapshot=$1
-		ORDER BY occurred_at DESC,id DESC LIMIT $2`, ruleID, limit)
+		SELECT `+adminAlertEventProjection+`
+		FROM admin_alert_events e
+		WHERE e.rule_id_snapshot=$1
+		ORDER BY e.occurred_at DESC,e.id DESC LIMIT $2`, ruleID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -266,12 +284,50 @@ func (r *Repository) ListAdminAlertEvents(ctx context.Context, ruleID uuid.UUID,
 	items := make([]domain.AdminAlertEvent, 0, limit)
 	for rows.Next() {
 		var item domain.AdminAlertEvent
-		if err := rows.Scan(&item.ID, &item.RuleID, &item.State, &item.Value, &item.Message, &item.OccurredAt); err != nil {
+		if err := scanAdminAlertEvent(rows, &item); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (r *Repository) ListRecentAdminAlertEvents(ctx context.Context, limit int) ([]domain.AdminAlertEvent, error) {
+	if limit < 1 || limit > adminAlertMaxLimit {
+		return nil, ErrInvalidAdminAlert
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+adminAlertEventProjection+`
+		FROM admin_alert_events e
+		ORDER BY e.occurred_at DESC,e.id DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.AdminAlertEvent, 0, limit)
+	for rows.Next() {
+		var item domain.AdminAlertEvent
+		if err := scanAdminAlertEvent(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanAdminAlertEvent(row interface{ Scan(...any) error }, item *domain.AdminAlertEvent) error {
+	return row.Scan(
+		&item.ID,
+		&item.RuleID,
+		&item.RuleName,
+		&item.RuleKind,
+		&item.Severity,
+		&item.State,
+		&item.Value,
+		&item.Message,
+		&item.OccurredAt,
+		&item.SourceRuleExists,
+	)
 }
 
 func scanAdminAlertRule(row interface{ Scan(...any) error }) (domain.AdminAlertRule, error) {

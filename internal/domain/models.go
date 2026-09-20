@@ -251,12 +251,16 @@ type AdminAlertRule struct {
 }
 
 type AdminAlertEvent struct {
-	ID         string    `json:"id"`
-	RuleID     string    `json:"rule_id"`
-	State      string    `json:"state"`
-	Value      *float64  `json:"value,omitempty"`
-	Message    string    `json:"message"`
-	OccurredAt time.Time `json:"occurred_at"`
+	ID               string    `json:"id"`
+	RuleID           string    `json:"rule_id"`
+	RuleName         string    `json:"rule_name"`
+	RuleKind         string    `json:"rule_kind"`
+	Severity         string    `json:"severity"`
+	State            string    `json:"state"`
+	Value            *float64  `json:"value,omitempty"`
+	Message          string    `json:"message"`
+	OccurredAt       time.Time `json:"occurred_at"`
+	SourceRuleExists bool      `json:"source_rule_exists"`
 }
 
 // AdminNotificationChannel never exposes its encrypted configuration. The

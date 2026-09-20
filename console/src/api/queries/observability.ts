@@ -343,6 +343,20 @@ export function useAdminAlerts(
   });
 }
 
+export function useAdminAlertEvents(
+  query: { limit?: number } = {},
+  options?: { refetchInterval?: number | false },
+) {
+  return useQuery({
+    queryKey: [...queryKeys.adminAlertEvents, query],
+    queryFn: cancellableQuery((signal) =>
+      api.GET("/v1/admin/alert-events", { params: { query }, signal }),
+    ),
+    placeholderData: keepPreviousData,
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
 export function useAdminNotificationChannels(
   query: { limit?: number } = {},
   options?: { refetchInterval?: number | false },

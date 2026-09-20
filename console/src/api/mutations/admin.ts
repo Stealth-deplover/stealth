@@ -84,6 +84,9 @@ export function useDeleteAdminAlert() {
         queryKey: queryKeys.adminAlert(alertRuleId),
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.adminAlerts });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.adminAlertEvents,
+      });
     },
   });
 }

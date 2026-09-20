@@ -163,7 +163,10 @@ future evaluation but retains immutable alert-event snapshots and their
 notification-delivery history. Error groups are derived and fingerprinted in
 ClickHouse; their owner-controlled lifecycle state is kept in PostgreSQL so
 acknowledgement and resolution survive a restart without copying high-volume
-occurrences into the control plane. Notification test sends use the same durable
+occurrences into the control plane. Recent alert history is available through
+the bounded authenticated `/v1/admin/alert-events` collection and the
+per-rule `/v1/admin/alerts/{alertRuleID}/events` collection, even after the
+live rule is deleted. Notification test sends use the same durable
 delivery queue as alert notifications and never return channel secrets to the
 browser.
 

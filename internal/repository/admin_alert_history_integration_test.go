@@ -190,17 +190,17 @@ func (f adminAlertHistoryFixture) claimFixtureDelivery(t *testing.T, eventID uui
 
 func (f adminAlertHistoryFixture) assertDeleteAudit(t *testing.T) {
 	t.Helper()
-	var count int
+	var name, kind, severity string
 	if err := f.pool.QueryRow(context.Background(), `
-		SELECT count(*) FROM audit_events
+		SELECT metadata->>'name',metadata->>'kind',metadata->>'severity' FROM audit_events
 		WHERE actor_account_id=$1
 		  AND action='admin.alert.delete'
 		  AND target_type='admin_alert_rule'
-		  AND target_id=$2`, f.accountID, f.ruleID).Scan(&count); err != nil {
+		  AND target_id=$2`, f.accountID, f.ruleID).Scan(&name, &kind, &severity); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("delete audit records = %d, want 1", count)
+	if name != "Delete history regression" || kind != "metric_threshold" || severity != "critical" {
+		t.Fatalf("delete audit metadata = %q/%q/%q, want safe rule metadata", name, kind, severity)
 	}
 }
 
@@ -221,7 +221,7 @@ func TestDeleteAlertRuleAfterNotificationDeliveryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].ID != eventID.String() || events[0].RuleID != fixture.ruleID.String() {
+	if len(events) != 1 || events[0].ID != eventID.String() || events[0].RuleID != fixture.ruleID.String() || events[0].RuleName != "Delete history regression" || events[0].RuleKind != "metric_threshold" || events[0].Severity != "critical" || events[0].SourceRuleExists {
 		t.Fatalf("historical event query = %#v, want retained event for %s", events, fixture.ruleID)
 	}
 }
