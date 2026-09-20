@@ -10,6 +10,7 @@ import { CreateDialog } from "@/components/create-dialog";
 import { CursorPaginationControls } from "@/components/cursor-pagination-controls";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,7 +66,10 @@ export function OrganizationsIndexView() {
           retry={() => query.refetch()}
         />
       ) : query.isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <LoadingState
+          label="Loading organizations…"
+          className="grid gap-4 space-y-0 md:grid-cols-2 xl:grid-cols-3"
+        >
           {Array.from({ length: 3 }, (_, index) => (
             <Card key={index}>
               <CardContent className="space-y-4 p-5">
@@ -75,7 +79,7 @@ export function OrganizationsIndexView() {
               </CardContent>
             </Card>
           ))}
-        </div>
+        </LoadingState>
       ) : organizations.length || navigation.canPrevious ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

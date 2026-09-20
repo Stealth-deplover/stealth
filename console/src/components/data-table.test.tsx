@@ -15,4 +15,18 @@ describe("DataTable", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Loading table…");
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
+
+  it("uses the contextual empty message supplied by a domain view", () => {
+    render(
+      <DataTable<Row>
+        columns={columns}
+        data={[]}
+        empty="No audit events recorded for this organization."
+      />,
+    );
+
+    expect(
+      screen.getByText("No audit events recorded for this organization."),
+    ).toBeInTheDocument();
+  });
 });

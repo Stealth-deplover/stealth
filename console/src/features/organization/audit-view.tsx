@@ -36,6 +36,7 @@ export function OrganizationAuditView({
           <DataTable
             data={query.data?.events ?? []}
             loading={query.isLoading}
+            empty="No audit events recorded for this organization."
             columns={[
               {
                 accessorKey: "action",

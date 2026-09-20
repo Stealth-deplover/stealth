@@ -23,6 +23,7 @@ import { CreateDialog } from "@/components/create-dialog";
 import { DataTable, type DataTableColumnDef } from "@/components/data-table";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import { InlineError } from "@/components/feedback/inline-error";
 import { LoadingState } from "@/components/feedback/loading-state";
 import { PageHeader } from "@/components/page-header";
 import { ResourceId } from "@/components/resource-id";
@@ -425,9 +426,9 @@ export function AgentDetailView({
           </CardHeader>
           <CardContent>
             {runs.error ? (
-              <p className="text-sm text-rose-200">
-                Could not load agent runs. Try the runs view again.
-              </p>
+              <InlineError>
+                Could not load agent runs. Open the runs view to retry.
+              </InlineError>
             ) : latestRun ? (
               <AgentRunSummary
                 run={latestRun}
