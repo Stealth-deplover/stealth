@@ -281,6 +281,170 @@ func TestMigrateInstalledReleaseMigratesExistingTopology(t *testing.T) {
 	}
 }
 
+func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) {
+	// v0.2.5's released updater validates the archive and atomically replaces
+	// only its own executable. This fixture intentionally models that deployed
+	// behavior rather than calling the new migration helper directly.
+	const bridgeVersion = "v1.2.3"
+	layout := writeExistingConfig(t, "v1.2.2")
+	assetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/"+bridgeVersion+"/") {
+			writeHostManagedAsset(w, strings.TrimPrefix(r.URL.Path, "/"+bridgeVersion+"/"))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer assetServer.Close()
+	if err := writeAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldCompose := "services:\n  otel-collector:\n    volumes:\n      - /:/hostfs:ro\n"
+	if err := writeAtomic(layout.ComposeFile, []byte(oldCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(layout.TelemetryDir, "otel-collector.yaml"), []byte("receivers:\n  file_log/docker:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(filepath.Join(layout.TelemetryDir, "docker-stats.yaml"), []byte("receivers:\n  docker_stats:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(layout.ProxyFile, []byte("server {\n  # old topology\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values["POSTGRES_PASSWORD"] = "bridge-preserved-secret"
+	port := strconv.Itoa(assetServer.Listener.Addr().(*net.TCPAddr).Port)
+	values["API_HOST_PORT"] = port
+	values["CONSOLE_HOST_PORT"] = port
+	values["PROXY_HTTP_PORT"] = port
+	if err := writePrivateFile(layout.EnvFile, formatEnvFile(values)); err != nil {
+		t.Fatal(err)
+	}
+	originalEnv, err := os.ReadFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installedCLI := writeTestExecutable(t, t.TempDir(), "v0.2.5 cli")
+	bridgeArchive := testArchive(t, "stealth", []byte("bridge cli"), tar.TypeReg)
+	legacy := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	legacy.executablePath = func() (string, error) { return installedCLI, nil }
+	legacy.runner = updateTestRunner{version: bridgeVersion}
+	if err := runV025StyleCLIOnlyUpdate(context.Background(), legacy, bridgeArchive, bridgeVersion); err != nil {
+		t.Fatalf("v0.2.5-style update error = %v", err)
+	}
+	if got, err := os.ReadFile(installedCLI); err != nil || string(got) != "bridge cli" {
+		t.Fatalf("bridge CLI replacement = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(layout.ComposeFile); err != nil || string(got) != oldCompose {
+		t.Fatalf("v0.2.5-style update unexpectedly migrated Compose = %q, %v", got, err)
+	}
+
+	t.Setenv("STEALTH_INSTALL_DIR", layout.Root)
+	bridge := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	bridge.assetBase = assetServer.URL
+	bridge.httpClient = assetServer.Client()
+	bridge.runner = &setupRunner{}
+	migrated, err := bridge.migrateInstalledRelease(context.Background(), bridgeVersion)
+	if err != nil || !migrated {
+		t.Fatalf("explicit bridge reconciliation = %v, migrated=%v", err, migrated)
+	}
+	if got, err := os.ReadFile(layout.ComposeFile); err != nil || !strings.Contains(string(got), "telemetry-docker-logs:") || strings.Contains(string(got), "/:/hostfs:ro") {
+		t.Fatalf("bridge reconciliation Compose = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(layout.EnvFile); err != nil || !bytes.Contains(got, []byte("POSTGRES_PASSWORD=bridge-preserved-secret")) {
+		t.Fatalf("bridge reconciliation changed config.env = %q, %v", got, err)
+	}
+	if !bytes.Contains(originalEnv, []byte("POSTGRES_PASSWORD=bridge-preserved-secret")) {
+		t.Fatal("fixture did not contain preserved secret")
+	}
+}
+
+func TestRunUpdateUsesVerifiedTargetBinaryForMigrationBeforeCLIReplacement(t *testing.T) {
+	archive := testArchive(t, "stealth", []byte("target cli"), tar.TypeReg)
+	state := newUpdateTestServer(t, archive, testChecksums(archive, "stealth_Linux_x86_64.tar.gz"))
+	target := writeTestExecutable(t, t.TempDir(), "old cli")
+	app, _, errorsOutput := newUpdateTestApp(t, state, "v0.1.0", target)
+	var migrationBinary, migrationVersion string
+	app.runTargetMigration = func(_ context.Context, binaryPath, version string) error {
+		migrationBinary = binaryPath
+		migrationVersion = version
+		info, err := os.Lstat(binaryPath)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode()&0111 == 0 {
+			return errors.New("target migration did not receive a validated executable")
+		}
+		return nil
+	}
+	if code := app.run([]string{"update"}); code != 0 {
+		t.Fatalf("update exit code = %d, stderr = %s", code, errorsOutput.String())
+	}
+	if migrationBinary == "" || migrationBinary == target || migrationVersion != "v0.2.0" {
+		t.Fatalf("target migration invocation = binary %q target %q", migrationBinary, migrationVersion)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "target cli" {
+		t.Fatalf("CLI was not replaced after target migration = %q, %v", got, err)
+	}
+}
+
+func TestRunUpdateReportsPlatformCLISkewWhenReplacementFails(t *testing.T) {
+	archive := testArchive(t, "stealth", []byte("target cli"), tar.TypeReg)
+	state := newUpdateTestServer(t, archive, testChecksums(archive, "stealth_Linux_x86_64.tar.gz"))
+	target := writeTestExecutable(t, t.TempDir(), "old cli")
+	app, _, errorsOutput := newUpdateTestApp(t, state, "v0.1.0", target)
+	migrated := false
+	app.runTargetMigration = func(context.Context, string, string) error {
+		migrated = true
+		return nil
+	}
+	app.renameFile = func(string, string) error { return errors.New("read-only installation") }
+	if code := app.run([]string{"update"}); code != 1 {
+		t.Fatalf("update exit code = %d, stderr = %s", code, errorsOutput.String())
+	}
+	if !migrated || !strings.Contains(errorsOutput.String(), "platform migration reached v0.2.0") {
+		t.Fatalf("post-migration replacement failure = migrated=%v stderr=%q", migrated, errorsOutput.String())
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "old cli" {
+		t.Fatalf("failed replacement changed CLI = %q, %v", got, err)
+	}
+}
+
+func TestInternalMigrationRequiresExactTargetBinaryVersion(t *testing.T) {
+	var errorsOutput bytes.Buffer
+	app := NewApp(strings.NewReader(""), io.Discard, &errorsOutput)
+	app.currentVersion = func() string { return "v1.2.3" }
+	if code := app.run([]string{"internal", "migrate-installation", "--target-version", "v1.2.4"}); code != 2 {
+		t.Fatalf("mismatched internal migration exit code = %d", code)
+	}
+	if !strings.Contains(errorsOutput.String(), "does not match this Stealth binary") {
+		t.Fatalf("mismatched internal migration error = %q", errorsOutput.String())
+	}
+}
+
+func runV025StyleCLIOnlyUpdate(ctx context.Context, app *App, archive []byte, version string) error {
+	// This is the relevant v0.2.5 updater contract, copied into the regression
+	// test deliberately: download/checksum handling has already completed, then
+	// it validates the extracted binary and replaces only the CLI executable.
+	directory, binary, err := extractUpdateBinary(archive)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(directory)
+	if err := app.validateDownloadedBinary(ctx, binary, version); err != nil {
+		return err
+	}
+	target, err := app.currentExecutablePath()
+	if err != nil {
+		return err
+	}
+	return app.replaceExecutable(ctx, binary, target)
+}
+
 func TestRunUpdateValidatesAndRunsExtractedExecutable(t *testing.T) {
 	newContents := []byte("#!/bin/sh\nprintf '%s\\n' 'Stealth v0.2.0'\n")
 	archive := testArchive(t, "stealth", newContents, tar.TypeReg)
@@ -459,7 +623,7 @@ func TestRunUpdateReplacementFailurePreservesBinary(t *testing.T) {
 	if string(contents) != "old cli" {
 		t.Fatalf("replacement failure changed binary to %q", contents)
 	}
-	if !strings.Contains(errorsOutput.String(), "left unchanged") {
+	if !strings.Contains(errorsOutput.String(), "platform migration reached v0.2.0") {
 		t.Fatalf("failure output = %q", errorsOutput.String())
 	}
 }
