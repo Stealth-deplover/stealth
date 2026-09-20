@@ -159,15 +159,28 @@ type Options struct {
 	Output       io.Writer
 	PollAttempts int
 	PollInterval time.Duration
+
+	// ManagedAssets is intentionally supplied by the release binary, never by
+	// CLI input. It lets the target release own its runtime asset manifest, so
+	// a future release can add an asset without teaching the previous binary
+	// about it first. A nil value selects this release's built-in manifest.
+	ManagedAssets []ManagedAsset
+
+	// MigrationHook is a test-only fault-injection seam. Production callers do
+	// not set it; it exists so recovery is exercised after each durable
+	// transaction boundary instead of relying on timing-sensitive SIGKILL tests.
+	MigrationHook func(MigrationEvent) error
 }
 
 type Engine struct {
-	runner       CommandRunner
-	httpClient   *http.Client
-	assetBaseURL string
-	output       io.Writer
-	pollAttempts int
-	pollInterval time.Duration
+	runner        CommandRunner
+	httpClient    *http.Client
+	assetBaseURL  string
+	output        io.Writer
+	pollAttempts  int
+	pollInterval  time.Duration
+	managedAssets []ManagedAsset
+	migrationHook func(MigrationEvent) error
 }
 
 func New(options Options) *Engine {
@@ -195,7 +208,15 @@ func New(options Options) *Engine {
 	if output == nil {
 		output = io.Discard
 	}
-	return &Engine{runner: runner, httpClient: httpClient, assetBaseURL: assetBaseURL, output: output, pollAttempts: attempts, pollInterval: interval}
+	managedAssets := options.ManagedAssets
+	if managedAssets == nil {
+		managedAssets = DefaultManagedAssets()
+	}
+	return &Engine{
+		runner: runner, httpClient: httpClient, assetBaseURL: assetBaseURL, output: output,
+		pollAttempts: attempts, pollInterval: interval, managedAssets: append([]ManagedAsset(nil), managedAssets...),
+		migrationHook: options.MigrationHook,
+	}
 }
 
 // Install executes every step while holding an OS-level lock. The lock is
@@ -260,8 +281,16 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 			rollbackErr := prepared.rollback()
 			return errors.Join(err, rollbackErr)
 		}
-		prepared.finalize()
-		return nil
+		if err := prepared.composeValidated(); err != nil {
+			if errors.Is(err, errMigrationProcessInterrupted) {
+				return err
+			}
+			return errors.Join(err, prepared.rollback())
+		}
+		// From COMPOSE_VALIDATED onward the new release is coherent. If the
+		// bounded backup publication is interrupted, the next lifecycle command
+		// completes it forward rather than rolling valid target assets back.
+		return prepared.finalize()
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
@@ -319,15 +348,64 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	}
 }
 
-type managedAssetSpec struct {
-	relativePath string
-	remotePath   string
-	marker       []byte
-	validate     func([]byte) error
+// ManagedAsset identifies a release-owned runtime file. The manifest is
+// compiled into the target release binary; callers cannot supply it through a
+// command-line flag or a downloaded manifest.
+type ManagedAsset struct {
+	Path       string
+	RemotePath string
+	Marker     string
+
+	setupOnly bool
+	validate  func([]byte) error
 }
 
+// DefaultManagedAssets is this release's complete production runtime manifest.
+// New releases extend this list in their own binary, which is why update
+// invokes the verified target binary before replacing the installed CLI.
+func DefaultManagedAssets() []ManagedAsset {
+	return []ManagedAsset{
+		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
+		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
+		{Path: "telemetry/otel-collector.yaml", RemotePath: "telemetry/otel-collector.yaml", Marker: "receivers:", validate: validateMainCollectorAsset},
+		{Path: "telemetry/host-metrics.yaml", RemotePath: "telemetry/host-metrics.yaml", Marker: "hostmetrics:"},
+		{Path: "telemetry/docker-logs.yaml", RemotePath: "telemetry/docker-logs.yaml", Marker: "file_log/docker:"},
+		{Path: "telemetry/docker-stats.yaml", RemotePath: "telemetry/docker-stats.yaml", Marker: "docker_stats:"},
+		{Path: "compose.setup.yaml", RemotePath: "compose.setup.yaml", Marker: "services:", setupOnly: true},
+	}
+}
+
+type migrationPhase string
+
+const (
+	migrationPhasePrepared         migrationPhase = "PREPARED"
+	migrationPhaseBackedUp         migrationPhase = "BACKED_UP"
+	migrationPhaseAssetsActivated  migrationPhase = "ASSETS_ACTIVATED"
+	migrationPhaseConfigActivated  migrationPhase = "CONFIG_ACTIVATED"
+	migrationPhaseVersionActivated migrationPhase = "VERSION_ACTIVATED"
+	migrationPhaseComposeValidated migrationPhase = "COMPOSE_VALIDATED"
+	migrationPhaseFinalized        migrationPhase = "FINALIZED"
+)
+
+const (
+	migrationEventBackupRenamed  migrationPhase = "BACKUP_RENAMED"
+	migrationEventAssetActivated migrationPhase = "ASSET_ACTIVATED"
+)
+
+// MigrationEvent reports a durable migration boundary to the test-only fault
+// injection hook. A hook returning errMigrationProcessInterrupted models a
+// hard process stop: it deliberately leaves the journal for the next process.
+type MigrationEvent struct {
+	Phase migrationPhase
+	Asset string
+	Index int
+	Total int
+}
+
+var errMigrationProcessInterrupted = errors.New("managed asset migration interrupted")
+
 type stagedManagedAsset struct {
-	spec       managedAssetSpec
+	spec       ManagedAsset
 	targetPath string
 	stagePath  string
 	backupPath string
@@ -339,13 +417,26 @@ type stagedManagedAsset struct {
 const managedAssetPendingFile = "managed-assets.pending"
 
 type managedAssetRecoveryManifest struct {
-	BackupDir string                      `json:"backup_dir"`
-	Assets    []managedAssetRecoveryEntry `json:"assets"`
+	TransactionID   string                      `json:"transaction_id"`
+	TargetVersion   string                      `json:"target_version"`
+	OriginalVersion string                      `json:"original_version"`
+	BackupDir       string                      `json:"backup_dir"`
+	StageDir        string                      `json:"stage_dir"`
+	Phase           migrationPhase              `json:"phase"`
+	Assets          []managedAssetRecoveryEntry `json:"assets"`
+	Config          managedAssetRecoveryFile    `json:"config"`
+	Version         managedAssetRecoveryFile    `json:"version"`
 }
 
 type managedAssetRecoveryEntry struct {
 	RelativePath string `json:"relative_path"`
 	Existed      bool   `json:"existed"`
+}
+
+type managedAssetRecoveryFile struct {
+	Existed bool   `json:"existed"`
+	Backup  string `json:"backup,omitempty"`
+	Mode    uint32 `json:"mode,omitempty"`
 }
 
 // managedAssetMigration stages the complete release-managed runtime set before
@@ -356,31 +447,29 @@ type managedAssetMigration struct {
 	layout         Layout
 	stageDir       string
 	backupDir      string
-	previousBackup string
 	assets         []stagedManagedAsset
-	committed      bool
+	allowedPaths   map[string]struct{}
+	hook           func(MigrationEvent) error
+	manifest       managedAssetRecoveryManifest
+	journalWritten bool
 }
 
 type preparedInstallation struct {
-	layout             Layout
-	assets             *managedAssetMigration
-	originalEnv        []byte
-	originalEnvExists  bool
-	newEnv             []byte
-	originalVersion    []byte
-	originalVersionSet bool
+	layout              Layout
+	assets              *managedAssetMigration
+	originalEnv         []byte
+	originalEnvExists   bool
+	newEnv              []byte
+	originalVersion     []byte
+	originalVersionSet  bool
+	originalVersionMode os.FileMode
 }
 
 func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
-	prepared, err := e.prepareInstallation(ctx, plan)
-	if err != nil {
-		return err
-	}
-	if err := prepared.commit(plan); err != nil {
-		return err
-	}
-	prepared.finalize()
-	return nil
+	// Keep this exported preparation entry point subject to the same durable
+	// transaction boundary as the lifecycle step. No caller can finalize a
+	// managed-asset journal without successful `docker compose config --quiet`.
+	return e.RunStep(ctx, plan, StepConfiguration)
 }
 
 // prepareInstallation downloads and validates the full managed asset set but
@@ -418,6 +507,11 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	if contents, err := os.ReadFile(plan.Layout.VersionFile); err == nil {
 		prepared.originalVersion = contents
 		prepared.originalVersionSet = true
+		if info, statErr := os.Stat(plan.Layout.VersionFile); statErr == nil {
+			prepared.originalVersionMode = info.Mode().Perm()
+		} else {
+			return nil, fmt.Errorf("inspect existing version: %w", statErr)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read existing version: %w", err)
 	}
@@ -473,64 +567,76 @@ func (p *preparedInstallation) commit(plan Plan) error {
 	if p == nil || p.assets == nil {
 		return errors.New("prepared installation is incomplete")
 	}
-	if err := p.assets.commit(); err != nil {
+	if err := p.assets.commit(plan, p.originalEnv, p.originalEnvExists, p.originalVersion, p.originalVersionSet, p.originalVersionMode); err != nil {
 		return err
 	}
 	if err := WritePrivateFile(p.layout.EnvFile, string(p.newEnv)); err != nil {
-		rollbackErr := p.rollback()
-		return errors.Join(fmt.Errorf("write configuration: %w", err), rollbackErr)
+		return p.failCommit(fmt.Errorf("write configuration: %w", err))
+	}
+	if err := p.assets.transition(migrationPhaseConfigActivated); err != nil {
+		return p.failCommit(err)
 	}
 	if err := WriteAtomic(p.layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
-		rollbackErr := p.rollback()
-		return errors.Join(fmt.Errorf("write version file: %w", err), rollbackErr)
+		return p.failCommit(fmt.Errorf("write version file: %w", err))
+	}
+	if err := p.assets.transition(migrationPhaseVersionActivated); err != nil {
+		return p.failCommit(err)
 	}
 	return nil
+}
+
+func (p *preparedInstallation) failCommit(cause error) error {
+	if errors.Is(cause, errMigrationProcessInterrupted) {
+		return cause
+	}
+	return errors.Join(cause, p.rollback())
 }
 
 func (p *preparedInstallation) rollback() error {
 	if p == nil {
 		return nil
 	}
-	var rollbackErr error
-	if p.assets != nil {
-		rollbackErr = errors.Join(rollbackErr, p.assets.rollback())
+	if p.assets == nil {
+		return nil
 	}
-	if p.originalEnvExists {
-		rollbackErr = errors.Join(rollbackErr, WritePrivateFile(p.layout.EnvFile, string(p.originalEnv)))
-	} else if err := os.Remove(p.layout.EnvFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		rollbackErr = errors.Join(rollbackErr, err)
-	}
-	if p.originalVersionSet {
-		rollbackErr = errors.Join(rollbackErr, WriteAtomic(p.layout.VersionFile, p.originalVersion, 0o644))
-	} else if err := os.Remove(p.layout.VersionFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		rollbackErr = errors.Join(rollbackErr, err)
-	}
-	return rollbackErr
+	return p.assets.rollback()
 }
 
-func (p *preparedInstallation) finalize() {
-	if p != nil && p.assets != nil {
-		p.assets.finalize()
+func (p *preparedInstallation) composeValidated() error {
+	if p == nil || p.assets == nil {
+		return errors.New("prepared installation is incomplete")
 	}
+	return p.assets.transition(migrationPhaseComposeValidated)
 }
 
-func managedAssetSpecs(plan Plan) []managedAssetSpec {
-	assets := []managedAssetSpec{
-		{relativePath: "compose.production.yaml", remotePath: "compose.production.yaml", marker: []byte("services:"), validate: validateProductionComposeAsset},
-		{relativePath: "console/deploy/nginx.conf", remotePath: "console/deploy/nginx.conf", marker: []byte("server {")},
-		{relativePath: "telemetry/otel-collector.yaml", remotePath: "telemetry/otel-collector.yaml", marker: []byte("receivers:"), validate: validateMainCollectorAsset},
-		{relativePath: "telemetry/host-metrics.yaml", remotePath: "telemetry/host-metrics.yaml", marker: []byte("hostmetrics:")},
-		{relativePath: "telemetry/docker-logs.yaml", remotePath: "telemetry/docker-logs.yaml", marker: []byte("file_log/docker:")},
-		{relativePath: "telemetry/docker-stats.yaml", remotePath: "telemetry/docker-stats.yaml", marker: []byte("docker_stats:")},
+func (p *preparedInstallation) finalize() error {
+	if p == nil || p.assets == nil {
+		return nil
 	}
-	if plan.Layout.SetupComposeFile != "" && (plan.Setup || (plan.Existing && FileExists(plan.Layout.SetupComposeFile))) {
-		assets = append(assets, managedAssetSpec{relativePath: "compose.setup.yaml", remotePath: "compose.setup.yaml", marker: []byte("services:")})
+	return p.assets.finalize()
+}
+
+func (e *Engine) managedAssetSpecs(plan Plan) []ManagedAsset {
+	assets := make([]ManagedAsset, 0, len(e.managedAssets))
+	for _, asset := range e.managedAssets {
+		if asset.setupOnly && (plan.Layout.SetupComposeFile == "" || (!plan.Setup && !(plan.Existing && FileExists(plan.Layout.SetupComposeFile)))) {
+			continue
+		}
+		assets = append(assets, asset)
 	}
 	return assets
 }
 
 func (e *Engine) stageManagedAssets(ctx context.Context, plan Plan) (*managedAssetMigration, error) {
-	if err := recoverInterruptedManagedAssetMigration(plan.Layout); err != nil {
+	assets := e.managedAssetSpecs(plan)
+	allowedPaths := make(map[string]struct{}, len(assets))
+	for _, asset := range assets {
+		if !validManagedAssetPath(asset.Path) {
+			return nil, fmt.Errorf("managed asset path %q is invalid", asset.Path)
+		}
+		allowedPaths[asset.Path] = struct{}{}
+	}
+	if err := recoverInterruptedManagedAssetMigration(plan.Layout, allowedPaths); err != nil {
 		return nil, fmt.Errorf("recover interrupted managed asset migration: %w", err)
 	}
 	stageDir, err := os.MkdirTemp(plan.Layout.StateDir, ".stealth-managed-assets-")
@@ -538,128 +644,282 @@ func (e *Engine) stageManagedAssets(ctx context.Context, plan Plan) (*managedAss
 		return nil, fmt.Errorf("create managed asset staging directory: %w", err)
 	}
 	migration := &managedAssetMigration{
-		layout:         plan.Layout,
-		stageDir:       stageDir,
-		previousBackup: filepath.Join(plan.Layout.StateDir, "managed-assets.previous"),
+		layout:       plan.Layout,
+		stageDir:     stageDir,
+		allowedPaths: allowedPaths,
+		hook:         e.migrationHook,
 	}
 	cleanup := func() {
 		_ = os.RemoveAll(stageDir)
 	}
-	for _, spec := range managedAssetSpecs(plan) {
-		contents, err := e.fetchAsset(ctx, e.assetBaseURL+"/"+strings.TrimSpace(plan.Version)+"/"+spec.remotePath)
+	for _, spec := range assets {
+		contents, err := e.fetchAsset(ctx, e.assetBaseURL+"/"+strings.TrimSpace(plan.Version)+"/"+spec.RemotePath)
 		if err != nil {
 			cleanup()
-			return nil, fmt.Errorf("download managed asset %q: %w", spec.remotePath, err)
+			return nil, fmt.Errorf("download managed asset %q: %w", spec.RemotePath, err)
 		}
-		if !bytes.Contains(contents, spec.marker) {
+		if !bytes.Contains(contents, []byte(spec.Marker)) {
 			cleanup()
-			return nil, fmt.Errorf("downloaded asset %q is invalid", spec.remotePath)
+			return nil, fmt.Errorf("downloaded asset %q is invalid", spec.RemotePath)
 		}
 		if spec.validate != nil {
 			if err := spec.validate(contents); err != nil {
 				cleanup()
-				return nil, fmt.Errorf("downloaded asset %q failed validation: %w", spec.remotePath, err)
+				return nil, fmt.Errorf("downloaded asset %q failed validation: %w", spec.RemotePath, err)
 			}
 		}
-		stagePath := filepath.Join(stageDir, filepath.FromSlash(spec.relativePath))
+		stagePath := filepath.Join(stageDir, filepath.FromSlash(spec.Path))
 		if err := WriteAtomic(stagePath, contents, 0o644); err != nil {
 			cleanup()
-			return nil, fmt.Errorf("stage managed asset %q: %w", spec.remotePath, err)
+			return nil, fmt.Errorf("stage managed asset %q: %w", spec.RemotePath, err)
 		}
 		migration.assets = append(migration.assets, stagedManagedAsset{
 			spec:       spec,
-			targetPath: filepath.Join(plan.Layout.Root, filepath.FromSlash(spec.relativePath)),
+			targetPath: filepath.Join(plan.Layout.Root, filepath.FromSlash(spec.Path)),
 			stagePath:  stagePath,
 		})
 	}
 	return migration, nil
 }
 
-func recoverInterruptedManagedAssetMigration(layout Layout) error {
+// recoverInterruptedManagedAssetMigration is deliberately rollback-first until
+// Compose validation has been durably recorded. That gives a restarted CLI
+// exactly two externally visible states: the complete old release, or a
+// complete, Compose-validated new release whose final cleanup can be finished.
+func recoverInterruptedManagedAssetMigration(layout Layout, allowedPaths map[string]struct{}) error {
 	pendingPath := filepath.Join(layout.StateDir, managedAssetPendingFile)
-	if info, err := os.Lstat(pendingPath); err == nil {
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("managed asset recovery journal is not a regular file")
+	info, err := os.Lstat(pendingPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return removeStaleManagedAssetTransactions(layout)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect managed asset recovery journal: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("managed asset recovery journal is not a regular file")
+	}
+	contents, err := os.ReadFile(pendingPath)
+	if err != nil {
+		return fmt.Errorf("read managed asset recovery journal: %w", err)
+	}
+	var manifest managedAssetRecoveryManifest
+	if err := json.Unmarshal(contents, &manifest); err != nil {
+		return fmt.Errorf("parse managed asset recovery journal: %w", err)
+	}
+	if err := validateManagedAssetRecoveryManifest(manifest, allowedPaths); err != nil {
+		return err
+	}
+	if manifest.Phase == migrationPhaseComposeValidated || manifest.Phase == migrationPhaseFinalized {
+		if err := finalizeRecoveredManagedAssetMigration(layout, manifest); err != nil {
+			return err
 		}
-		contents, err := os.ReadFile(pendingPath)
-		if err != nil {
-			return fmt.Errorf("read managed asset recovery journal: %w", err)
+	} else if err := rollbackManagedAssetMigration(layout, manifest); err != nil {
+		return err
+	}
+	return removeStaleManagedAssetTransactions(layout)
+}
+
+func validateManagedAssetRecoveryManifest(manifest managedAssetRecoveryManifest, allowedPaths map[string]struct{}) error {
+	if strings.TrimSpace(manifest.TransactionID) == "" || strings.ContainsAny(manifest.TransactionID, `/\\`) {
+		return errors.New("managed asset recovery journal contains an invalid transaction id")
+	}
+	if err := ValidateReleaseVersion(manifest.TargetVersion); err != nil {
+		return fmt.Errorf("managed asset recovery journal contains an invalid target version: %w", err)
+	}
+	if manifest.OriginalVersion != "" {
+		if err := ValidateReleaseVersion(manifest.OriginalVersion); err != nil {
+			return fmt.Errorf("managed asset recovery journal contains an invalid original version: %w", err)
 		}
-		var manifest managedAssetRecoveryManifest
-		if err := json.Unmarshal(contents, &manifest); err != nil {
-			return fmt.Errorf("parse managed asset recovery journal: %w", err)
+	}
+	if !validManagedTransactionDirectory(manifest.BackupDir, ".stealth-managed-backup-") || !validManagedTransactionDirectory(manifest.StageDir, ".stealth-managed-assets-") {
+		return errors.New("managed asset recovery journal contains an invalid transaction path")
+	}
+	switch manifest.Phase {
+	case migrationPhasePrepared, migrationPhaseBackedUp, migrationPhaseAssetsActivated, migrationPhaseConfigActivated, migrationPhaseVersionActivated, migrationPhaseComposeValidated, migrationPhaseFinalized:
+	default:
+		return fmt.Errorf("managed asset recovery journal contains an unknown phase %q", manifest.Phase)
+	}
+	seen := make(map[string]struct{}, len(manifest.Assets))
+	for _, entry := range manifest.Assets {
+		if !validManagedAssetPath(entry.RelativePath) {
+			return fmt.Errorf("managed asset recovery journal contains an invalid path %q", entry.RelativePath)
 		}
-		if filepath.Base(manifest.BackupDir) != manifest.BackupDir || !strings.HasPrefix(manifest.BackupDir, ".stealth-managed-backup-") {
-			return errors.New("managed asset recovery journal contains an invalid backup path")
+		if _, ok := allowedPaths[entry.RelativePath]; !ok {
+			return fmt.Errorf("managed asset recovery journal contains a path unknown to this release %q", entry.RelativePath)
 		}
-		backupPath := filepath.Join(layout.StateDir, manifest.BackupDir)
-		if info, err := os.Lstat(backupPath); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("inspect interrupted managed asset recovery set: %w", err)
-			}
-			backupPath = filepath.Join(layout.StateDir, "managed-assets.previous")
-			info, err := os.Lstat(backupPath)
-			if err != nil {
-				return fmt.Errorf("inspect published managed asset recovery set: %w", err)
-			}
-			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-				return errors.New("published managed asset recovery set is not a directory")
-			}
-		} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("interrupted managed asset recovery set is not a directory")
+		if _, ok := seen[entry.RelativePath]; ok {
+			return fmt.Errorf("managed asset recovery journal contains duplicate path %q", entry.RelativePath)
 		}
-		seen := make(map[string]struct{}, len(manifest.Assets))
-		for _, entry := range manifest.Assets {
-			if !isManagedAssetPath(entry.RelativePath) {
-				return fmt.Errorf("managed asset recovery journal contains unknown path %q", entry.RelativePath)
-			}
-			if _, ok := seen[entry.RelativePath]; ok {
-				return fmt.Errorf("managed asset recovery journal contains duplicate path %q", entry.RelativePath)
-			}
-			seen[entry.RelativePath] = struct{}{}
-			targetPath := filepath.Join(layout.Root, filepath.FromSlash(entry.RelativePath))
-			if entry.Existed {
-				sourcePath := filepath.Join(backupPath, filepath.FromSlash(entry.RelativePath))
-				if _, err := os.Lstat(sourcePath); errors.Is(err, os.ErrNotExist) {
-					// The journal is written before the first rename. If a
-					// process stopped in that small window, the original target
-					// is still authoritative and needs no restoration.
-					targetInfo, targetErr := os.Lstat(targetPath)
-					if targetErr != nil {
-						return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, targetErr)
-					}
-					if !targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0 {
-						return fmt.Errorf("recover previous managed asset %q: target is not a regular file", entry.RelativePath)
-					}
-					continue
-				} else if err != nil {
-					return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, err)
-				}
-				if err := removeManagedAssetTarget(targetPath); err != nil {
-					return fmt.Errorf("clear interrupted managed asset %q: %w", entry.RelativePath, err)
-				}
-				if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
-					return fmt.Errorf("prepare managed asset recovery path %q: %w", entry.RelativePath, err)
-				}
-				if err := os.Rename(sourcePath, targetPath); err != nil {
-					return fmt.Errorf("restore managed asset %q: %w", entry.RelativePath, err)
-				}
-				continue
-			}
+		seen[entry.RelativePath] = struct{}{}
+	}
+	for _, file := range []managedAssetRecoveryFile{manifest.Config, manifest.Version} {
+		if file.Existed && (file.Backup == "" || filepath.Base(file.Backup) != file.Backup) {
+			return errors.New("managed asset recovery journal contains an invalid state backup path")
+		}
+	}
+	return nil
+}
+
+func validManagedTransactionDirectory(value, prefix string) bool {
+	return filepath.Base(value) == value && strings.HasPrefix(value, prefix) && !strings.ContainsAny(value, `/\\`)
+}
+
+func validManagedAssetPath(relativePath string) bool {
+	if relativePath == "" || filepath.ToSlash(filepath.Clean(relativePath)) != relativePath {
+		return false
+	}
+	return !strings.HasPrefix(relativePath, "../") && !strings.Contains(relativePath, "//")
+}
+
+func rollbackManagedAssetMigration(layout Layout, manifest managedAssetRecoveryManifest) error {
+	backupDir := filepath.Join(layout.StateDir, manifest.BackupDir)
+	if err := ensurePrivateManagedDirectory(backupDir); err != nil {
+		return fmt.Errorf("inspect interrupted managed asset recovery set: %w", err)
+	}
+	for index := len(manifest.Assets) - 1; index >= 0; index-- {
+		entry := manifest.Assets[index]
+		targetPath := filepath.Join(layout.Root, filepath.FromSlash(entry.RelativePath))
+		if !entry.Existed {
 			if err := removeManagedAssetTarget(targetPath); err != nil {
 				return fmt.Errorf("remove partially activated managed asset %q: %w", entry.RelativePath, err)
 			}
+			continue
 		}
-		if err := os.RemoveAll(backupPath); err != nil {
-			return fmt.Errorf("remove recovered managed asset set: %w", err)
+		sourcePath := filepath.Join(backupDir, filepath.FromSlash(entry.RelativePath))
+		if sourceInfo, err := os.Lstat(sourcePath); errors.Is(err, os.ErrNotExist) {
+			// PREPARED is recorded before the first source rename. Until the
+			// backup phase is durable, an untouched regular target is the old
+			// authoritative file.
+			if manifest.Phase != migrationPhasePrepared {
+				return fmt.Errorf("recover previous managed asset %q: backup is missing", entry.RelativePath)
+			}
+			if err := ensureRegularManagedAsset(targetPath); err != nil {
+				return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, err)
+			}
+			continue
+		} else if err != nil {
+			return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, err)
+		} else if !sourceInfo.Mode().IsRegular() || sourceInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("recover previous managed asset %q: backup is not a regular file", entry.RelativePath)
 		}
-		if err := os.Remove(pendingPath); err != nil {
-			return fmt.Errorf("remove managed asset recovery journal: %w", err)
+		if err := removeManagedAssetTarget(targetPath); err != nil {
+			return fmt.Errorf("clear interrupted managed asset %q: %w", entry.RelativePath, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+			return fmt.Errorf("prepare managed asset recovery path %q: %w", entry.RelativePath, err)
+		}
+		if err := renameAndSync(sourcePath, targetPath); err != nil {
+			return fmt.Errorf("restore managed asset %q: %w", entry.RelativePath, err)
+		}
+	}
+	if err := restoreManagedStateFile(layout.EnvFile, backupDir, manifest.Config, 0o600); err != nil {
+		return fmt.Errorf("restore config.env: %w", err)
+	}
+	if err := restoreManagedStateFile(layout.VersionFile, backupDir, manifest.Version, 0o644); err != nil {
+		return fmt.Errorf("restore VERSION: %w", err)
+	}
+	if err := removeAllAndSync(backupDir); err != nil {
+		return fmt.Errorf("remove recovered managed asset set: %w", err)
+	}
+	if err := removeAllAndSync(filepath.Join(layout.StateDir, manifest.StageDir)); err != nil {
+		return fmt.Errorf("remove recovered managed asset staging set: %w", err)
+	}
+	if err := removeAndSync(filepath.Join(layout.StateDir, managedAssetPendingFile)); err != nil {
+		return fmt.Errorf("remove managed asset recovery journal: %w", err)
+	}
+	return nil
+}
+
+func publishManagedAssetRecoverySet(layout Layout, manifest managedAssetRecoveryManifest) error {
+	backupDir := filepath.Join(layout.StateDir, manifest.BackupDir)
+	previous := filepath.Join(layout.StateDir, "managed-assets.previous")
+	if info, err := os.Lstat(backupDir); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("completed managed asset recovery set is not a directory")
+		}
+		if err := removeAllAndSync(previous); err != nil {
+			return fmt.Errorf("replace previous managed asset recovery set: %w", err)
+		}
+		if err := renameAndSync(backupDir, previous); err != nil {
+			return fmt.Errorf("publish managed asset recovery set: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect managed asset recovery journal: %w", err)
+		return fmt.Errorf("inspect completed managed asset recovery set: %w", err)
+	} else if info, previousErr := os.Lstat(previous); previousErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("completed managed asset recovery set is missing")
 	}
+	if err := removeAllAndSync(filepath.Join(layout.StateDir, manifest.StageDir)); err != nil {
+		return fmt.Errorf("remove completed managed asset staging set: %w", err)
+	}
+	return nil
+}
 
+func finalizeRecoveredManagedAssetMigration(layout Layout, manifest managedAssetRecoveryManifest) error {
+	if err := publishManagedAssetRecoverySet(layout, manifest); err != nil {
+		return err
+	}
+	if manifest.Phase != migrationPhaseFinalized {
+		manifest.Phase = migrationPhaseFinalized
+		contents, err := json.Marshal(manifest)
+		if err != nil {
+			return fmt.Errorf("encode completed managed asset recovery journal: %w", err)
+		}
+		if err := WriteAtomic(filepath.Join(layout.StateDir, managedAssetPendingFile), contents, 0o600); err != nil {
+			return fmt.Errorf("record completed managed asset recovery journal: %w", err)
+		}
+	}
+	if err := removeAndSync(filepath.Join(layout.StateDir, managedAssetPendingFile)); err != nil {
+		return fmt.Errorf("remove completed managed asset recovery journal: %w", err)
+	}
+	return nil
+}
+
+func restoreManagedStateFile(targetPath, backupDir string, state managedAssetRecoveryFile, fallbackMode os.FileMode) error {
+	if !state.Existed {
+		return removeAndSync(targetPath)
+	}
+	backupPath := filepath.Join(backupDir, state.Backup)
+	info, err := os.Lstat(backupPath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("state backup is not a regular file")
+	}
+	contents, err := os.ReadFile(backupPath)
+	if err != nil {
+		return err
+	}
+	mode := os.FileMode(state.Mode)
+	if mode == 0 {
+		mode = fallbackMode
+	}
+	return WriteAtomic(targetPath, contents, mode)
+}
+
+func ensurePrivateManagedDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("not a directory")
+	}
+	return nil
+}
+
+func ensureRegularManagedAsset(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("target is not a regular file")
+	}
+	return nil
+}
+
+func removeStaleManagedAssetTransactions(layout Layout) error {
 	entries, err := os.ReadDir(layout.StateDir)
 	if err != nil {
 		return fmt.Errorf("inspect managed asset staging directory: %w", err)
@@ -668,20 +928,11 @@ func recoverInterruptedManagedAssetMigration(layout Layout) error {
 		if !strings.HasPrefix(entry.Name(), ".stealth-managed-assets-") && !strings.HasPrefix(entry.Name(), ".stealth-managed-backup-") {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(layout.StateDir, entry.Name())); err != nil {
+		if err := removeAllAndSync(filepath.Join(layout.StateDir, entry.Name())); err != nil {
 			return fmt.Errorf("remove stale managed asset transaction %q: %w", entry.Name(), err)
 		}
 	}
 	return nil
-}
-
-func isManagedAssetPath(relativePath string) bool {
-	switch filepath.ToSlash(filepath.Clean(relativePath)) {
-	case "compose.production.yaml", "compose.setup.yaml", "console/deploy/nginx.conf", "telemetry/otel-collector.yaml", "telemetry/host-metrics.yaml", "telemetry/docker-logs.yaml", "telemetry/docker-stats.yaml":
-		return filepath.Clean(relativePath) == filepath.FromSlash(relativePath)
-	default:
-		return false
-	}
 }
 
 func removeManagedAssetTarget(path string) error {
@@ -695,7 +946,45 @@ func removeManagedAssetTarget(path string) error {
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("target is not a regular file")
 	}
-	return os.Remove(path)
+	return removeAndSync(path)
+}
+
+func renameAndSync(source, target string) error {
+	if err := os.Rename(source, target); err != nil {
+		return err
+	}
+	if err := syncDirectory(filepath.Dir(source)); err != nil {
+		return err
+	}
+	if filepath.Dir(source) != filepath.Dir(target) {
+		if err := syncDirectory(filepath.Dir(target)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeAndSync(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func removeAllAndSync(path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func validateProductionComposeAsset(contents []byte) error {
@@ -726,157 +1015,186 @@ func validateMainCollectorAsset(contents []byte) error {
 	return nil
 }
 
-func (m *managedAssetMigration) commit() error {
+func (m *managedAssetMigration) commit(plan Plan, originalEnv []byte, originalEnvExists bool, originalVersion []byte, originalVersionExists bool, originalVersionMode os.FileMode) error {
 	if m == nil {
 		return errors.New("managed asset migration is nil")
-	}
-	if info, err := os.Lstat(m.previousBackup); err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("managed asset recovery path is not a directory")
-		}
-		if err := os.RemoveAll(m.previousBackup); err != nil {
-			return fmt.Errorf("replace previous managed asset recovery set: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect previous managed asset recovery set: %w", err)
 	}
 	backupDir, err := os.MkdirTemp(m.layout.StateDir, ".stealth-managed-backup-")
 	if err != nil {
 		return fmt.Errorf("create managed asset recovery set: %w", err)
 	}
+	if err := os.Chmod(backupDir, 0o700); err != nil {
+		_ = os.RemoveAll(backupDir)
+		return fmt.Errorf("protect managed asset recovery set: %w", err)
+	}
 	m.backupDir = backupDir
+	m.manifest = managedAssetRecoveryManifest{
+		TransactionID:   filepath.Base(backupDir),
+		TargetVersion:   strings.TrimSpace(plan.Version),
+		OriginalVersion: strings.TrimSpace(plan.InstalledVersion),
+		BackupDir:       filepath.Base(backupDir),
+		StageDir:        filepath.Base(m.stageDir),
+		Phase:           migrationPhasePrepared,
+		Assets:          make([]managedAssetRecoveryEntry, 0, len(m.assets)),
+		Config:          managedAssetRecoveryFile{Existed: originalEnvExists, Backup: "config.env", Mode: 0o600},
+		Version:         managedAssetRecoveryFile{Existed: originalVersionExists, Backup: "VERSION", Mode: uint32(originalVersionMode)},
+	}
+	if m.manifest.OriginalVersion == "" && originalVersionExists {
+		m.manifest.OriginalVersion = strings.TrimSpace(string(originalVersion))
+	}
+	if originalEnvExists {
+		if err := WriteAtomic(filepath.Join(backupDir, m.manifest.Config.Backup), originalEnv, 0o600); err != nil {
+			return m.failCommit(fmt.Errorf("back up config.env: %w", err))
+		}
+	}
+	if originalVersionExists {
+		mode := originalVersionMode
+		if mode == 0 {
+			mode = 0o644
+			m.manifest.Version.Mode = uint32(mode)
+		}
+		if err := WriteAtomic(filepath.Join(backupDir, m.manifest.Version.Backup), originalVersion, mode); err != nil {
+			return m.failCommit(fmt.Errorf("back up VERSION: %w", err))
+		}
+	}
 	for index := range m.assets {
 		asset := &m.assets[index]
-		info, err := os.Lstat(asset.targetPath)
-		if errors.Is(err, os.ErrNotExist) {
+		info, statErr := os.Lstat(asset.targetPath)
+		if errors.Is(statErr, os.ErrNotExist) {
+			m.manifest.Assets = append(m.manifest.Assets, managedAssetRecoveryEntry{RelativePath: asset.spec.Path})
 			continue
 		}
-		if err != nil {
-			return m.failCommit(fmt.Errorf("inspect managed asset %q: %w", asset.spec.relativePath, err))
+		if statErr != nil {
+			return m.failCommit(fmt.Errorf("inspect managed asset %q: %w", asset.spec.Path, statErr))
 		}
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return m.failCommit(fmt.Errorf("managed asset %q is not a regular file", asset.spec.relativePath))
+			return m.failCommit(fmt.Errorf("managed asset %q is not a regular file", asset.spec.Path))
 		}
 		asset.existed = true
-		asset.backupPath = filepath.Join(backupDir, filepath.FromSlash(asset.spec.relativePath))
+		asset.backupPath = filepath.Join(backupDir, filepath.FromSlash(asset.spec.Path))
 		if err := os.MkdirAll(filepath.Dir(asset.backupPath), 0o700); err != nil {
-			return m.failCommit(fmt.Errorf("prepare recovery path for %q: %w", asset.spec.relativePath, err))
+			return m.failCommit(fmt.Errorf("prepare recovery path for %q: %w", asset.spec.Path, err))
 		}
+		m.manifest.Assets = append(m.manifest.Assets, managedAssetRecoveryEntry{RelativePath: asset.spec.Path, Existed: true})
 	}
-	manifest := managedAssetRecoveryManifest{BackupDir: filepath.Base(backupDir), Assets: make([]managedAssetRecoveryEntry, 0, len(m.assets))}
-	for _, asset := range m.assets {
-		manifest.Assets = append(manifest.Assets, managedAssetRecoveryEntry{RelativePath: asset.spec.relativePath, Existed: asset.existed})
+	if err := m.writeJournal(); err != nil {
+		return m.failCommit(err)
 	}
-	manifestContents, err := json.Marshal(manifest)
-	if err != nil {
-		return m.failCommit(fmt.Errorf("encode managed asset recovery journal: %w", err))
+	m.journalWritten = true
+	if err := m.notify(MigrationEvent{Phase: migrationPhasePrepared}); err != nil {
+		return m.failCommit(err)
 	}
-	if err := WriteAtomic(filepath.Join(m.layout.StateDir, managedAssetPendingFile), manifestContents, 0o600); err != nil {
-		return m.failCommit(fmt.Errorf("write managed asset recovery journal: %w", err))
-	}
+	backupIndex := 0
 	for index := range m.assets {
 		asset := &m.assets[index]
 		if !asset.existed {
 			continue
 		}
-		if err := os.Rename(asset.targetPath, asset.backupPath); err != nil {
-			return m.failCommit(fmt.Errorf("save previous managed asset %q: %w", asset.spec.relativePath, err))
+		if err := renameAndSync(asset.targetPath, asset.backupPath); err != nil {
+			return m.failCommit(fmt.Errorf("save previous managed asset %q: %w", asset.spec.Path, err))
 		}
 		asset.backedUp = true
+		backupIndex++
+		if err := m.notify(MigrationEvent{Phase: migrationEventBackupRenamed, Asset: asset.spec.Path, Index: backupIndex, Total: len(m.assets)}); err != nil {
+			return m.failCommit(err)
+		}
+	}
+	if err := m.transition(migrationPhaseBackedUp); err != nil {
+		return m.failCommit(err)
 	}
 	for index := range m.assets {
 		asset := &m.assets[index]
 		if err := os.MkdirAll(filepath.Dir(asset.targetPath), 0o700); err != nil {
-			return m.failCommit(fmt.Errorf("create managed asset directory for %q: %w", asset.spec.relativePath, err))
+			return m.failCommit(fmt.Errorf("create managed asset directory for %q: %w", asset.spec.Path, err))
 		}
-		if err := os.Rename(asset.stagePath, asset.targetPath); err != nil {
-			return m.failCommit(fmt.Errorf("activate managed asset %q: %w", asset.spec.relativePath, err))
+		if err := renameAndSync(asset.stagePath, asset.targetPath); err != nil {
+			return m.failCommit(fmt.Errorf("activate managed asset %q: %w", asset.spec.Path, err))
 		}
 		asset.installed = true
-	}
-	hasBackup := false
-	for _, asset := range m.assets {
-		if asset.existed {
-			hasBackup = true
-			break
+		if err := m.notify(MigrationEvent{Phase: migrationEventAssetActivated, Asset: asset.spec.Path, Index: index + 1, Total: len(m.assets)}); err != nil {
+			return m.failCommit(err)
 		}
 	}
-	if hasBackup {
-		if err := os.Rename(backupDir, m.previousBackup); err != nil {
-			return m.failCommit(fmt.Errorf("publish managed asset recovery set: %w", err))
-		}
-		m.backupDir = m.previousBackup
-		for index := range m.assets {
-			if m.assets[index].existed {
-				m.assets[index].backupPath = filepath.Join(m.previousBackup, filepath.FromSlash(m.assets[index].spec.relativePath))
-			}
-		}
-	} else {
-		_ = os.RemoveAll(backupDir)
-		m.backupDir = ""
+	if err := m.transition(migrationPhaseAssetsActivated); err != nil {
+		return m.failCommit(err)
 	}
-	if err := os.Remove(filepath.Join(m.layout.StateDir, managedAssetPendingFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return m.failCommit(fmt.Errorf("remove managed asset recovery journal: %w", err))
+	return nil
+}
+
+func (m *managedAssetMigration) transition(phase migrationPhase) error {
+	if m == nil || !m.journalWritten {
+		return errors.New("managed asset recovery journal is not active")
 	}
-	m.committed = true
+	m.manifest.Phase = phase
+	if err := m.writeJournal(); err != nil {
+		return err
+	}
+	return m.notify(MigrationEvent{Phase: phase})
+}
+
+func (m *managedAssetMigration) notify(event MigrationEvent) error {
+	if m != nil && m.hook != nil {
+		if err := m.hook(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *managedAssetMigration) writeJournal() error {
+	contents, err := json.Marshal(m.manifest)
+	if err != nil {
+		return fmt.Errorf("encode managed asset recovery journal: %w", err)
+	}
+	if err := WriteAtomic(filepath.Join(m.layout.StateDir, managedAssetPendingFile), contents, 0o600); err != nil {
+		return fmt.Errorf("write managed asset recovery journal: %w", err)
+	}
 	return nil
 }
 
 func (m *managedAssetMigration) failCommit(cause error) error {
-	rollbackErr := m.rollback()
-	return errors.Join(cause, rollbackErr)
+	if errors.Is(cause, errMigrationProcessInterrupted) {
+		return cause
+	}
+	return errors.Join(cause, m.rollback())
 }
 
 func (m *managedAssetMigration) rollback() error {
 	if m == nil {
 		return nil
 	}
-	var rollbackErr error
-	for index := len(m.assets) - 1; index >= 0; index-- {
-		asset := &m.assets[index]
-		if asset.installed {
-			if err := os.Remove(asset.targetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove activated asset %q: %w", asset.spec.relativePath, err))
-			}
-			asset.installed = false
+	if !m.journalWritten {
+		var cleanupErr error
+		if m.backupDir != "" {
+			cleanupErr = errors.Join(cleanupErr, removeAllAndSync(m.backupDir))
 		}
-		if asset.backedUp && asset.backupPath != "" {
-			if err := os.MkdirAll(filepath.Dir(asset.targetPath), 0o700); err != nil {
-				rollbackErr = errors.Join(rollbackErr, err)
-				continue
-			}
-			if err := os.Rename(asset.backupPath, asset.targetPath); err != nil {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore managed asset %q: %w", asset.spec.relativePath, err))
-			}
+		if m.stageDir != "" {
+			cleanupErr = errors.Join(cleanupErr, removeAllAndSync(m.stageDir))
 		}
+		return cleanupErr
 	}
-	if m.backupDir != "" {
-		if err := os.RemoveAll(m.backupDir); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-	}
-	if m.stageDir != "" {
-		if err := os.RemoveAll(m.stageDir); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-	}
-	if err := os.Remove(filepath.Join(m.layout.StateDir, managedAssetPendingFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		rollbackErr = errors.Join(rollbackErr, err)
-	}
-	m.committed = false
-	return rollbackErr
+	return recoverInterruptedManagedAssetMigration(m.layout, m.allowedPaths)
 }
 
-func (m *managedAssetMigration) finalize() {
+func (m *managedAssetMigration) finalize() error {
 	if m == nil {
-		return
+		return nil
 	}
-	if m.stageDir != "" {
-		_ = os.RemoveAll(m.stageDir)
+	if m.manifest.Phase != migrationPhaseComposeValidated {
+		return errors.New("managed asset migration has not passed Compose validation")
 	}
-	if m.backupDir != "" && m.backupDir != m.previousBackup {
-		_ = os.RemoveAll(m.backupDir)
+	// Do not discard the previous recovery set until the new complete backup
+	// exists and the new platform has passed Compose validation. If this process
+	// dies during publication, recovery sees COMPOSE_VALIDATED and completes
+	// forward without exposing a mixed release.
+	if err := publishManagedAssetRecoverySet(m.layout, m.manifest); err != nil {
+		return err
 	}
+	m.manifest.Phase = migrationPhaseFinalized
+	if err := m.writeJournal(); err != nil {
+		return err
+	}
+	return removeAndSync(filepath.Join(m.layout.StateDir, managedAssetPendingFile))
 }
 
 // Wait checks the host-visible service endpoints for CLI plans and the
@@ -1112,7 +1430,22 @@ func WriteAtomic(path string, contents []byte, mode os.FileMode) error {
 	if err := os.Rename(temporaryName, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, mode)
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
+	if err := syncFile(path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func syncFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 func ReadEnvFile(path string) (map[string]string, error) {

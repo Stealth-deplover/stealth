@@ -310,7 +310,7 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := New(Options{AssetBaseURL: server.URL, PollAttempts: 1})
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL, PollAttempts: 1})
 	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", Setup: true, ConfigContents: config}); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := New(Options{AssetBaseURL: server.URL})
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL})
 	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v0.2.2", Existing: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestPrepareSameVersionRepairRestoresMissingAndCorruptAssets(t *testing.T) {
 
 	assetServer := newEngineAssetServer(t, version)
 	defer assetServer.Close()
-	engine := New(Options{AssetBaseURL: assetServer.URL})
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
 	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: version, Existing: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -593,6 +593,234 @@ func TestRunStepConfigurationRollsBackWhenComposeValidationFails(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(layout.StateDir, "managed-assets.previous")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("rollback left recovery backup: %v", statErr)
+	}
+}
+
+func TestManagedAssetRecoveryRestoresOnlyCoherentReleaseStates(t *testing.T) {
+	targetVersion := "v1.2.3"
+	checkpoints := []struct {
+		name  string
+		match func(MigrationEvent) bool
+		want  string
+	}{
+		{name: "journal written", match: func(event MigrationEvent) bool { return event.Phase == migrationPhasePrepared }, want: "old"},
+		{name: "first backup rename", match: func(event MigrationEvent) bool { return event.Phase == migrationEventBackupRenamed && event.Index == 1 }, want: "old"},
+		{name: "last backup rename", match: func(event MigrationEvent) bool {
+			return event.Phase == migrationEventBackupRenamed && event.Index == event.Total
+		}, want: "old"},
+		{name: "first target activation", match: func(event MigrationEvent) bool {
+			return event.Phase == migrationEventAssetActivated && event.Index == 1
+		}, want: "old"},
+		{name: "last target activation", match: func(event MigrationEvent) bool {
+			return event.Phase == migrationEventAssetActivated && event.Index == event.Total
+		}, want: "old"},
+		{name: "config activation", match: func(event MigrationEvent) bool { return event.Phase == migrationPhaseConfigActivated }, want: "old"},
+		{name: "version activation", match: func(event MigrationEvent) bool { return event.Phase == migrationPhaseVersionActivated }, want: "old"},
+		{name: "compose validation", match: func(event MigrationEvent) bool { return event.Phase == migrationPhaseComposeValidated }, want: "new"},
+	}
+
+	for _, checkpoint := range checkpoints {
+		t.Run(checkpoint.name, func(t *testing.T) {
+			layout := writeEngineFixture(t, false)
+			if err := WriteAtomic(layout.ComposeFile, []byte("services:\n  old-topology:\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://127.0.0.1:8080\nPOSTGRES_PASSWORD=crash-test-secret\n"); err != nil {
+				t.Fatal(err)
+			}
+			old := captureManagedInstallationState(t, layout)
+			assetServer := newEngineAssetServer(t, targetVersion)
+			defer assetServer.Close()
+			engine := New(Options{
+				Runner:       &fakeRunner{},
+				AssetBaseURL: assetServer.URL,
+				MigrationHook: func(event MigrationEvent) error {
+					if checkpoint.match(event) {
+						return errMigrationProcessInterrupted
+					}
+					return nil
+				},
+			})
+			plan := Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v1.2.2", Existing: true}
+			err := engine.RunStep(context.Background(), plan, StepConfiguration)
+			if !errors.Is(err, errMigrationProcessInterrupted) {
+				t.Fatalf("injected interruption error = %v", err)
+			}
+
+			// A new Engine models a reboot/SIGKILL: it has no in-memory state and
+			// uses only the durable journal to choose rollback or completion.
+			recovery := New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
+			allowed := make(map[string]struct{})
+			for _, asset := range recovery.managedAssetSpecs(plan) {
+				allowed[asset.Path] = struct{}{}
+			}
+			if err := recoverInterruptedManagedAssetMigration(layout, allowed); err != nil {
+				t.Fatalf("recoverInterruptedManagedAssetMigration() error = %v", err)
+			}
+			if checkpoint.want == "old" {
+				assertManagedInstallationState(t, layout, old)
+			} else {
+				assertCurrentManagedInstallationState(t, layout, targetVersion)
+			}
+			if _, statErr := os.Stat(filepath.Join(layout.StateDir, managedAssetPendingFile)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("recovery left pending journal: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestTargetReleaseManifestCanAddFutureManagedAsset(t *testing.T) {
+	const version = "v1.2.3"
+	layout := writeEngineFixture(t, false)
+	assets := map[string]string{
+		"compose.production.yaml":       testProductionComposeAsset(),
+		"telemetry/otel-collector.yaml": testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":     "server {\n}",
+		"telemetry/future.yaml":         "future_receiver:\n",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contents, ok := assets[strings.TrimPrefix(r.URL.Path, "/"+version+"/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, contents)
+	}))
+	defer server.Close()
+
+	oldManifest := DefaultManagedAssets()
+	targetManifest := append(DefaultManagedAssets(), ManagedAsset{Path: "telemetry/future.yaml", RemotePath: "telemetry/future.yaml", Marker: "future_receiver:"})
+	for _, asset := range oldManifest {
+		if asset.Path == "telemetry/future.yaml" {
+			t.Fatal("old release unexpectedly knows future asset")
+		}
+	}
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL, ManagedAssets: targetManifest})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: "v1.2.2", Existing: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(layout.TelemetryDir, "future.yaml")); err != nil || string(got) != "future_receiver:\n" {
+		t.Fatalf("target-owned future asset = %q, %v", got, err)
+	}
+}
+
+func TestManagedAssetMigrationKeepsPreviousRecoverySetUntilTargetIsValidated(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	if err := WriteAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous := filepath.Join(layout.StateDir, "managed-assets.previous")
+	if err := WriteAtomic(filepath.Join(previous, "sentinel"), []byte("older bounded recovery set\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{
+		Runner:       &fakeRunner{},
+		AssetBaseURL: assetServer.URL,
+		MigrationHook: func(event MigrationEvent) error {
+			if event.Phase == migrationPhaseVersionActivated {
+				return errMigrationProcessInterrupted
+			}
+			return nil
+		},
+	})
+	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}
+	if err := engine.RunStep(context.Background(), plan, StepConfiguration); !errors.Is(err, errMigrationProcessInterrupted) {
+		t.Fatalf("injected interruption error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(previous, "sentinel")); err != nil || string(got) != "older bounded recovery set\n" {
+		t.Fatalf("previous recovery set was removed before validation: %q, %v", got, err)
+	}
+	allowed := make(map[string]struct{})
+	for _, asset := range DefaultManagedAssets() {
+		if !asset.setupOnly {
+			allowed[asset.Path] = struct{}{}
+		}
+	}
+	if err := recoverInterruptedManagedAssetMigration(layout, allowed); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(previous, "sentinel")); err != nil || string(got) != "older bounded recovery set\n" {
+		t.Fatalf("rollback replaced previous recovery set: %q, %v", got, err)
+	}
+
+	engine = New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
+	if err := engine.RunStep(context.Background(), plan, StepConfiguration); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(previous, "sentinel")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finalized recovery set retained stale sentinel: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(previous, "config.env")); err != nil {
+		t.Fatalf("finalized previous recovery set does not retain private config backup: %v", err)
+	}
+}
+
+type managedInstallationState struct {
+	assets  map[string][]byte
+	config  []byte
+	version []byte
+}
+
+func captureManagedInstallationState(t *testing.T, layout Layout) managedInstallationState {
+	t.Helper()
+	state := managedInstallationState{assets: make(map[string][]byte)}
+	for _, asset := range DefaultManagedAssets() {
+		if asset.setupOnly {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(layout.Root, asset.Path))
+		if err != nil {
+			t.Fatalf("read %s: %v", asset.Path, err)
+		}
+		state.assets[asset.Path] = contents
+	}
+	var err error
+	if state.config, err = os.ReadFile(layout.EnvFile); err != nil {
+		t.Fatal(err)
+	}
+	if state.version, err = os.ReadFile(layout.VersionFile); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func assertManagedInstallationState(t *testing.T, layout Layout, want managedInstallationState) {
+	t.Helper()
+	for path, contents := range want.assets {
+		if got, err := os.ReadFile(filepath.Join(layout.Root, path)); err != nil || !bytes.Equal(got, contents) {
+			t.Fatalf("recovered %s = %q, %v; want %q", path, got, err, contents)
+		}
+	}
+	if got, err := os.ReadFile(layout.EnvFile); err != nil || !bytes.Equal(got, want.config) {
+		t.Fatalf("recovered config.env = %q, %v; want %q", got, err, want.config)
+	}
+	if got, err := os.ReadFile(layout.VersionFile); err != nil || !bytes.Equal(got, want.version) {
+		t.Fatalf("recovered VERSION = %q, %v; want %q", got, err, want.version)
+	}
+}
+
+func assertCurrentManagedInstallationState(t *testing.T, layout Layout, version string) {
+	t.Helper()
+	if got, err := os.ReadFile(layout.ComposeFile); err != nil || string(got) != testProductionComposeAsset() {
+		t.Fatalf("current Compose = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(layout.VersionFile); err != nil || string(got) != version+"\n" {
+		t.Fatalf("current VERSION = %q, %v", got, err)
+	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["POSTGRES_PASSWORD"] != "crash-test-secret" {
+		t.Fatalf("current config did not preserve secret: %#v", values)
 	}
 }
 

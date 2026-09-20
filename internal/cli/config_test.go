@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -105,6 +106,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	layout := newInstallLayout(filepath.Join(root, ".stealth"))
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
+	app.runner = &setupRunner{}
 	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)
@@ -239,6 +241,27 @@ func writeExistingConfig(t *testing.T, version string) InstallLayout {
 		t.Fatal(err)
 	}
 	return layout
+}
+
+func TestRetargetRepairPlanUsesReleasedCurrentCLIWithoutDowngrade(t *testing.T) {
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.currentVersion = func() string { return "v1.2.3" }
+	plan := &InstallPlan{Version: "v1.2.2", InstalledVersion: "v1.2.2", Existing: true}
+	if err := app.retargetRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Version != "v1.2.3" || plan.InstalledVersion != "v1.2.2" {
+		t.Fatalf("retargeted repair plan = %#v", plan)
+	}
+	newer := &InstallPlan{Version: "v1.2.4", InstalledVersion: "v1.2.4", Existing: true}
+	if err := app.retargetRepairPlan(newer); err == nil || !strings.Contains(err.Error(), "newer than this CLI") {
+		t.Fatalf("downgrade repair error = %v", err)
+	}
+	app.currentVersion = func() string { return "dev" }
+	local := &InstallPlan{Version: "v1.2.2", InstalledVersion: "v1.2.2", Existing: true}
+	if err := app.retargetRepairPlan(local); err != nil || local.Version != "v1.2.2" {
+		t.Fatalf("development repair plan = %#v, %v", local, err)
+	}
 }
 
 func parseEnvContents(t *testing.T, contents string) (map[string]string, error) {
