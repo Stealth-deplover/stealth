@@ -295,6 +295,15 @@ func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) 
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer assetServer.Close()
+	releaseServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"tag_name":"v1.2.3","draft":false,"prerelease":false,"assets":[]}`)
+	}))
+	defer releaseServer.Close()
 	if err := writeAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -344,13 +353,16 @@ func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) 
 	}
 
 	t.Setenv("STEALTH_INSTALL_DIR", layout.Root)
-	bridge := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	var bridgeOutput, bridgeErrors bytes.Buffer
+	bridge := NewApp(strings.NewReader(""), &bridgeOutput, &bridgeErrors)
 	bridge.assetBase = assetServer.URL
-	bridge.httpClient = assetServer.Client()
+	bridge.httpClient = releaseServer.Client()
 	bridge.runner = &setupRunner{}
-	migrated, err := bridge.migrateInstalledRelease(context.Background(), bridgeVersion)
-	if err != nil || !migrated {
-		t.Fatalf("explicit bridge reconciliation = %v, migrated=%v", err, migrated)
+	bridge.releaseAPIBase = releaseServer.URL
+	bridge.releaseDownloadBase = releaseServer.URL
+	bridge.currentVersion = func() string { return bridgeVersion }
+	if code := bridge.run([]string{"update"}); code != 0 {
+		t.Fatalf("explicit bridge reconciliation exit code = %d, stderr=%s", code, bridgeErrors.String())
 	}
 	if got, err := os.ReadFile(layout.ComposeFile); err != nil || !strings.Contains(string(got), "telemetry-docker-logs:") || strings.Contains(string(got), "/:/hostfs:ro") {
 		t.Fatalf("bridge reconciliation Compose = %q, %v", got, err)
