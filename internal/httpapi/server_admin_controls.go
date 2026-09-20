@@ -30,6 +30,10 @@ type adminAlertRulesResponse struct {
 	Items []domain.AdminAlertRule `json:"items"`
 }
 
+type adminAlertEventsResponse struct {
+	Items []domain.AdminAlertEvent `json:"items"`
+}
+
 type adminNotificationChannelRequest struct {
 	Name    string         `json:"name"`
 	Kind    string         `json:"kind"`
@@ -108,6 +112,19 @@ func (s *Server) listAdminAlertRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, adminAlertRulesResponse{Items: items})
+}
+
+func (s *Server) listAdminAlertEvents(w http.ResponseWriter, r *http.Request) {
+	limit, ok := adminConfigLimit(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.repo.ListRecentAdminAlertEvents(r.Context(), limit)
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminAlertEventsResponse{Items: items})
 }
 
 func (s *Server) listAdminNotificationChannels(w http.ResponseWriter, r *http.Request) {
@@ -260,6 +277,23 @@ func (s *Server) getAdminAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, adminAlertRuleResponse{Rule: item, Events: events})
+}
+
+func (s *Server) listAdminAlertRuleEvents(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "alertRuleID")
+	if !ok {
+		return
+	}
+	limit, ok := adminConfigLimit(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.repo.ListAdminAlertEvents(r.Context(), id, limit)
+	if err != nil {
+		adminControlError(s, w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, adminAlertEventsResponse{Items: items})
 }
 
 func (s *Server) updateAdminAlertRule(w http.ResponseWriter, r *http.Request) {

@@ -124,6 +124,7 @@ export const queryKeys = {
   adminMonitor: (monitorId: string) => ["admin", "monitor", monitorId] as const,
   adminAlerts: ["admin", "alerts"] as const,
   adminAlert: (alertRuleId: string) => ["admin", "alert", alertRuleId] as const,
+  adminAlertEvents: ["admin", "alert-events"] as const,
   adminNotifications: ["admin", "notifications"] as const,
   adminIncidents: ["admin", "incidents"] as const,
   adminIncident: (incidentId: string) =>

@@ -67,13 +67,14 @@ func (r *Repository) EvaluateAdminAlert(ctx context.Context, ruleID uuid.UUID, t
 }
 
 func evaluateAdminAlertTx(ctx context.Context, tx pgx.Tx, ruleID uuid.UUID, trigger bool, value *float64, lastError, message string) (uuid.UUID, error) {
-	var state string
+	var name, kind, severity, state string
+	var condition json.RawMessage
 	var forSeconds int
 	var pendingSince *time.Time
 	var enabled bool
 	if err := tx.QueryRow(ctx, `
-		SELECT state,for_seconds,pending_since,enabled
-		FROM admin_alert_rules WHERE id=$1 FOR UPDATE`, ruleID).Scan(&state, &forSeconds, &pendingSince, &enabled); err != nil {
+		SELECT name,kind,condition,severity,state,for_seconds,pending_since,enabled
+		FROM admin_alert_rules WHERE id=$1 FOR UPDATE`, ruleID).Scan(&name, &kind, &condition, &severity, &state, &forSeconds, &pendingSince, &enabled); err != nil {
 		if err == pgx.ErrNoRows {
 			return uuid.Nil, ErrNotFound
 		}
@@ -111,7 +112,12 @@ func evaluateAdminAlertTx(ctx context.Context, tx pgx.Tx, ruleID uuid.UUID, trig
 	if message == "" {
 		message = "Admin alert condition changed"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO admin_alert_events (id,rule_id,state,value,message,occurred_at) VALUES ($1,$2,$3,$4,$5,$6)`, eventID, ruleID, transition.EventState, value, message, now); err != nil {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO admin_alert_events (
+			id,rule_id,rule_id_snapshot,rule_name_snapshot,rule_kind_snapshot,severity_snapshot,condition_snapshot,
+			state,value,message,occurred_at
+		) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		eventID, ruleID, name, kind, severity, condition, transition.EventState, value, message, now); err != nil {
 		return uuid.Nil, err
 	}
 	if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {

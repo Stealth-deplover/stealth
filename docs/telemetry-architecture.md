@@ -158,11 +158,17 @@ API and never accepts raw SQL.
 The owner control room also exposes durable operations, audit events, monitor
 checks, alert history, notification delivery state, incidents, infrastructure
 metric samples, service-map edges, error-group status, and a public status-page
-projection. Error groups are derived and fingerprinted in ClickHouse; their
-owner-controlled lifecycle state is kept in PostgreSQL so acknowledgement and
-resolution survive a restart without copying high-volume occurrences into the
-control plane. Notification test sends use the same durable delivery queue as
-alert notifications and never return channel secrets to the browser.
+projection. Alert rules are mutable live configuration: deleting one stops
+future evaluation but retains immutable alert-event snapshots and their
+notification-delivery history. Error groups are derived and fingerprinted in
+ClickHouse; their owner-controlled lifecycle state is kept in PostgreSQL so
+acknowledgement and resolution survive a restart without copying high-volume
+occurrences into the control plane. Recent alert history is available through
+the bounded authenticated `/v1/admin/alert-events` collection and the
+per-rule `/v1/admin/alerts/{alertRuleID}/events` collection, even after the
+live rule is deleted. Notification test sends use the same durable
+delivery queue as alert notifications and never return channel secrets to the
+browser.
 
 The API remains usable when ClickHouse or the Collector is unavailable. Admin
 pages report the telemetry backend as unavailable; core authentication,

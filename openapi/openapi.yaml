@@ -328,6 +328,20 @@ paths:
       security: [{ sessionCookie: [] }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateAdminAlertRuleRequest' } } } }
       responses: { '201': { description: Alert rule created, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertRuleResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+  /v1/admin/alert-events:
+    get:
+      operationId: listAdminAlertEvents
+      description: List bounded recent alert history, including events whose live rule was deleted.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Recent alert history, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertEventsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
+  /v1/admin/alerts/{alertRuleID}/events:
+    get:
+      operationId: listAdminAlertRuleEvents
+      description: List bounded alert history by immutable rule snapshot ID. The live rule need not exist.
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/AlertRuleID' }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }]
+      responses: { '200': { description: Alert history, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAlertEventsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '500': { $ref: '#/components/responses/InternalError' } }
   /v1/admin/alerts/{alertRuleID}:
     get:
       operationId: getAdminAlertRule
@@ -2897,7 +2911,8 @@ components:
     AdminNotificationChannelsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminNotificationChannel' } } } }
     CreateAdminNotificationChannelRequest: { type: object, additionalProperties: false, required: [name, kind, config], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [email, webhook, slack, discord, telegram] }, enabled: { type: boolean, default: true }, config: { type: object, additionalProperties: true, writeOnly: true } } }
     AdminNotificationTestResponse: { type: object, additionalProperties: false, required: [delivery_id, status], properties: { delivery_id: { type: string, format: uuid }, status: { type: string, enum: [pending] } } }
-    AdminAlertEvent: { type: object, additionalProperties: false, required: [id, rule_id, state, message, occurred_at], properties: { id: { type: string, format: uuid }, rule_id: { type: string, format: uuid }, state: { type: string, enum: [firing, resolved] }, value: { type: [number, 'null'] }, message: { type: string, maxLength: 1000 }, occurred_at: { type: string, format: date-time } } }
+    AdminAlertEvent: { type: object, additionalProperties: false, required: [id, rule_id, rule_name, rule_kind, severity, state, message, occurred_at, source_rule_exists], properties: { id: { type: string, format: uuid }, rule_id: { type: string, format: uuid }, rule_name: { type: string, maxLength: 120 }, rule_kind: { type: string, maxLength: 120 }, severity: { type: string, enum: [info, warning, critical] }, state: { type: string, enum: [firing, resolved] }, value: { type: [number, 'null'] }, message: { type: string, maxLength: 1000 }, occurred_at: { type: string, format: date-time }, source_rule_exists: { type: boolean } } }
+    AdminAlertEventsResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAlertEvent' } } } }
     AdminAlertRulesResponse: { type: object, additionalProperties: false, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/AdminAlertRule' } } } }
     AdminAlertRuleResponse: { type: object, additionalProperties: false, required: [rule], properties: { rule: { $ref: '#/components/schemas/AdminAlertRule' }, events: { type: array, items: { $ref: '#/components/schemas/AdminAlertEvent' } } } }
     CreateAdminAlertRuleRequest: { type: object, additionalProperties: false, required: [name, kind, condition, severity], properties: { name: { type: string, minLength: 1, maxLength: 120 }, kind: { type: string, enum: [metric_threshold, error_rate, latency, log_match, service_health, disk_pressure, monitor_failure, heartbeat_failure, certificate_expiry] }, condition: { type: object, additionalProperties: true, maxProperties: 16 }, severity: { type: string, enum: [info, warning, critical] }, for_seconds: { type: integer, minimum: 0, maximum: 86400, default: 0 }, enabled: { type: boolean, default: true } } }

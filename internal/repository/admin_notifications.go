@@ -254,15 +254,14 @@ func (r *Repository) ClaimNextAdminNotificationDelivery(ctx context.Context, wor
 	var job AdminNotificationDeliveryJob
 	err = tx.QueryRow(ctx, `
 		SELECT d.id,d.channel_id,c.name,c.kind,c.config_encrypted,d.alert_event_id,
-		       COALESCE(r.name,'Stealth notification test'),
-		       COALESCE(r.severity,'info'),
+		       COALESCE(e.rule_name_snapshot,'Stealth notification test'),
+		       COALESCE(e.severity_snapshot,'info'),
 		       COALESCE(e.state,'test'),
 		       COALESCE(e.message,d.test_message),
 		       COALESCE(e.occurred_at,d.created_at),d.attempts
 		FROM admin_notification_deliveries d
 		JOIN admin_notification_channels c ON c.id=d.channel_id
 		LEFT JOIN admin_alert_events e ON e.id=d.alert_event_id
-		LEFT JOIN admin_alert_rules r ON r.id=e.rule_id
 		WHERE d.status='pending' AND d.available_at<=now() AND c.enabled
 		  AND (d.alert_event_id IS NOT NULL OR d.test_message IS NOT NULL)
 		  AND (d.leased_at IS NULL OR d.leased_at < now() - ($1::double precision * interval '1 second'))
@@ -331,12 +330,21 @@ func enqueueAdminNotificationDeliveriesTx(ctx context.Context, tx pgx.Tx, eventI
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	channelIDs := make([]uuid.UUID, 0)
 	for rows.Next() {
 		var channelID uuid.UUID
 		if err := rows.Scan(&channelID); err != nil {
+			rows.Close()
 			return err
 		}
+		channelIDs = append(channelIDs, channelID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, channelID := range channelIDs {
 		deliveryID, err := uuid.NewV7()
 		if err != nil {
 			return err
@@ -345,7 +353,7 @@ func enqueueAdminNotificationDeliveriesTx(ctx context.Context, tx pgx.Tx, eventI
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func scanAdminNotificationChannel(row interface{ Scan(...any) error }) (domain.AdminNotificationChannel, error) {

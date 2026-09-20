@@ -4,7 +4,11 @@ import { useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { BellRing, Plus, Trash2 } from "lucide-react";
 import { useCreateAdminAlert, useDeleteAdminAlert } from "@/api/mutations";
-import { useAdminAlerts, useAdminMonitors } from "@/api/queries";
+import {
+  useAdminAlertEvents,
+  useAdminAlerts,
+  useAdminMonitors,
+} from "@/api/queries";
 import {
   CreateAdminAlertRuleRequestKind,
   CreateAdminAlertRuleRequestSeverity,
@@ -37,6 +41,10 @@ export function AdminAlertsView() {
   const timeRange = useAdminTimeRange();
   const alerts = useAdminAlerts(
     { limit: 100 },
+    { refetchInterval: timeRange.refreshInterval },
+  );
+  const history = useAdminAlertEvents(
+    { limit: 50 },
     { refetchInterval: timeRange.refreshInterval },
   );
   const remove = useDeleteAdminAlert();
@@ -178,6 +186,86 @@ export function AdminAlertsView() {
           ) : null}
         </div>
       ) : null}
+      <section className="overflow-hidden rounded-xl border border-graphite bg-carbon">
+        <div className="border-b border-graphite px-4 py-4">
+          <h2 className="text-sm font-medium text-paper">
+            Recent alert history
+          </h2>
+          <p className="mt-1 text-sm text-fog">
+            Firing and resolved events remain available after their rule is
+            deleted.
+          </p>
+        </div>
+        {history.isPending ? <LoadingState rows={3} /> : null}
+        {history.error ? (
+          <div className="p-4" role="alert">
+            <ErrorState
+              title="Could not load alert history"
+              error={history.error}
+              retry={() => history.refetch()}
+            />
+          </div>
+        ) : null}
+        {history.data && !history.data.items.length ? (
+          <p className="p-6 text-sm text-fog">No alert history recorded yet.</p>
+        ) : null}
+        {history.data?.items.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-left text-sm">
+              <thead className="border-b border-graphite bg-white/[0.02] text-xs uppercase tracking-[0.1em] text-fog">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Rule</th>
+                  <th className="px-4 py-3 font-medium">Severity</th>
+                  <th className="px-4 py-3 font-medium">State</th>
+                  <th className="px-4 py-3 font-medium">Source</th>
+                  <th className="px-4 py-3 font-medium">Occurred</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-graphite">
+                {history.data.items.map((event) => (
+                  <tr
+                    key={event.id}
+                    className="align-top hover:bg-white/[0.025]"
+                  >
+                    <td className="max-w-[280px] px-4 py-4">
+                      <p className="truncate text-mist" title={event.rule_name}>
+                        {event.rule_name}
+                      </p>
+                      <p className="mt-1 font-mono text-[11px] text-fog">
+                        {event.rule_kind}
+                      </p>
+                    </td>
+                    <td className="px-4 py-4">
+                      <Badge
+                        variant={
+                          event.severity === "critical"
+                            ? "error"
+                            : event.severity === "warning"
+                              ? "warning"
+                              : "neutral"
+                        }
+                      >
+                        {event.severity}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-4">
+                      <StatusBadge status={event.state} />
+                    </td>
+                    <td className="px-4 py-4 text-xs text-fog">
+                      {event.source_rule_exists
+                        ? "Active rule"
+                        : "Deleted rule"}
+                    </td>
+                    <td className="px-4 py-4 text-xs text-fog">
+                      {formatDate(event.occurred_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
     </AdminShell>
   );
 }

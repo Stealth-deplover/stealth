@@ -363,6 +363,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/alert-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded recent alert history, including events whose live rule was deleted. */
+        get: operations["listAdminAlertEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/alerts/{alertRuleID}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded alert history by immutable rule snapshot ID. The live rule need not exist. */
+        get: operations["listAdminAlertRuleEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/alerts/{alertRuleID}": {
         parameters: {
             query?: never;
@@ -3371,12 +3405,20 @@ export interface components {
             id: string;
             /** Format: uuid */
             rule_id: string;
+            rule_name: string;
+            rule_kind: string;
+            /** @enum {string} */
+            severity: AdminAlertEventSeverity;
             /** @enum {string} */
             state: AdminAlertEventState;
             value?: number | null;
             message: string;
             /** Format: date-time */
             occurred_at: string;
+            source_rule_exists: boolean;
+        };
+        AdminAlertEventsResponse: {
+            items: components["schemas"]["AdminAlertEvent"][];
         };
         AdminAlertRulesResponse: {
             items: components["schemas"]["AdminAlertRule"][];
@@ -6675,6 +6717,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAlertRuleResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminAlertEvents: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent alert history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertEventsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAdminAlertRuleEvents: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                alertRuleID: components["parameters"]["AlertRuleID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAlertEventsResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -13881,6 +13977,11 @@ export enum CreateAdminNotificationChannelRequestKind {
 }
 export enum AdminNotificationTestResponseStatus {
     pending = "pending"
+}
+export enum AdminAlertEventSeverity {
+    info = "info",
+    warning = "warning",
+    critical = "critical"
 }
 export enum AdminAlertEventState {
     firing = "firing",
