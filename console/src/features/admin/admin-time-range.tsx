@@ -280,6 +280,7 @@ export function AdminTimeRange({
   return (
     <div
       className="flex flex-wrap items-center gap-3"
+      role="group"
       aria-label="Telemetry time range"
     >
       <div className="flex flex-wrap items-center gap-1 rounded-md border border-graphite bg-carbon p-1">

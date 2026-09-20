@@ -139,6 +139,9 @@ describe("admin time range preferences", () => {
   it("gives every time-range control a standard touch target", () => {
     render(<Harness />);
 
+    expect(
+      screen.getByRole("group", { name: "Telemetry time range" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "24h" })).toHaveClass(
       "min-h-11",
       "min-w-11",
