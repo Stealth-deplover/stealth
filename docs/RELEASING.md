@@ -31,6 +31,13 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
   ```
 
+- [ ] During the v0.2.5 bridge period, run
+      `./scripts/real-v025-upgrade-smoke.sh` (or the identically named CI
+      step). It must start from the tag-derived v0.2.5 fixture, verify the
+      CLI-only bridge phase, run the bridge `stealth update`, invoke the
+      checksum- and version-verified target binary's internal migration, and
+      finish with the full production telemetry/HTTP smoke.
+
 ## Tag and release artifacts
 
 - [ ] Confirm the release version is either a stable `vMAJOR.MINOR.PATCH` tag

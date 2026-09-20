@@ -39,6 +39,13 @@ type CommandRunner interface {
 
 type execCommandRunner struct{}
 
+type cliTestOverrides struct {
+	assetBase    string
+	runner       CommandRunner
+	pollAttempts int
+	pollInterval time.Duration
+}
+
 // App owns process dependencies and CLI configuration. A single App is used
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
@@ -69,21 +76,39 @@ type App struct {
 // command runner, HTTP client, or installation directory after construction.
 func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	homeDir, _ := os.UserHomeDir()
+	runner := CommandRunner(execCommandRunner{})
+	assetBase := defaultRawBaseURL
+	pollAttempts := 60
+	pollInterval := 2 * time.Second
+	if overrides := compiledCLITestOverrides(); overrides != nil {
+		if overrides.assetBase != "" {
+			assetBase = overrides.assetBase
+		}
+		if overrides.runner != nil {
+			runner = overrides.runner
+		}
+		if overrides.pollAttempts > 0 {
+			pollAttempts = overrides.pollAttempts
+		}
+		if overrides.pollInterval > 0 {
+			pollInterval = overrides.pollInterval
+		}
+	}
 	return &App{
 		in:                  in,
 		out:                 out,
 		errOut:              errOut,
-		runner:              execCommandRunner{},
+		runner:              runner,
 		httpClient:          &http.Client{Timeout: 20 * time.Second},
 		homeDir:             homeDir,
-		assetBase:           defaultRawBaseURL,
+		assetBase:           assetBase,
 		releaseAPIBase:      defaultGitHubAPIBaseURL,
 		releaseDownloadBase: defaultGitHubReleaseBaseURL,
 		executablePath:      os.Executable,
 		renameFile:          os.Rename,
 		currentVersion:      func() string { return buildinfo.Version },
-		pollAttempts:        60,
-		pollInterval:        2 * time.Second,
+		pollAttempts:        pollAttempts,
+		pollInterval:        pollInterval,
 	}
 }
 

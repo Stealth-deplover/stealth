@@ -173,6 +173,12 @@ install --repair`) with the bridge binary to migrate the existing stack. See
 the exact bridge-release procedure in [`upgrade.md`](upgrade.md); do not infer
 that a single v0.2.5 update has changed old production assets.
 
+If the stable release has already advanced beyond the bridge, acquire the
+bridge archive and `checksums.txt`, verify the selected archive entry, and
+replace only the existing CLI executable with the extracted `stealth` file.
+Do not run the normal fresh-install bootstrap for this step: an existing root
+must remain untouched until the bridge CLI runs `stealth update`.
+
 Use `stealth update --check` for a network-only check; it exits non-zero when
 an update is available. The update source is the official stable release only:
 drafts, prereleases, arbitrary URLs, and downgrades are rejected. If the

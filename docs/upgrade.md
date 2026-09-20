@@ -55,9 +55,27 @@ from `v0.2.5` while that bridge is the latest stable release:
    binary detects the existing installation and performs the documented
    managed-asset migration.
 
-If a later release is already latest, first install the bridge CLI archive
-explicitly using the official release's checksum-verified bootstrap path and
-then run `stealth update`. Do not assume a single invocation of the already
+If a later release is already latest, install the bridge executable itself
+before running `stealth update`; do not run a fresh-install bootstrap against
+an existing root. Use the official bridge archive and its checksum file, for
+example:
+
+```bash
+release=v0.2.6                 # the bridge named by that release's notes
+asset=stealth_Linux_x86_64.tar.gz
+workdir="$(mktemp -d)"
+curl -fsSLo "$workdir/$asset" "https://github.com/Stealth-deplover/stealth/releases/download/$release/$asset"
+curl -fsSLo "$workdir/checksums.txt" "https://github.com/Stealth-deplover/stealth/releases/download/$release/checksums.txt"
+(cd "$workdir" && grep "  $asset$" checksums.txt | sha256sum -c -)
+tar -xzf "$workdir/$asset" -C "$workdir"
+install -m 0755 "$workdir/stealth" "$(readlink -f "$(command -v stealth)")"
+rm -rf "$workdir"
+stealth update
+```
+
+Use the arm64 archive on arm64 hosts. This binary-only replacement preserves
+the existing installation root; the following `stealth update` performs the
+coordinated migration. Do not assume a single invocation of the already
 shipped v0.2.5 binary can migrate future platform assets. Release notes name
 the bridge tag while this transition remains necessary.
 
