@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { VirtualizedLogTable } from "./admin-logs-view";
+import { AdminLogTailStatus, VirtualizedLogTable } from "./admin-logs-view";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -46,5 +46,22 @@ describe("virtualized Admin log table", () => {
     expect(
       screen.getByRole("button", { name: "Close dialog" }),
     ).toBeInTheDocument();
+  });
+
+  it("announces live-tail connection changes", () => {
+    render(
+      <AdminLogTailStatus
+        connected={false}
+        error="Live log stream disconnected. The browser will retry."
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Connecting to live stream",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Live log stream disconnected",
+    );
   });
 });

@@ -519,7 +519,10 @@ function MetricPanel({
     <PanelFrame title={panel.title ?? panel.metric ?? "Metrics"}>
       {metrics.isPending ? <LoadingState rows={2} /> : null}
       {metrics.error ? (
-        <p className="text-sm text-fog">Telemetry unavailable.</p>
+        <TelemetryPanelError
+          message="Metric data unavailable."
+          retry={() => metrics.refetch()}
+        />
       ) : null}
       {metrics.data?.items.length ? (
         <AdminMetricChart items={metrics.data.items} />
@@ -556,7 +559,10 @@ function LogPanel({
     <PanelFrame title={panel.title ?? "Recent logs"}>
       {logs.isPending ? <LoadingState rows={2} /> : null}
       {logs.error ? (
-        <p className="text-sm text-fog">Telemetry unavailable.</p>
+        <TelemetryPanelError
+          message="Log data unavailable."
+          retry={() => logs.refetch()}
+        />
       ) : null}
       {logs.data?.items.length ? (
         <div className="divide-y divide-graphite">
@@ -592,7 +598,10 @@ function MonitorStatusPanel({
     <PanelFrame title="Monitor status">
       {monitors.isPending ? <LoadingState rows={2} /> : null}
       {monitors.error ? (
-        <p className="text-sm text-fog">Monitor state unavailable.</p>
+        <TelemetryPanelError
+          message="Monitor state unavailable."
+          retry={() => monitors.refetch()}
+        />
       ) : null}
       {monitors.data?.items.length ? (
         <div className="space-y-2">
@@ -615,6 +624,31 @@ function MonitorStatusPanel({
         </p>
       ) : null}
     </PanelFrame>
+  );
+}
+
+export function TelemetryPanelError({
+  message,
+  retry,
+}: {
+  message: string;
+  retry: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-coral-red/20 bg-coral-red/[0.04] px-3 py-2.5"
+      role="alert"
+    >
+      <p className="text-sm text-mist">{message}</p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => void retry()}
+      >
+        Retry
+      </Button>
+    </div>
   );
 }
 

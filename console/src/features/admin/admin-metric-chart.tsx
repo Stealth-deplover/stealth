@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import * as echarts from "echarts/core";
 import { type ComposeOption } from "echarts/core";
 import {
@@ -15,6 +15,7 @@ import {
 } from "echarts/components";
 import { LineChart, type LineSeriesOption } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
+import { formatDate } from "@/lib/format";
 
 echarts.use([
   DataZoomComponent,
@@ -42,6 +43,7 @@ type AdminMetric = {
 
 export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const descriptionId = useId();
 
   useEffect(() => {
     const element = chartRef.current;
@@ -124,11 +126,67 @@ export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
     };
   }, [items]);
 
+  const totalSeriesCount = new Set(
+    items.map((item) => `${item.service} · ${item.name}`),
+  ).size;
+  const seriesCount = Math.min(totalSeriesCount, 8);
+  const seriesLabel =
+    totalSeriesCount > seriesCount
+      ? `Metric time series showing ${seriesCount} of ${totalSeriesCount} series`
+      : `Metric time series with ${seriesCount} series`;
+
   return (
-    <div
-      ref={chartRef}
-      className="h-72 w-full"
-      aria-label="Metric time series"
-    />
+    <div className="space-y-3">
+      <div
+        ref={chartRef}
+        className="h-72 w-full"
+        role="img"
+        aria-label={seriesLabel}
+        aria-describedby={descriptionId}
+      />
+      <p id={descriptionId} className="sr-only">
+        {items.length} metric points across {totalSeriesCount} series are
+        available. The chart shows up to eight series. Expand the data table to
+        inspect the timestamps, metric names, services, and values.
+      </p>
+      <details className="rounded-md border border-graphite bg-void">
+        <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-medium text-mist hover:text-paper">
+          View data table
+        </summary>
+        <div className="overflow-x-auto border-t border-graphite p-3">
+          <table className="w-full min-w-[640px] text-left text-xs">
+            <caption className="sr-only">Metric time series data</caption>
+            <thead className="text-fog">
+              <tr>
+                <th className="px-2 py-2 font-medium">Time</th>
+                <th className="px-2 py-2 font-medium">Metric</th>
+                <th className="px-2 py-2 font-medium">Service</th>
+                <th className="px-2 py-2 text-right font-medium">Value</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-graphite">
+              {items.map((item, index) => (
+                <tr
+                  key={`${item.timestamp}-${item.name}-${item.service}-${index}`}
+                >
+                  <td className="whitespace-nowrap px-2 py-2 font-mono text-mist">
+                    <time dateTime={item.timestamp}>
+                      {formatDate(item.timestamp)}
+                    </time>
+                  </td>
+                  <td className="px-2 py-2 font-mono text-mist">{item.name}</td>
+                  <td className="px-2 py-2 text-mist">{item.service}</td>
+                  <td className="px-2 py-2 text-right font-mono tabular-nums text-mist">
+                    {item.value.toLocaleString(undefined, {
+                      maximumFractionDigits: 4,
+                    })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
   );
 }

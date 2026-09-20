@@ -42,6 +42,28 @@ function readLogQueryHistory(): string[] {
   }
 }
 
+export function AdminLogTailStatus({
+  connected,
+  error,
+}: {
+  connected: boolean;
+  error: string | null;
+}) {
+  return (
+    <div
+      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fog"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span>
+        {connected ? "Streaming new records" : "Connecting to live stream"}
+      </span>
+      {error ? <span className="text-coral-red">{error}</span> : null}
+    </div>
+  );
+}
+
 export function AdminLogsView() {
   const timeRange = useAdminTimeRange();
   const searchParams = useSearchParams();
@@ -116,16 +138,7 @@ export function AdminLogsView() {
         }
       />
       {tailEnabled ? (
-        <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fog">
-          <span>
-            {tail.connected
-              ? "Streaming new records"
-              : "Connecting to live stream"}
-          </span>
-          {tail.error ? (
-            <span className="text-coral-red">{tail.error}</span>
-          ) : null}
-        </div>
+        <AdminLogTailStatus connected={tail.connected} error={tail.error} />
       ) : null}
       <Card className="mb-4">
         <CardContent className="space-y-3 p-4">

@@ -79,6 +79,11 @@ export function DataTable<T extends RowData>({
   });
   return (
     <div aria-busy={loading || undefined}>
+      {loading ? (
+        <span className="sr-only" role="status" aria-live="polite">
+          Loading table…
+        </span>
+      ) : null}
       <Table>
         <TableHeader>
           <TableRow>
