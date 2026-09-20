@@ -32,6 +32,10 @@ type hostInstallFixture struct {
 func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1.2.3/") {
+			writeHostManagedAsset(w, strings.TrimPrefix(r.URL.Path, "/v1.2.3/"))
+			return
+		}
 		if r.URL.Path == "/v1/setup/handoff/status" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"pending":false}`)
@@ -97,9 +101,27 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
 	app.runner = &setupRunner{}
 	app.httpClient = server.Client()
+	app.assetBase = server.URL
 	app.pollAttempts = 1
 	app.pollInterval = time.Millisecond
 	return &hostInstallFixture{app: app, layout: layout, store: store, state: state, values: values, server: server}
+}
+
+func writeHostManagedAsset(w http.ResponseWriter, name string) {
+	assets := map[string]string{
+		"compose.production.yaml":       "services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
+		"compose.setup.yaml":            "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml": "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":     "server {\n}\n",
+	}
+	if contents, ok := assets[name]; ok {
+		_, _ = io.WriteString(w, contents)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
@@ -348,6 +370,7 @@ func TestHostInstallerRestartResumesInstallingRun(t *testing.T) {
 	resumed := NewApp(strings.NewReader(""), io.Discard, io.Discard)
 	resumed.runner = &setupRunner{}
 	resumed.httpClient = fixture.server.Client()
+	resumed.assetBase = fixture.server.URL
 	resumed.pollAttempts = 1
 	resumed.pollInterval = time.Millisecond
 	if err := resumed.executeHostInstallation(context.Background(), fixture.layout, fixture.values, fixture.store, "run-1"); err != nil {

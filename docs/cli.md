@@ -110,10 +110,20 @@ Git tag as the CLI. The config pins API, setup, worker, migration, Console,
 the capability-free Collector image, the dedicated Docker-log Collector image,
 and the restricted telemetry Docker proxy image to the same GHCR release tag.
 
-An existing `config.env` or `VERSION` is never replaced by a normal reinstall.
-The command refuses to proceed and leaves volumes untouched. After a partial
-failure, use `stealth doctor`; an explicit `stealth install --repair` reuses
-the existing private configuration and does not regenerate secrets.
+An existing `config.env` is operator state: supported update and repair paths
+preserve its secrets and custom values while adding missing release keys. The
+Compose, Collector, proxy, and telemetry files are release-managed artifacts;
+supported update and repair replace them atomically with the target release
+after validation. Direct edits to those managed files may therefore be
+replaced. A bounded previous managed-asset set is kept under `state/` for
+recovery/debugging, while persistent database, storage, and Collector state
+volumes are preserved. Unknown local files are not recursively removed.
+
+An ordinary fresh install still refuses to overwrite an existing installation.
+After a partial preparation or Compose-validation failure, the active files,
+`config.env`, and `VERSION` remain recoverable; use `stealth doctor` or
+`stealth install --repair` for the next attempt. The coordinated `stealth
+update` path performs this migration before replacing the CLI binary.
 
 ## Operations
 
@@ -139,12 +149,17 @@ To update the installed Stealth CLI to the latest stable GitHub Release:
 stealth update
 ```
 
-The command downloads only the Linux amd64/arm64 CLI archive for the running
-platform, verifies its entry in `checksums.txt`, validates the extracted
-binary, and replaces the installed CLI with an atomic file swap. A failed
-download, checksum, extraction, or replacement leaves the current CLI
-untouched. Development builds can use `stealth update --check` to inspect
-availability, but a release build is recommended for self-update.
+On a host without an installation, the command downloads only the Linux
+amd64/arm64 CLI archive for the running platform, verifies its entry in
+`checksums.txt`, validates the extracted binary, and replaces the installed
+CLI with an atomic file swap. For an existing installation it first runs the
+coordinated release migration described in [`upgrade.md`](upgrade.md):
+release-managed Compose, Collector, proxy, and telemetry assets are validated
+and updated, while `config.env`, secrets, unknown files, and persistent state
+are preserved. A failed download, checksum, asset preparation, Compose
+validation, or replacement leaves the installation recoverable. Development
+builds can use `stealth update --check` to inspect availability, but a release
+build is recommended for self-update.
 
 Use `stealth update --check` for a network-only check; it exits non-zero when
 an update is available. The update source is the official stable release only:
@@ -153,10 +168,11 @@ installation directory is not writable, rerun the command with the
 appropriate system permissions; Stealth never invokes `sudo` or asks for its
 password.
 
-`stealth update` updates the CLI binary only. It does not pull or restart API,
-worker, Console, PostgreSQL, Redis, or proxy containers, apply migrations, or
-upgrade the running Stealth server stack. Use the production upgrade runbook
-for coordinated platform changes.
+For an existing installation, `stealth update` also pulls/recreates the
+versioned production stack, runs the normal migrations and health checks, and
+updates the telemetry topology. It is the supported coordinated platform
+upgrade path; it does not promise zero-downtime upgrades or automatic database
+rollback.
 
 ## First-run Instance Owner setup
 

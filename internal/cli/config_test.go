@@ -79,11 +79,14 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  api:\n    image: test\n"))
+			_, _ = writer.Write([]byte("services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
 			return
 		}
 		if strings.Contains(request.URL.Path, "/telemetry/") {
 			marker := "receivers:\n"
+			if strings.HasSuffix(request.URL.Path, "otel-collector.yaml") {
+				marker = "receivers:\n  otlp:\nexporters:\n  clickhouse:\n"
+			}
 			switch {
 			case strings.HasSuffix(request.URL.Path, "host-metrics.yaml"):
 				marker = "hostmetrics:\n"

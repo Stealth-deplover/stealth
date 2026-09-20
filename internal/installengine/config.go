@@ -81,6 +81,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	clickhousePassword, err := randomHex(32)
+	if err != nil {
+		return "", err
+	}
 	apiImage := options.APIImage
 	if apiImage == "" {
 		apiImage = ImageName("stealth-api", options.Version)
@@ -103,51 +107,61 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		cookieSecure = "true"
 	}
 	values := map[string]string{
-		"COMPOSE_PROJECT_NAME":                 project,
-		"STEALTH_API_IMAGE":                    apiImage,
-		"STEALTH_SETUP_IMAGE":                  setupImage,
-		"STEALTH_WORKER_IMAGE":                 ImageName("stealth-worker", options.Version),
-		"STEALTH_MIGRATE_IMAGE":                ImageName("stealth-migrate", options.Version),
-		"STEALTH_CONSOLE_IMAGE":                ImageName("stealth-console", options.Version),
-		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": ImageName("stealth-telemetry-docker-proxy", options.Version),
-		"OTEL_COLLECTOR_IMAGE":                 collectorImage,
-		"OTEL_HOST_COLLECTOR_IMAGE":            collectorImage,
-		"OTEL_DOCKER_COLLECTOR_IMAGE":          collectorImage,
-		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     ImageName("stealth-otel-docker-logs", options.Version),
-		"POSTGRES_DB":                          "stealth",
-		"POSTGRES_USER":                        "stealth",
-		"POSTGRES_PASSWORD":                    postgresPassword,
-		"DATABASE_URL":                         databaseURL,
-		"REDIS_PASSWORD":                       redisPassword,
-		"REDIS_URL":                            redisURL,
-		"FUNCTIONS_SECRET_KEY":                 functionsKey,
-		"BOOTSTRAP_CLI_KEY":                    bootstrapKey,
-		"GITHUB_APP_CLIENT_ID":                 strings.TrimSpace(options.GitHubAppClientID),
-		"PUBLIC_APP_URL":                       publicURL,
-		"COOKIE_SECURE":                        cookieSecure,
-		"TRUSTED_PROXY_CIDRS":                  trustedProxy,
-		"STEALTH_NETWORK_SUBNET":               subnet,
-		"STEALTH_NETWORK_NAME":                 "stealth_network",
-		"DOCKER_GID":                           strconv.FormatUint(uint64(options.DockerGID), 10),
-		"METRICS_TOKEN":                        metricsToken,
-		"FUNCTIONS_RUNNER_ENABLED":             "true",
-		"FUNCTIONS_WORKER_ID":                  "stealth-worker",
-		"FUNCTIONS_RUNNER_STAGING_VOLUME":      "stealth_function_runner_staging",
-		"STORAGE_DRIVER":                       storageDriver,
-		"STORAGE_MAX_FILE_SIZE":                "50MiB",
-		"STORAGE_DEFAULT_QUOTA_BYTES":          "1GiB",
-		"PROJECT_OPERATION_RATE_LIMIT":         "120",
-		"PROJECT_OPERATION_RATE_WINDOW":        "1m",
-		"AUTH_RATE_LIMIT":                      "10",
-		"AUTH_RATE_WINDOW":                     "1m",
-		"PROXY_HTTP_BIND":                      "127.0.0.1",
-		"PROXY_HTTP_PORT":                      "8080",
-		"API_HOST_PORT":                        "18080",
-		"CONSOLE_HOST_PORT":                    "13000",
-		"SETUP_API_HOST_PORT":                  "18081",
-		"SETUP_CONSOLE_HOST_PORT":              "13001",
-		"SETUP_PROXY_HTTP_PORT":                "8081",
-		"SETUP_MODE":                           strconv.FormatBool(options.Setup),
+		"COMPOSE_PROJECT_NAME":                  project,
+		"STEALTH_API_IMAGE":                     apiImage,
+		"STEALTH_SETUP_IMAGE":                   setupImage,
+		"STEALTH_WORKER_IMAGE":                  ImageName("stealth-worker", options.Version),
+		"STEALTH_MIGRATE_IMAGE":                 ImageName("stealth-migrate", options.Version),
+		"STEALTH_CONSOLE_IMAGE":                 ImageName("stealth-console", options.Version),
+		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE":  ImageName("stealth-telemetry-docker-proxy", options.Version),
+		"OTEL_COLLECTOR_IMAGE":                  collectorImage,
+		"OTEL_HOST_COLLECTOR_IMAGE":             collectorImage,
+		"OTEL_DOCKER_COLLECTOR_IMAGE":           collectorImage,
+		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":      ImageName("stealth-otel-docker-logs", options.Version),
+		"POSTGRES_DB":                           "stealth",
+		"POSTGRES_USER":                         "stealth",
+		"POSTGRES_PASSWORD":                     postgresPassword,
+		"DATABASE_URL":                          databaseURL,
+		"REDIS_PASSWORD":                        redisPassword,
+		"REDIS_URL":                             redisURL,
+		"FUNCTIONS_SECRET_KEY":                  functionsKey,
+		"BOOTSTRAP_CLI_KEY":                     bootstrapKey,
+		"GITHUB_APP_CLIENT_ID":                  strings.TrimSpace(options.GitHubAppClientID),
+		"PUBLIC_APP_URL":                        publicURL,
+		"COOKIE_SECURE":                         cookieSecure,
+		"TRUSTED_PROXY_CIDRS":                   trustedProxy,
+		"STEALTH_NETWORK_SUBNET":                subnet,
+		"STEALTH_NETWORK_NAME":                  "stealth_network",
+		"DOCKER_GID":                            strconv.FormatUint(uint64(options.DockerGID), 10),
+		"METRICS_TOKEN":                         metricsToken,
+		"CLICKHOUSE_IMAGE":                      "clickhouse/clickhouse-server:26.8.6.5",
+		"CLICKHOUSE_DATABASE":                   "stealth_telemetry",
+		"CLICKHOUSE_USER":                       "stealth",
+		"CLICKHOUSE_PASSWORD":                   clickhousePassword,
+		"CLICKHOUSE_VOLUME_NAME":                "stealth_clickhouse_data",
+		"OTEL_COLLECTOR_HEALTH_URL":             "http://otel-collector:13133",
+		"OTELCOL_VOLUME_NAME":                   "stealth_otelcol_state",
+		"OTEL_DOCKER_LOGS_VOLUME_NAME":          "stealth_otel_docker_logs_state",
+		"STEALTH_TELEMETRY_STORE_NETWORK_NAME":  "stealth_telemetry_store",
+		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
+		"FUNCTIONS_RUNNER_ENABLED":              "true",
+		"FUNCTIONS_WORKER_ID":                   "stealth-worker",
+		"FUNCTIONS_RUNNER_STAGING_VOLUME":       "stealth_function_runner_staging",
+		"STORAGE_DRIVER":                        storageDriver,
+		"STORAGE_MAX_FILE_SIZE":                 "50MiB",
+		"STORAGE_DEFAULT_QUOTA_BYTES":           "1GiB",
+		"PROJECT_OPERATION_RATE_LIMIT":          "120",
+		"PROJECT_OPERATION_RATE_WINDOW":         "1m",
+		"AUTH_RATE_LIMIT":                       "10",
+		"AUTH_RATE_WINDOW":                      "1m",
+		"PROXY_HTTP_BIND":                       "127.0.0.1",
+		"PROXY_HTTP_PORT":                       "8080",
+		"API_HOST_PORT":                         "18080",
+		"CONSOLE_HOST_PORT":                     "13000",
+		"SETUP_API_HOST_PORT":                   "18081",
+		"SETUP_CONSOLE_HOST_PORT":               "13001",
+		"SETUP_PROXY_HTTP_PORT":                 "8081",
+		"SETUP_MODE":                            strconv.FormatBool(options.Setup),
 	}
 	values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] = "stealth_telemetry_ingest"
 	if options.Setup {
@@ -165,6 +179,69 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 
 func ImageName(name, version string) string {
 	return "ghcr.io/stealth-deplover/" + name + ":" + strings.TrimSpace(version)
+}
+
+var releaseManagedImageNames = map[string]string{
+	"STEALTH_API_IMAGE":                    "stealth-api",
+	"STEALTH_SETUP_IMAGE":                  "stealth-setup",
+	"STEALTH_WORKER_IMAGE":                 "stealth-worker",
+	"STEALTH_MIGRATE_IMAGE":                "stealth-migrate",
+	"STEALTH_CONSOLE_IMAGE":                "stealth-console",
+	"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": "stealth-telemetry-docker-proxy",
+	"OTEL_COLLECTOR_IMAGE":                 "stealth-otel-collector",
+	"OTEL_HOST_COLLECTOR_IMAGE":            "stealth-otel-collector",
+	"OTEL_DOCKER_COLLECTOR_IMAGE":          "stealth-otel-collector",
+	"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     "stealth-otel-docker-logs",
+}
+
+// MigrateReleaseConfig advances release-owned defaults while preserving
+// operator-selected values. Image values are updated only when they still
+// equal the canonical image for the installed release; custom registries,
+// digests, and custom tags are treated as operator overrides. Secret values
+// are never regenerated unless a required secret key is absent.
+func MigrateReleaseConfig(values map[string]string, targetVersion, installedVersion string) (string, error) {
+	if err := ValidateReleaseVersion(targetVersion); err != nil {
+		return "", err
+	}
+	result := make(map[string]string, len(values)+len(releaseManagedImageNames)+16)
+	for key, value := range values {
+		result[key] = value
+	}
+	updates := make(map[string]string)
+	for key, imageName := range releaseManagedImageNames {
+		current := strings.TrimSpace(result[key])
+		target := ImageName(imageName, targetVersion)
+		switch {
+		case current == "":
+			updates[key] = target
+		case strings.TrimSpace(installedVersion) != "" && current == ImageName(imageName, installedVersion):
+			updates[key] = target
+		}
+	}
+	for key, value := range map[string]string{
+		"CLICKHOUSE_IMAGE":                      "clickhouse/clickhouse-server:26.8.6.5",
+		"CLICKHOUSE_DATABASE":                   "stealth_telemetry",
+		"CLICKHOUSE_USER":                       "stealth",
+		"CLICKHOUSE_VOLUME_NAME":                "stealth_clickhouse_data",
+		"OTEL_COLLECTOR_HEALTH_URL":             "http://otel-collector:13133",
+		"OTELCOL_VOLUME_NAME":                   "stealth_otelcol_state",
+		"OTEL_DOCKER_LOGS_VOLUME_NAME":          "stealth_otel_docker_logs_state",
+		"STEALTH_TELEMETRY_STORE_NETWORK_NAME":  "stealth_telemetry_store",
+		"STEALTH_TELEMETRY_INGEST_NETWORK_NAME": "stealth_telemetry_ingest",
+		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
+	} {
+		if strings.TrimSpace(result[key]) == "" {
+			updates[key] = value
+		}
+	}
+	if strings.TrimSpace(result["CLICKHOUSE_PASSWORD"]) == "" {
+		password, err := randomHex(32)
+		if err != nil {
+			return "", fmt.Errorf("generate ClickHouse password: %w", err)
+		}
+		updates["CLICKHOUSE_PASSWORD"] = password
+	}
+	return MergeEnv(result, updates)
 }
 
 func validateConfigValues(values map[string]string) error {

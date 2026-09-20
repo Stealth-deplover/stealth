@@ -21,15 +21,56 @@ forwarding packages are provided.
 
 ## Upgrade procedure
 
-For a CLI-only update, use the installed self-update command:
+Use the installed host CLI for a coordinated update:
 
 ```bash
 stealth update
 ```
 
-This changes only the CLI binary and does not pull images, run migrations, or
-restart the server stack. Use the coordinated procedure below for API,
-worker, migration, Console, PostgreSQL, Redis, or proxy changes.
+When an installation is present, `stealth update` validates the target release
+assets, migrates the installation, pulls the target images, runs the existing
+database/telemetry state initialization and migrations, recreates the
+production services, and performs the normal health checks before replacing
+the CLI binary. On a host without an installation it remains a CLI-only
+self-update.
+
+`stealth install --repair` performs the same managed-asset preparation for the
+currently installed release and is the supported recovery path for a missing
+or damaged runtime asset.
+
+The host CLI treats these repository-controlled files as release-managed:
+
+- `compose.production.yaml` and `compose.setup.yaml` when setup assets are present;
+- `telemetry/otel-collector.yaml`, `telemetry/host-metrics.yaml`,
+  `telemetry/docker-logs.yaml`, and `telemetry/docker-stats.yaml`;
+- `console/deploy/nginx.conf`.
+
+The complete target set is downloaded and validated before activation. Existing
+managed files are replaced atomically, with one bounded previous-release set
+under `state/managed-assets.previous` for recovery/debugging. Unknown files in
+the installation root and telemetry directory are preserved. Direct edits to
+release-managed files are not an override mechanism and may be replaced by a
+supported update or repair.
+
+`config.env` is operator state. Its existing values, including generated
+secrets and custom image references, are preserved; only missing release keys
+are added, and canonical Stealth image references advance with the installed
+release. Persistent database, object-storage, and Collector state volumes are
+not deleted or recreated by this migration. External PostgreSQL/Redis settings
+remain external and are not replaced with bundled services.
+
+Compose configuration is validated before image pulls or service recreation.
+If target assets cannot be downloaded/validated, or Compose rejects them, the
+active files, `config.env`, and `VERSION` remain at the previous release. A
+later service or migration failure leaves a coherent prepared asset set and can
+be retried with `stealth install --repair`; this process does not promise
+zero-downtime upgrades or automatic database rollback.
+
+For an operator-managed checkout, the manual platform procedure below remains
+available. Installed deployments using the host CLI should use the coordinated
+command so managed assets and the runtime are migrated as one lifecycle.
+
+## Manual platform upgrade
 
 1. Read the GitHub Release notes for the target version, especially migration
    and configuration changes.

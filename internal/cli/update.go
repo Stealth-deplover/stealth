@@ -92,6 +92,16 @@ func (a *App) runUpdate(args []string) int {
 
 	comparison, comparable := compareReleaseVersions(current, latest)
 	if comparable && comparison == 0 {
+		if !*check {
+			migrated, migrationErr := a.migrateInstalledRelease(ctx, latest)
+			if migrationErr != nil {
+				a.printUpdateFailure(migrationErr)
+				return 1
+			}
+			if migrated {
+				a.printUpdateStep("✓", "Managed production assets synchronized", successStyle)
+			}
+		}
 		a.printUpdateSuccess("Stealth is already up to date")
 		fmt.Fprintf(a.out, "%s\n", latest)
 		return 0
@@ -112,7 +122,16 @@ func (a *App) runUpdate(args []string) int {
 		return 1
 	}
 	a.printUpdateStep("⠹", "Downloading Stealth "+latest, cyanStyle)
-	if err := a.performUpdate(ctx, release, asset); err != nil {
+	if err := a.performUpdateWithHook(ctx, release, asset, func() error {
+		migrated, migrationErr := a.migrateInstalledRelease(ctx, latest)
+		if migrationErr != nil {
+			return migrationErr
+		}
+		if migrated {
+			a.printUpdateStep("✓", "Managed production assets synchronized", successStyle)
+		}
+		return nil
+	}); err != nil {
 		a.printUpdateFailure(err)
 		return 1
 	}
@@ -214,6 +233,10 @@ func (a *App) latestStableRelease(ctx context.Context) (githubRelease, error) {
 }
 
 func (a *App) performUpdate(ctx context.Context, release githubRelease, asset string) error {
+	return a.performUpdateWithHook(ctx, release, asset, nil)
+}
+
+func (a *App) performUpdateWithHook(ctx context.Context, release githubRelease, asset string, beforeReplace func() error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("update canceled: %w", err)
 	}
@@ -260,10 +283,48 @@ func (a *App) performUpdate(ctx context.Context, release githubRelease, asset st
 	if err != nil {
 		return err
 	}
+	if beforeReplace != nil {
+		if err := beforeReplace(); err != nil {
+			return fmt.Errorf("migrate existing installation: %w", err)
+		}
+	}
 	if err := a.replaceExecutable(ctx, temporaryBinary, target); err != nil {
 		return err
 	}
 	return nil
+}
+
+// migrateInstalledRelease runs the trusted host-side install engine for an
+// existing installation. A self-update is still possible on a host without an
+// installation, but an installation that is present is never left on a
+// pre-release topology merely because the CLI binary changed.
+func (a *App) migrateInstalledRelease(ctx context.Context, targetVersion string) (bool, error) {
+	layout, err := a.layout()
+	if err != nil {
+		return false, fmt.Errorf("inspect installation layout: %w", err)
+	}
+	if !installationExists(layout) {
+		return false, nil
+	}
+	// A state directory alone can be left by an interrupted first install and
+	// does not contain enough release metadata to select a target asset set.
+	// Let the CLI self-update in that case; the explicit repair flow remains the
+	// recovery owner once config.env exists.
+	if !regularFile(layout.EnvFile) {
+		return false, nil
+	}
+	plan, err := a.loadExistingPlan(layout)
+	if err != nil {
+		return false, fmt.Errorf("load existing installation for migration: %w", err)
+	}
+	installedVersion := plan.Version
+	plan.Version = targetVersion
+	plan.InstalledVersion = installedVersion
+	plan.Existing = true
+	if err := a.installEngine().Install(ctx, *plan, nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func hasReleaseAsset(release githubRelease, name string) bool {

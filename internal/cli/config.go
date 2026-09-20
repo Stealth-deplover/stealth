@@ -183,7 +183,7 @@ func (a *App) loadExistingPlan(layout InstallLayout) (*InstallPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("existing DOCKER_GID is invalid")
 	}
-	return &InstallPlan{Layout: layout, Version: version, PublicURL: publicURL, GitHubAppClientID: githubAppClientID, DockerGID: uint32(gid), Existing: true, Setup: setupMode, ExternalDatabase: strings.EqualFold(values["DATABASE_MODE"], "external"), ExternalRedis: strings.EqualFold(values["REDIS_MODE"], "external")}, nil
+	return &InstallPlan{Layout: layout, Version: version, InstalledVersion: version, PublicURL: publicURL, GitHubAppClientID: githubAppClientID, DockerGID: uint32(gid), Existing: true, Setup: setupMode, ExternalDatabase: strings.EqualFold(values["DATABASE_MODE"], "external"), ExternalRedis: strings.EqualFold(values["REDIS_MODE"], "external")}, nil
 }
 
 func imageVersion(image string) (string, error) {

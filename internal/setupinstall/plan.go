@@ -83,6 +83,7 @@ func BuildPlan(state setupstate.State, installRoot string) (installengine.Plan, 
 	return installengine.Plan{
 		Layout:            layout,
 		Version:           BaseVersion(base),
+		InstalledVersion:  BaseVersion(base),
 		PublicURL:         state.Draft.PublicURL,
 		GitHubAppClientID: state.GitHub.ClientID,
 		Existing:          true,

@@ -1,6 +1,7 @@
 package installengine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -82,10 +83,42 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 	return layout
 }
 
+func testProductionComposeAsset() string {
+	return "services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
+}
+
+func testMainCollectorAsset() string {
+	return "receivers:\n  otlp:\nexporters:\n  clickhouse:\n"
+}
+
+func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
+	t.Helper()
+	assets := map[string]string{
+		"compose.production.yaml":       testProductionComposeAsset(),
+		"compose.setup.yaml":            "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml": testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":     "server {\n}",
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/"+version+"/")
+		contents, ok := assets[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, contents)
+	}))
+}
+
 func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 	layout := writeEngineFixture(t, true)
 	runner := &fakeRunner{}
-	engine := New(Options{Runner: runner, PollAttempts: 1})
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{Runner: runner, AssetBaseURL: assetServer.URL, PollAttempts: 1})
 	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, Setup: true}
 
 	for _, step := range []Step{StepConfiguration, StepPull, StepDependencies, StepMigration, StepServices} {
@@ -250,10 +283,12 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		switch r.URL.Path {
-		case "/v1.2.3/compose.production.yaml", "/v1.2.3/compose.setup.yaml":
+		case "/v1.2.3/compose.production.yaml":
+			_, _ = io.WriteString(w, testProductionComposeAsset())
+		case "/v1.2.3/compose.setup.yaml":
 			_, _ = io.WriteString(w, "services:\n  setup:\n    image: example\n")
 		case "/v1.2.3/telemetry/otel-collector.yaml":
-			_, _ = io.WriteString(w, "receivers:\n")
+			_, _ = io.WriteString(w, testMainCollectorAsset())
 		case "/v1.2.3/telemetry/host-metrics.yaml":
 			_, _ = io.WriteString(w, "hostmetrics:\n")
 		case "/v1.2.3/telemetry/docker-logs.yaml":
@@ -302,7 +337,9 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 
 func TestPrepareMigratesExistingConfigWithTelemetryImages(t *testing.T) {
 	layout := writeEngineFixture(t, false)
-	engine := New(Options{Runner: &fakeRunner{}})
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
 	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true}
 	if err := engine.Prepare(context.Background(), plan); err != nil {
 		t.Fatal(err)
@@ -323,6 +360,239 @@ func TestPrepareMigratesExistingConfigWithTelemetryImages(t *testing.T) {
 		if got := values[key]; got != want {
 			t.Fatalf("migrated %s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
+	const targetVersion = "v0.2.3"
+	targetAssets := map[string]string{
+		"compose.production.yaml":       testProductionComposeAsset(),
+		"compose.setup.yaml":            "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml": "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":     "server {\n  location / { proxy_pass http://console:3000; }\n}\n",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contents, ok := targetAssets[strings.TrimPrefix(r.URL.Path, "/"+targetVersion+"/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, contents)
+	}))
+	defer server.Close()
+
+	root := filepath.Join(t.TempDir(), "stealth")
+	layout, err := NewLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(layout.ProxyFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePrivateFile(layout.EnvFile, "STEALTH_API_IMAGE=ghcr.io/stealth-deplover/stealth-api:v0.2.2\nPOSTGRES_PASSWORD=old-postgres-secret\nCLICKHOUSE_PASSWORD=old-clickhouse-secret\nPUBLIC_APP_URL=http://127.0.0.1:8080\nDOCKER_GID=999\n"); err != nil {
+		t.Fatal(err)
+	}
+	oldCompose := "services:\n  otel-collector:\n    volumes:\n      - /:/hostfs:ro\n    cap_add:\n      - DAC_READ_SEARCH\nnetworks:\n  stealth:\n"
+	oldCollector := "receivers:\n  filelog/docker:\n    include:\n      - /hostfs/var/lib/docker/containers/*/*-json.log\n"
+	if err := WriteAtomic(layout.ComposeFile, []byte(oldCompose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.SetupComposeFile, []byte("services:\n  old-setup:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(filepath.Join(layout.TelemetryDir, "otel-collector.yaml"), []byte(oldCollector), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(filepath.Join(layout.TelemetryDir, "docker-stats.yaml"), []byte("receivers:\n  docker_stats:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.ProxyFile, []byte("server {\n  # pre-PR-83\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.VersionFile, []byte("v0.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := New(Options{AssetBaseURL: server.URL})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v0.2.2", Existing: true}); err != nil {
+		t.Fatal(err)
+	}
+	for asset, want := range targetAssets {
+		path := filepath.Join(layout.Root, asset)
+		got, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("read migrated asset %s: %v", asset, readErr)
+		}
+		if string(got) != want {
+			t.Errorf("asset %s was not migrated:\n got %q\nwant %q", asset, got, want)
+		}
+	}
+	version, err := os.ReadFile(layout.VersionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(version) != targetVersion+"\n" {
+		t.Fatalf("VERSION = %q, want %q", version, targetVersion+"\n")
+	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["POSTGRES_PASSWORD"] != "old-postgres-secret" || values["CLICKHOUSE_PASSWORD"] != "old-clickhouse-secret" {
+		t.Fatalf("migration replaced operator secrets: %#v", values)
+	}
+	if values["STEALTH_API_IMAGE"] != ImageName("stealth-api", targetVersion) {
+		t.Fatalf("migration did not advance canonical API image: %q", values["STEALTH_API_IMAGE"])
+	}
+	if values["OTEL_DOCKER_LOGS_COLLECTOR_IMAGE"] != ImageName("stealth-otel-docker-logs", targetVersion) {
+		t.Fatalf("migration did not add target Docker-log image: %#v", values)
+	}
+}
+
+func TestPrepareSameVersionRepairRestoresMissingAndCorruptAssets(t *testing.T) {
+	const version = "v1.2.3"
+	layout := writeEngineFixture(t, false)
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values["POSTGRES_PASSWORD"] = "operator-postgres-secret"
+	values["STEALTH_API_IMAGE"] = "registry.example.test/stealth-api:operator-pin"
+	config, err := MergeEnv(values, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePrivateFile(layout.EnvFile, config); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.VersionFile, []byte(version+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.ComposeFile, []byte("services:\n  old-topology:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(layout.TelemetryDir, "host-metrics.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	unknown := filepath.Join(layout.TelemetryDir, "operator-extra.yaml")
+	if err := WriteAtomic(unknown, []byte("operator-owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unknownRoot := filepath.Join(layout.Root, "operator-local.conf")
+	if err := WriteAtomic(unknownRoot, []byte("operator-owned-root\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	assetServer := newEngineAssetServer(t, version)
+	defer assetServer.Close()
+	engine := New(Options{AssetBaseURL: assetServer.URL})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: version, Existing: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(layout.ComposeFile); err != nil || string(got) != testProductionComposeAsset() {
+		t.Fatalf("same-version repair Compose = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(layout.TelemetryDir, "host-metrics.yaml")); err != nil || !bytes.Contains(got, []byte("hostmetrics:")) {
+		t.Fatalf("same-version repair host metrics = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(unknown); err != nil || string(got) != "operator-owned\n" {
+		t.Fatalf("unknown operator asset changed: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(unknownRoot); err != nil || string(got) != "operator-owned-root\n" {
+		t.Fatalf("unknown root asset changed: %q, %v", got, err)
+	}
+	values, err = ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["POSTGRES_PASSWORD"] != "operator-postgres-secret" || values["STEALTH_API_IMAGE"] != "registry.example.test/stealth-api:operator-pin" {
+		t.Fatalf("same-version repair changed operator values: %#v", values)
+	}
+	if !FileIsPrivate(layout.EnvFile) {
+		t.Fatal("same-version repair loosened config.env permissions")
+	}
+}
+
+func TestPrepareFailureLeavesExistingInstallationRecoverable(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	oldCompose := []byte("services:\n  old-topology:\n")
+	if err := WriteAtomic(layout.ComposeFile, oldCompose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldEnv, err := os.ReadFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	engine := New(Options{AssetBaseURL: server.URL})
+	err = engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true})
+	if err == nil || !strings.Contains(err.Error(), "download managed asset") {
+		t.Fatalf("failed preparation error = %v", err)
+	}
+	if got, readErr := os.ReadFile(layout.ComposeFile); readErr != nil || !bytes.Equal(got, oldCompose) {
+		t.Fatalf("failed preparation changed Compose: %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(layout.EnvFile); readErr != nil || !bytes.Equal(got, oldEnv) {
+		t.Fatalf("failed preparation changed config: %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(layout.VersionFile); readErr != nil || string(got) != "v1.2.2\n" {
+		t.Fatalf("failed preparation changed VERSION: %q, %v", got, readErr)
+	}
+}
+
+type configFailureRunner struct{}
+
+func (configFailureRunner) Run(_ context.Context, _ string, _, _ io.Writer, _ string, args ...string) error {
+	if contains(args, "config") {
+		return errors.New("compose config rejected target asset")
+	}
+	return nil
+}
+
+func (configFailureRunner) Output(context.Context, string, string, ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func TestRunStepConfigurationRollsBackWhenComposeValidationFails(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	oldCompose := []byte("services:\n  old-topology:\n")
+	if err := WriteAtomic(layout.ComposeFile, oldCompose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(layout.VersionFile, []byte("v1.2.2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldEnv, err := os.ReadFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{Runner: configFailureRunner{}, AssetBaseURL: assetServer.URL})
+	err = engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}, StepConfiguration)
+	if err == nil || !strings.Contains(err.Error(), "compose config rejected") {
+		t.Fatalf("Compose validation error = %v", err)
+	}
+	if got, readErr := os.ReadFile(layout.ComposeFile); readErr != nil || !bytes.Equal(got, oldCompose) {
+		t.Fatalf("Compose rollback = %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(layout.EnvFile); readErr != nil || !bytes.Equal(got, oldEnv) {
+		t.Fatalf("config rollback = %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(layout.VersionFile); readErr != nil || string(got) != "v1.2.2\n" {
+		t.Fatalf("VERSION rollback = %q, %v", got, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(layout.StateDir, "managed-assets.previous")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("rollback left recovery backup: %v", statErr)
 	}
 }
 

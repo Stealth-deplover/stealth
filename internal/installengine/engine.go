@@ -7,6 +7,7 @@ package installengine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -101,8 +102,13 @@ func NewLayout(root string) (Layout, error) {
 // engine for a fresh plan or are supplied as already-rendered ConfigContents
 // for a browser-confirmed plan.
 type Plan struct {
-	Layout             Layout
-	Version            string
+	Layout  Layout
+	Version string
+	// InstalledVersion is the release currently recorded by an existing
+	// installation. Version is the target release for this operation. Keeping
+	// both values lets managed configuration advance canonical image references
+	// without overwriting operator-selected image overrides.
+	InstalledVersion   string
 	PublicURL          string
 	GitHubAppClientID  string
 	DockerGID          uint32
@@ -243,10 +249,19 @@ func (e *Engine) InstallLocked(ctx context.Context, plan Plan, emit func(Event))
 func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	switch step {
 	case StepConfiguration:
-		if err := e.Prepare(ctx, plan); err != nil {
+		prepared, err := e.prepareInstallation(ctx, plan)
+		if err != nil {
 			return err
 		}
-		return e.runCompose(ctx, plan, "config", "--quiet")
+		if err := prepared.commit(plan); err != nil {
+			return err
+		}
+		if err := e.runCompose(ctx, plan, "config", "--quiet"); err != nil {
+			rollbackErr := prepared.rollback()
+			return errors.Join(err, rollbackErr)
+		}
+		prepared.finalize()
+		return nil
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
@@ -304,120 +319,564 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	}
 }
 
+type managedAssetSpec struct {
+	relativePath string
+	remotePath   string
+	marker       []byte
+	validate     func([]byte) error
+}
+
+type stagedManagedAsset struct {
+	spec       managedAssetSpec
+	targetPath string
+	stagePath  string
+	backupPath string
+	existed    bool
+	backedUp   bool
+	installed  bool
+}
+
+const managedAssetPendingFile = "managed-assets.pending"
+
+type managedAssetRecoveryManifest struct {
+	BackupDir string                      `json:"backup_dir"`
+	Assets    []managedAssetRecoveryEntry `json:"assets"`
+}
+
+type managedAssetRecoveryEntry struct {
+	RelativePath string `json:"relative_path"`
+	Existed      bool   `json:"existed"`
+}
+
+// managedAssetMigration stages the complete release-managed runtime set before
+// changing the installation. Existing managed files are moved into one
+// bounded recovery set, never copied with secrets, and restored if a later
+// commit step or Compose validation fails.
+type managedAssetMigration struct {
+	layout         Layout
+	stageDir       string
+	backupDir      string
+	previousBackup string
+	assets         []stagedManagedAsset
+	committed      bool
+}
+
+type preparedInstallation struct {
+	layout             Layout
+	assets             *managedAssetMigration
+	originalEnv        []byte
+	originalEnvExists  bool
+	newEnv             []byte
+	originalVersion    []byte
+	originalVersionSet bool
+}
+
 func (e *Engine) Prepare(ctx context.Context, plan Plan) error {
-	if err := ctx.Err(); err != nil {
+	prepared, err := e.prepareInstallation(ctx, plan)
+	if err != nil {
 		return err
 	}
+	if err := prepared.commit(plan); err != nil {
+		return err
+	}
+	prepared.finalize()
+	return nil
+}
+
+// prepareInstallation downloads and validates the full managed asset set but
+// does not publish it until commit. RunStep uses the returned transaction to
+// roll the files back when docker compose config validation fails.
+func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedInstallation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if plan.Layout.Root == "" || plan.Layout.EnvFile == "" || plan.Layout.ComposeFile == "" {
-		return errors.New("installation layout is incomplete")
+		return nil, errors.New("installation layout is incomplete")
+	}
+	if err := ValidateReleaseVersion(strings.TrimSpace(plan.Version)); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(plan.Layout.Root, 0o700); err != nil {
-		return fmt.Errorf("create installation directory: %w", err)
+		return nil, fmt.Errorf("create installation directory: %w", err)
 	}
 	if err := os.Chmod(plan.Layout.Root, 0o700); err != nil {
-		return fmt.Errorf("protect installation directory: %w", err)
+		return nil, fmt.Errorf("protect installation directory: %w", err)
 	}
 	// Setup state is shared by the host CLI and the root setup container. The
 	// setgid directory preserves the host operator's group on files atomically
 	// replaced by the container, while the state payload remains group-private.
 	stateDirectoryMode := os.FileMode(0o770) | os.ModeSetgid
 	if err := os.MkdirAll(plan.Layout.StateDir, stateDirectoryMode); err != nil {
-		return fmt.Errorf("create state directory: %w", err)
+		return nil, fmt.Errorf("create state directory: %w", err)
 	}
 	if err := os.Chmod(plan.Layout.StateDir, stateDirectoryMode); err != nil {
-		return fmt.Errorf("protect state directory: %w", err)
+		return nil, fmt.Errorf("protect state directory: %w", err)
 	}
-	if !plan.Existing {
+	prepared := &preparedInstallation{
+		layout: plan.Layout,
+	}
+	if contents, err := os.ReadFile(plan.Layout.VersionFile); err == nil {
+		prepared.originalVersion = contents
+		prepared.originalVersionSet = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read existing version: %w", err)
+	}
+	if plan.Existing {
+		if !FileIsPrivate(plan.Layout.EnvFile) {
+			return nil, errors.New("existing configuration permissions are too broad; expected mode 0600")
+		}
+		contents, err := os.ReadFile(plan.Layout.EnvFile)
+		if err != nil {
+			return nil, fmt.Errorf("read existing configuration: %w", err)
+		}
+		values, err := ReadEnvFile(plan.Layout.EnvFile)
+		if err != nil {
+			return nil, fmt.Errorf("parse existing configuration: %w", err)
+		}
+		installedVersion := strings.TrimSpace(plan.InstalledVersion)
+		if installedVersion == "" && prepared.originalVersionSet {
+			installedVersion = strings.TrimSpace(string(prepared.originalVersion))
+			if err := ValidateReleaseVersion(installedVersion); err != nil {
+				return nil, fmt.Errorf("existing VERSION is invalid: %w", err)
+			}
+		}
+		if installedVersion == "" {
+			installedVersion = strings.TrimSpace(plan.Version)
+		}
+		migrated, err := MigrateReleaseConfig(values, plan.Version, installedVersion)
+		if err != nil {
+			return nil, fmt.Errorf("prepare existing configuration migration: %w", err)
+		}
+		prepared.originalEnv = contents
+		prepared.originalEnvExists = true
+		prepared.newEnv = []byte(migrated)
+	} else {
 		contents := plan.ConfigContents
 		if strings.TrimSpace(contents) == "" {
 			var err error
 			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root})
 			if err != nil {
-				return fmt.Errorf("generate configuration: %w", err)
+				return nil, fmt.Errorf("generate configuration: %w", err)
 			}
 		}
-		if err := WritePrivateFile(plan.Layout.EnvFile, contents); err != nil {
-			return fmt.Errorf("write configuration: %w", err)
-		}
-	} else if !FileIsPrivate(plan.Layout.EnvFile) {
-		return errors.New("existing configuration permissions are too broad; expected mode 0600")
-	} else if err := e.ensureTelemetryImages(plan); err != nil {
+		prepared.newEnv = []byte(contents)
+	}
+	assets, err := e.stageManagedAssets(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+	prepared.assets = assets
+	return prepared, nil
+}
+
+func (p *preparedInstallation) commit(plan Plan) error {
+	if p == nil || p.assets == nil {
+		return errors.New("prepared installation is incomplete")
+	}
+	if err := p.assets.commit(); err != nil {
 		return err
 	}
-	if err := e.ensureAsset(ctx, plan.Layout.ComposeFile, plan.Version, "compose.production.yaml", []byte("services:")); err != nil {
-		return fmt.Errorf("prepare production Compose file: %w", err)
+	if err := WritePrivateFile(p.layout.EnvFile, string(p.newEnv)); err != nil {
+		rollbackErr := p.rollback()
+		return errors.Join(fmt.Errorf("write configuration: %w", err), rollbackErr)
 	}
-	if plan.Setup && plan.Layout.SetupComposeFile != "" {
-		if err := e.ensureAsset(ctx, plan.Layout.SetupComposeFile, plan.Version, "compose.setup.yaml", []byte("services:")); err != nil {
-			return fmt.Errorf("prepare setup Compose file: %w", err)
+	if err := WriteAtomic(p.layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
+		rollbackErr := p.rollback()
+		return errors.Join(fmt.Errorf("write version file: %w", err), rollbackErr)
+	}
+	return nil
+}
+
+func (p *preparedInstallation) rollback() error {
+	if p == nil {
+		return nil
+	}
+	var rollbackErr error
+	if p.assets != nil {
+		rollbackErr = errors.Join(rollbackErr, p.assets.rollback())
+	}
+	if p.originalEnvExists {
+		rollbackErr = errors.Join(rollbackErr, WritePrivateFile(p.layout.EnvFile, string(p.originalEnv)))
+	} else if err := os.Remove(p.layout.EnvFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	if p.originalVersionSet {
+		rollbackErr = errors.Join(rollbackErr, WriteAtomic(p.layout.VersionFile, p.originalVersion, 0o644))
+	} else if err := os.Remove(p.layout.VersionFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	return rollbackErr
+}
+
+func (p *preparedInstallation) finalize() {
+	if p != nil && p.assets != nil {
+		p.assets.finalize()
+	}
+}
+
+func managedAssetSpecs(plan Plan) []managedAssetSpec {
+	assets := []managedAssetSpec{
+		{relativePath: "compose.production.yaml", remotePath: "compose.production.yaml", marker: []byte("services:"), validate: validateProductionComposeAsset},
+		{relativePath: "console/deploy/nginx.conf", remotePath: "console/deploy/nginx.conf", marker: []byte("server {")},
+		{relativePath: "telemetry/otel-collector.yaml", remotePath: "telemetry/otel-collector.yaml", marker: []byte("receivers:"), validate: validateMainCollectorAsset},
+		{relativePath: "telemetry/host-metrics.yaml", remotePath: "telemetry/host-metrics.yaml", marker: []byte("hostmetrics:")},
+		{relativePath: "telemetry/docker-logs.yaml", remotePath: "telemetry/docker-logs.yaml", marker: []byte("file_log/docker:")},
+		{relativePath: "telemetry/docker-stats.yaml", remotePath: "telemetry/docker-stats.yaml", marker: []byte("docker_stats:")},
+	}
+	if plan.Layout.SetupComposeFile != "" && (plan.Setup || (plan.Existing && FileExists(plan.Layout.SetupComposeFile))) {
+		assets = append(assets, managedAssetSpec{relativePath: "compose.setup.yaml", remotePath: "compose.setup.yaml", marker: []byte("services:")})
+	}
+	return assets
+}
+
+func (e *Engine) stageManagedAssets(ctx context.Context, plan Plan) (*managedAssetMigration, error) {
+	if err := recoverInterruptedManagedAssetMigration(plan.Layout); err != nil {
+		return nil, fmt.Errorf("recover interrupted managed asset migration: %w", err)
+	}
+	stageDir, err := os.MkdirTemp(plan.Layout.StateDir, ".stealth-managed-assets-")
+	if err != nil {
+		return nil, fmt.Errorf("create managed asset staging directory: %w", err)
+	}
+	migration := &managedAssetMigration{
+		layout:         plan.Layout,
+		stageDir:       stageDir,
+		previousBackup: filepath.Join(plan.Layout.StateDir, "managed-assets.previous"),
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(stageDir)
+	}
+	for _, spec := range managedAssetSpecs(plan) {
+		contents, err := e.fetchAsset(ctx, e.assetBaseURL+"/"+strings.TrimSpace(plan.Version)+"/"+spec.remotePath)
+		if err != nil {
+			cleanup()
+			return nil, fmt.Errorf("download managed asset %q: %w", spec.remotePath, err)
+		}
+		if !bytes.Contains(contents, spec.marker) {
+			cleanup()
+			return nil, fmt.Errorf("downloaded asset %q is invalid", spec.remotePath)
+		}
+		if spec.validate != nil {
+			if err := spec.validate(contents); err != nil {
+				cleanup()
+				return nil, fmt.Errorf("downloaded asset %q failed validation: %w", spec.remotePath, err)
+			}
+		}
+		stagePath := filepath.Join(stageDir, filepath.FromSlash(spec.relativePath))
+		if err := WriteAtomic(stagePath, contents, 0o644); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("stage managed asset %q: %w", spec.remotePath, err)
+		}
+		migration.assets = append(migration.assets, stagedManagedAsset{
+			spec:       spec,
+			targetPath: filepath.Join(plan.Layout.Root, filepath.FromSlash(spec.relativePath)),
+			stagePath:  stagePath,
+		})
+	}
+	return migration, nil
+}
+
+func recoverInterruptedManagedAssetMigration(layout Layout) error {
+	pendingPath := filepath.Join(layout.StateDir, managedAssetPendingFile)
+	if info, err := os.Lstat(pendingPath); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("managed asset recovery journal is not a regular file")
+		}
+		contents, err := os.ReadFile(pendingPath)
+		if err != nil {
+			return fmt.Errorf("read managed asset recovery journal: %w", err)
+		}
+		var manifest managedAssetRecoveryManifest
+		if err := json.Unmarshal(contents, &manifest); err != nil {
+			return fmt.Errorf("parse managed asset recovery journal: %w", err)
+		}
+		if filepath.Base(manifest.BackupDir) != manifest.BackupDir || !strings.HasPrefix(manifest.BackupDir, ".stealth-managed-backup-") {
+			return errors.New("managed asset recovery journal contains an invalid backup path")
+		}
+		backupPath := filepath.Join(layout.StateDir, manifest.BackupDir)
+		if info, err := os.Lstat(backupPath); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect interrupted managed asset recovery set: %w", err)
+			}
+			backupPath = filepath.Join(layout.StateDir, "managed-assets.previous")
+			info, err := os.Lstat(backupPath)
+			if err != nil {
+				return fmt.Errorf("inspect published managed asset recovery set: %w", err)
+			}
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return errors.New("published managed asset recovery set is not a directory")
+			}
+		} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("interrupted managed asset recovery set is not a directory")
+		}
+		seen := make(map[string]struct{}, len(manifest.Assets))
+		for _, entry := range manifest.Assets {
+			if !isManagedAssetPath(entry.RelativePath) {
+				return fmt.Errorf("managed asset recovery journal contains unknown path %q", entry.RelativePath)
+			}
+			if _, ok := seen[entry.RelativePath]; ok {
+				return fmt.Errorf("managed asset recovery journal contains duplicate path %q", entry.RelativePath)
+			}
+			seen[entry.RelativePath] = struct{}{}
+			targetPath := filepath.Join(layout.Root, filepath.FromSlash(entry.RelativePath))
+			if entry.Existed {
+				sourcePath := filepath.Join(backupPath, filepath.FromSlash(entry.RelativePath))
+				if _, err := os.Lstat(sourcePath); errors.Is(err, os.ErrNotExist) {
+					// The journal is written before the first rename. If a
+					// process stopped in that small window, the original target
+					// is still authoritative and needs no restoration.
+					targetInfo, targetErr := os.Lstat(targetPath)
+					if targetErr != nil {
+						return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, targetErr)
+					}
+					if !targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0 {
+						return fmt.Errorf("recover previous managed asset %q: target is not a regular file", entry.RelativePath)
+					}
+					continue
+				} else if err != nil {
+					return fmt.Errorf("recover previous managed asset %q: %w", entry.RelativePath, err)
+				}
+				if err := removeManagedAssetTarget(targetPath); err != nil {
+					return fmt.Errorf("clear interrupted managed asset %q: %w", entry.RelativePath, err)
+				}
+				if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+					return fmt.Errorf("prepare managed asset recovery path %q: %w", entry.RelativePath, err)
+				}
+				if err := os.Rename(sourcePath, targetPath); err != nil {
+					return fmt.Errorf("restore managed asset %q: %w", entry.RelativePath, err)
+				}
+				continue
+			}
+			if err := removeManagedAssetTarget(targetPath); err != nil {
+				return fmt.Errorf("remove partially activated managed asset %q: %w", entry.RelativePath, err)
+			}
+		}
+		if err := os.RemoveAll(backupPath); err != nil {
+			return fmt.Errorf("remove recovered managed asset set: %w", err)
+		}
+		if err := os.Remove(pendingPath); err != nil {
+			return fmt.Errorf("remove managed asset recovery journal: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect managed asset recovery journal: %w", err)
+	}
+
+	entries, err := os.ReadDir(layout.StateDir)
+	if err != nil {
+		return fmt.Errorf("inspect managed asset staging directory: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".stealth-managed-assets-") && !strings.HasPrefix(entry.Name(), ".stealth-managed-backup-") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(layout.StateDir, entry.Name())); err != nil {
+			return fmt.Errorf("remove stale managed asset transaction %q: %w", entry.Name(), err)
 		}
 	}
-	if err := e.ensureAsset(ctx, plan.Layout.ProxyFile, plan.Version, "console/deploy/nginx.conf", []byte("server {")); err != nil {
-		return fmt.Errorf("prepare proxy configuration: %w", err)
+	return nil
+}
+
+func isManagedAssetPath(relativePath string) bool {
+	switch filepath.ToSlash(filepath.Clean(relativePath)) {
+	case "compose.production.yaml", "compose.setup.yaml", "console/deploy/nginx.conf", "telemetry/otel-collector.yaml", "telemetry/host-metrics.yaml", "telemetry/docker-logs.yaml", "telemetry/docker-stats.yaml":
+		return filepath.Clean(relativePath) == filepath.FromSlash(relativePath)
+	default:
+		return false
 	}
-	for _, asset := range []struct {
-		name   string
-		marker []byte
-	}{
-		{name: "otel-collector.yaml", marker: []byte("receivers:")},
-		{name: "host-metrics.yaml", marker: []byte("hostmetrics:")},
-		{name: "docker-logs.yaml", marker: []byte("file_log/docker:")},
-		{name: "docker-stats.yaml", marker: []byte("docker_stats:")},
+}
+
+func removeManagedAssetTarget(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("target is not a regular file")
+	}
+	return os.Remove(path)
+}
+
+func validateProductionComposeAsset(contents []byte) error {
+	for _, marker := range []string{
+		"  otel-collector:",
+		"  telemetry-host:",
+		"  telemetry-docker-logs:",
+		"  telemetry-docker:",
+		"  telemetry-docker-proxy:",
+		"  telemetry_ingest:",
 	} {
-		path := filepath.Join(plan.Layout.TelemetryDir, asset.name)
-		if err := e.ensureAsset(ctx, path, plan.Version, "telemetry/"+asset.name, asset.marker); err != nil {
-			return fmt.Errorf("prepare telemetry configuration %s: %w", asset.name, err)
+		if !bytes.Contains(contents, []byte(marker)) {
+			return fmt.Errorf("missing current telemetry topology marker %q", marker)
 		}
-	}
-	if err := WriteAtomic(plan.Layout.VersionFile, []byte(strings.TrimSpace(plan.Version)+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write version file: %w", err)
 	}
 	return nil
 }
 
-func (e *Engine) ensureTelemetryImages(plan Plan) error {
-	values, err := ReadEnvFile(plan.Layout.EnvFile)
-	if err != nil {
-		return fmt.Errorf("read existing configuration for telemetry image migration: %w", err)
-	}
-	updates := map[string]string{
-		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": ImageName("stealth-telemetry-docker-proxy", plan.Version),
-		"OTEL_COLLECTOR_IMAGE":                 ImageName("stealth-otel-collector", plan.Version),
-		"OTEL_HOST_COLLECTOR_IMAGE":            ImageName("stealth-otel-collector", plan.Version),
-		"OTEL_DOCKER_COLLECTOR_IMAGE":          ImageName("stealth-otel-collector", plan.Version),
-		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE":     ImageName("stealth-otel-docker-logs", plan.Version),
-	}
-	changed := false
-	for key, value := range updates {
-		if strings.TrimSpace(values[key]) == "" {
-			values[key] = value
-			changed = true
+func validateMainCollectorAsset(contents []byte) error {
+	for _, marker := range [][]byte{[]byte("exporters:"), []byte("clickhouse:")} {
+		if !bytes.Contains(contents, marker) {
+			return fmt.Errorf("missing main Collector marker %q", marker)
 		}
 	}
-	if !changed {
-		return nil
-	}
-	if err := WritePrivateFile(plan.Layout.EnvFile, FormatEnvFile(values)); err != nil {
-		return fmt.Errorf("add telemetry images to existing configuration: %w", err)
+	if bytes.Contains(contents, []byte("file_log/docker:")) {
+		return errors.New("main Collector still contains the Docker file-log receiver")
 	}
 	return nil
 }
 
-func (e *Engine) ensureAsset(ctx context.Context, path, version, asset string, marker []byte) error {
-	if FileExists(path) {
+func (m *managedAssetMigration) commit() error {
+	if m == nil {
+		return errors.New("managed asset migration is nil")
+	}
+	if info, err := os.Lstat(m.previousBackup); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("managed asset recovery path is not a directory")
+		}
+		if err := os.RemoveAll(m.previousBackup); err != nil {
+			return fmt.Errorf("replace previous managed asset recovery set: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect previous managed asset recovery set: %w", err)
+	}
+	backupDir, err := os.MkdirTemp(m.layout.StateDir, ".stealth-managed-backup-")
+	if err != nil {
+		return fmt.Errorf("create managed asset recovery set: %w", err)
+	}
+	m.backupDir = backupDir
+	for index := range m.assets {
+		asset := &m.assets[index]
+		info, err := os.Lstat(asset.targetPath)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return m.failCommit(fmt.Errorf("inspect managed asset %q: %w", asset.spec.relativePath, err))
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return m.failCommit(fmt.Errorf("managed asset %q is not a regular file", asset.spec.relativePath))
+		}
+		asset.existed = true
+		asset.backupPath = filepath.Join(backupDir, filepath.FromSlash(asset.spec.relativePath))
+		if err := os.MkdirAll(filepath.Dir(asset.backupPath), 0o700); err != nil {
+			return m.failCommit(fmt.Errorf("prepare recovery path for %q: %w", asset.spec.relativePath, err))
+		}
+	}
+	manifest := managedAssetRecoveryManifest{BackupDir: filepath.Base(backupDir), Assets: make([]managedAssetRecoveryEntry, 0, len(m.assets))}
+	for _, asset := range m.assets {
+		manifest.Assets = append(manifest.Assets, managedAssetRecoveryEntry{RelativePath: asset.spec.relativePath, Existed: asset.existed})
+	}
+	manifestContents, err := json.Marshal(manifest)
+	if err != nil {
+		return m.failCommit(fmt.Errorf("encode managed asset recovery journal: %w", err))
+	}
+	if err := WriteAtomic(filepath.Join(m.layout.StateDir, managedAssetPendingFile), manifestContents, 0o600); err != nil {
+		return m.failCommit(fmt.Errorf("write managed asset recovery journal: %w", err))
+	}
+	for index := range m.assets {
+		asset := &m.assets[index]
+		if !asset.existed {
+			continue
+		}
+		if err := os.Rename(asset.targetPath, asset.backupPath); err != nil {
+			return m.failCommit(fmt.Errorf("save previous managed asset %q: %w", asset.spec.relativePath, err))
+		}
+		asset.backedUp = true
+	}
+	for index := range m.assets {
+		asset := &m.assets[index]
+		if err := os.MkdirAll(filepath.Dir(asset.targetPath), 0o700); err != nil {
+			return m.failCommit(fmt.Errorf("create managed asset directory for %q: %w", asset.spec.relativePath, err))
+		}
+		if err := os.Rename(asset.stagePath, asset.targetPath); err != nil {
+			return m.failCommit(fmt.Errorf("activate managed asset %q: %w", asset.spec.relativePath, err))
+		}
+		asset.installed = true
+	}
+	hasBackup := false
+	for _, asset := range m.assets {
+		if asset.existed {
+			hasBackup = true
+			break
+		}
+	}
+	if hasBackup {
+		if err := os.Rename(backupDir, m.previousBackup); err != nil {
+			return m.failCommit(fmt.Errorf("publish managed asset recovery set: %w", err))
+		}
+		m.backupDir = m.previousBackup
+		for index := range m.assets {
+			if m.assets[index].existed {
+				m.assets[index].backupPath = filepath.Join(m.previousBackup, filepath.FromSlash(m.assets[index].spec.relativePath))
+			}
+		}
+	} else {
+		_ = os.RemoveAll(backupDir)
+		m.backupDir = ""
+	}
+	if err := os.Remove(filepath.Join(m.layout.StateDir, managedAssetPendingFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return m.failCommit(fmt.Errorf("remove managed asset recovery journal: %w", err))
+	}
+	m.committed = true
+	return nil
+}
+
+func (m *managedAssetMigration) failCommit(cause error) error {
+	rollbackErr := m.rollback()
+	return errors.Join(cause, rollbackErr)
+}
+
+func (m *managedAssetMigration) rollback() error {
+	if m == nil {
 		return nil
 	}
-	if strings.TrimSpace(version) == "" {
-		return errors.New("release version is required")
+	var rollbackErr error
+	for index := len(m.assets) - 1; index >= 0; index-- {
+		asset := &m.assets[index]
+		if asset.installed {
+			if err := os.Remove(asset.targetPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove activated asset %q: %w", asset.spec.relativePath, err))
+			}
+			asset.installed = false
+		}
+		if asset.backedUp && asset.backupPath != "" {
+			if err := os.MkdirAll(filepath.Dir(asset.targetPath), 0o700); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+				continue
+			}
+			if err := os.Rename(asset.backupPath, asset.targetPath); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore managed asset %q: %w", asset.spec.relativePath, err))
+			}
+		}
 	}
-	contents, err := e.fetchAsset(ctx, e.assetBaseURL+"/"+version+"/"+asset)
-	if err != nil {
-		return err
+	if m.backupDir != "" {
+		if err := os.RemoveAll(m.backupDir); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
 	}
-	if !bytes.Contains(contents, marker) {
-		return fmt.Errorf("downloaded asset %q is invalid", asset)
+	if m.stageDir != "" {
+		if err := os.RemoveAll(m.stageDir); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
 	}
-	return WriteAtomic(path, contents, 0o644)
+	if err := os.Remove(filepath.Join(m.layout.StateDir, managedAssetPendingFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		rollbackErr = errors.Join(rollbackErr, err)
+	}
+	m.committed = false
+	return rollbackErr
+}
+
+func (m *managedAssetMigration) finalize() {
+	if m == nil {
+		return
+	}
+	if m.stageDir != "" {
+		_ = os.RemoveAll(m.stageDir)
+	}
+	if m.backupDir != "" && m.backupDir != m.previousBackup {
+		_ = os.RemoveAll(m.backupDir)
+	}
 }
 
 // Wait checks the host-visible service endpoints for CLI plans and the

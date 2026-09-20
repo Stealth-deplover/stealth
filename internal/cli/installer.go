@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -47,6 +49,16 @@ type installerModel struct {
 
 func (a *App) runInstallerTUI(ctx context.Context, checks []SystemCheck, plan *InstallPlan, repair bool) int {
 	initTerminalStyles()
+	var lock *os.File
+	if repair && plan != nil {
+		var err error
+		lock, err = installengine.AcquireProcessLock(plan.Layout.StateDir, "install.lock", "installation")
+		if err != nil {
+			fmt.Fprintf(a.errOut, "could not lock the existing installation: %v\n", err)
+			return 1
+		}
+		defer lock.Close()
+	}
 	uiCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	model := newInstallerModel(a, uiCtx, cancel, checks, plan, repair)
