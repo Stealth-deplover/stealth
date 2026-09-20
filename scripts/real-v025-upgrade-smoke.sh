@@ -139,6 +139,18 @@ export STEALTH_REAL_V025_BRIDGE_VERSION="$bridge_version"
 export STEALTH_REAL_V025_TARGET_VERSION="$target_version"
 go test ./internal/cli -run '^TestRealV025UpgradeSmoke$' -count=1
 
+# The Go handoff uses a temporary loopback listener for the target binary's
+# StepVerify checks. Restore the actual workflow ports before the migrated root
+# is handed to the production smoke; these are operator/runtime settings, not
+# release-managed asset content.
+source_proxy_port="$(awk -F= '$1 == "PROXY_HTTP_PORT" { value = substr($0, index($0, "=") + 1) } END { print value }' "$source_env")"
+source_api_port="$(awk -F= '$1 == "API_HOST_PORT" { value = substr($0, index($0, "=") + 1) } END { print value }' "$source_env")"
+source_console_port="$(awk -F= '$1 == "CONSOLE_HOST_PORT" { value = substr($0, index($0, "=") + 1) } END { print value }' "$source_env")"
+set_config_value PROXY_HTTP_PORT "$source_proxy_port"
+set_config_value API_HOST_PORT "$source_api_port"
+set_config_value CONSOLE_HOST_PORT "$source_console_port"
+chmod 600 "$smoke_root/config.env"
+
 docker compose --env-file "$smoke_root/config.env" -f "$smoke_root/compose.production.yaml" config --quiet
 ENV_FILE="$smoke_root/config.env" \
 COMPOSE_FILE="$smoke_root/compose.production.yaml" \
