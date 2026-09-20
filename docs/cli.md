@@ -122,8 +122,11 @@ volumes are preserved. Unknown local files are not recursively removed.
 An ordinary fresh install still refuses to overwrite an existing installation.
 After a partial preparation or Compose-validation failure, the active files,
 `config.env`, and `VERSION` remain recoverable; use `stealth doctor` or
-`stealth install --repair` for the next attempt. The coordinated `stealth
-update` path performs this migration before replacing the CLI binary.
+`stealth install --repair` for the next attempt. The recovery journal remains
+active through managed-asset activation, `config.env`, `VERSION`, and Compose
+validation; it stores no secret values. The coordinated `stealth update` path
+uses the checksum-verified target binary to perform the target release's
+migration before replacing the installed CLI binary.
 
 ## Operations
 
@@ -152,14 +155,23 @@ stealth update
 On a host without an installation, the command downloads only the Linux
 amd64/arm64 CLI archive for the running platform, verifies its entry in
 `checksums.txt`, validates the extracted binary, and replaces the installed
-CLI with an atomic file swap. For an existing installation it first runs the
-coordinated release migration described in [`upgrade.md`](upgrade.md):
-release-managed Compose, Collector, proxy, and telemetry assets are validated
-and updated, while `config.env`, secrets, unknown files, and persistent state
-are preserved. A failed download, checksum, asset preparation, Compose
-validation, or replacement leaves the installation recoverable. Development
-builds can use `stealth update --check` to inspect availability, but a release
-build is recommended for self-update.
+CLI with an atomic file swap. For an existing installation, the verified target
+CLI runs the coordinated release migration described in
+[`upgrade.md`](upgrade.md): release-managed Compose, Collector, proxy, and
+telemetry assets are validated and updated, while `config.env`, secrets,
+unknown files, and persistent state are preserved. A failed download,
+checksum, asset preparation, Compose validation, or replacement leaves the
+installation recoverable. If the platform migration succeeds but executable
+replacement does not, the command reports the resulting CLI/platform skew and
+the next `stealth update` reconciles it. Development builds can use `stealth
+update --check` to inspect availability, but a release build is recommended
+for self-update.
+
+`v0.2.5` predates this handoff. Its first update to the bridge release is
+CLI-only by design; run the documented second `stealth update` (or `stealth
+install --repair`) with the bridge binary to migrate the existing stack. See
+the exact bridge-release procedure in [`upgrade.md`](upgrade.md); do not infer
+that a single v0.2.5 update has changed old production assets.
 
 Use `stealth update --check` for a network-only check; it exits non-zero when
 an update is available. The update source is the official stable release only:

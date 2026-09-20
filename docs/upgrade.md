@@ -27,12 +27,39 @@ Use the installed host CLI for a coordinated update:
 stealth update
 ```
 
-When an installation is present, `stealth update` validates the target release
-assets, migrates the installation, pulls the target images, runs the existing
-database/telemetry state initialization and migrations, recreates the
-production services, and performs the normal health checks before replacing
-the CLI binary. On a host without an installation it remains a CLI-only
+For releases containing the coordinated updater, the running CLI downloads,
+checksum-verifies, extracts, and version-verifies the target binary first. It
+then invokes that verified target binary in a narrow internal host-only
+migration mode. The target binary owns the target release's managed-asset
+manifest, acquires `install.lock`, migrates the installation, validates Compose,
+pulls target images, runs the existing database/telemetry state initialization
+and migrations, recreates production services, and performs the normal health
+checks. Only after that succeeds does the original CLI atomically replace its
+own executable. On a host without an installation it remains a CLI-only
 self-update.
+
+### Transition from v0.2.5
+
+The currently published stable CLI, `v0.2.5`, predates the target-binary
+handoff. Its updater can verify and replace a CLI archive, but cannot execute
+the release-managed platform migration code that did not exist when it was
+published. This is an unavoidable bootstrap boundary, not evidence that an
+old stack has been upgraded.
+
+The first release carrying this updater is the **bridge release**. When moving
+from `v0.2.5` while that bridge is the latest stable release:
+
+1. Run `stealth update` once. v0.2.5 replaces only the CLI with the bridge
+   binary; the running production topology remains unchanged.
+2. Run `stealth update` again (or `stealth install --repair`). The bridge
+   binary detects the existing installation and performs the documented
+   managed-asset migration.
+
+If a later release is already latest, first install the bridge CLI archive
+explicitly using the official release's checksum-verified bootstrap path and
+then run `stealth update`. Do not assume a single invocation of the already
+shipped v0.2.5 binary can migrate future platform assets. Release notes name
+the bridge tag while this transition remains necessary.
 
 `stealth install --repair` performs the same managed-asset preparation for the
 currently installed release and is the supported recovery path for a missing
@@ -60,11 +87,26 @@ not deleted or recreated by this migration. External PostgreSQL/Redis settings
 remain external and are not replaced with bundled services.
 
 Compose configuration is validated before image pulls or service recreation.
+The migration journal is durable through these states: `PREPARED`,
+`BACKED_UP`, `ASSETS_ACTIVATED`, `CONFIG_ACTIVATED`, `VERSION_ACTIVATED`,
+`COMPOSE_VALIDATED`, and `FINALIZED`. Before `COMPOSE_VALIDATED`, a later
+update/repair rolls the runtime assets, private `config.env` backup, and
+`VERSION` back as one old release. After that durable validation point, it
+finishes forward cleanup and retains one private prior-release recovery set.
+The journal contains paths and phase metadata only; it never contains secret
+values. `config.env` backups are private files under the installation state
+directory.
+
 If target assets cannot be downloaded/validated, or Compose rejects them, the
 active files, `config.env`, and `VERSION` remain at the previous release. A
 later service or migration failure leaves a coherent prepared asset set and can
 be retried with `stealth install --repair`; this process does not promise
-zero-downtime upgrades or automatic database rollback.
+zero-downtime upgrades or automatic database rollback. If target platform
+migration succeeds but the final CLI executable replacement fails, the stack
+is already at the target coordinated release while the old CLI remains. The
+command reports that bounded skew explicitly; rerun `stealth update` to
+reconcile the executable. An older CLI intentionally refuses a repair that
+would downgrade a newer recorded platform release.
 
 For an operator-managed checkout, the manual platform procedure below remains
 available. Installed deployments using the host CLI should use the coordinated

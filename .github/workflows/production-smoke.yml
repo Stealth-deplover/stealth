@@ -15,7 +15,7 @@ jobs:
   production-smoke:
     name: Build local images and run production smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
     env:
       VERSION: ci
       COMMIT_SHA: ${{ github.sha }}
@@ -138,3 +138,18 @@ jobs:
           ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
           SMOKE_REMOVE_VOLUMES: "true"
         run: ./scripts/compose-production-smoke.sh
+
+      - name: Set up Go for Upgrade Migration Smoke
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      # This is deliberately folded into the Production Compose Smoke workflow
+      # so the migrated installation uses the same locally-built images and
+      # verifies the complete telemetry path after an old topology upgrade.
+      - name: Upgrade Migration Smoke
+        env:
+          ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
+          SMOKE_REMOVE_VOLUMES: "true"
+        run: ./scripts/managed-asset-upgrade-smoke.sh

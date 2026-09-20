@@ -111,10 +111,20 @@ claim a full browser/provider installation or run a full production stack.
 - [ ] Verify the guided `stealth setup` flow on a temporary installation; do
       not use a production instance during release validation.
 - [ ] Verify `stealth update` against the published stable archive and
-      `checksums.txt`; record that it coordinates an installed stack's
-      release-managed asset migration and never selects an RC automatically.
-      On a host without an installation it updates only the CLI. Use an
-      explicit version pin to test an RC archive.
+      `checksums.txt`; record that the verified target binary, rather than the
+      previously running CLI, owns the installed stack's release-managed asset
+      migration and never selects an RC automatically. On a host without an
+      installation it updates only the CLI. Use an explicit version pin to
+      test an RC archive.
+- [ ] During the v0.2.5 bridge period, state the bridge tag and test the
+      explicit two-phase path: v0.2.5 updates the CLI only, then the bridge
+      binary runs `stealth update` or `stealth install --repair` to migrate the
+      platform. Do not claim a one-step stack migration from the already
+      shipped v0.2.5 updater.
+- [ ] Exercise interrupted managed-asset recovery before Compose validation
+      and after its durable validation point. Confirm `config.env` secrets and
+      `VERSION` recover as the same old or new coordinated release, and retain
+      only the bounded private previous-release set.
 - [ ] Record that the bundled single-host deployment does not claim HA or
   exactly-once external side effects.
 - [ ] Record that Agent provider execution remains queue-only by default.
