@@ -3307,6 +3307,7 @@ export interface components {
             name: string;
             /** @enum {string} */
             kind: CreateAdminMonitorRequestKind;
+            /** @description HTTP(S) targets may include query parameters; credentials and fragments are rejected. */
             target: string;
             /** @default 60 */
             interval_seconds: number;
@@ -3328,6 +3329,7 @@ export interface components {
             port?: number;
             /** @enum {string} */
             record_type?: CreateAdminMonitorRequestRecord_type;
+            /** @description For DNS monitors every configured value must be present; additional records are allowed. */
             expected_values?: string[];
             grace_seconds?: number;
             certificate_expiry_days?: number;
