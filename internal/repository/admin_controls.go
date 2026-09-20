@@ -255,8 +255,10 @@ func (r *Repository) ListAdminAlertEvents(ctx context.Context, ruleID uuid.UUID,
 		return nil, ErrInvalidAdminAlert
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id::text,rule_id::text,state,value,message,occurred_at
-		FROM admin_alert_events WHERE rule_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT $2`, ruleID, limit)
+		SELECT id::text,COALESCE(rule_id,rule_id_snapshot)::text,state,value,message,occurred_at
+		FROM admin_alert_events
+		WHERE rule_id=$1 OR rule_id_snapshot=$1
+		ORDER BY occurred_at DESC,id DESC LIMIT $2`, ruleID, limit)
 	if err != nil {
 		return nil, err
 	}
