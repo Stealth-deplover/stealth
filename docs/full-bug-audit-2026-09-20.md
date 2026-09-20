@@ -128,9 +128,21 @@ union; that is tracked as AUD-14.
 
 ### AUD-01 — Raw telemetry secrets can be persisted before Admin API redaction
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation complete in PR #89
+  pending merge.
 - **Severity:** High
 - **Area:** Telemetry privacy; ClickHouse persistence; Admin telemetry
+- **Remediation evidence:** PR #89 adds pre-export redaction to every main
+  Collector logs, metrics, and traces pipeline, retains Store/API redaction as
+  defense in depth, and verifies the pinned Collector configuration.
+- **Regression coverage:** The real Collector + ClickHouse integration now
+  searches raw exporter rows for deterministic fake secrets before checking
+  the Admin API; the Admin integration also verifies the authenticated API
+  result contains no raw secret. CI runs both suites with the pinned Collector.
+- **Residual risk:** This historical document's open-finding count remains
+  tied to the audited pre-remediation SHA until PR #89 is merged. Future
+  Collector upgrades must revalidate the processor behavior and exporter
+  schema.
 - **Current-head evidence:** `telemetry/otel-collector.yaml` has no redaction
   processor before the ClickHouse exporter. The Docker file-log pipeline also
   forwards parsed bodies without a secret-removal processor. In
@@ -679,10 +691,9 @@ docs/full-bug-audit-2026-09-20.md
 
 No credential values, access tokens, or private host data are included in this
 document. Fresh VPS E2E and a post-merge Production Compose Smoke run were not
-performed/available. A direct raw-secret ClickHouse assertion was not run in a
-live environment during this docs-only refresh; the open AUD-01 status is based
-on the current exporter path, absence of a pre-persistence redaction stage, and
-the fact that the existing integration asserts only read-time redaction.
+performed/available. A direct raw-secret ClickHouse assertion was not run in the
+docs-only refresh represented by this document; PR #89 adds that live assertion
+and records the remediation status above.
 
 ## Remediation backlog
 
