@@ -50,6 +50,14 @@ type semanticVersion struct {
 	patch uint64
 }
 
+type platformMigratedUpdateError struct {
+	targetVersion string
+	err           error
+}
+
+func (e *platformMigratedUpdateError) Error() string { return e.err.Error() }
+func (e *platformMigratedUpdateError) Unwrap() error { return e.err }
+
 func (a *App) runUpdate(args []string) int {
 	initTerminalStyles()
 
@@ -92,6 +100,16 @@ func (a *App) runUpdate(args []string) int {
 
 	comparison, comparable := compareReleaseVersions(current, latest)
 	if comparable && comparison == 0 {
+		if !*check {
+			migrated, migrationErr := a.migrateInstalledRelease(ctx, latest)
+			if migrationErr != nil {
+				a.printUpdateFailure(migrationErr)
+				return 1
+			}
+			if migrated {
+				a.printUpdateStep("✓", "Managed production assets synchronized", successStyle)
+			}
+		}
 		a.printUpdateSuccess("Stealth is already up to date")
 		fmt.Fprintf(a.out, "%s\n", latest)
 		return 0
@@ -112,12 +130,13 @@ func (a *App) runUpdate(args []string) int {
 		return 1
 	}
 	a.printUpdateStep("⠹", "Downloading Stealth "+latest, cyanStyle)
-	if err := a.performUpdate(ctx, release, asset); err != nil {
+	if err := a.performUpdateWithTargetMigration(ctx, release, asset); err != nil {
 		a.printUpdateFailure(err)
 		return 1
 	}
 	a.printUpdateStep("✓", "Downloaded Stealth "+latest, successStyle)
 	a.printUpdateStep("✓", "SHA-256 checksum verified", successStyle)
+	a.printUpdateStep("✓", "Target release migration completed", successStyle)
 	a.printUpdateStep("✓", "CLI updated", successStyle)
 	fmt.Fprintf(a.out, "\n%s → %s\n", currentLabel, latest)
 	return 0
@@ -214,6 +233,23 @@ func (a *App) latestStableRelease(ctx context.Context) (githubRelease, error) {
 }
 
 func (a *App) performUpdate(ctx context.Context, release githubRelease, asset string) error {
+	return a.performUpdateWithTargetMigration(ctx, release, asset)
+}
+
+// performUpdateWithTargetMigration executes a target-owned migration after
+// validating the downloaded release binary and before replacing the installed
+// executable. The currently running binary deliberately does not interpret the
+// target manifest: future releases can evolve their managed assets safely.
+func (a *App) performUpdateWithTargetMigration(ctx context.Context, release githubRelease, asset string) error {
+	return a.performUpdateWithTargetMigrationHook(ctx, release, asset, func(binary string) error {
+		if err := a.invokeTargetMigration(ctx, binary, release.TagName); err != nil {
+			return fmt.Errorf("run target release migration: %w", err)
+		}
+		return nil
+	})
+}
+
+func (a *App) performUpdateWithTargetMigrationHook(ctx context.Context, release githubRelease, asset string, beforeReplace func(string) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("update canceled: %w", err)
 	}
@@ -260,10 +296,106 @@ func (a *App) performUpdate(ctx context.Context, release githubRelease, asset st
 	if err != nil {
 		return err
 	}
+	if beforeReplace != nil {
+		if err := beforeReplace(temporaryBinary); err != nil {
+			return fmt.Errorf("migrate existing installation: %w", err)
+		}
+	}
 	if err := a.replaceExecutable(ctx, temporaryBinary, target); err != nil {
-		return err
+		return &platformMigratedUpdateError{
+			targetVersion: release.TagName,
+			err:           fmt.Errorf("target platform migration completed, but replacing the CLI executable failed: %w; the installed stack is at %s and a later `stealth update` will reconcile the CLI", err, release.TagName),
+		}
 	}
 	return nil
+}
+
+func (a *App) invokeTargetMigration(ctx context.Context, binaryPath, targetVersion string) error {
+	if a.runTargetMigration != nil {
+		return a.runTargetMigration(ctx, binaryPath, targetVersion)
+	}
+	runner := a.runner
+	if runner == nil {
+		runner = execCommandRunner{}
+	}
+	return runner.Run(ctx, "", a.out, a.errOut, binaryPath, "internal", "migrate-installation", "--target-version", targetVersion)
+}
+
+// migrateInstalledRelease runs the trusted host-side install engine for an
+// existing installation. A self-update is still possible on a host without an
+// installation, but an installation that is present is never left on a
+// pre-release topology merely because the CLI binary changed.
+func (a *App) migrateInstalledRelease(ctx context.Context, targetVersion string) (bool, error) {
+	layout, err := a.layout()
+	if err != nil {
+		return false, fmt.Errorf("inspect installation layout: %w", err)
+	}
+	if !installationExists(layout) {
+		return false, nil
+	}
+	// A state directory alone can be left by an interrupted first install and
+	// does not contain enough release metadata to select a target asset set.
+	// Let the CLI self-update in that case; the explicit repair flow remains the
+	// recovery owner once config.env exists.
+	if !regularFile(layout.EnvFile) {
+		return false, nil
+	}
+	plan, err := a.loadExistingPlan(layout)
+	if err != nil {
+		return false, fmt.Errorf("load existing installation for migration: %w", err)
+	}
+	installedVersion := plan.Version
+	plan.Version = targetVersion
+	plan.InstalledVersion = installedVersion
+	plan.Existing = true
+	if err := a.installEngine().Install(ctx, *plan, nil); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// runInternal exposes one deliberately narrow host-only handoff used by a
+// verified downloaded release during self-update. It accepts neither scripts
+// nor URLs: the target binary uses its compiled-in managed-asset manifest and
+// trusted release base, then takes the ordinary install.lock itself.
+func (a *App) runInternal(args []string) int {
+	if len(args) == 0 || args[0] != "migrate-installation" {
+		fmt.Fprintln(a.errOut, "unknown internal command")
+		return 2
+	}
+	fs := flag.NewFlagSet("stealth internal migrate-installation", flag.ContinueOnError)
+	fs.SetOutput(a.errOut)
+	targetVersion := fs.String("target-version", "", "target release version")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*targetVersion) == "" {
+		fmt.Fprintln(a.errOut, "internal migration requires exactly --target-version vX.Y.Z")
+		return 2
+	}
+	if err := validateStableReleaseVersion(*targetVersion); err != nil {
+		fmt.Fprintf(a.errOut, "invalid internal migration target: %v\n", err)
+		return 2
+	}
+	current := buildinfo.Version
+	if a.currentVersion != nil {
+		current = a.currentVersion()
+	}
+	if strings.TrimSpace(current) != strings.TrimSpace(*targetVersion) {
+		fmt.Fprintln(a.errOut, "internal migration target does not match this Stealth binary")
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	migrated, err := a.migrateInstalledRelease(ctx, *targetVersion)
+	if err != nil {
+		fmt.Fprintf(a.errOut, "internal installation migration failed: %v\n", err)
+		return 1
+	}
+	if migrated {
+		fmt.Fprintln(a.out, "managed installation migration completed")
+	}
+	return 0
 }
 
 func hasReleaseAsset(release githubRelease, name string) bool {
@@ -586,5 +718,10 @@ func (a *App) printUpdateFailure(err error) {
 		fmt.Fprintln(a.errOut, line)
 	}
 	fmt.Fprintln(a.errOut, err)
+	var migrated *platformMigratedUpdateError
+	if errors.As(err, &migrated) {
+		fmt.Fprintf(a.errOut, "The installed CLI was not replaced, but the platform migration reached %s. Re-run `stealth update` to reconcile the CLI.\n", migrated.targetVersion)
+		return
+	}
 	fmt.Fprintln(a.errOut, "Your existing Stealth CLI was not modified.")
 }

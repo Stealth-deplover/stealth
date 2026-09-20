@@ -15,7 +15,7 @@ jobs:
   production-smoke:
     name: Build local images and run production smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       VERSION: ci
       COMMIT_SHA: ${{ github.sha }}
@@ -138,3 +138,18 @@ jobs:
           ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
           SMOKE_REMOVE_VOLUMES: "true"
         run: ./scripts/compose-production-smoke.sh
+
+      - name: Set up Go for Real v0.2.5 Upgrade Smoke
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
+      # This starts from the checked-in, tag-derived v0.2.5 installation and
+      # exercises both the released CLI-only bridge boundary and the current
+      # target-binary migration before running the complete production smoke.
+      - name: Real v0.2.5 Upgrade Smoke
+        env:
+          ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
+          SMOKE_REMOVE_VOLUMES: "true"
+        run: ./scripts/real-v025-upgrade-smoke.sh

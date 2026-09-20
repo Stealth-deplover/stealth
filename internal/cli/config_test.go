@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -79,11 +80,14 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  api:\n    image: test\n"))
+			_, _ = writer.Write([]byte("services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
 			return
 		}
 		if strings.Contains(request.URL.Path, "/telemetry/") {
 			marker := "receivers:\n"
+			if strings.HasSuffix(request.URL.Path, "otel-collector.yaml") {
+				marker = "receivers:\n  otlp:\nexporters:\n  clickhouse:\n"
+			}
 			switch {
 			case strings.HasSuffix(request.URL.Path, "host-metrics.yaml"):
 				marker = "hostmetrics:\n"
@@ -102,6 +106,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	layout := newInstallLayout(filepath.Join(root, ".stealth"))
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
+	app.runner = &setupRunner{}
 	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)
@@ -236,6 +241,27 @@ func writeExistingConfig(t *testing.T, version string) InstallLayout {
 		t.Fatal(err)
 	}
 	return layout
+}
+
+func TestRetargetRepairPlanUsesReleasedCurrentCLIWithoutDowngrade(t *testing.T) {
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.currentVersion = func() string { return "v1.2.3" }
+	plan := &InstallPlan{Version: "v1.2.2", InstalledVersion: "v1.2.2", Existing: true}
+	if err := app.retargetRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Version != "v1.2.3" || plan.InstalledVersion != "v1.2.2" {
+		t.Fatalf("retargeted repair plan = %#v", plan)
+	}
+	newer := &InstallPlan{Version: "v1.2.4", InstalledVersion: "v1.2.4", Existing: true}
+	if err := app.retargetRepairPlan(newer); err == nil || !strings.Contains(err.Error(), "newer than this CLI") {
+		t.Fatalf("downgrade repair error = %v", err)
+	}
+	app.currentVersion = func() string { return "dev" }
+	local := &InstallPlan{Version: "v1.2.2", InstalledVersion: "v1.2.2", Existing: true}
+	if err := app.retargetRepairPlan(local); err != nil || local.Version != "v1.2.2" {
+		t.Fatalf("development repair plan = %#v, %v", local, err)
+	}
 }
 
 func parseEnvContents(t *testing.T, contents string) (map[string]string, error) {

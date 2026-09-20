@@ -39,6 +39,13 @@ type CommandRunner interface {
 
 type execCommandRunner struct{}
 
+type cliTestOverrides struct {
+	assetBase    string
+	runner       CommandRunner
+	pollAttempts int
+	pollInterval time.Duration
+}
+
 // App owns process dependencies and CLI configuration. A single App is used
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
@@ -55,6 +62,7 @@ type App struct {
 	executablePath      func() (string, error)
 	renameFile          func(string, string) error
 	currentVersion      func() string
+	runTargetMigration  func(context.Context, string, string) error
 	cloudflareFactory   cloudflareClientFactory
 	verbose             bool
 
@@ -68,21 +76,39 @@ type App struct {
 // command runner, HTTP client, or installation directory after construction.
 func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	homeDir, _ := os.UserHomeDir()
+	runner := CommandRunner(execCommandRunner{})
+	assetBase := defaultRawBaseURL
+	pollAttempts := 60
+	pollInterval := 2 * time.Second
+	if overrides := compiledCLITestOverrides(); overrides != nil {
+		if overrides.assetBase != "" {
+			assetBase = overrides.assetBase
+		}
+		if overrides.runner != nil {
+			runner = overrides.runner
+		}
+		if overrides.pollAttempts > 0 {
+			pollAttempts = overrides.pollAttempts
+		}
+		if overrides.pollInterval > 0 {
+			pollInterval = overrides.pollInterval
+		}
+	}
 	return &App{
 		in:                  in,
 		out:                 out,
 		errOut:              errOut,
-		runner:              execCommandRunner{},
+		runner:              runner,
 		httpClient:          &http.Client{Timeout: 20 * time.Second},
 		homeDir:             homeDir,
-		assetBase:           defaultRawBaseURL,
+		assetBase:           assetBase,
 		releaseAPIBase:      defaultGitHubAPIBaseURL,
 		releaseDownloadBase: defaultGitHubReleaseBaseURL,
 		executablePath:      os.Executable,
 		renameFile:          os.Rename,
 		currentVersion:      func() string { return buildinfo.Version },
-		pollAttempts:        60,
-		pollInterval:        2 * time.Second,
+		pollAttempts:        pollAttempts,
+		pollInterval:        pollInterval,
 	}
 }
 
@@ -111,6 +137,8 @@ func (a *App) run(args []string) int {
 		return a.runUninstall(args[1:])
 	case "update":
 		return a.runUpdate(args[1:])
+	case "internal":
+		return a.runInternal(args[1:])
 	case "status":
 		return a.runStatus(args[1:])
 	case "doctor":
@@ -216,6 +244,12 @@ func (a *App) runInstall(args []string) int {
 			fmt.Fprintf(a.errOut, "existing installation cannot be repaired: %v\n", loadErr)
 			return 1
 		}
+		if *repair {
+			if retargetErr := a.retargetRepairPlan(plan); retargetErr != nil {
+				fmt.Fprintf(a.errOut, "existing installation cannot be repaired: %v\n", retargetErr)
+				return 1
+			}
+		}
 		if plan.Setup || a.setupLifecycleNeedsRecovery(layout) {
 			return a.runWebBootstrap(ctx, checks, layout, plan.Version, true)
 		}
@@ -227,6 +261,31 @@ func (a *App) runInstall(args []string) int {
 		return 1
 	}
 	return a.runWebBootstrap(ctx, checks, layout, version, false)
+}
+
+// retargetRepairPlan lets a released bridge/current CLI repair the installed
+// platform with its own compiled asset manifest. Development builds preserve
+// the recorded version so local source tests remain explicit rather than
+// silently pretending that "dev" is a release artifact.
+func (a *App) retargetRepairPlan(plan *InstallPlan) error {
+	if plan == nil {
+		return errors.New("repair plan is missing")
+	}
+	current := buildinfo.Version
+	if a.currentVersion != nil {
+		current = a.currentVersion()
+	}
+	current = strings.TrimSpace(current)
+	if validateReleaseVersion(current) != nil {
+		return nil
+	}
+	comparison, comparable := compareReleaseVersions(plan.Version, current)
+	if comparable && comparison > 0 {
+		return fmt.Errorf("installed release %s is newer than this CLI %s; install the matching or newer CLI before repair", plan.Version, current)
+	}
+	plan.InstalledVersion = plan.Version
+	plan.Version = current
+	return nil
 }
 
 func (a *App) runStatus(args []string) int {

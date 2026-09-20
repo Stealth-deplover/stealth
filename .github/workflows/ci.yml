@@ -170,7 +170,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Validate bootstrap and release scripts
-        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh
+        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh
 
       - name: Verify release smoke revision pinning
         run: ./scripts/release_workflow_test.sh
