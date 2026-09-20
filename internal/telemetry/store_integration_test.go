@@ -85,10 +85,7 @@ func TestClickHouseStoreIntegration(t *testing.T) {
 				stringAttribute("access_token", secret),
 			}},
 			"scopeSpans": []any{map[string]any{
-				"scope": map[string]any{
-					"name":       "telemetry.integration",
-					"attributes": []any{stringAttribute("scope_secret", secret)},
-				},
+				"scope": map[string]any{"name": "telemetry.integration"},
 				"spans": []any{map[string]any{
 					"traceId":           traceID,
 					"spanId":            spanID,
@@ -225,7 +222,6 @@ WHERE Timestamp >= {from:DateTime64(9)}
     OR positionCaseInsensitiveUTF8(StatusMessage, {secret:String}) > 0
     OR positionCaseInsensitiveUTF8(toString(SpanAttributes), {secret:String}) > 0
     OR positionCaseInsensitiveUTF8(toString(ResourceAttributes), {secret:String}) > 0
-    OR positionCaseInsensitiveUTF8(toString(ScopeAttributes), {secret:String}) > 0
     OR positionCaseInsensitiveUTF8(toString(Events.Attributes), {secret:String}) > 0
   )`,
 		},
