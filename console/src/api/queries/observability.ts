@@ -1,6 +1,10 @@
 "use client";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, apiUrl, cancellableQuery } from "@/api/client";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
+import { api, apiUrl, cancellableQuery, unwrap } from "@/api/client";
 import type { PathsV1AdminInfrastructureMetricsGetParametersQueryScope } from "@/api/generated/schema";
 import { type CursorQuery, withCursorPage } from "@/api/pagination";
 import { queryKeys } from "@/api/query-keys";
@@ -344,15 +348,21 @@ export function useAdminAlerts(
 }
 
 export function useAdminAlertEvents(
-  query: { limit?: number } = {},
+  query: { from?: string; to?: string; limit?: number } = {},
   options?: { refetchInterval?: number | false },
 ) {
-  return useQuery({
-    queryKey: [...queryKeys.adminAlertEvents, query],
-    queryFn: cancellableQuery((signal) =>
-      api.GET("/v1/admin/alert-events", { params: { query }, signal }),
-    ),
-    placeholderData: keepPreviousData,
+  const pageQuery = { ...query };
+  return useInfiniteQuery({
+    queryKey: [...queryKeys.adminAlertEvents, pageQuery],
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ signal, pageParam }) => {
+      const result = await api.GET("/v1/admin/alert-events", {
+        params: { query: { ...pageQuery, cursor: pageParam } },
+        signal,
+      });
+      return unwrap(result);
+    },
+    getNextPageParam: (lastPage) => lastPage?.next_cursor ?? undefined,
     refetchInterval: options?.refetchInterval,
   });
 }

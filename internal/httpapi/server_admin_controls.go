@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/repository"
@@ -31,7 +32,8 @@ type adminAlertRulesResponse struct {
 }
 
 type adminAlertEventsResponse struct {
-	Items []domain.AdminAlertEvent `json:"items"`
+	Items      []domain.AdminAlertEvent `json:"items"`
+	NextCursor *string                  `json:"next_cursor,omitempty"`
 }
 
 type adminNotificationChannelRequest struct {
@@ -115,16 +117,16 @@ func (s *Server) listAdminAlertRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAdminAlertEvents(w http.ResponseWriter, r *http.Request) {
-	limit, ok := adminConfigLimit(w, r)
+	query, ok := adminAlertEventQuery(w, r, nil)
 	if !ok {
 		return
 	}
-	items, err := s.repo.ListRecentAdminAlertEvents(r.Context(), limit)
+	page, err := s.repo.QueryAdminAlertEvents(r.Context(), query)
 	if err != nil {
 		adminControlError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, adminAlertEventsResponse{Items: items})
+	writeAdminAlertEventPage(w, page)
 }
 
 func (s *Server) listAdminNotificationChannels(w http.ResponseWriter, r *http.Request) {
@@ -284,16 +286,67 @@ func (s *Server) listAdminAlertRuleEvents(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	limit, ok := adminConfigLimit(w, r)
+	query, ok := adminAlertEventQuery(w, r, &id)
 	if !ok {
 		return
 	}
-	items, err := s.repo.ListAdminAlertEvents(r.Context(), id, limit)
+	page, err := s.repo.QueryAdminAlertEvents(r.Context(), query)
 	if err != nil {
 		adminControlError(s, w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, adminAlertEventsResponse{Items: items})
+	writeAdminAlertEventPage(w, page)
+}
+
+func adminAlertEventQuery(w http.ResponseWriter, r *http.Request, ruleID *uuid.UUID) (repository.AdminAlertEventQuery, bool) {
+	limit, ok := adminConfigLimit(w, r)
+	if !ok {
+		return repository.AdminAlertEventQuery{}, false
+	}
+	from, ok := adminAlertEventTime(w, r, "from")
+	if !ok {
+		return repository.AdminAlertEventQuery{}, false
+	}
+	to, ok := adminAlertEventTime(w, r, "to")
+	if !ok {
+		return repository.AdminAlertEventQuery{}, false
+	}
+	if from != nil && to != nil && !to.After(*from) {
+		writeError(w, http.StatusBadRequest, "validation_error", "from must be before to")
+		return repository.AdminAlertEventQuery{}, false
+	}
+	var cursor *repository.AdminAlertEventCursor
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		parsed, err := repository.DecodeAdminAlertEventCursor(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "validation_error", "cursor is invalid")
+			return repository.AdminAlertEventQuery{}, false
+		}
+		cursor = &parsed
+	}
+	return repository.AdminAlertEventQuery{RuleID: ruleID, From: from, To: to, Cursor: cursor, Limit: limit}, true
+}
+
+func adminAlertEventTime(w http.ResponseWriter, r *http.Request, key string) (*time.Time, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return nil, true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", key+" must be an RFC3339 timestamp")
+		return nil, false
+	}
+	parsed = parsed.UTC()
+	return &parsed, true
+}
+
+func writeAdminAlertEventPage(w http.ResponseWriter, page repository.AdminAlertEventPage) {
+	response := adminAlertEventsResponse{Items: page.Items}
+	if page.NextCursor != "" {
+		response.NextCursor = &page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) updateAdminAlertRule(w http.ResponseWriter, r *http.Request) {
@@ -565,7 +618,7 @@ func adminConfigLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 
 func adminControlError(s *Server, w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, repository.ErrInvalidAdminAlert), errors.Is(err, repository.ErrInvalidAdminNotification), errors.Is(err, repository.ErrInvalidAdminIncident), errors.Is(err, repository.ErrInvalidAdminDashboard), errors.Is(err, repository.ErrInvalidAdminStatus):
+	case errors.Is(err, repository.ErrInvalidAdminAlert), errors.Is(err, repository.ErrInvalidAdminAlertHistory), errors.Is(err, repository.ErrInvalidAdminNotification), errors.Is(err, repository.ErrInvalidAdminIncident), errors.Is(err, repository.ErrInvalidAdminDashboard), errors.Is(err, repository.ErrInvalidAdminStatus):
 		writeError(w, http.StatusBadRequest, "validation_error", "admin configuration is invalid")
 	case errors.Is(err, repository.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "admin resource was not found")

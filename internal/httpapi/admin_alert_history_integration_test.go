@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -56,6 +57,16 @@ func TestDeleteAdminAlertRulePreservesHistoryIntegration(t *testing.T) {
 	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+uuid.Must(uuid.NewV7()).String()+"/events?limit=10", nil, http.StatusOK, &emptyHistory)
 	if len(emptyHistory.Items) != 0 {
 		t.Fatalf("history for an unknown rule = %d items, want empty", len(emptyHistory.Items))
+	}
+	for _, suffix := range []string{
+		"/v1/admin/alert-events?cursor=not-a-cursor",
+		"/v1/admin/alert-events?from=not-a-timestamp",
+		"/v1/admin/alert-events?to=not-a-timestamp",
+		"/v1/admin/alert-events?from=2026-09-20T12:00:00Z&to=2026-09-20T12:00:00Z",
+		"/v1/admin/alert-events?limit=0",
+		"/v1/admin/alert-events?limit=101",
+	} {
+		requestJSON(t, client, http.MethodGet, server.URL+suffix, nil, http.StatusBadRequest, nil)
 	}
 	channelID := uuid.Must(uuid.NewV7())
 	var ruleID uuid.UUID
@@ -126,6 +137,62 @@ func TestDeleteAdminAlertRulePreservesHistoryIntegration(t *testing.T) {
 			OccurredAt       time.Time `json:"occurred_at"`
 			SourceRuleExists bool      `json:"source_rule_exists"`
 		} `json:"items"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String()+"/events?limit=1", nil, http.StatusOK, &history)
+	if len(history.Items) != 1 || history.NextCursor == nil || *history.NextCursor == "" {
+		t.Fatalf("first alert history page = %#v, want one item and next cursor", history)
+	}
+	firstID := history.Items[0].ID
+	var nextHistory struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String()+"/events?limit=1&cursor="+url.QueryEscape(*history.NextCursor), nil, http.StatusOK, &nextHistory)
+	if len(nextHistory.Items) != 1 || nextHistory.Items[0].ID == firstID || nextHistory.NextCursor != nil {
+		t.Fatalf("second alert history page = %#v, want final distinct item", nextHistory)
+	}
+	var filteredHistory struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	from := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	to := time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String()+"/events?limit=10&from="+url.QueryEscape(from)+"&to="+url.QueryEscape(to), nil, http.StatusOK, &filteredHistory)
+	if len(filteredHistory.Items) != 2 {
+		t.Fatalf("filtered alert history items = %d, want 2", len(filteredHistory.Items))
+	}
+	var eventFrom, eventTo time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT min(occurred_at),max(occurred_at)
+		FROM admin_alert_events WHERE rule_id_snapshot=$1`, ruleID).Scan(&eventFrom, &eventTo); err != nil {
+		t.Fatal(err)
+	}
+	globalQuery := url.Values{}
+	globalQuery.Set("limit", "1")
+	globalQuery.Set("from", eventFrom.Add(-time.Second).Format(time.RFC3339Nano))
+	globalQuery.Set("to", eventTo.Add(time.Second).Format(time.RFC3339Nano))
+	var globalFirst struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alert-events?"+globalQuery.Encode(), nil, http.StatusOK, &globalFirst)
+	if len(globalFirst.Items) != 1 || globalFirst.NextCursor == nil || *globalFirst.NextCursor == "" {
+		t.Fatalf("first global alert history page = %#v, want one item and next cursor", globalFirst)
+	}
+	globalQuery.Set("cursor", *globalFirst.NextCursor)
+	var globalSecond struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alert-events?"+globalQuery.Encode(), nil, http.StatusOK, &globalSecond)
+	if len(globalSecond.Items) != 1 || globalSecond.Items[0].ID == globalFirst.Items[0].ID || globalSecond.NextCursor != nil {
+		t.Fatalf("second global alert history page = %#v, want final distinct item", globalSecond)
 	}
 	requestJSON(t, client, http.MethodGet, server.URL+"/v1/admin/alerts/"+ruleID.String()+"/events?limit=10", nil, http.StatusOK, &history)
 	if len(history.Items) != 2 {

@@ -3419,6 +3419,8 @@ export interface components {
         };
         AdminAlertEventsResponse: {
             items: components["schemas"]["AdminAlertEvent"][];
+            /** @description Opaque cursor for the next page; absent when there are no more results. */
+            next_cursor?: string | null;
         };
         AdminAlertRulesResponse: {
             items: components["schemas"]["AdminAlertRule"][];
@@ -6729,6 +6731,12 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Opaque cursor returned by the previous page. It is valid only with the same filters. */
+                cursor?: string;
+                /** @description Inclusive RFC3339 lower bound for occurred_at. */
+                from?: string;
+                /** @description Inclusive RFC3339 upper bound for occurred_at. */
+                to?: string;
             };
             header?: never;
             path?: never;
@@ -6755,6 +6763,12 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Opaque cursor returned by the previous page. It is valid only with the same filters. */
+                cursor?: string;
+                /** @description Inclusive RFC3339 lower bound for occurred_at. */
+                from?: string;
+                /** @description Inclusive RFC3339 upper bound for occurred_at. */
+                to?: string;
             };
             header?: never;
             path: {

@@ -264,70 +264,20 @@ func (r *Repository) DeleteAdminAlertRule(ctx context.Context, accountID, id uui
 	return tx.Commit(ctx)
 }
 
-const adminAlertEventProjection = `
-	e.id::text,e.rule_id_snapshot::text,e.rule_name_snapshot,e.rule_kind_snapshot,e.severity_snapshot,
-	e.state,e.value,e.message,e.occurred_at,(e.rule_id IS NOT NULL)`
-
 func (r *Repository) ListAdminAlertEvents(ctx context.Context, ruleID uuid.UUID, limit int) ([]domain.AdminAlertEvent, error) {
-	if ruleID == uuid.Nil || limit < 1 || limit > adminAlertMaxLimit {
-		return nil, ErrInvalidAdminAlert
-	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT `+adminAlertEventProjection+`
-		FROM admin_alert_events e
-		WHERE e.rule_id_snapshot=$1
-		ORDER BY e.occurred_at DESC,e.id DESC LIMIT $2`, ruleID, limit)
+	page, err := r.QueryAdminAlertEvents(ctx, AdminAlertEventQuery{RuleID: &ruleID, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]domain.AdminAlertEvent, 0, limit)
-	for rows.Next() {
-		var item domain.AdminAlertEvent
-		if err := scanAdminAlertEvent(rows, &item); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return page.Items, nil
 }
 
 func (r *Repository) ListRecentAdminAlertEvents(ctx context.Context, limit int) ([]domain.AdminAlertEvent, error) {
-	if limit < 1 || limit > adminAlertMaxLimit {
-		return nil, ErrInvalidAdminAlert
-	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT `+adminAlertEventProjection+`
-		FROM admin_alert_events e
-		ORDER BY e.occurred_at DESC,e.id DESC LIMIT $1`, limit)
+	page, err := r.QueryAdminAlertEvents(ctx, AdminAlertEventQuery{Limit: limit})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]domain.AdminAlertEvent, 0, limit)
-	for rows.Next() {
-		var item domain.AdminAlertEvent
-		if err := scanAdminAlertEvent(rows, &item); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-func scanAdminAlertEvent(row interface{ Scan(...any) error }, item *domain.AdminAlertEvent) error {
-	return row.Scan(
-		&item.ID,
-		&item.RuleID,
-		&item.RuleName,
-		&item.RuleKind,
-		&item.Severity,
-		&item.State,
-		&item.Value,
-		&item.Message,
-		&item.OccurredAt,
-		&item.SourceRuleExists,
-	)
+	return page.Items, nil
 }
 
 func scanAdminAlertRule(row interface{ Scan(...any) error }) (domain.AdminAlertRule, error) {
