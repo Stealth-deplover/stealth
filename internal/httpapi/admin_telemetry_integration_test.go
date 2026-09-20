@@ -147,7 +147,7 @@ func TestAdminTelemetryQueriesRealClickHouseIntegration(t *testing.T) {
 				"scope": map[string]any{"name": "telemetry.admin.integration"},
 				"spans": []any{map[string]any{
 					"traceId":           redactionTraceID,
-					"spanId":            "admin-redaction-span",
+					"spanId":            "adredact00000001",
 					"name":              "GET /admin?token=" + secret,
 					"kind":              "SPAN_KIND_SERVER",
 					"startTimeUnixNano": fmt.Sprintf("%d", collectorTimestamp.Add(-time.Millisecond).UnixNano()),
