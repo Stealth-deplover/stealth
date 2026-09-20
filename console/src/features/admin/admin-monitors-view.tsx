@@ -87,8 +87,10 @@ export function AdminMonitorsView() {
             <AdminTimeRange
               rangeKey={timeRange.rangeKey}
               refreshKey={timeRange.refreshKey}
+              customRange={timeRange.customRange}
               onRangeChange={timeRange.setRange}
               onRefreshChange={timeRange.setRefresh}
+              onCustomRangeChange={timeRange.setCustomRange}
             />
             <Dialog
               open={dialogOpen}

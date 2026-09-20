@@ -47,8 +47,10 @@ export function AdminErrorsView() {
           <AdminTimeRange
             rangeKey={timeRange.rangeKey}
             refreshKey={timeRange.refreshKey}
+            customRange={timeRange.customRange}
             onRangeChange={timeRange.setRange}
             onRefreshChange={timeRange.setRefresh}
+            onCustomRangeChange={timeRange.setCustomRange}
           />
         }
       />
@@ -169,7 +171,7 @@ function ErrorGroupTable({
                           status: event.target.value as ErrorStatus,
                         })
                       }
-                      className="rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none disabled:opacity-50"
+                      className="min-h-11 rounded-md border border-graphite bg-carbon px-2 py-1.5 text-xs text-mist focus:border-acid-lime/70 focus:outline-none disabled:opacity-50"
                     >
                       <option value="open">Open</option>
                       <option value="acknowledged">Acknowledged</option>

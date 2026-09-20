@@ -24,6 +24,12 @@ type RangeKey = (typeof adminRanges)[number]["key"];
 type CustomRangeKey = "custom";
 type AnyRangeKey = RangeKey | CustomRangeKey;
 type RefreshKey = (typeof adminRefreshIntervals)[number]["key"];
+type CustomRange = { from: string; to: string };
+type StoredPreferences = {
+  rangeKey: AnyRangeKey;
+  refreshKey: RefreshKey;
+  customRange?: CustomRange;
+};
 
 const rangeStorageKey = "stealth.admin.time-range";
 const customFromStorageKey = "stealth.admin.custom-from";
@@ -77,6 +83,27 @@ function readStoredCustomRange() {
   }
 }
 
+function readStoredPreferences(): StoredPreferences {
+  return {
+    rangeKey: readStoredRange(),
+    refreshKey: readStoredRefresh(),
+    customRange: readStoredCustomRange(),
+  };
+}
+
+function readStoredPreferencesSnapshot() {
+  return JSON.stringify(readStoredPreferences());
+}
+
+const serverPreferencesSnapshot = JSON.stringify({
+  rangeKey: "1h" satisfies AnyRangeKey,
+  refreshKey: "off" satisfies RefreshKey,
+});
+
+function parseStoredPreferences(snapshot: string): StoredPreferences {
+  return JSON.parse(snapshot) as StoredPreferences;
+}
+
 function readStoredRefresh(): RefreshKey {
   if (typeof window === "undefined") return "off";
   try {
@@ -90,16 +117,21 @@ function readStoredRefresh(): RefreshKey {
 }
 
 export function useAdminTimeRange() {
-  const rangeKey = useSyncExternalStore(
+  const storedPreferencesSnapshot = useSyncExternalStore(
     subscribeToPreferences,
-    readStoredRange,
-    () => "1h" as AnyRangeKey,
+    readStoredPreferencesSnapshot,
+    () => serverPreferencesSnapshot,
   );
-  const refreshKey = useSyncExternalStore(
-    subscribeToPreferences,
-    readStoredRefresh,
-    () => "off" as RefreshKey,
-  );
+  const storedPreferences = parseStoredPreferences(storedPreferencesSnapshot);
+  const [sessionPreferences, setSessionPreferences] = useState<
+    Partial<StoredPreferences>
+  >({});
+
+  const rangeKey = sessionPreferences.rangeKey ?? storedPreferences.rangeKey;
+  const refreshKey =
+    sessionPreferences.refreshKey ?? storedPreferences.refreshKey;
+  const customRange =
+    sessionPreferences.customRange ?? storedPreferences.customRange;
   const selectedRefresh = adminRefreshIntervals.find(
     (item) => item.key === refreshKey,
   )!;
@@ -114,13 +146,10 @@ export function useAdminTimeRange() {
     return () => window.clearInterval(timer);
   }, [selectedRefresh.milliseconds]);
 
-  const storedCustomRange = readStoredCustomRange();
-  const customFrom = storedCustomRange?.from;
-  const customTo = storedCustomRange?.to;
   const selectedRange = adminRanges.find((item) => item.key === rangeKey);
   const query = useMemo(() => {
-    if (rangeKey === "custom" && customFrom && customTo) {
-      return { from: customFrom, to: customTo };
+    if (rangeKey === "custom" && customRange) {
+      return customRange;
     }
     const to = new Date();
     return {
@@ -132,33 +161,71 @@ export function useAdminTimeRange() {
     // refreshTick intentionally invalidates the moving window when auto-refresh is on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    customFrom,
-    customTo,
+    customRange?.from,
+    customRange?.to,
     rangeKey,
     selectedRange?.milliseconds,
     refreshTick,
   ]);
 
-  const persist = (key: string, value: string) => {
+  const persist = (values: Array<[string, string]>) => {
     try {
-      window.localStorage.setItem(key, value);
+      for (const [key, value] of values) {
+        window.localStorage.setItem(key, value);
+      }
+      return true;
     } catch {
-      // A private browsing context can reject localStorage. The preference
-      // remains valid for the current request lifecycle.
+      // The active preference is held in React state. Persistence is optional.
+      return false;
+    } finally {
+      window.dispatchEvent(new Event(preferenceEvent));
     }
-    window.dispatchEvent(new Event(preferenceEvent));
+  };
+
+  const updateSessionPreferences = (next: Partial<StoredPreferences>) => {
+    setSessionPreferences((current) => ({ ...current, ...next }));
+  };
+
+  const clearSessionPreferences = (keys: Array<keyof StoredPreferences>) => {
+    setSessionPreferences((current) => {
+      const next = { ...current };
+      for (const key of keys) delete next[key];
+      return next;
+    });
   };
 
   return {
     query,
     rangeKey,
     refreshKey,
+    customRange,
     refreshInterval: selectedRefresh.milliseconds,
     setRange: (next: AnyRangeKey) => {
-      persist(rangeStorageKey, next);
+      if (persist([[rangeStorageKey, next]])) {
+        clearSessionPreferences(["rangeKey"]);
+      } else {
+        updateSessionPreferences({ rangeKey: next });
+      }
     },
     setRefresh: (next: RefreshKey) => {
-      persist(refreshStorageKey, next);
+      if (persist([[refreshStorageKey, next]])) {
+        clearSessionPreferences(["refreshKey"]);
+      } else {
+        updateSessionPreferences({ refreshKey: next });
+      }
+    },
+    setCustomRange: (next: CustomRange) => {
+      if (
+        persist([
+          [customFromStorageKey, next.from],
+          [customToStorageKey, next.to],
+          [rangeStorageKey, "custom"],
+        ])
+      ) {
+        clearSessionPreferences(["rangeKey", "customRange"]);
+      } else {
+        updateSessionPreferences({ rangeKey: "custom", customRange: next });
+      }
     },
   };
 }
@@ -166,24 +233,28 @@ export function useAdminTimeRange() {
 export function AdminTimeRange({
   rangeKey,
   refreshKey,
+  customRange,
   onRangeChange,
   onRefreshChange,
+  onCustomRangeChange,
 }: {
   rangeKey: AnyRangeKey;
   refreshKey: RefreshKey;
+  customRange?: CustomRange;
   onRangeChange: (value: AnyRangeKey) => void;
   onRefreshChange: (value: RefreshKey) => void;
+  onCustomRangeChange: (value: CustomRange) => void;
 }) {
-  const initialCustom = readStoredCustomRange();
   const [customFrom, setCustomFrom] = useState(() =>
     toDateTimeInput(
-      initialCustom?.from ?? new Date(Date.now() - 60 * 60_000).toISOString(),
+      customRange?.from ?? new Date(Date.now() - 60 * 60_000).toISOString(),
     ),
   );
   const [customTo, setCustomTo] = useState(() =>
-    toDateTimeInput(initialCustom?.to ?? new Date().toISOString()),
+    toDateTimeInput(customRange?.to ?? new Date().toISOString()),
   );
   const [customError, setCustomError] = useState("");
+
   const displayRanges = [
     ...adminRanges,
     { key: "custom" as const, label: "Custom" },
@@ -204,29 +275,35 @@ export function AdminTimeRange({
       return;
     }
     setCustomError("");
-    try {
-      window.localStorage.setItem(customFromStorageKey, from.toISOString());
-      window.localStorage.setItem(customToStorageKey, to.toISOString());
-    } catch {
-      // The range is still applied for this render; shared preference storage is optional.
-    }
-    window.dispatchEvent(new Event(preferenceEvent));
-    onRangeChange("custom");
+    onCustomRangeChange({ from: from.toISOString(), to: to.toISOString() });
   };
   return (
     <div
       className="flex flex-wrap items-center gap-3"
       aria-label="Telemetry time range"
     >
-      <div className="flex items-center gap-1 rounded-md border border-graphite bg-carbon p-1">
+      <div className="flex flex-wrap items-center gap-1 rounded-md border border-graphite bg-carbon p-1">
         {displayRanges.map((item) => (
           <button
             key={item.key}
             type="button"
             aria-pressed={rangeKey === item.key}
-            onClick={() => onRangeChange(item.key)}
+            onClick={() => {
+              if (item.key === "custom") {
+                setCustomFrom(
+                  toDateTimeInput(
+                    customRange?.from ??
+                      new Date(Date.now() - 60 * 60_000).toISOString(),
+                  ),
+                );
+                setCustomTo(
+                  toDateTimeInput(customRange?.to ?? new Date().toISOString()),
+                );
+              }
+              onRangeChange(item.key);
+            }}
             className={cn(
-              "rounded-xs px-2 py-1 text-xs text-fog transition-colors duration-150 hover:text-mist",
+              "min-h-11 min-w-11 rounded-xs px-2 py-1 text-xs text-fog transition-colors duration-150 hover:text-mist",
               rangeKey === item.key && "bg-white/[0.08] text-paper",
             )}
           >
@@ -242,7 +319,7 @@ export function AdminTimeRange({
               type="datetime-local"
               value={customFrom}
               onChange={(event) => setCustomFrom(event.target.value)}
-              className="mt-1 block h-8 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
             />
           </label>
           <label className="text-[11px] text-fog">
@@ -251,13 +328,13 @@ export function AdminTimeRange({
               type="datetime-local"
               value={customTo}
               onChange={(event) => setCustomTo(event.target.value)}
-              className="mt-1 block h-8 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
             />
           </label>
           <button
             type="button"
             onClick={applyCustom}
-            className="h-8 rounded-md bg-acid-lime px-3 text-xs font-medium text-void transition-colors duration-150 hover:bg-acid-lime/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60"
+            className="min-h-11 rounded-md bg-acid-lime px-3 text-xs font-medium text-void transition-colors duration-150 hover:bg-acid-lime/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60"
           >
             Apply
           </button>
@@ -275,7 +352,7 @@ export function AdminTimeRange({
           onChange={(event) =>
             onRefreshChange(event.target.value as RefreshKey)
           }
-          className="h-8 rounded-md border border-graphite bg-carbon px-2 text-xs text-mist outline-none focus:border-smoke"
+          className="min-h-11 rounded-md border border-graphite bg-carbon px-2 text-xs text-mist outline-none focus:border-smoke"
         >
           {adminRefreshIntervals.map((item) => (
             <option key={item.key} value={item.key}>
