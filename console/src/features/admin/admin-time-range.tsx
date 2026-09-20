@@ -320,7 +320,7 @@ export function AdminTimeRange({
               type="datetime-local"
               value={customFrom}
               onChange={(event) => setCustomFrom(event.target.value)}
-              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist focus:border-acid-lime focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60 focus-visible:ring-offset-2 focus-visible:ring-offset-void"
             />
           </label>
           <label className="text-[11px] text-fog">
@@ -329,7 +329,7 @@ export function AdminTimeRange({
               type="datetime-local"
               value={customTo}
               onChange={(event) => setCustomTo(event.target.value)}
-              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist outline-none focus:border-smoke"
+              className="mt-1 block min-h-11 rounded-md border border-graphite bg-void px-2 text-xs text-mist focus:border-acid-lime focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60 focus-visible:ring-offset-2 focus-visible:ring-offset-void"
             />
           </label>
           <button
@@ -353,7 +353,7 @@ export function AdminTimeRange({
           onChange={(event) =>
             onRefreshChange(event.target.value as RefreshKey)
           }
-          className="min-h-11 rounded-md border border-graphite bg-carbon px-2 text-xs text-mist outline-none focus:border-smoke"
+          className="min-h-11 rounded-md border border-graphite bg-carbon px-2 text-xs text-mist focus:border-acid-lime focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acid-lime/60 focus-visible:ring-offset-2 focus-visible:ring-offset-void"
         >
           {adminRefreshIntervals.map((item) => (
             <option key={item.key} value={item.key}>

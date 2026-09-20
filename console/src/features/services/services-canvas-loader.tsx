@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { LoadingState } from "@/components/feedback/loading-state";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const ServicesCanvasView = dynamic(
@@ -11,7 +12,12 @@ const ServicesCanvasView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <Skeleton className="h-[calc(100vh-15rem)] min-h-[520px] w-full rounded-2xl" />
+      <LoadingState
+        label="Loading services canvas…"
+        className="h-[calc(100vh-15rem)] min-h-[520px] w-full"
+      >
+        <Skeleton className="h-full w-full rounded-2xl" />
+      </LoadingState>
     ),
   },
 );

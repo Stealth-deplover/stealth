@@ -69,9 +69,13 @@ export function LoginView() {
               type="email"
               autoComplete="email"
               {...form.register("email")}
+              aria-invalid={form.formState.errors.email ? true : undefined}
+              aria-describedby={
+                form.formState.errors.email ? "login-email-error" : undefined
+              }
             />
             {form.formState.errors.email ? (
-              <p className="text-xs text-rose-300">
+              <p id="login-email-error" className="text-xs text-rose-300">
                 {form.formState.errors.email.message}
               </p>
             ) : null}
@@ -91,15 +95,24 @@ export function LoginView() {
               type="password"
               autoComplete="current-password"
               {...form.register("password")}
+              aria-invalid={form.formState.errors.password ? true : undefined}
+              aria-describedby={
+                form.formState.errors.password
+                  ? "login-password-error"
+                  : undefined
+              }
             />
             {form.formState.errors.password ? (
-              <p className="text-xs text-rose-300">
+              <p id="login-password-error" className="text-xs text-rose-300">
                 {form.formState.errors.password.message}
               </p>
             ) : null}
           </div>
           {mutation.error ? (
-            <p className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200">
+            <p
+              role="alert"
+              className="rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs leading-5 text-rose-200"
+            >
               {errorMessage(mutation.error)}
             </p>
           ) : null}

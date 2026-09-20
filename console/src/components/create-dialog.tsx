@@ -38,6 +38,7 @@ export type CreateField<TValues extends CreateFormValues = CreateFormValues> = {
   optionsForValues?: (
     values: Readonly<TValues>,
   ) => readonly { value: string; label: string }[];
+  autoComplete?: React.InputHTMLAttributes<HTMLInputElement>["autoComplete"];
   onChange?: (value: string, values: Readonly<TValues>) => Partial<TValues>;
   defaultValue?: string;
   required?: boolean;
@@ -149,7 +150,9 @@ export function CreateDialog<
               {field.type === "textarea" ? (
                 <Textarea
                   id={field.name}
+                  name={field.name}
                   required={field.required !== false}
+                  autoComplete={field.autoComplete}
                   placeholder={field.placeholder}
                   value={values[field.name] ?? ""}
                   onChange={(event) =>
@@ -159,7 +162,9 @@ export function CreateDialog<
               ) : field.type === "select" ? (
                 <select
                   id={field.name}
+                  name={field.name}
                   required={field.required !== false}
+                  autoComplete={field.autoComplete}
                   value={values[field.name] ?? ""}
                   onChange={(event) =>
                     updateValue(field.name, event.target.value)
@@ -192,6 +197,7 @@ export function CreateDialog<
                         className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-mist hover:bg-white/[0.04]"
                       >
                         <Input
+                          name={field.name}
                           type="checkbox"
                           aria-label={option.label}
                           checked={selected}
@@ -223,8 +229,10 @@ export function CreateDialog<
               ) : (
                 <Input
                   id={field.name}
+                  name={field.name}
                   required={field.required !== false}
                   type={field.type ?? "text"}
+                  autoComplete={field.autoComplete}
                   placeholder={field.placeholder}
                   value={values[field.name] ?? ""}
                   onChange={(event) =>

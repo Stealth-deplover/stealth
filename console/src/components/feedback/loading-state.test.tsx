@@ -11,4 +11,19 @@ describe("LoadingState", () => {
     expect(screen.getByText("Loading…")).toBeInTheDocument();
     expect(screen.queryAllByRole("status")).toHaveLength(1);
   });
+
+  it("supports an accessible label for custom visual fallbacks", () => {
+    render(
+      <LoadingState label="Loading sign-in form…">
+        <div data-testid="custom-placeholder" />
+      </LoadingState>,
+    );
+
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "aria-label",
+      "Loading sign-in form",
+    );
+    expect(screen.getByText("Loading sign-in form…")).toBeInTheDocument();
+    expect(screen.getByTestId("custom-placeholder")).toBeInTheDocument();
+  });
 });
