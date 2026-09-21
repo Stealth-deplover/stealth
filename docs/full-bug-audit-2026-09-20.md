@@ -574,35 +574,24 @@ union; that is tracked as AUD-14.
 
 ### AUD-17 — Existing repair/update paths can retain the pre-PR-#83 telemetry topology
 
-- **Status:** OPEN
-- **Severity:** High
+- **Status:** RESOLVED BY PR #85
+- **Severity:** High (historical)
 - **Area:** Installer/update lifecycle; security boundary rollout
-- **Current-head evidence:** `internal/installengine/engine.go` uses
-  `ensureAsset`, which returns immediately when a destination file already
-  exists. Existing-install preparation is intentionally non-destructive, and
-  `--repair` is documented as reusing an existing installation without
-  replacing its configuration. The asset list can add the split files, but an
-  existing `compose.production.yaml` and existing telemetry configuration are
-  not migrated or replaced. `docs/upgrade.md` likewise describes manual image
-  and service recreation rather than a schema-aware telemetry asset migration.
-- **Minimal proof path:** Start with an installation created before PR #83,
-  retaining its old Compose and Collector assets, then run the current repair
-  or update path. Existing files satisfy `ensureAsset`; no transformation
-  changes the old main-Collector host mount, file-log pipeline, or capability
-  topology. The installation can therefore continue running the superseded
-  boundary after the new release is installed.
-- **Impact:** The security separation delivered by PR #83 is not reliably
-  applied to existing installations, leaving the former broad Collector
-  privilege boundary in place after an operator follows the supported lifecycle
-  path.
-- **Recommended remediation:** Add an explicit, versioned telemetry asset
-  migration with backup/confirmation semantics, or fail/warn clearly when an
-  existing installation needs a manual security migration. Make Compose,
-  configs, images, networks, and state-volume changes a coherent upgrade unit.
-- **Recommended regression test:** Fixture an old installation, run repair and
-  update, then assert the resulting Compose/config uses the split collectors,
-  has no main-Collector DAC capability or host-root mount, and preserves
-  operator-owned settings according to the documented policy.
+- **Fix:** PR #85, merged into current `main`, moved target-release asset
+  ownership to the verified target CLI, added coordinated managed-asset
+  staging/recovery, preserved operator state, and validated the migrated
+  Compose topology before activation.
+- **Current verification:** `internal/installengine/engine.go` contains the
+  managed-asset transaction/journal and target-binary migration path;
+  `internal/cli/real_upgrade_smoke_test.go` covers the real v0.2.5 bridge
+  lifecycle; and the release/installer checks passed on the merged PR #85
+  implementation. The current production topology therefore migrates old
+  installations instead of treating an existing file as proof that it is
+  current.
+- **Residual risk:** A fresh VPS upgrade was not run in this environment. The
+  migration intentionally preserves operator-owned `config.env` and unknown
+  local files, while release-managed runtime assets advance according to the
+  documented policy.
 
 ### AUD-18 — Purge validation omits the post-PR-#83 ClickHouse and Collector volumes
 
@@ -641,12 +630,11 @@ collector, Docker-log collector), the Docker proxy image, and the
 `telemetry-collector`, `telemetry-docker-logs`, and `telemetry-docker-proxy`
 targets. Asset names include the four current telemetry configuration files.
 
-The confirmed lifecycle gaps are AUD-17 and AUD-18. No separate release image
-tag mismatch, wrong fresh-install network name, missing fresh-install asset, or
-rollback-specific defect was confirmed in this refresh. The update/repair
-behavior is intentionally non-destructive, but it lacks a versioned migration
-for the security-sensitive telemetry split; that is why the gap is recorded
-instead of treating the fresh-install path as sufficient.
+The refreshed baseline confirmed AUD-17 and AUD-18 as lifecycle gaps. PR #85
+resolved the versioned telemetry migration gap; PR #89 adds the current-volume
+purge coverage for AUD-18. No separate release image tag mismatch, wrong fresh-
+install network name, missing fresh-install asset, or rollback-specific defect
+was confirmed in this refresh.
 
 ## Telemetry failure isolation
 
