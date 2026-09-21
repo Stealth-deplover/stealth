@@ -413,28 +413,28 @@ union; that is tracked as AUD-14.
 
 ### AUD-11 — Custom admin time range still depends on localStorage for active state
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Console admin time-range state
-- **Current-head evidence:** `console/src/features/admin/admin-time-range.tsx`
-  catches `localStorage.getItem` errors in `readStoredRange` and returns
-  `"1h"`. The hook uses that storage-backed snapshot directly through
-  `useSyncExternalStore`. `setItem` failures are caught, but there is no
-  in-memory active-range fallback. Thus a storage failure can cause the
-  currently selected custom range to be read back as `1h`, not merely lose
-  persistence across reloads.
-- **Minimal proof path:** Make `localStorage.getItem` and `setItem` throw,
-  select a custom range, and trigger the preference snapshot update. The
-  active range falls back to the default instead of remaining custom for the
-  current session.
-- **Impact:** Admin telemetry views silently query a different time window in
-  private browsing, restricted storage, or embedded browser environments.
-- **Recommended remediation:** Keep the active range in React/in-memory state
-  and treat localStorage only as best-effort persistence. Emit a storage event
-  only after updating the in-memory value.
-- **Recommended regression test:** Mock throwing get/set storage operations
-  and assert that the selected custom range remains active during the current
-  session while remount persistence is unavailable.
+- **Current-head evidence:** `useAdminTimeRange` keeps failed persistence in
+  session state, uses `useSyncExternalStore` for same-tab and browser storage
+  events, validates a custom range to 30 days, and falls back to `1h` when a
+  persisted custom selection has malformed endpoints. Selecting Custom with
+  no valid stored draft remains active while the operator edits it; the range
+  is persisted only after Apply succeeds.
+- **Minimal proof path:** `admin-time-range.test.tsx` covers storage failure,
+  successful persistence/remount, malformed custom data, same-tab updates,
+  cross-tab storage events, bounded custom ranges, and moving refresh windows.
+- **Impact:** The active query no longer silently falls back to `1h` when
+  browser storage is unavailable or a persisted custom draft is invalid.
+- **Remediation evidence in PR #89:** session-first preference resolution,
+  safe malformed-data fallback, draft activation, and mounted-control tests.
+- **Residual risk:** Browser storage can still be unavailable for persistence
+  across a full reload; the documented behavior is to preserve the current
+  session selection and use the safe default on a later session.
+- **Recommended regression test:** Keep the existing ten-case time-range suite
+  and run it in the Console CI test job.
 
 ### AUD-12 — Admin control-plane mutations do not propagate cross-session in realtime
 

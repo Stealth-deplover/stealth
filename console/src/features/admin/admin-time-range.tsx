@@ -84,10 +84,12 @@ function readStoredCustomRange() {
 }
 
 function readStoredPreferences(): StoredPreferences {
+  const customRange = readStoredCustomRange();
+  const storedRange = readStoredRange();
   return {
-    rangeKey: readStoredRange(),
+    rangeKey: storedRange === "custom" && !customRange ? "1h" : storedRange,
     refreshKey: readStoredRefresh(),
-    customRange: readStoredCustomRange(),
+    customRange,
   };
 }
 
@@ -201,6 +203,12 @@ export function useAdminTimeRange() {
     customRange,
     refreshInterval: selectedRefresh.milliseconds,
     setRange: (next: AnyRangeKey) => {
+      if (next === "custom" && !customRange) {
+        // A custom range is not persisted until its two endpoints pass
+        // validation. Keep the button active while the user edits the draft.
+        updateSessionPreferences({ rangeKey: next });
+        return;
+      }
       if (persist([[rangeStorageKey, next]])) {
         clearSessionPreferences(["rangeKey"]);
       } else {
@@ -313,7 +321,10 @@ export function AdminTimeRange({
         ))}
       </div>
       {rangeKey === "custom" ? (
-        <div className="flex flex-wrap items-end gap-2 rounded-md border border-graphite bg-carbon p-2">
+        <div
+          key={`${customRange?.from ?? ""}:${customRange?.to ?? ""}`}
+          className="flex flex-wrap items-end gap-2 rounded-md border border-graphite bg-carbon p-2"
+        >
           <label className="text-[11px] text-fog">
             From (local time)
             <input

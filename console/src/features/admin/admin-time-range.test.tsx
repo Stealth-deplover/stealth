@@ -53,6 +53,57 @@ describe("admin time range preferences", () => {
     expect(screen.getByTestId("refresh")).toHaveTextContent("1m");
   });
 
+  it("falls back when persisted custom range data is malformed", () => {
+    window.localStorage.setItem("stealth.admin.time-range", "custom");
+    window.localStorage.setItem("stealth.admin.custom-from", "not-a-date");
+    window.localStorage.setItem(
+      "stealth.admin.custom-to",
+      "2026-09-17T11:30:00.000Z",
+    );
+
+    render(<Harness />);
+
+    expect(screen.getByTestId("range")).toHaveTextContent("1h");
+    expect(screen.getByTestId("from")).not.toHaveTextContent("not-a-date");
+  });
+
+  it("updates mounted sessions when another admin component changes preferences", () => {
+    render(
+      <>
+        <Harness />
+        <Harness />
+      </>,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "24h" })[0]);
+
+    expect(screen.getAllByTestId("range")).toHaveLength(2);
+    expect(screen.getAllByTestId("range")[1]).toHaveTextContent("24h");
+  });
+
+  it("applies cross-tab storage events without reloading", () => {
+    render(
+      <>
+        <Harness />
+        <Harness />
+      </>,
+    );
+
+    window.localStorage.setItem("stealth.admin.time-range", "7d");
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "stealth.admin.time-range",
+          newValue: "7d",
+          storageArea: window.localStorage,
+        }),
+      );
+    });
+
+    expect(screen.getAllByTestId("range")[0]).toHaveTextContent("7d");
+    expect(screen.getAllByTestId("range")[1]).toHaveTextContent("7d");
+  });
+
   it("moves a refresh window forward on the configured interval", () => {
     vi.useFakeTimers();
     try {
