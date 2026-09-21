@@ -490,6 +490,7 @@ http_probe_header() {
 	{
 		line = $0
 		sub(/\r$/, "", line)
+		sub(/^[[:space:]]+/, "", line)
 		colon = index(line, ":")
 		if (colon > 0 && tolower(substr(line, 1, colon - 1)) == wanted) {
 			value = substr(line, colon + 1)
