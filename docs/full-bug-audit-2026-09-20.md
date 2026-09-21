@@ -249,16 +249,17 @@ union; that is tracked as AUD-14.
 
 ### AUD-05 — Monitor alert rules can be orphaned or semantically invalid
 
-- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
+- **Status:** OPEN on the audited baseline; remediation complete in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Alert-rule validation and monitor lifecycle
 - **Current-head evidence:** The audited baseline only checked that `monitor_id`
   was a UUID, did not load the monitor, did not verify rule/monitor kind
   compatibility, accepted non-positive certificate thresholds, and deleted
   monitors without checking alert-rule references. The PR #89 remediation adds
-  transaction-scoped existence/kind validation, positive expiry thresholds, and
-  a deterministic `409 monitor_has_alert_rules` delete response while holding
-  the monitor row lock.
+  one authoritative monitor/rule compatibility predicate, transaction-scoped
+  existence/kind validation for rule create/update, a locked monitor-kind
+  update check over all dependent rules, positive expiry thresholds, and
+  deterministic conflict responses while holding the monitor row lock.
 - **Minimal proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
   non-TLS monitor; separately delete a monitor that has a rule. The current
@@ -267,14 +268,18 @@ union; that is tracked as AUD-14.
 - **Impact:** Rules can never fire, can evaluate against the wrong monitor
   semantics, or can remain misleading orphan records in the control plane.
 - **Regression evidence in PR #89:** `TestAdminAlertMonitorReferenceValidationIntegration`,
+  `TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration`,
   `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
   `TestCertificateExpiryAlertRequiresPositiveDays`, and
   `TestAdminMonitorErrorMapsAlertRuleConflict` cover missing/wrong-kind
-  references, positive expiry thresholds, conflict semantics, and successful
-  deletion after the rule is removed.
+  references, heartbeat/TLS kind-change conflicts, compatible kind changes,
+  positive expiry thresholds, conflict semantics, and successful deletion or
+  update after the dependent rule is removed.
 - **Residual risk:** The existing condition JSON remains the storage shape;
   direct SQL writes outside the supported repository/API contract are not an
-  application path. The evaluator remains intentionally unchanged.
+  application path. The evaluator remains intentionally unchanged, and the
+  documented `monitor_failure` compatibility contract remains the product
+  authority for the monitor kinds it supports.
 
 ### AUD-06 — Live-tail can replay large historical ranges and duplicate rows
 
@@ -303,23 +308,27 @@ union; that is tracked as AUD-14.
   larger than the live window; assert monotonic cursor delivery, bounded query
   windows, no duplicates after reconnect, and correct behavior after a seen-set
   eviction.
-- **Remediation evidence in PR #89:** `ClickHouseStore.QueryLogs` now exposes a
-  versioned cursor over timestamp, trace ID, span ID, and a deterministic
-  tie-breaker. `adminTelemetryLogTail` uses a five-minute initial lookback,
-  advances with the cursor on subsequent polls, and emits opaque SSE event IDs
-  so browser reconnects resume from the last delivered row. The browser keeps
-  only bounded defense-in-depth deduplication and no longer clears rows on a
-  transport reconnect.
-- **Regression coverage:** `TestQueryLogsAfterUsesCompleteStableCursor`,
+- **Remediation evidence in PR #89:** The pinned ClickHouse exporter schema has
+  no native physical log-row ID, so the Collector now assigns one UUIDv7
+  ingestion attribute (`stealth.log.event_id`) before persistence. It is
+  stored in the existing `LogAttributes` map for both OTLP and Docker file-log
+  paths, removed from public API records, and used by `ClickHouseStore` in a
+  versioned `(Timestamp, EventID)` cursor. Live-tail keeps its bounded initial
+  lookback, orders and filters on the persisted event ID, and rejects old v1
+  cursors rather than reinterpreting their hash.
+- **Regression coverage:** `TestClickHouseStoreIdenticalLogRowsPaginateByPersistedEventIDIntegration`
+  inserts two real ClickHouse log rows with identical visible fields, uses
+  page size one, and verifies both rows are returned on successive pages with
+  an empty third page. `TestQueryLogsAfterUsesCompleteStableCursor`,
   `TestAdminTelemetryLogTailUsesShortStableCursorWindow`,
   `TestAdminTelemetryLogTailResumesFromLastEventID`, and
   `TestLogCursorRoundTrip` cover same-timestamp ordering, bounded windows,
   polling cursors, and reconnect behavior.
-- **Residual risk:** The pinned exporter schema has no physical log-row ID;
-  the final cursor component is a deterministic hash of visible log fields.
-  Exact byte-for-byte duplicate rows are therefore logically indistinguishable
-  and are treated as one stream position. A future exporter schema with a
-  stable row identity should replace that hash component.
+- **Residual risk:** Rows persisted before the event-ID rollout have no
+  lossless cursor identity and are excluded from live-tail pagination; they
+  remain available to normal explorer queries. New rows receive the ID once
+  before exporter persistence, and the exact-duplicate integration test covers
+  the no-loss rollout invariant.
 
 ### AUD-07 — Docker attribution is improved for metrics but incomplete for file logs
 
@@ -457,12 +466,16 @@ union; that is tracked as AUD-14.
 - **Remediation evidence in PR #89:** `TestAdminRealtimeSSEIntegration` uses
   two independent authenticated instance-admin sessions, proves a mutation is
   delivered to the other session, and proves `Last-Event-ID` resume. The
-  payload is an invalidation envelope rather than a resource snapshot and is
-  sanitized before persistence.
-- **Residual risk:** The stream uses bounded PostgreSQL polling rather than a
-  Redis fanout channel because instance-admin events have no project scope;
-  it is still a long-lived authenticated SSE stream with durable cursor
-  recovery. Expired rows are pruned by the realtime publisher worker.
+  stream rechecks the session row and current instance role on a bounded
+  interval and closes fail-closed when either is revoked. The authorization
+  lifecycle integration test covers both direct role removal and session-row
+  deletion while a stream is open. The payload is an invalidation envelope
+  rather than a resource snapshot and is sanitized before persistence.
+- **Residual risk:** The stream uses bounded PostgreSQL polling and periodic
+  authorization checks rather than a Redis fanout channel because
+  instance-admin events have no project scope. Revocation is therefore
+  bounded by the configured recheck interval; expired rows are pruned by the
+  realtime publisher worker.
 
 ### AUD-13 — Collector healthchecks validated configuration instead of runtime health
 
