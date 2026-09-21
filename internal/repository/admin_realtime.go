@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	adminRealtimeMaxBatch     = 100
-	adminRealtimeExpiry       = 24 * time.Hour
-	adminRealtimePruneMax     = 1000
-	adminRealtimeEventVersion = 1
+	adminRealtimeMaxBatch             = 100
+	adminRealtimeExpiry               = 24 * time.Hour
+	adminRealtimePruneMax             = 1000
+	adminRealtimeEventVersion         = 1
+	adminRealtimeOrderingLockID int64 = 8_105_202_602
 )
 
 var (
@@ -29,6 +30,7 @@ var (
 // contains no resource snapshot; clients refetch the authenticated API state.
 type AdminRealtimeEvent struct {
 	ID         uuid.UUID
+	Sequence   int64
 	EventName  string
 	TargetType string
 	TargetID   *uuid.UUID
@@ -70,28 +72,40 @@ func enqueueAdminRealtimeEventTx(ctx context.Context, tx pgx.Tx, eventName, targ
 	if err != nil || len(encoded) > 16384 {
 		return ErrInvalidAdminRealtime
 	}
+	// Every producer transaction takes the same transaction-scoped lock before
+	// allocating its delivery sequence. The lock remains held through commit,
+	// so a transaction that allocated an earlier sequence cannot be overtaken
+	// by a later committed event. A rolled-back transaction can still leave a
+	// numeric sequence gap, but it cannot make a committed event unreachable.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, adminRealtimeOrderingLockID); err != nil {
+		return err
+	}
+	var sequence int64
+	if err := tx.QueryRow(ctx, `SELECT nextval('admin_realtime_event_sequence'::regclass)`).Scan(&sequence); err != nil {
+		return err
+	}
 	var target any
 	if targetID != uuid.Nil {
 		target = targetID
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO admin_realtime_events (id,event_name,target_type,target_id,payload,occurred_at,expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, eventName, targetType, target, encoded, now, now.Add(adminRealtimeExpiry))
+		INSERT INTO admin_realtime_events (id,sequence,event_name,target_type,target_id,payload,occurred_at,expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, id, sequence, eventName, targetType, target, encoded, now, now.Add(adminRealtimeExpiry))
 	return err
 }
 
 // ResolveAdminRealtimeStartCursor returns the requested retained event or the
 // current tail. A new stream therefore does not replay the retention window,
 // while reconnects with a retained Last-Event-ID receive every later event.
-func (r *Repository) ResolveAdminRealtimeStartCursor(ctx context.Context, requested *uuid.UUID) (*uuid.UUID, error) {
-	if r == nil || r.pool == nil || (requested != nil && *requested == uuid.Nil) {
+func (r *Repository) ResolveAdminRealtimeStartCursor(ctx context.Context, requested *int64) (*int64, error) {
+	if r == nil || r.pool == nil || (requested != nil && *requested <= 0) {
 		return nil, ErrInvalidAdminRealtime
 	}
 	if requested != nil {
-		var retained uuid.UUID
+		var retained int64
 		err := r.pool.QueryRow(ctx, `
-			SELECT id FROM admin_realtime_events
-			WHERE id=$1 AND expires_at>now()`, *requested).Scan(&retained)
+			SELECT sequence FROM admin_realtime_events
+			WHERE sequence=$1 AND expires_at>now()`, *requested).Scan(&retained)
 		if err == nil {
 			return &retained, nil
 		}
@@ -99,11 +113,11 @@ func (r *Repository) ResolveAdminRealtimeStartCursor(ctx context.Context, reques
 			return nil, err
 		}
 	}
-	var tail uuid.UUID
+	var tail int64
 	err := r.pool.QueryRow(ctx, `
-		SELECT id FROM admin_realtime_events
+		SELECT sequence FROM admin_realtime_events
 		WHERE expires_at>now()
-		ORDER BY id DESC
+		ORDER BY sequence DESC
 		LIMIT 1`).Scan(&tail)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -114,33 +128,38 @@ func (r *Repository) ResolveAdminRealtimeStartCursor(ctx context.Context, reques
 	return &tail, nil
 }
 
-// ListAdminRealtimeEvents returns the next bounded batch after a cursor.
-// UUIDv7 IDs provide the same monotonic ordering used by project realtime.
-func (r *Repository) ListAdminRealtimeEvents(ctx context.Context, after *uuid.UUID, limit int) ([]AdminRealtimeEvent, *uuid.UUID, error) {
-	if r == nil || r.pool == nil || limit < 1 || limit > adminRealtimeMaxBatch || (after != nil && *after == uuid.Nil) {
+// ListAdminRealtimeEvents returns the next bounded batch after a durable
+// delivery sequence. Event UUIDs remain identities only; they are not cursor
+// ordering keys.
+func (r *Repository) ListAdminRealtimeEvents(ctx context.Context, after *int64, limit int) ([]AdminRealtimeEvent, *int64, error) {
+	if r == nil || r.pool == nil || limit < 1 || limit > adminRealtimeMaxBatch || (after != nil && *after <= 0) {
 		return nil, nil, ErrInvalidAdminRealtime
 	}
+	var afterValue any
+	if after != nil {
+		afterValue = *after
+	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id,event_name,target_type,target_id,payload,occurred_at
+		SELECT id,sequence,event_name,target_type,target_id,payload,occurred_at
 		FROM admin_realtime_events
-		WHERE ($1::uuid IS NULL OR id>$1) AND expires_at>now()
-		ORDER BY id
-		LIMIT $2`, after, limit)
+		WHERE ($1::bigint IS NULL OR sequence>$1) AND expires_at>now()
+		ORDER BY sequence
+		LIMIT $2`, afterValue, limit)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	items := make([]AdminRealtimeEvent, 0, limit)
-	var next *uuid.UUID
+	var next *int64
 	for rows.Next() {
 		var item AdminRealtimeEvent
-		if err := rows.Scan(&item.ID, &item.EventName, &item.TargetType, &item.TargetID, &item.Payload, &item.OccurredAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Sequence, &item.EventName, &item.TargetType, &item.TargetID, &item.Payload, &item.OccurredAt); err != nil {
 			return nil, nil, err
 		}
 		if !json.Valid(item.Payload) {
 			return nil, nil, fmt.Errorf("%w: malformed event payload", ErrInvalidAdminRealtime)
 		}
-		last := item.ID
+		last := item.Sequence
 		next = &last
 		items = append(items, item)
 	}
@@ -161,7 +180,7 @@ func (r *Repository) PruneExpiredAdminRealtimeEvents(ctx context.Context, limit 
 		WHERE id IN (
 			SELECT id FROM admin_realtime_events
 			WHERE expires_at<=now()
-			ORDER BY expires_at,id
+			ORDER BY expires_at,sequence
 			LIMIT $1
 		)`, limit)
 	if err != nil {

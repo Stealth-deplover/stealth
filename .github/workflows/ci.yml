@@ -97,7 +97,7 @@ jobs:
             done
           }
           run_and_require_tests ./internal/repository \
-            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration)$' \
+            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration|TestAdminRealtimeSequenceCommitOrderingIntegration|TestAdminRealtimeSequenceRollbackIntegration)$' \
             TestDeleteAlertRuleAfterNotificationDeliveryIntegration \
             TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration \
             TestDeleteAlertRuleNeverFiredIntegration \
@@ -108,16 +108,20 @@ jobs:
             TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration \
             TestQueryAdminAlertEventsTimeRangeIntegration \
             TestAdminAlertMonitorReferenceValidationIntegration \
-            TestDeleteAdminMonitorWithAlertRuleConflictsIntegration
+            TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration \
+            TestDeleteAdminMonitorWithAlertRuleConflictsIntegration \
+            TestAdminRealtimeSequenceCommitOrderingIntegration \
+            TestAdminRealtimeSequenceRollbackIntegration
           run_and_require_tests ./internal/migrate \
             '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration|TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration)$' \
             TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration \
             TestAdminAlertHistoryGlobalIndexMigrationIntegration \
             TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration
           run_and_require_tests ./internal/httpapi \
-            '^(TestDeleteAdminAlertRulePreservesHistoryIntegration|TestAdminRealtimeSSEIntegration)$' \
+            '^(TestDeleteAdminAlertRulePreservesHistoryIntegration|TestAdminRealtimeSSEIntegration|TestAdminRealtimeSSEAuthorizationLifecycleIntegration)$' \
             TestDeleteAdminAlertRulePreservesHistoryIntegration \
-            TestAdminRealtimeSSEIntegration
+            TestAdminRealtimeSSEIntegration \
+            TestAdminRealtimeSSEAuthorizationLifecycleIntegration
 
       - name: Real Collector and telemetry integration suites
         env:

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -124,6 +125,7 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 	if eventType != "admin" || eventID == "" || createdEvent.Type != "admin.alert.create" || createdEvent.ResourceID != alertID.String() {
 		t.Fatalf("cross-session admin event = id %q type %q data %q", eventID, eventType, eventData)
 	}
+	assertAdminRealtimeSequenceCursor(t, eventID)
 	if strings.Contains(eventData, "password") || strings.Contains(eventData, "secret") || strings.Contains(eventData, "token") {
 		t.Fatalf("admin realtime event contains sensitive field name: %q", eventData)
 	}
@@ -175,6 +177,7 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 	if resumedEventID == eventID || resumedType != "admin" || updatedEvent.Type != "admin.alert.update" || updatedEvent.ResourceID != alertID.String() {
 		t.Fatalf("admin SSE resumed event = id %q type %q data %q", resumedEventID, resumedType, resumedData)
 	}
+	assertAdminRealtimeSequenceCursor(t, resumedEventID)
 	var alerts struct {
 		Items []struct {
 			ID   string `json:"id"`
@@ -379,5 +382,23 @@ func readAdminRealtimeSSEEvent(t *testing.T, reader *bufio.Reader) (string, stri
 		case line == "" && id != "" && event != "":
 			return id, event, data
 		}
+	}
+}
+
+func assertAdminRealtimeSequenceCursor(t *testing.T, value string) {
+	t.Helper()
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		t.Fatalf("Admin realtime Last-Event-ID is not base64url: %v", err)
+	}
+	var payload struct {
+		Version  int   `json:"v"`
+		Sequence int64 `json:"sequence"`
+	}
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		t.Fatalf("Admin realtime Last-Event-ID JSON: %v", err)
+	}
+	if payload.Version != 2 || payload.Sequence <= 0 {
+		t.Fatalf("Admin realtime Last-Event-ID payload = %#v, want v2 positive sequence", payload)
 	}
 }

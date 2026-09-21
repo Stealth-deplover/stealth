@@ -134,10 +134,10 @@ union; that is tracked as AUD-14.
   pending merge.
 - **Severity:** High
 - **Area:** Telemetry privacy; ClickHouse persistence; Admin telemetry
-- **Remediation evidence:** PR #89 adds pre-export redaction to every main
+- **PR #89 remediation evidence:** PR #89 adds pre-export redaction to every main
   Collector logs, metrics, and traces pipeline, retains Store/API redaction as
   defense in depth, and verifies the pinned Collector configuration.
-- **Regression coverage:** The real Collector + ClickHouse integration now
+- **Current PR #89 verification:** The real Collector + ClickHouse integration now
   searches raw exporter rows for deterministic fake secrets before checking
   the Admin API; the Admin integration also verifies the authenticated API
   result contains no raw secret. CI runs both suites with the pinned Collector.
@@ -145,7 +145,7 @@ union; that is tracked as AUD-14.
   tied to the audited pre-remediation SHA until PR #89 is merged. Future
   Collector upgrades must revalidate the processor behavior and exporter
   schema.
-- **Current-head evidence:** `telemetry/otel-collector.yaml` has no redaction
+- **Audited-baseline evidence:** At the audited SHA, `telemetry/otel-collector.yaml` had no redaction
   processor before the ClickHouse exporter. The Docker file-log pipeline also
   forwards parsed bodies without a secret-removal processor. In
   `internal/telemetry/store.go`, `QueryLogs`, `QueryTraces`, and
@@ -156,7 +156,7 @@ union; that is tracked as AUD-14.
 - **Affected code/config:** `telemetry/otel-collector.yaml`,
   `telemetry/docker-logs.yaml`, `internal/telemetry/store.go`,
   `internal/telemetry/store_integration_test.go`.
-- **Minimal proof path:** Emit a test-only OTLP log or trace containing a
+- **Audited-baseline proof path:** Emit a test-only OTLP log or trace containing a
   placeholder value under a key such as `password`, `token`, `authorization`,
   `cookie`, or `client_secret`, then inspect the corresponding raw exporter
   row directly in ClickHouse before calling the Stealth API. The current
@@ -252,22 +252,23 @@ union; that is tracked as AUD-14.
 - **Status:** OPEN on the audited baseline; remediation complete in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Alert-rule validation and monitor lifecycle
-- **Current-head evidence:** The audited baseline only checked that `monitor_id`
-  was a UUID, did not load the monitor, did not verify rule/monitor kind
-  compatibility, accepted non-positive certificate thresholds, and deleted
-  monitors without checking alert-rule references. The PR #89 remediation adds
-  one authoritative monitor/rule compatibility predicate, transaction-scoped
-  existence/kind validation for rule create/update, a locked monitor-kind
-  update check over all dependent rules, positive expiry thresholds, and
-  deterministic conflict responses while holding the monitor row lock.
-- **Minimal proof path:** Submit a rule with a nonexistent monitor UUID, a
+- **Audited-baseline evidence:** At the audited SHA, validation only checked
+  that `monitor_id` was a UUID, did not load the monitor, did not verify
+  rule/monitor kind compatibility, accepted non-positive certificate
+  thresholds, and deleted monitors without checking alert-rule references.
+- **PR #89 remediation evidence:** The remediation adds one authoritative
+  monitor/rule compatibility predicate, transaction-scoped existence/kind
+  validation for rule create/update, a locked monitor-kind update check over
+  all dependent rules, positive expiry thresholds, and deterministic conflict
+  responses while holding the monitor row lock.
+- **Audited-baseline proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
   non-TLS monitor; separately delete a monitor that has a rule. The current
   database/repository path accepts or leaves these relationships without a
   defined reconciliation outcome.
 - **Impact:** Rules can never fire, can evaluate against the wrong monitor
   semantics, or can remain misleading orphan records in the control plane.
-- **Regression evidence in PR #89:** `TestAdminAlertMonitorReferenceValidationIntegration`,
+- **Current PR #89 verification:** `TestAdminAlertMonitorReferenceValidationIntegration`,
   `TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration`,
   `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
   `TestCertificateExpiryAlertRequiresPositiveDays`, and
@@ -287,7 +288,7 @@ union; that is tracked as AUD-14.
   and pending merge
 - **Severity:** Medium
 - **Area:** Admin telemetry log streaming
-- **Current-head evidence:** `adminTelemetryLogTail` in
+- **Audited-baseline evidence:** At the audited SHA, `adminTelemetryLogTail` in
   `internal/httpapi/server_admin.go` initializes its cursor from the selected
   explorer range. Every two seconds it queries from `cursor - 1ns` through now,
   clamped to the maximum range, so a 30-day selection can cause every poll to
@@ -296,7 +297,7 @@ union; that is tracked as AUD-14.
   on a strictly later timestamp, and the `seen` map is reset after a bounded
   size. Same-timestamp rows and rows preceding a reset can therefore be
   emitted again.
-- **Minimal proof path:** Select a 30-day range, start live tail with many
+- **Audited-baseline proof path:** Select a 30-day range, start live tail with many
   same-timestamp rows, let polling continue until the bounded seen map resets,
   and observe repeated historical rows or large repeated queries.
 - **Impact:** High-volume tenants can receive duplicate events, incur repeated
@@ -308,7 +309,7 @@ union; that is tracked as AUD-14.
   larger than the live window; assert monotonic cursor delivery, bounded query
   windows, no duplicates after reconnect, and correct behavior after a seen-set
   eviction.
-- **Remediation evidence in PR #89:** The pinned ClickHouse exporter schema has
+- **PR #89 remediation evidence:** The pinned ClickHouse exporter schema has
   no native physical log-row ID, so the Collector now assigns one UUIDv7
   ingestion attribute (`stealth.log.event_id`) before persistence. It is
   stored in the existing `LogAttributes` map for both OTLP and Docker file-log
@@ -316,7 +317,7 @@ union; that is tracked as AUD-14.
   versioned `(Timestamp, EventID)` cursor. Live-tail keeps its bounded initial
   lookback, orders and filters on the persisted event ID, and rejects old v1
   cursors rather than reinterpreting their hash.
-- **Regression coverage:** `TestClickHouseStoreIdenticalLogRowsPaginateByPersistedEventIDIntegration`
+- **Current PR #89 verification:** `TestClickHouseStoreIdenticalLogRowsPaginateByPersistedEventIDIntegration`
   inserts two real ClickHouse log rows with identical visible fields, uses
   page size one, and verifies both rows are returned on successive pages with
   an empty third page. `TestQueryLogsAfterUsesCompleteStableCursor`,
@@ -451,30 +452,33 @@ union; that is tracked as AUD-14.
   and pending merge
 - **Severity:** Medium
 - **Area:** Console admin realtime behavior
-- **Current-head evidence:** The audited baseline had only the project-scoped
+- **Audited-baseline evidence:** At the audited SHA, only the project-scoped
   `console/src/realtime/project-realtime-listener.tsx`; Admin mutations only
-  invalidated the initiating browser's TanStack Query cache. PR #89 adds the
-  bounded `admin_realtime_events` PostgreSQL outbox, the authenticated
-  `/v1/admin/realtime` SSE stream, and `AdminRealtimeListener`, which maps
-  notification types to canonical Admin query invalidations.
-- **Minimal proof path:** Open the same admin screen as Admin A and Admin B.
+  invalidated the initiating browser's TanStack Query cache.
+- **Audited-baseline proof path:** Open the same admin screen as Admin A and Admin B.
   Have A mutate a control-plane object. B receives no instance-admin event and
   sees the change only after polling, manual refresh, navigation, or another
   invalidation.
 - **Impact:** The baseline allowed operators to act on stale alert, incident,
   monitor, dashboard, or status-page state during concurrent administration.
-- **Remediation evidence in PR #89:** `TestAdminRealtimeSSEIntegration` uses
-  two independent authenticated instance-admin sessions, proves a mutation is
-  delivered to the other session, and proves `Last-Event-ID` resume. The
-  stream rechecks the session row and current instance role on a bounded
-  interval and closes fail-closed when either is revoked. The authorization
-  lifecycle integration test covers both direct role removal and session-row
-  deletion while a stream is open. The payload is an invalidation envelope
-  rather than a resource snapshot and is sanitized before persistence.
+- **PR #89 remediation evidence:** PR #89 adds the bounded PostgreSQL
+  `admin_realtime_events` outbox, a sequence-based durable cursor, and a
+  transaction-scoped advisory lock that serializes sequence allocation through
+  producer commit. `TestAdminRealtimeSSEIntegration` uses two independent
+  authenticated instance-admin sessions, proves cross-session delivery, and
+  proves `Last-Event-ID` resume. The stream rechecks the session row and
+  current instance role on a bounded interval and closes fail-closed when
+  either is revoked. The payload is an invalidation envelope rather than a
+  resource snapshot and is sanitized before persistence.
+- **Current PR #89 verification:** `TestAdminRealtimeSequenceCommitOrderingIntegration`
+  and `TestAdminRealtimeSequenceRollbackIntegration` verify commit ordering
+  and rollback behavior. `TestAdminRealtimeSSEAuthorizationLifecycleIntegration`
+  covers direct role removal and session-row deletion while a stream is open.
 - **Residual risk:** The stream uses bounded PostgreSQL polling and periodic
   authorization checks rather than a Redis fanout channel because
-  instance-admin events have no project scope. Revocation is therefore
-  bounded by the configured recheck interval; expired rows are pruned by the
+  instance-admin events have no project scope. Revocation is therefore bounded
+  by the configured recheck interval; the global ordering lock serializes the
+  low-volume admin invalidation writes; and expired rows are pruned by the
   realtime publisher worker.
 
 ### AUD-13 — Collector healthchecks validated configuration instead of runtime health
@@ -531,13 +535,13 @@ union; that is tracked as AUD-14.
   and pending merge
 - **Severity:** Low
 - **Area:** Trace query parameter validation
-- **Current-head evidence:** `QueryTraces` checks `MinMs < 0` and an upper bound,
+- **Audited-baseline evidence:** At the audited SHA, `QueryTraces` checked `MinMs < 0` and an upper bound,
   then converts `query.MinMs * time.Millisecond` to `uint64`. NaN and positive
   or negative infinity do not satisfy the ordinary comparisons, so they can
   reach the conversion and ClickHouse parameter construction. HTTP validation
   must be checked separately; the Store/domain guard is currently not
   sufficient.
-- **Minimal proof path:** Call the HTTP endpoint and Store query with
+- **Audited-baseline proof path:** Call the HTTP endpoint and Store query with
   `min_duration_ms=NaN`, `+Inf`, and `-Inf`, observing whether conversion or a
   ClickHouse error occurs instead of a clean validation error.
 - **Impact:** Invalid input can produce implementation-dependent conversion,
@@ -548,11 +552,11 @@ union; that is tracked as AUD-14.
 - **Recommended regression test:** Table-driven HTTP and Store tests for NaN,
   both infinities, negative values, zero, fractional milliseconds, the maximum,
   and range-boundary values.
-- **Remediation evidence in PR #89:** `parseFloatQuery` rejects NaN and both
+- **PR #89 remediation evidence:** `parseFloatQuery` rejects NaN and both
   infinities before the Admin trace handler calls the Store, and
   `ClickHouseStore.QueryTraces` repeats the finite-number guard before the
   millisecond-to-UInt64 conversion.
-- **Regression coverage:** `TestAdminTelemetryTracesRejectsNonFiniteDuration`
+- **Current PR #89 verification:** `TestAdminTelemetryTracesRejectsNonFiniteDuration`
   and `TestQueryTracesRejectsNonFiniteDuration` cover NaN, both infinities,
   negative values, zero, fractional values, and finite values.
 
@@ -561,12 +565,14 @@ union; that is tracked as AUD-14.
 - **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Database/API alert contract
-- **Current-head evidence:** Migration `000043_admin_observability.up.sql`
-  allowed `backup_failure` and `job_failure` in the SQL CHECK constraint while
-  `validAdminAlertKind`, the OpenAPI enums, generated Console enums, and both
-  evaluator dispatch paths excluded them. PR #89 removes the unreachable
-  validation branch and adds forward migration `000049_admin_alert_kind_contract.up.sql`.
-- **Minimal proof path:** Insert or migrate a row with either SQL-permitted
+- **Audited-baseline evidence:** At the audited SHA, migration
+  `000043_admin_observability.up.sql` allowed `backup_failure` and
+  `job_failure` in the SQL CHECK constraint while `validAdminAlertKind`, the
+  OpenAPI enums, generated Console enums, and both evaluator dispatch paths
+  excluded them.
+- **PR #89 remediation evidence:** PR #89 removes the unreachable validation
+  branch and adds forward migration `000049_admin_alert_kind_contract.up.sql`.
+- **Audited-baseline proof path:** Insert or migrate a row with either SQL-permitted
   kind, then attempt to represent, update, evaluate, or create it through the
   repository/API. The database accepts a state for which the API/evaluator has
   no coherent end-to-end contract.
@@ -611,13 +617,14 @@ union; that is tracked as AUD-14.
 - **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Uninstall/purge lifecycle and data cleanup
-- **Current-head evidence:** The audited baseline omitted
+- **Audited-baseline evidence:** At the audited SHA, the purge model omitted
   `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` from
   `configuredUninstallVolumes`, so current post-PR-#83 Compose failed the
-  exact-set purge guard. PR #89 adds all six release-owned volume keys,
-  validates their Compose ownership, accepts a known legacy subset, and
+  exact-set purge guard.
+- **PR #89 remediation evidence:** PR #89 adds all six release-owned volume
+  keys, validates their Compose ownership, accepts a known legacy subset, and
   explicitly removes remaining verified managed volume names.
-- **Minimal proof path:** Run `stealth uninstall --purge` against a current
+- **Audited-baseline proof path:** Run `stealth uninstall --purge` against a current
   installation using the post-PR-#83 Compose file. The exact-set validation
   sees the ClickHouse and collector state volumes absent from the configured
   model and refuses the purge. If that validation were bypassed, verification
