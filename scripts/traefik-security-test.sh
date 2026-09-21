@@ -24,7 +24,10 @@ env_value() {
 	printf '%s\n' "${value%$'\r'}"
 }
 
-compose=(docker compose --env-file "$env_file" -f "$compose_file")
+# Include the optional tunnel profile so the rendered topology also proves the
+# reserved Cloudflared peer. The profile is part of the ingress address model,
+# even though it is not the active public origin during this migration.
+compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile cloudflare)
 "${compose[@]}" config --quiet
 rendered="$(mktemp "${TMPDIR:-/tmp}/stealth-traefik-compose.XXXXXX")"
 cleanup() {
