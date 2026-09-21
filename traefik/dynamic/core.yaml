@@ -1,0 +1,30 @@
+# Release-managed core routes. The installer replaces
+# __STEALTH_PUBLIC_HOST__ with the hostname from PUBLIC_APP_URL before
+# activation. Traefik is a derived-state consumer; this file is never the
+# source of truth for application ownership.
+http:
+  routers:
+    stealth-api:
+      entryPoints:
+        - web
+      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && (PathPrefix(`/v1/`) || Path(`/healthz`) || Path(`/readyz`) || Path(`/version`))"
+      priority: 100
+      service: stealth-api
+    stealth-console:
+      entryPoints:
+        - web
+      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)"
+      priority: 1
+      service: stealth-console
+
+  services:
+    stealth-api:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://api:8080
+    stealth-console:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://console:3000

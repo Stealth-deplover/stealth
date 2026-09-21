@@ -19,6 +19,9 @@ cookie_file="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-cookie.XXXXXX")"
 register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.XXXXXX")"
 auth_cookie_header=""
 filelog_smoke_pid=""
+core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
+core_backup=""
+core_modified="false"
 cleanup() {
 	local exit_code=$?
 	if [ -n "$filelog_smoke_pid" ]; then
@@ -29,14 +32,20 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 	else
 		"${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
 	fi
+	if [ "$core_modified" = "true" ] && [ -n "$core_backup" ]; then
+		cp -- "$core_backup" "$core_file" || true
+	fi
 	rm -f "$cookie_file" "$register_response"
+	if [ -n "$core_backup" ]; then
+		rm -f "$core_backup"
+	fi
 	exit "$exit_code"
 }
 trap cleanup EXIT
@@ -48,6 +57,38 @@ case "${SMOKE_REMOVE_VOLUMES:-false}" in
 		exit 2
 		;;
 esac
+
+public_url="$(awk -F= '$1 == "PUBLIC_APP_URL" { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
+traefik_host="$(python3 - "$public_url" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+if not parsed.hostname:
+    raise SystemExit("PUBLIC_APP_URL has no hostname")
+print(parsed.hostname.lower())
+PY
+)"
+if grep -Fq '__STEALTH_PUBLIC_HOST__' "$core_file"; then
+	core_backup="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-core.XXXXXX")"
+	cp -- "$core_file" "$core_backup"
+	python3 - "$core_file" "$traefik_host" <<'PY'
+import os
+import sys
+
+path, host = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    contents = source.read()
+contents = contents.replace("__STEALTH_PUBLIC_HOST__", host)
+temporary = path + ".smoke.tmp"
+with open(temporary, "w", encoding="utf-8") as target:
+    target.write(contents)
+    target.flush()
+    os.fsync(target.fileno())
+os.replace(temporary, path)
+PY
+	core_modified="true"
+fi
 
 wait_for_healthy() {
 	local service="$1"
@@ -232,6 +273,135 @@ telemetry_ingest_network_name() {
 		return
 	fi
 	printf '%s\n' 'stealth_telemetry_ingest'
+}
+
+traefik_ingress_network_name() {
+	local configured
+	configured="$(awk -F= '$1 == "STEALTH_INGRESS_NETWORK_NAME" { print substr($0, index($0, "=") + 1); exit }' "$env_file")"
+	configured="${configured%$'\r'}"
+	if [ -n "$configured" ]; then
+		printf '%s\n' "$configured"
+		return
+	fi
+	printf '%s\n' 'stealth_ingress'
+}
+
+verify_traefik_runtime_boundaries() {
+	local container networks mounts caps security_opt user ingress_network service service_container
+	ingress_network="$(traefik_ingress_network_name)"
+	container="$("${compose[@]}" ps -q traefik)"
+	if [ -z "$container" ]; then
+		printf 'missing Traefik container\n' >&2
+		return 1
+	fi
+	networks="$(container_networks "$container")"
+	if [ "$(network_count "$networks")" -ne 1 ] || ! network_contains "$networks" "$ingress_network"; then
+		printf 'Traefik must join only the dedicated ingress network: %s\n' "$networks" >&2
+		return 1
+	fi
+	if [ "$(docker network inspect --format '{{.Internal}}' "$ingress_network")" != "true" ]; then
+		printf 'Traefik ingress network must be internal: %s\n' "$ingress_network" >&2
+		return 1
+	fi
+	mounts="$(docker inspect --format '{{range .Mounts}}{{printf "%s=%t " .Destination .RW}}{{end}}' "$container")"
+	case "$mounts" in
+		*'/etc/traefik/traefik.yaml=false '*|*'/etc/traefik/traefik.yaml=false') ;;
+		*) printf 'Traefik static config is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
+	esac
+	case "$mounts" in
+		*'/etc/traefik/dynamic=false '*|*'/etc/traefik/dynamic=false') ;;
+		*) printf 'Traefik dynamic config is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
+	esac
+	caps="$(docker inspect --format '{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}}' "$container")"
+	case "$caps" in
+		*'"ALL"'*) ;;
+		*) printf 'Traefik does not drop all Linux capabilities: %s\n' "$caps" >&2; return 1 ;;
+	esac
+	security_opt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container")"
+	case "$security_opt" in
+		*'no-new-privileges:true'*) ;;
+		*) printf 'Traefik is missing no-new-privileges: %s\n' "$security_opt" >&2; return 1 ;;
+	esac
+	user="$(docker inspect --format '{{.Config.User}}' "$container")"
+	if [ "$user" != "65532:65532" ]; then
+		printf 'Traefik user = %q, want non-root 65532:65532\n' "$user" >&2
+		return 1
+	fi
+	for service in api console; do
+		service_container="$("${compose[@]}" ps -q "$service")"
+		if ! network_contains "$(container_networks "$service_container")" "$ingress_network"; then
+			printf '%s is not attached to the Traefik ingress network\n' "$service" >&2
+			return 1
+		fi
+	done
+	for service in proxy worker otel-collector telemetry-host telemetry-docker-logs telemetry-docker telemetry-docker-proxy clickhouse postgres redis; do
+		service_container="$("${compose[@]}" ps -q "$service" 2>/dev/null || true)"
+		if [ -n "$service_container" ] && network_contains "$(container_networks "$service_container")" "$ingress_network"; then
+			printf 'prohibited service %s is attached to the Traefik ingress network\n' "$service" >&2
+			return 1
+		fi
+	done
+	printf 'Traefik security, health, and network boundaries passed\n'
+}
+
+traefik_http_status() {
+	local path="$1" host="$2" cookie_header="${3:-}" output status
+	output="$("${compose[@]}" exec -T api sh -ec '
+		path="$1"; host="$2"; cookie="$3"
+		set -- --header "Host: $host"
+		if [ -n "$cookie" ]; then set -- "$@" --header "Cookie: $cookie"; fi
+		wget -S -O /dev/null --timeout=8 "$@" "http://traefik:8080$path" 2>&1 || true
+	' sh "$path" "$host" "$cookie_header")"
+	status="$(printf '%s\n' "$output" | awk '/HTTP\/[0-9.]+/ { code=$2 } END { gsub(/\r/, "", code); print code }')"
+	printf '%s\n' "$status"
+}
+
+verify_traefik_routing() {
+	local status sse_headers
+	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" "http://traefik:8080/healthz" >/dev/null' sh "$traefik_host"; then
+		printf 'Traefik API health route did not return successfully\n' >&2
+		return 1
+	fi
+	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" "http://traefik:8080/" >/dev/null' sh "$traefik_host"; then
+		printf 'Traefik Console route did not return successfully\n' >&2
+		return 1
+	fi
+	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" --header="Cookie: $2" "http://traefik:8080/v1/account" >/dev/null' sh "$traefik_host" "$auth_cookie_header"; then
+		printf 'Traefik API path-preservation request failed\n' >&2
+		return 1
+	fi
+	status="$(traefik_http_status /not-a-real-route "$traefik_host")"
+	if [ "$status" != "404" ]; then
+		printf 'Traefik unknown path status = %q, want 404\n' "$status" >&2
+		return 1
+	fi
+	# A router scoped to PUBLIC_APP_URL must reject an unrelated Host header.
+	status="$(traefik_http_status / unknown.example.invalid "")"
+	if [ "$status" != "404" ]; then
+		printf 'Traefik unknown host status = %q, want 404\n' "$status" >&2
+		return 1
+	fi
+	status="$(traefik_http_status /dashboard/ "$traefik_host")"
+	if [ "$status" != "404" ]; then
+		printf 'Traefik dashboard probe status = %q, want 404\n' "$status" >&2
+		return 1
+	fi
+	sse_headers="$("${compose[@]}" exec -T api sh -ec '
+		wget -S -O /dev/null --timeout=5 \
+			--header="Host: $1" \
+			--header="Accept: text/event-stream" \
+			--header="Cookie: $2" \
+			http://traefik:8080/v1/admin/realtime 2>&1 || true
+	' sh "$traefik_host" "$auth_cookie_header")"
+	if ! printf '%s\n' "$sse_headers" | grep -Eq 'HTTP/[0-9.]+ 200'; then
+		printf 'Traefik Admin realtime did not establish HTTP 200:\n%s\n' "$sse_headers" >&2
+		return 1
+	fi
+	if ! printf '%s\n' "$sse_headers" | grep -Eiq 'content-type:.*text/event-stream'; then
+		printf 'Traefik Admin realtime did not preserve SSE content type:\n%s\n' "$sse_headers" >&2
+		return 1
+	fi
+	printf 'Traefik core API, Console, fail-closed, and SSE routing passed\n'
 }
 
 verify_telemetry_runtime_boundaries() {
@@ -483,12 +653,14 @@ wait_for_healthy telemetry-host
 wait_for_healthy telemetry-docker-logs
 wait_for_healthy telemetry-docker-proxy
 wait_for_healthy telemetry-docker
-"${compose[@]}" up -d api worker console proxy
+"${compose[@]}" up -d api worker console proxy traefik
 wait_for_healthy api
 wait_for_healthy worker
 wait_for_healthy console
 wait_for_healthy proxy
+wait_for_healthy traefik
 verify_telemetry_runtime_boundaries
+verify_traefik_runtime_boundaries
 
 api_endpoint="$("${compose[@]}" port api 8080 | head -n 1)"
 console_endpoint="$("${compose[@]}" port console 3000 | head -n 1)"
@@ -557,6 +729,8 @@ if [ "$role_count" != '1' ]; then
 	printf 'smoke admin role was not created\n' >&2
 	exit 1
 fi
+
+verify_traefik_routing
 
 filelog_marker="${smoke_marker}-docker-log"
 start_docker_filelog_smoke "compose filelog smoke ${filelog_marker}"

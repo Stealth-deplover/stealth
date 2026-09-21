@@ -9,6 +9,7 @@ This index links the repository’s existing guides. The root [README](../README
 - [Host-side setup architecture](host-side-setup-architecture.md): state ownership, host execution, preflight projection, handoff, and security boundaries.
 - [Telemetry architecture](telemetry-architecture.md): OTLP flow, ClickHouse storage, query limits, and the Docker privilege boundary.
 - [Production deployment](production-deployment.md): the supported Docker Compose baseline.
+- [Traefik ingress foundation](traefik-ingress.md): the internal file-provider data-plane and migration boundary.
 
 ## Architecture and API
 

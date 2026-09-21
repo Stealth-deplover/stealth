@@ -80,27 +80,47 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 			t.Fatal(err)
 		}
 	}
+	for path, contents := range map[string]string{
+		layout.TraefikStatic: testTraefikStaticAsset(),
+		layout.TraefikCore:   strings.ReplaceAll(testTraefikCoreAsset(), "__STEALTH_PUBLIC_HOST__", "127.0.0.1"),
+		filepath.Join(layout.TraefikGenerated, ".gitkeep"): "# Stealth route reconciler\n",
+	} {
+		if err := WriteAtomic(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return layout
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
+	return "services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
 }
 
 func testMainCollectorAsset() string {
 	return "receivers:\n  otlp:\nexporters:\n  clickhouse:\n"
 }
 
+func testTraefikStaticAsset() string {
+	return "entryPoints:\n  web:\n    address: \":8080\"\n  health:\n    address: \":8081\"\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n"
+}
+
+func testTraefikCoreAsset() string {
+	return "http:\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n"
+}
+
 func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	assets := map[string]string{
-		"compose.production.yaml":       testProductionComposeAsset(),
-		"compose.setup.yaml":            "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml": testMainCollectorAsset(),
-		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":     "server {\n}",
+		"compose.production.yaml":            testProductionComposeAsset(),
+		"compose.setup.yaml":                 "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":          "server {\n}",
+		"traefik/traefik.yaml":               testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/"+version+"/")
@@ -206,7 +226,7 @@ func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
 	if !containsPair(calls[0].args, "--profile", "cloudflare") {
 		t.Fatalf("Cloudflare profile was not enabled: %#v", calls[0])
 	}
-	if got := calls[0].args[len(calls[0].args)-10:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "cloudflared"}) {
+	if got := calls[0].args[len(calls[0].args)-11:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "traefik", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "cloudflared"}) {
 		t.Fatalf("Cloudflare service command = %#v", calls[0])
 	}
 }
@@ -297,6 +317,12 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 			_, _ = io.WriteString(w, "docker_stats:\n")
 		case "/v1.2.3/console/deploy/nginx.conf":
 			_, _ = io.WriteString(w, "server {\n}")
+		case "/v1.2.3/traefik/traefik.yaml":
+			_, _ = io.WriteString(w, testTraefikStaticAsset())
+		case "/v1.2.3/traefik/dynamic/core.yaml":
+			_, _ = io.WriteString(w, testTraefikCoreAsset())
+		case "/v1.2.3/traefik/dynamic/generated/.gitkeep":
+			_, _ = io.WriteString(w, "# Stealth route reconciler\n")
 		default:
 			http.NotFound(w, r)
 		}
@@ -366,13 +392,16 @@ func TestPrepareMigratesExistingConfigWithTelemetryImages(t *testing.T) {
 func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 	const targetVersion = "v0.2.3"
 	targetAssets := map[string]string{
-		"compose.production.yaml":       testProductionComposeAsset(),
-		"compose.setup.yaml":            "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml": "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
-		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":     "server {\n  location / { proxy_pass http://console:3000; }\n}\n",
+		"compose.production.yaml":            testProductionComposeAsset(),
+		"compose.setup.yaml":                 "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":          "server {\n  location / { proxy_pass http://console:3000; }\n}\n",
+		"traefik/traefik.yaml":               testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		contents, ok := targetAssets[strings.TrimPrefix(r.URL.Path, "/"+targetVersion+"/")]
@@ -421,6 +450,9 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for asset, want := range targetAssets {
+		if asset == "traefik/dynamic/core.yaml" {
+			want = strings.ReplaceAll(want, "__STEALTH_PUBLIC_HOST__", "127.0.0.1")
+		}
 		path := filepath.Join(layout.Root, asset)
 		got, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -676,13 +708,16 @@ func TestTargetReleaseManifestCanAddFutureManagedAsset(t *testing.T) {
 	const version = "v1.2.3"
 	layout := writeEngineFixture(t, false)
 	assets := map[string]string{
-		"compose.production.yaml":       testProductionComposeAsset(),
-		"telemetry/otel-collector.yaml": testMainCollectorAsset(),
-		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":     "server {\n}",
-		"telemetry/future.yaml":         "future_receiver:\n",
+		"compose.production.yaml":            testProductionComposeAsset(),
+		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":          "server {\n}",
+		"traefik/traefik.yaml":               testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
+		"telemetry/future.yaml":              "future_receiver:\n",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		contents, ok := assets[strings.TrimPrefix(r.URL.Path, "/"+version+"/")]

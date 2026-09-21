@@ -1,0 +1,2 @@
+# The Stealth route reconciler will atomically publish generated YAML files here.
+# Traefik consumes this directory read-only.

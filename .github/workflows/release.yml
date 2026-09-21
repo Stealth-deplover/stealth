@@ -101,7 +101,7 @@ jobs:
         run: ./scripts/setup-security-test.sh
 
       - name: Validate smoke scripts
-        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/setup-security-test.sh scripts/release_workflow_test.sh
+        run: bash -n scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/setup-security-test.sh scripts/traefik-security-test.sh scripts/release_workflow_test.sh
 
       - name: Verify release bootstrap is revision-pinned
         run: ./scripts/release_workflow_test.sh
@@ -111,6 +111,9 @@ jobs:
 
       - name: Telemetry security regression
         run: ./scripts/telemetry-security-test.sh
+
+      - name: Traefik security regression
+        run: ./scripts/traefik-security-test.sh
 
       - name: Collector Docker log parser smoke
         run: ./scripts/collector-log-parser-smoke.sh
@@ -249,6 +252,7 @@ jobs:
           OTEL_DOCKER_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${SHORT_SHA}
           OTEL_DOCKER_LOGS_COLLECTOR_IMAGE=stealth-otel-docker-logs:smoke-${SHORT_SHA}
           STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE=stealth-telemetry-docker-proxy:smoke-${SHORT_SHA}
+          TRAEFIK_IMAGE=traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c
           POSTGRES_DB=stealth
           POSTGRES_USER=stealth
           POSTGRES_PASSWORD=${postgres_password}
@@ -261,9 +265,10 @@ jobs:
           GITHUB_APP_CLIENT_ID=smoke-client-id
           PUBLIC_APP_URL=http://127.0.0.1:13000
           COOKIE_SECURE=false
-          TRUSTED_PROXY_CIDRS=172.31.0.0/24
-          STEALTH_NETWORK_SUBNET=172.31.0.0/24
+          TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.2/32
+          STEALTH_NETWORK_SUBNET=172.30.0.0/24
           STEALTH_NETWORK_NAME=stealth_release_smoke_network_${GITHUB_RUN_ID}
+          STEALTH_INGRESS_NETWORK_NAME=stealth_release_smoke_ingress_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_release_smoke_telemetry_store_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_INGEST_NETWORK_NAME=stealth_release_smoke_telemetry_ingest_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_release_smoke_telemetry_docker_${GITHUB_RUN_ID}

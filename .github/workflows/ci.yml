@@ -196,6 +196,9 @@ jobs:
       - name: Setup security regression
         run: ./scripts/setup-security-test.sh
 
+      - name: Traefik security regression
+        run: ./scripts/traefik-security-test.sh
+
       - name: Build setup image without Docker tooling
         run: docker build --target setup -t stealth-setup:ci .
 
@@ -219,7 +222,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Validate bootstrap and release scripts
-        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh
+        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh scripts/compose-production-smoke.sh scripts/traefik-security-test.sh
 
       - name: Verify release smoke revision pinning
         run: ./scripts/release_workflow_test.sh
@@ -238,6 +241,9 @@ jobs:
 
       - name: Validate production Compose file
         run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
+
+      - name: Traefik security regression
+        run: ./scripts/traefik-security-test.sh
 
       - name: Docker uninstall purge integration
         env:

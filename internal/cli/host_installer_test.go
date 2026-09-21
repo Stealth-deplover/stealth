@@ -109,13 +109,16 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":       "services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
-		"compose.setup.yaml":            "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml": "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
-		"telemetry/host-metrics.yaml":   "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":    "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":   "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":     "server {\n}\n",
+		"compose.production.yaml":            "services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
+		"compose.setup.yaml":                 "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":          "server {\n}\n",
+		"traefik/traefik.yaml":               "entryPoints:\n  web:\n    address: :8080\n  health:\n    address: :8081\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n",
+		"traefik/dynamic/core.yaml":          "http:\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n",
+		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
 	}
 	if contents, ok := assets[name]; ok {
 		_, _ = io.WriteString(w, contents)

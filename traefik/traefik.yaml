@@ -1,0 +1,58 @@
+# Release-managed Traefik static configuration.
+#
+# Dynamic application and domain routes do not belong here. The file provider
+# watches /etc/traefik/dynamic, where core.yaml is release-managed and future
+# generated route files are atomically materialized by the Stealth control
+# plane.
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    address: ":8080"
+    forwardedHeaders:
+      # Only the Cloudflare Tunnel peer is allowed to supply an upstream
+      # forwarded-header chain. Direct clients on the ingress network are not
+      # trusted merely because they can connect to the entrypoint.
+      trustedIPs:
+        - "172.31.0.10/32"
+    transport:
+      respondingTimeouts:
+        # The API accepts large uploads and long-running requests. SSE and
+        # WebSocket responses must not be cut off by a short write timeout.
+        readTimeout: 10m
+        writeTimeout: 0s
+        idleTimeout: 1h
+  health:
+    address: ":8081"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+api:
+  dashboard: false
+  insecure: false
+
+ping:
+  entryPoint: health
+
+log:
+  format: json
+  level: INFO
+
+accessLog:
+  format: json
+  addInternals: false
+  fields:
+    defaultMode: keep
+    headers:
+      # Do not persist credentials or session cookies in access logs.
+      defaultMode: drop
+      names:
+        Authorization: drop
+        Cookie: drop
+        Set-Cookie: drop
+        Proxy-Authorization: drop

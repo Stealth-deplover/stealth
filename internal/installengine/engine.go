@@ -63,14 +63,20 @@ func (OSCommandRunner) Output(ctx context.Context, dir, name string, args ...str
 // production files and runs Compose from this root; the setup API only shares
 // the separate encrypted state directory.
 type Layout struct {
-	Root             string
-	EnvFile          string
-	ComposeFile      string
-	SetupComposeFile string
-	TelemetryDir     string
-	ProxyFile        string
-	VersionFile      string
-	StateDir         string
+	Root                string
+	EnvFile             string
+	ComposeFile         string
+	SetupComposeFile    string
+	TelemetryDir        string
+	ProxyFile           string
+	TraefikDir          string
+	TraefikStatic       string
+	TraefikDynamic      string
+	TraefikCore         string
+	TraefikGenerated    string
+	TraefikReloadMarker string
+	VersionFile         string
+	StateDir            string
 }
 
 func NewLayout(root string) (Layout, error) {
@@ -87,14 +93,20 @@ func NewLayout(root string) (Layout, error) {
 		return Layout{}, errors.New("refusing filesystem root as installation root")
 	}
 	return Layout{
-		Root:             clean,
-		EnvFile:          filepath.Join(clean, "config.env"),
-		ComposeFile:      filepath.Join(clean, "compose.production.yaml"),
-		SetupComposeFile: filepath.Join(clean, "compose.setup.yaml"),
-		TelemetryDir:     filepath.Join(clean, "telemetry"),
-		ProxyFile:        filepath.Join(clean, "console", "deploy", "nginx.conf"),
-		VersionFile:      filepath.Join(clean, "VERSION"),
-		StateDir:         filepath.Join(clean, "state"),
+		Root:                clean,
+		EnvFile:             filepath.Join(clean, "config.env"),
+		ComposeFile:         filepath.Join(clean, "compose.production.yaml"),
+		SetupComposeFile:    filepath.Join(clean, "compose.setup.yaml"),
+		TelemetryDir:        filepath.Join(clean, "telemetry"),
+		ProxyFile:           filepath.Join(clean, "console", "deploy", "nginx.conf"),
+		TraefikDir:          filepath.Join(clean, "traefik"),
+		TraefikStatic:       filepath.Join(clean, "traefik", "traefik.yaml"),
+		TraefikDynamic:      filepath.Join(clean, "traefik", "dynamic"),
+		TraefikCore:         filepath.Join(clean, "traefik", "dynamic", "core.yaml"),
+		TraefikGenerated:    filepath.Join(clean, "traefik", "dynamic", "generated"),
+		TraefikReloadMarker: filepath.Join(clean, "traefik", "dynamic", ".reload.yaml"),
+		VersionFile:         filepath.Join(clean, "VERSION"),
+		StateDir:            filepath.Join(clean, "state"),
 	}, nil
 }
 
@@ -140,7 +152,7 @@ var StepNames = []string{
 	"Release images",
 	"PostgreSQL and Redis",
 	"Database migrations",
-	"API, Worker, Console, and Proxy",
+	"API, Worker, Console, Proxy, and Traefik",
 	"Health and readiness verification",
 }
 
@@ -326,7 +338,7 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		}
 		return e.runCompose(ctx, plan, "up", "migrate")
 	case StepServices:
-		services := []string{"api", "worker", "console", "proxy"}
+		services := []string{"api", "worker", "console", "proxy", "traefik"}
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
@@ -356,8 +368,10 @@ type ManagedAsset struct {
 	RemotePath string
 	Marker     string
 
-	setupOnly bool
-	validate  func([]byte) error
+	setupOnly      bool
+	productionOnly bool
+	validate       func([]byte) error
+	render         func([]byte, Plan) ([]byte, error)
 }
 
 // DefaultManagedAssets is this release's complete production runtime manifest.
@@ -367,6 +381,9 @@ func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
+		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, validate: validateTraefikStaticAsset},
+		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
+		{Path: "traefik/dynamic/generated/.gitkeep", RemotePath: "traefik/dynamic/generated/.gitkeep", Marker: "Stealth route reconciler", productionOnly: true},
 		{Path: "telemetry/otel-collector.yaml", RemotePath: "telemetry/otel-collector.yaml", Marker: "receivers:", validate: validateMainCollectorAsset},
 		{Path: "telemetry/host-metrics.yaml", RemotePath: "telemetry/host-metrics.yaml", Marker: "hostmetrics:"},
 		{Path: "telemetry/docker-logs.yaml", RemotePath: "telemetry/docker-logs.yaml", Marker: "file_log/docker:"},
@@ -560,6 +577,11 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		return nil, err
 	}
 	prepared.assets = assets
+	if !plan.Setup {
+		if err := ensureTraefikDirectories(plan.Layout); err != nil {
+			return nil, err
+		}
+	}
 	return prepared, nil
 }
 
@@ -619,6 +641,9 @@ func (p *preparedInstallation) finalize() error {
 func (e *Engine) managedAssetSpecs(plan Plan) []ManagedAsset {
 	assets := make([]ManagedAsset, 0, len(e.managedAssets))
 	for _, asset := range e.managedAssets {
+		if asset.productionOnly && plan.Setup {
+			continue
+		}
 		if asset.setupOnly && (plan.Layout.SetupComposeFile == "" || (!plan.Setup && !(plan.Existing && FileExists(plan.Layout.SetupComposeFile)))) {
 			continue
 		}
@@ -661,6 +686,13 @@ func (e *Engine) stageManagedAssets(ctx context.Context, plan Plan) (*managedAss
 		if !bytes.Contains(contents, []byte(spec.Marker)) {
 			cleanup()
 			return nil, fmt.Errorf("downloaded asset %q is invalid", spec.RemotePath)
+		}
+		if spec.render != nil {
+			contents, err = spec.render(contents, plan)
+			if err != nil {
+				cleanup()
+				return nil, fmt.Errorf("render managed asset %q: %w", spec.RemotePath, err)
+			}
 		}
 		if spec.validate != nil {
 			if err := spec.validate(contents); err != nil {
@@ -989,6 +1021,7 @@ func syncDirectory(path string) error {
 
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
+		"  traefik:",
 		"  otel-collector:",
 		"  telemetry-host:",
 		"  telemetry-docker-logs:",

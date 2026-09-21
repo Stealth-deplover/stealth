@@ -46,6 +46,7 @@ trap cleanup EXIT
 cp -a "$fixture_root"/. "$smoke_root"/
 for asset_version in "$bridge_version" "$target_version"; do
 	mkdir -p "$asset_root/$asset_version/telemetry" "$asset_root/$asset_version/console/deploy"
+	mkdir -p "$asset_root/$asset_version/traefik/dynamic/generated"
 	cp "$repo_root/compose.production.yaml" "$asset_root/$asset_version/compose.production.yaml"
 	cp "$repo_root/compose.setup.yaml" "$asset_root/$asset_version/compose.setup.yaml"
 	cp "$repo_root/telemetry/otel-collector.yaml" "$asset_root/$asset_version/telemetry/otel-collector.yaml"
@@ -53,6 +54,9 @@ for asset_version in "$bridge_version" "$target_version"; do
 	cp "$repo_root/telemetry/docker-logs.yaml" "$asset_root/$asset_version/telemetry/docker-logs.yaml"
 	cp "$repo_root/telemetry/docker-stats.yaml" "$asset_root/$asset_version/telemetry/docker-stats.yaml"
 	cp "$repo_root/console/deploy/nginx.conf" "$asset_root/$asset_version/console/deploy/nginx.conf"
+	cp "$repo_root/traefik/traefik.yaml" "$asset_root/$asset_version/traefik/traefik.yaml"
+	cp "$repo_root/traefik/dynamic/core.yaml" "$asset_root/$asset_version/traefik/dynamic/core.yaml"
+	cp "$repo_root/traefik/dynamic/generated/.gitkeep" "$asset_root/$asset_version/traefik/dynamic/generated/.gitkeep"
 done
 
 config_value() {

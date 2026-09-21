@@ -472,7 +472,7 @@ func assertMigratedV025State(t *testing.T, layout installengine.Layout, targetVe
 		t.Fatal(err)
 	}
 	compose := string(composeBytes)
-	for _, marker := range []string{"  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
+	for _, marker := range []string{"  traefik:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
 		if !strings.Contains(compose, marker) {
 			t.Fatalf("target Compose is missing %q", marker)
 		}
@@ -508,6 +508,9 @@ func assertMigratedV025State(t *testing.T, layout installengine.Layout, targetVe
 		{layout.TelemetryDir + "/docker-logs.yaml", "file_log/docker:"},
 		{layout.TelemetryDir + "/docker-stats.yaml", "docker_stats:"},
 		{layout.ProxyFile, "server {"},
+		{layout.TraefikStatic, "entryPoints:"},
+		{layout.TraefikCore, "stealth-api:"},
+		{filepath.Join(layout.TraefikGenerated, ".gitkeep"), "Stealth route reconciler"},
 	} {
 		contents, readErr := os.ReadFile(file.path)
 		if readErr != nil || !strings.Contains(string(contents), file.marker) {

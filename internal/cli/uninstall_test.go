@@ -241,6 +241,36 @@ func TestPurgeRemovesProjectOwnedDataAfterExactValidation(t *testing.T) {
 	}
 }
 
+func TestPurgeRefusesToDeleteGeneratedTraefikRoutes(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	if err := os.MkdirAll(layout.TraefikGenerated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	route := filepath.Join(layout.TraefikGenerated, "workloads.yaml")
+	if err := os.WriteFile(route, []byte("http:\n  routers: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := buildUninstallPlan(layout, uninstallPurge)
+	if !containsArgs(plan.unknownEntries, route) || plan.canPurge() {
+		t.Fatalf("generated Traefik route was not protected: %#v, canPurge=%t", plan.unknownEntries, plan.canPurge())
+	}
+	runner := &uninstallTestRunner{}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--purge", "--yes"}); got != 1 {
+		t.Fatalf("purge with generated Traefik route exit code = %d", got)
+	}
+	if !pathPresent(route) {
+		t.Fatal("purge removed the generated Traefik route")
+	}
+	for _, call := range runner.calls {
+		if containsArgs(call.args, "down", "--volumes") {
+			t.Fatalf("blocked purge invoked Docker: %#v", call.args)
+		}
+	}
+}
+
 func TestPurgeRemovesCurrentManagedTelemetryVolumesAndPreservesSentinel(t *testing.T) {
 	layout := writeUninstallFixture(t)
 	managed := map[string]string{

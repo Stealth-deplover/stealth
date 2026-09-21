@@ -25,6 +25,11 @@ The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
 
+Traefik runs in parallel as the future file-provider ingress. See the
+[Traefik ingress foundation](traefik-ingress.md) for its network boundary,
+ownership model, and the later Cloudflare origin cutover. Nginx remains the
+active external entrypoint in this release.
+
 ## Fresh install
 
 Prerequisites:
@@ -49,7 +54,7 @@ docker compose --env-file .env.production -f compose.production.yaml config
 docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 
@@ -79,6 +84,8 @@ Required production values:
   tag. The four Collector images are built from the pinned
   `otel/opentelemetry-collector-contrib:0.161.0` base; the Docker-log image is
   the only one with the narrow file capability.
+- `TRAEFIK_IMAGE`, pinned to the exact v3.7.13 version and manifest digest
+  shown in [`.env.production.example`](../.env.production.example).
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
 - `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the

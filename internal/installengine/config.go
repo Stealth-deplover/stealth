@@ -17,6 +17,13 @@ var (
 	stableReleaseVersionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
+// Traefik is a release-managed third-party runtime dependency. Keep the
+// version and multi-architecture manifest digest in one place so fresh
+// installs and upgrades converge on the same immutable image.
+const defaultTraefikImage = "traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c"
+
+const traefikTrustedProxyCIDR = "172.31.0.2/32"
+
 // ConfigOptions describes the non-secret choices made before the production
 // stack is started. The engine creates all initial credentials in one place so
 // a retry never needs to invent a second secret set.
@@ -56,7 +63,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	}
 	project := firstNonEmpty(options.ComposeProject, "stealth")
 	subnet := firstNonEmpty(options.NetworkSubnet, "172.30.0.0/24")
-	trustedProxy := firstNonEmpty(options.TrustedProxyCIDRs, subnet)
+	trustedProxy := ensureTraefikTrustedProxyCIDR(options.TrustedProxyCIDRs, subnet)
 	storageDriver := strings.ToLower(firstNonEmpty(options.StorageDriver, "local"))
 	if storageDriver != "local" && storageDriver != "s3" {
 		return "", errorsf("storage driver must be local or s3")
@@ -114,6 +121,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"STEALTH_MIGRATE_IMAGE":                 ImageName("stealth-migrate", options.Version),
 		"STEALTH_CONSOLE_IMAGE":                 ImageName("stealth-console", options.Version),
 		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE":  ImageName("stealth-telemetry-docker-proxy", options.Version),
+		"TRAEFIK_IMAGE":                         defaultTraefikImage,
 		"OTEL_COLLECTOR_IMAGE":                  collectorImage,
 		"OTEL_HOST_COLLECTOR_IMAGE":             collectorImage,
 		"OTEL_DOCKER_COLLECTOR_IMAGE":           collectorImage,
@@ -144,6 +152,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"OTEL_DOCKER_LOGS_VOLUME_NAME":          "stealth_otel_docker_logs_state",
 		"STEALTH_TELEMETRY_STORE_NETWORK_NAME":  "stealth_telemetry_store",
 		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
+		"STEALTH_INGRESS_NETWORK_NAME":          "stealth_ingress",
 		"FUNCTIONS_RUNNER_ENABLED":              "true",
 		"FUNCTIONS_WORKER_ID":                   "stealth-worker",
 		"FUNCTIONS_RUNNER_STAGING_VOLUME":       "stealth_function_runner_staging",
@@ -229,10 +238,16 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 		"STEALTH_TELEMETRY_STORE_NETWORK_NAME":  "stealth_telemetry_store",
 		"STEALTH_TELEMETRY_INGEST_NETWORK_NAME": "stealth_telemetry_ingest",
 		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
+		"TRAEFIK_IMAGE":                         defaultTraefikImage,
+		"STEALTH_INGRESS_NETWORK_NAME":          "stealth_ingress",
 	} {
 		if strings.TrimSpace(result[key]) == "" {
 			updates[key] = value
 		}
+	}
+	trustedProxy := ensureTraefikTrustedProxyCIDR(result["TRUSTED_PROXY_CIDRS"], result["STEALTH_NETWORK_SUBNET"])
+	if trustedProxy != strings.TrimSpace(result["TRUSTED_PROXY_CIDRS"]) {
+		updates["TRUSTED_PROXY_CIDRS"] = trustedProxy
 	}
 	if strings.TrimSpace(result["CLICKHOUSE_PASSWORD"]) == "" {
 		password, err := randomHex(32)
@@ -244,6 +259,19 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 	return MergeEnv(result, updates)
 }
 
+func ensureTraefikTrustedProxyCIDR(value, fallbackSubnet string) string {
+	trusted := strings.TrimSpace(value)
+	if trusted == "" {
+		trusted = firstNonEmpty(strings.TrimSpace(fallbackSubnet), "172.30.0.0/24")
+	}
+	for _, entry := range strings.Split(trusted, ",") {
+		if strings.TrimSpace(entry) == traefikTrustedProxyCIDR {
+			return trusted
+		}
+	}
+	return trusted + "," + traefikTrustedProxyCIDR
+}
+
 func validateConfigValues(values map[string]string) error {
 	for key, value := range values {
 		if !ValidEnvKey(key) || strings.ContainsAny(value, "\x00\r\n") {
@@ -253,7 +281,7 @@ func validateConfigValues(values map[string]string) error {
 			return fmt.Errorf("generated configuration value for %s is empty", key)
 		}
 	}
-	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE"} {
+	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE", "TRAEFIK_IMAGE"} {
 		if !validImageReference(values[key]) {
 			return fmt.Errorf("generated image reference for %s is invalid", key)
 		}

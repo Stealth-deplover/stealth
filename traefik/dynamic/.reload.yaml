@@ -1,0 +1,3 @@
+# The installer creates this top-level file-provider reload sentinel. A future
+# route reconciler atomically replaces it after publishing generated files so
+# Traefik notices changes under the recursively loaded generated directory.
