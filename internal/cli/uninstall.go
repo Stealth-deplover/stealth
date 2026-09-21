@@ -212,6 +212,9 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 	postgres := configuredVolumeName(values, "POSTGRES_VOLUME_NAME", "stealth_postgres_data")
 	storage := configuredVolumeName(values, "STORAGE_VOLUME_NAME", "stealth_storage")
 	staging := configuredVolumeName(values, "FUNCTIONS_RUNNER_STAGING_VOLUME", "stealth_function_runner_staging")
+	clickhouse := configuredVolumeName(values, "CLICKHOUSE_VOLUME_NAME", "stealth_clickhouse_data")
+	otelCollector := configuredVolumeName(values, "OTELCOL_VOLUME_NAME", "stealth_otelcol_state")
+	otelDockerLogs := configuredVolumeName(values, "OTEL_DOCKER_LOGS_VOLUME_NAME", "stealth_otel_docker_logs_state")
 	volumes := []uninstallVolume{
 		{label: "PostgreSQL data volume", name: postgres, composeName: "postgres_data"},
 	}
@@ -221,6 +224,11 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 		volumes = append(volumes, uninstallVolume{label: "Object storage and function/site artifacts", name: storage, composeName: "stealth_storage"})
 	}
 	volumes = append(volumes, uninstallVolume{label: "Function runner staging volume", name: staging, composeName: "function_runner_staging"})
+	volumes = append(volumes,
+		uninstallVolume{label: "ClickHouse telemetry volume", name: clickhouse, composeName: "clickhouse_data"},
+		uninstallVolume{label: "OTel Collector state volume", name: otelCollector, composeName: "otelcol_state"},
+		uninstallVolume{label: "Docker log Collector state volume", name: otelDockerLogs, composeName: "otel_docker_logs_state"},
+	)
 	return uniqueUninstallVolumes(volumes)
 }
 
@@ -526,6 +534,12 @@ func (a *App) uninstallOperations(plan uninstallPlan) []uninstallOperation {
 	}
 	if plan.mode == uninstallPurge {
 		operations = append(operations, uninstallOperation{
+			name:   "Remove remaining managed Docker volumes",
+			action: func(ctx context.Context) error { return a.removeManagedVolumes(ctx, plan) },
+		})
+	}
+	if plan.mode == uninstallPurge {
+		operations = append(operations, uninstallOperation{
 			name:   "Verify services and persistent data removal",
 			action: func(ctx context.Context) error { return a.verifyDockerPurge(ctx, plan) },
 		})
@@ -618,16 +632,42 @@ func (a *App) validatePurgeScope(ctx context.Context, plan uninstallPlan) error 
 			actual[name] = struct{}{}
 		}
 	}
-	if len(actual) != len(declared) {
-		return fmt.Errorf("Compose declares unexpected persistent resources; refusing purge")
-	}
-	for name := range declared {
-		if _, ok := actual[name]; !ok {
-			return fmt.Errorf("Compose volume %q was not confirmed as project-owned", name)
+	// Older supported installations may legitimately declare only the legacy
+	// volume subset. Every volume that Compose does declare must still be one
+	// of the known Stealth-managed keys; unknown declarations remain fail-closed.
+	for name := range actual {
+		if _, ok := declared[name]; !ok {
+			return fmt.Errorf("Compose declares unexpected persistent resource %q; refusing purge", name)
 		}
 	}
 	if err := a.validateExistingVolumeOwnership(ctx, plan); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (a *App) removeManagedVolumes(ctx context.Context, plan uninstallPlan) error {
+	if err := a.validateExistingVolumeOwnership(ctx, plan); err != nil {
+		return err
+	}
+	output, err := a.runner.Output(ctx, "", "docker", "volume", "ls", "--format", "{{.Name}}")
+	if err != nil {
+		return fmt.Errorf("inspect Docker volumes for purge: %w", err)
+	}
+	existing := make(map[string]struct{})
+	for _, raw := range strings.Split(string(output), "\n") {
+		name := strings.TrimSpace(raw)
+		if name != "" {
+			existing[name] = struct{}{}
+		}
+	}
+	for _, volume := range plan.volumes {
+		if _, ok := existing[volume.name]; !ok {
+			continue
+		}
+		if err := a.runCommandCaptured(ctx, "", "docker", "volume", "rm", volume.name); err != nil {
+			return fmt.Errorf("remove managed Docker volume %q: %w", volume.name, err)
+		}
 	}
 	return nil
 }

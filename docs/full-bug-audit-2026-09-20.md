@@ -570,19 +570,15 @@ union; that is tracked as AUD-14.
 
 ### AUD-18 — Purge validation omits the post-PR-#83 ClickHouse and Collector volumes
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Uninstall/purge lifecycle and data cleanup
-- **Current-head evidence:** Current production Compose declares
-  `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` in addition
-  to the older PostgreSQL, storage, and function-runner volumes. The
-  `configuredUninstallVolumes` model in `internal/cli/uninstall.go` still
-  contains only the older three categories. `validatePurgeScope` compares the
-  declared Compose volume set with that model and refuses a purge when
-  unexpected persistent resources exist. Current post-PR-#83 Compose therefore
-  fails closed with an unexpected-persistent-resource error instead of
-  completing the requested purge. Existing uninstall fixtures cover only the
-  old volume set.
+- **Current-head evidence:** The audited baseline omitted
+  `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` from
+  `configuredUninstallVolumes`, so current post-PR-#83 Compose failed the
+  exact-set purge guard. PR #89 adds all six release-owned volume keys,
+  validates their Compose ownership, accepts a known legacy subset, and
+  explicitly removes remaining verified managed volume names.
 - **Minimal proof path:** Run `stealth uninstall --purge` against a current
   installation using the post-PR-#83 Compose file. The exact-set validation
   sees the ClickHouse and collector state volumes absent from the configured
@@ -592,13 +588,13 @@ union; that is tracked as AUD-14.
   telemetry data/state through the supported purge command, and the lifecycle
   model does not provide an auditable policy for retaining or deleting those
   volumes.
-- **Recommended remediation:** Add all current persistent resources to the
-  uninstall model with explicit retention semantics, preserve custom volume
-  names, and verify deletion/retention for ClickHouse and both Collector state
-  volumes. Keep the fail-closed behavior for genuinely unknown resources.
-- **Recommended regression test:** Use a current Compose fixture and assert
-  normal uninstall, purge, custom names, and unknown-volume rejection for the
-  complete six-volume set.
+- **Regression evidence in PR #89:** `TestPurgeRemovesCurrentManagedTelemetryVolumesAndPreservesSentinel`
+  verifies all six managed volumes are removed without touching an unrelated
+  sentinel; `TestPurgeAcceptsKnownLegacyVolumeSubset` protects pre-split
+  installations; existing ownership and unknown-layout tests remain in place.
+- **Residual risk:** Purge still fails closed for an unknown Compose volume,
+  an unowned managed-name collision, unreadable configuration, or unsafe local
+  path. External S3 data remains intentionally outside the purge scope.
 
 ## Installer, update, release, and rollback audit
 

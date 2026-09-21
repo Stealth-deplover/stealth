@@ -304,7 +304,7 @@ export interface paths {
         /** @description Replace an encrypted instance monitor definition. A heartbeat token is rotated and returned once. */
         put: operations["updateAdminMonitor"];
         post?: never;
-        /** @description Delete a monitor and its bounded check history. */
+        /** @description Delete a monitor and its bounded check history. A monitor with alert rules must have those rules deleted first. */
         delete: operations["deleteAdminMonitor"];
         options?: never;
         head?: never;

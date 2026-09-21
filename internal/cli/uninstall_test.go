@@ -19,15 +19,26 @@ type uninstallCommandCall struct {
 }
 
 type uninstallTestRunner struct {
-	calls       []uninstallCommandCall
-	runErr      error
-	outputErr   error
-	volumeNames string
-	volumeList  string
+	calls        []uninstallCommandCall
+	runErr       error
+	outputErr    error
+	volumeNames  string
+	volumeList   string
+	volumeLabels map[string]string
 }
 
 func (r *uninstallTestRunner) Run(_ context.Context, dir string, _ io.Writer, _ io.Writer, name string, args ...string) error {
 	r.calls = append(r.calls, uninstallCommandCall{dir: dir, name: name, args: append([]string(nil), args...)})
+	if name == "docker" && containsArgs(args, "volume", "rm") && len(args) > 0 {
+		removed := args[len(args)-1]
+		remaining := make([]string, 0)
+		for _, volume := range strings.Split(r.volumeList, "\n") {
+			if strings.TrimSpace(volume) != "" && strings.TrimSpace(volume) != removed {
+				remaining = append(remaining, strings.TrimSpace(volume))
+			}
+		}
+		r.volumeList = strings.Join(remaining, "\n")
+	}
 	return r.runErr
 }
 
@@ -40,10 +51,13 @@ func (r *uninstallTestRunner) Output(_ context.Context, dir, name string, args .
 		if r.volumeNames != "" {
 			return []byte(r.volumeNames), nil
 		}
-		return []byte("postgres_data\nstealth_storage\nfunction_runner_staging\n"), nil
+		return []byte("postgres_data\nstealth_storage\nfunction_runner_staging\nclickhouse_data\notelcol_state\notel_docker_logs_state\n"), nil
 	}
 	if containsArgs(args, "volume", "ls") {
 		return []byte(r.volumeList), nil
+	}
+	if containsArgs(args, "volume", "inspect") && len(args) > 0 {
+		return []byte(r.volumeLabels[args[len(args)-1]]), nil
 	}
 	return nil, nil
 }
@@ -90,7 +104,7 @@ func writeUninstallFixture(t *testing.T) InstallLayout {
 	if err := writePrivateFile(layout.EnvFile, formatEnvFile(values)); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeAtomic(layout.ComposeFile, []byte("services:\n  api:\n    image: test\nvolumes:\n  postgres_data:\n  stealth_storage:\n  function_runner_staging:\n"), 0644); err != nil {
+	if err := writeAtomic(layout.ComposeFile, []byte("services:\n  api:\n    image: test\nvolumes:\n  postgres_data:\n  stealth_storage:\n  function_runner_staging:\n  clickhouse_data:\n  otelcol_state:\n  otel_docker_logs_state:\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeAtomic(layout.ProxyFile, []byte("server {}\n"), 0644); err != nil {
@@ -227,6 +241,59 @@ func TestPurgeRemovesProjectOwnedDataAfterExactValidation(t *testing.T) {
 	}
 }
 
+func TestPurgeRemovesCurrentManagedTelemetryVolumesAndPreservesSentinel(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	managed := map[string]string{
+		"stealth_postgres_data":           "postgres_data",
+		"stealth_storage":                 "stealth_storage",
+		"stealth_function_runner_staging": "function_runner_staging",
+		"stealth_clickhouse_data":         "clickhouse_data",
+		"stealth_otelcol_state":           "otelcol_state",
+		"stealth_otel_docker_logs_state":  "otel_docker_logs_state",
+	}
+	volumeNames := make([]string, 0, len(managed)+1)
+	labels := make(map[string]string, len(managed))
+	for name, composeName := range managed {
+		volumeNames = append(volumeNames, name)
+		labels[name] = "stealth\t" + composeName
+	}
+	volumeNames = append(volumeNames, "unrelated-sentinel")
+	runner := &uninstallTestRunner{volumeList: strings.Join(volumeNames, "\n"), volumeLabels: labels}
+	var out, errOut strings.Builder
+	app := NewApp(strings.NewReader(""), &out, &errOut)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--purge", "--yes"}); got != 0 {
+		t.Fatalf("exit code = %d, stdout=%q stderr=%q", got, out.String(), errOut.String())
+	}
+	if !strings.Contains(runner.volumeList, "unrelated-sentinel") || strings.TrimSpace(runner.volumeList) != "unrelated-sentinel" {
+		t.Fatalf("managed purge changed unrelated volume list to %q", runner.volumeList)
+	}
+	for name := range managed {
+		for _, call := range runner.calls {
+			if call.name == "docker" && containsArgs(call.args, "volume", "rm", name) {
+				goto found
+			}
+		}
+		t.Fatalf("purge did not explicitly remove managed volume %q", name)
+	found:
+	}
+}
+
+func TestPurgeAcceptsKnownLegacyVolumeSubset(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	if err := writeAtomic(layout.ComposeFile, []byte("services:\n  api:\n    image: test\nvolumes:\n  postgres_data:\n  stealth_storage:\n  function_runner_staging:\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &uninstallTestRunner{volumeNames: "postgres_data\nstealth_storage\nfunction_runner_staging\n"}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--purge", "--yes"}); got != 0 {
+		t.Fatalf("legacy subset purge exit code = %d", got)
+	}
+}
+
 func TestPurgeRefusesUnlabeledExistingVolume(t *testing.T) {
 	layout := writeUninstallFixture(t)
 	runner := &uninstallTestRunner{volumeList: "stealth_storage\n"}
@@ -316,6 +383,9 @@ func TestUninstallDryRunPlanIncludesOwnedResources(t *testing.T) {
 		"stealth_postgres_data",
 		"stealth_storage",
 		"stealth_function_runner_staging",
+		"stealth_clickhouse_data",
+		"stealth_otelcol_state",
+		"stealth_otel_docker_logs_state",
 		"config.env and local secrets",
 		"This is permanent",
 		"No changes were made",
