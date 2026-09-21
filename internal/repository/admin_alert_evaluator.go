@@ -123,6 +123,9 @@ func evaluateAdminAlertTx(ctx context.Context, tx pgx.Tx, ruleID uuid.UUID, trig
 	if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {
 		return uuid.Nil, err
 	}
+	if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.alert.updated", "admin_alert_rule", ruleID, map[string]any{"state": transition.EventState}); err != nil {
+		return uuid.Nil, err
+	}
 	return eventID, nil
 }
 

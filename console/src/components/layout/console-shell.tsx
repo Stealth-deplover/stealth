@@ -21,6 +21,7 @@ import {
   useConsoleRouteContext,
 } from "@/components/navigation/console-route-context";
 import { ProjectRealtimeListener } from "@/realtime/project-realtime-listener";
+import { AdminRealtimeListener } from "@/realtime/admin-realtime-listener";
 
 function ConsoleShellContent({
   children,
@@ -80,6 +81,10 @@ function ConsoleShellContent({
   return (
     <div className="min-h-screen bg-void">
       <ProjectRealtimeListener projectId={projectId} />
+      {(account.data?.account.instance_role === "instance_owner" ||
+        account.data?.account.instance_role === "instance_admin") && (
+        <AdminRealtimeListener />
+      )}
       <a
         href="#main-content"
         className="sr-only fixed left-4 top-4 z-[60] rounded-md bg-acid-lime px-3 py-2 text-sm font-medium text-void focus:not-sr-only"

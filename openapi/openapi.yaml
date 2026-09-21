@@ -65,6 +65,19 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '500': { $ref: '#/components/responses/InternalError' }
+  /v1/admin/realtime:
+    get:
+      operationId: streamAdminRealtime
+      description: Stream bounded invalidation notifications for authenticated instance-owner/admin Console sessions. Events contain no resource snapshots; clients refetch canonical Admin API state.
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: Last-Event-ID, in: header, description: Opaque UUIDv7 cursor sent by the browser on SSE reconnect, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Admin invalidation events, content: { text/event-stream: { schema: { type: string } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/admin/telemetry/logs:
     get:
       operationId: listAdminTelemetryLogs

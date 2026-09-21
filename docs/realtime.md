@@ -5,6 +5,21 @@ PostgreSQL and the Go API own canonical resource state. A Console subscriber
 uses a notification to invalidate a TanStack Query key and then reads the
 current state from the normal Go API endpoint.
 
+Instance-owner/admin Console sessions also subscribe to:
+
+```text
+GET /v1/admin/realtime
+```
+
+This stream uses the bounded `admin_realtime_events` PostgreSQL outbox. Admin
+events have no project scope, so they use the same authenticated SSE and
+`Last-Event-ID` cursor contract but a short PostgreSQL polling interval instead
+of Redis project fanout. The event contains only an invalidation type and
+resource identifier; the browser always refetches the canonical Admin API.
+Rows expire after 24 hours and are pruned in bounded batches by the realtime
+publisher worker. Non-admin sessions are rejected by the normal instance-admin
+middleware.
+
 ## Flow
 
 For integrated mutations the flow is:
@@ -52,10 +67,10 @@ not mistake Redis for the job queue:
 | Database backups | Backup upload/restore is an API-controlled, bounded storage operation rather than a background queue | The database restore path runs in one transaction and records audit metadata | Backup metadata and audit records remain durable; no separate backup worker or realtime stream is claimed |
 
 Audit/activity events continue to be written with their mutation and remain
-available through the canonical activity API. They are not broadcast
-automatically unless a resource notification has a concrete Console consumer.
-All integrated notification rows use the same outbox lease/retry path, so a
-worker crash can delay publication but cannot erase a committed event.
+available through the canonical activity API. Project notifications use the
+Redis publisher lease/retry path, while instance-admin notifications use their
+own bounded PostgreSQL outbox and cursor poll. In both cases a worker or API
+connection failure cannot erase a committed notification row.
 
 ## SSE endpoint and authorization
 

@@ -24,6 +24,10 @@ func (f *fakePersistence) PendingRealtimeEvents(context.Context) (int64, error) 
 	return 0, nil
 }
 
+func (f *fakePersistence) PruneExpiredAdminRealtimeEvents(context.Context, int) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakePersistence) ClaimNextRealtimeEvent(context.Context, string, time.Duration) (repository.RealtimePublishJob, error) {
 	return f.job, nil
 }

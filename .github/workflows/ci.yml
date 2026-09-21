@@ -115,8 +115,9 @@ jobs:
             TestAdminAlertHistoryGlobalIndexMigrationIntegration \
             TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration
           run_and_require_tests ./internal/httpapi \
-            '^TestDeleteAdminAlertRulePreservesHistoryIntegration$' \
-            TestDeleteAdminAlertRulePreservesHistoryIntegration
+            '^(TestDeleteAdminAlertRulePreservesHistoryIntegration|TestAdminRealtimeSSEIntegration)$' \
+            TestDeleteAdminAlertRulePreservesHistoryIntegration \
+            TestAdminRealtimeSSEIntegration
 
       - name: Real Collector and telemetry integration suites
         env:

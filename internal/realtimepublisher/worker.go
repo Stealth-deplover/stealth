@@ -31,6 +31,7 @@ const (
 type Persistence interface {
 	RequeueStaleRealtimeEvents(context.Context, time.Duration) (int64, error)
 	PendingRealtimeEvents(context.Context) (int64, error)
+	PruneExpiredAdminRealtimeEvents(context.Context, int) (int64, error)
 	ClaimNextRealtimeEvent(context.Context, string, time.Duration) (repository.RealtimePublishJob, error)
 	FinishRealtimeEvent(context.Context, uuid.UUID, string, bool, *time.Time, string) error
 }
@@ -85,10 +86,17 @@ func (w *Worker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	lastPendingMetric := time.Time{}
+	lastAdminRealtimePrune := time.Time{}
 	for {
 		if time.Since(lastPendingMetric) >= pendingMetricPeriod {
 			w.refreshPendingMetric(ctx)
 			lastPendingMetric = time.Now()
+		}
+		if time.Since(lastAdminRealtimePrune) >= pendingMetricPeriod {
+			if _, err := w.Store.PruneExpiredAdminRealtimeEvents(ctx, 1000); err != nil && !errors.Is(err, context.Canceled) {
+				w.logError("prune expired admin realtime events failed", err)
+			}
+			lastAdminRealtimePrune = time.Now()
 		}
 		if _, err := w.Store.RequeueStaleRealtimeEvents(ctx, leaseAge); err != nil && !errors.Is(err, context.Canceled) {
 			w.logError("requeue stale realtime events failed", err)

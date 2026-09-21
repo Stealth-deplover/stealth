@@ -3,6 +3,7 @@ import {
   type CacheChange,
   type CacheQueryKey,
 } from "@/api/cache-coherence";
+import { queryKeys } from "@/api/query-keys";
 
 export type RealtimeNotification = {
   type?: string;
@@ -359,6 +360,52 @@ export function realtimeInvalidationKeys(
   event: RealtimeNotification,
 ): CacheQueryKey[] {
   return realtimeCacheChanges(projectId, event).flatMap(invalidationKeysFor);
+}
+
+export function adminRealtimeInvalidationKeys(
+  event: RealtimeNotification,
+): CacheQueryKey[] {
+  const type = stringValue(event.type) ?? stringValue(event.event) ?? "";
+  const resource = resourceId(event);
+  const keys: CacheQueryKey[] = [["admin", "audit-events"]];
+  const add = (key: CacheQueryKey) => {
+    if (
+      !keys.some(
+        (candidate) => JSON.stringify(candidate) === JSON.stringify(key),
+      )
+    ) {
+      keys.push(key);
+    }
+  };
+
+  if (type.startsWith("admin.monitor.")) {
+    add(queryKeys.adminMonitors);
+    if (resource) add(queryKeys.adminMonitor(resource));
+  } else if (type.startsWith("admin.alert.")) {
+    add(queryKeys.adminAlerts);
+    add(queryKeys.adminAlertEvents);
+    if (resource) add(queryKeys.adminAlert(resource));
+  } else if (
+    type.startsWith("admin.notification_channel.") ||
+    type.startsWith("admin.notification.delivery.")
+  ) {
+    add(queryKeys.adminNotifications);
+  } else if (type.startsWith("admin.incident.")) {
+    add(queryKeys.adminIncidents);
+    if (resource) add(queryKeys.adminIncident(resource));
+  } else if (type.startsWith("admin.dashboard.")) {
+    add(queryKeys.adminDashboards);
+    if (resource) add(queryKeys.adminDashboard(resource));
+  } else if (type.startsWith("admin.status_page.")) {
+    add(queryKeys.adminStatusPage);
+  } else if (type.startsWith("admin.error_group.")) {
+    add(["admin", "telemetry", "errors"]);
+  } else {
+    // Unknown Admin events still invalidate the bounded control-room overview
+    // without forcing every telemetry query to refetch.
+    add(queryKeys.adminOverview);
+  }
+  return keys;
 }
 
 export function eventTypesForProjectStream() {

@@ -127,6 +127,9 @@ func (r *Repository) UpdateAdminErrorGroupStatus(ctx context.Context, accountID 
 		"admin.error_group.status", "admin_error_group", encoded); err != nil {
 		return AdminErrorGroupState{}, err
 	}
+	if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.error_group.status", "admin_error_group", uuid.Nil, map[string]any{"fingerprint": normalizedFingerprint, "status": status}); err != nil {
+		return AdminErrorGroupState{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return AdminErrorGroupState{}, err
 	}

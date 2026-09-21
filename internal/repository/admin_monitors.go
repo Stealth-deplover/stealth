@@ -365,6 +365,11 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if err != nil {
 		return err
 	}
+	if status != newStatus {
+		if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.monitor.status", "admin_monitor", monitorID, map[string]any{"status": newStatus}); err != nil {
+			return err
+		}
+	}
 	checkID, err := uuid.NewV7()
 	if err != nil {
 		return err
@@ -513,5 +518,8 @@ func writeInstanceAuditTx(ctx context.Context, tx pgx.Tx, actor uuid.UUID, actio
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO audit_events (id,organization_id,actor_account_id,action,target_type,target_id,metadata) VALUES ($1,NULL,$2,$3,$4,$5,$6)`, id, actor, action, targetType, target, encoded)
-	return err
+	if err != nil {
+		return err
+	}
+	return enqueueAdminRealtimeEventTx(ctx, tx, action, targetType, target, nil)
 }

@@ -438,28 +438,31 @@ union; that is tracked as AUD-14.
 
 ### AUD-12 — Admin control-plane mutations do not propagate cross-session in realtime
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Console admin realtime behavior
-- **Current-head evidence:** `console/src/realtime/project-realtime-listener.tsx`
-  subscribes to project-scoped realtime events only. Admin monitor, alert,
-  notification, incident, dashboard, and status-page mutations in
-  `console/src/api/mutations/admin.ts` invalidate local TanStack Query keys;
-  they do not publish or subscribe to an authenticated instance-admin event
-  stream. Admin query hooks use optional polling intervals, which is not
-  realtime delivery.
+- **Current-head evidence:** The audited baseline had only the project-scoped
+  `console/src/realtime/project-realtime-listener.tsx`; Admin mutations only
+  invalidated the initiating browser's TanStack Query cache. PR #89 adds the
+  bounded `admin_realtime_events` PostgreSQL outbox, the authenticated
+  `/v1/admin/realtime` SSE stream, and `AdminRealtimeListener`, which maps
+  notification types to canonical Admin query invalidations.
 - **Minimal proof path:** Open the same admin screen as Admin A and Admin B.
   Have A mutate a control-plane object. B receives no instance-admin event and
   sees the change only after polling, manual refresh, navigation, or another
   invalidation.
-- **Impact:** Operators can act on stale alert, incident, monitor, dashboard,
-  or status-page state during concurrent administration.
-- **Recommended remediation:** Add an authenticated instance-admin event
-  channel with per-resource invalidation, or explicitly document polling as the
-  product contract and expose its freshness guarantees.
-- **Recommended regression test:** Two authenticated admin clients with an
-  event assertion that a mutation invalidates the second client's relevant
-  query without manual refresh.
+- **Impact:** The baseline allowed operators to act on stale alert, incident,
+  monitor, dashboard, or status-page state during concurrent administration.
+- **Remediation evidence in PR #89:** `TestAdminRealtimeSSEIntegration` uses
+  two independent authenticated instance-admin sessions, proves a mutation is
+  delivered to the other session, and proves `Last-Event-ID` resume. The
+  payload is an invalidation envelope rather than a resource snapshot and is
+  sanitized before persistence.
+- **Residual risk:** The stream uses bounded PostgreSQL polling rather than a
+  Redis fanout channel because instance-admin events have no project scope;
+  it is still a long-lived authenticated SSE stream with durable cursor
+  recovery. Expired rows are pruned by the realtime publisher worker.
 
 ### AUD-13 — Collector healthchecks validated configuration instead of runtime health
 

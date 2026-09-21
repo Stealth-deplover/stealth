@@ -322,6 +322,9 @@ func (r *Repository) FinishAdminNotificationDelivery(ctx context.Context, delive
 	if err != nil {
 		return err
 	}
+	if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.notification.delivery.updated", "admin_notification_delivery", deliveryID, map[string]any{"status": status}); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
