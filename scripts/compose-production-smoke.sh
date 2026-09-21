@@ -585,6 +585,7 @@ verify_nginx_traefik_parity() {
 	nginx_hsts="$(http_probe_header "$nginx_https_response" Strict-Transport-Security)"
 	if [ "$nginx_hsts" != 'max-age=31536000; includeSubDomains' ]; then
 		printf 'Nginx HTTPS HSTS policy = %q, want the current edge policy\n' "$nginx_hsts" >&2
+		print_bounded_diagnostic 'Nginx HTTPS response headers' "$nginx_https_response"
 		return 1
 	fi
 	traefik_https_response="$(http_probe_output traefik / "$traefik_host" "$auth_cookie_header" https)"
