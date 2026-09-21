@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -108,7 +109,14 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 	}
 
 	eventID, eventType, eventData := readAdminRealtimeSSEEvent(t, reader)
-	if eventType != "admin" || eventID == "" || !strings.Contains(eventData, `"type":"admin.alert.create"`) || !strings.Contains(eventData, alertID.String()) {
+	var createdEvent struct {
+		Type       string `json:"type"`
+		ResourceID string `json:"resource_id"`
+	}
+	if err := json.Unmarshal([]byte(eventData), &createdEvent); err != nil {
+		t.Fatalf("decode cross-session admin event: %v; data=%q", err, eventData)
+	}
+	if eventType != "admin" || eventID == "" || createdEvent.Type != "admin.alert.create" || createdEvent.ResourceID != alertID.String() {
 		t.Fatalf("cross-session admin event = id %q type %q data %q", eventID, eventType, eventData)
 	}
 	if strings.Contains(eventData, "password") || strings.Contains(eventData, "secret") || strings.Contains(eventData, "token") {
@@ -152,7 +160,14 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	resumedEventID, resumedType, resumedData := readAdminRealtimeSSEEvent(t, resumeReader)
-	if resumedEventID == eventID || resumedType != "admin" || !strings.Contains(resumedData, `"type":"admin.alert.update"`) {
+	var updatedEvent struct {
+		Type       string `json:"type"`
+		ResourceID string `json:"resource_id"`
+	}
+	if err := json.Unmarshal([]byte(resumedData), &updatedEvent); err != nil {
+		t.Fatalf("decode resumed admin event: %v; data=%q", err, resumedData)
+	}
+	if resumedEventID == eventID || resumedType != "admin" || updatedEvent.Type != "admin.alert.update" || updatedEvent.ResourceID != alertID.String() {
 		t.Fatalf("admin SSE resumed event = id %q type %q data %q", resumedEventID, resumedType, resumedData)
 	}
 	var alerts struct {
