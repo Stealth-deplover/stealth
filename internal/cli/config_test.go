@@ -60,6 +60,18 @@ func testManagedTraefikCoreAsset() string {
       buffering:
         maxRequestBodyBytes: 104857600
   routers:
+    stealth-admin-realtime:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && Path(STEALTH_BACKTICK/v1/admin/realtimeSTEALTH_BACKTICK)"
+      priority: 200
+      middlewares: [stealth-security-headers]
+      service: stealth-api
+    stealth-project-realtime:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathRegexp(STEALTH_BACKTICK^/v1/projects/[0-9a-fA-F-]{36}/realtime$STEALTH_BACKTICK)"
+      priority: 200
+      middlewares: [stealth-security-headers]
+      service: stealth-api
     stealth-api:
       entryPoints: [web]
       rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathPrefix(STEALTH_BACKTICK/v1/STEALTH_BACKTICK)"
