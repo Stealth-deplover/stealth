@@ -231,6 +231,11 @@ jobs:
       - name: Validate production Compose file
         run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
 
+      - name: Docker uninstall purge integration
+        env:
+          TEST_DOCKER_INTEGRATION: "1"
+        run: go test ./internal/cli -run '^TestPurgeCurrentManagedVolumesDockerIntegration$' -count=1 -v
+
   console:
     name: Console checks
     runs-on: ubuntu-latest
