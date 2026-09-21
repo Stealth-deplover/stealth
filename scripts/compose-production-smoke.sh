@@ -572,8 +572,16 @@ verify_nginx_traefik_parity() {
 			done
 		fi
 	done
-	local nginx_https_response nginx_hsts traefik_https_response traefik_hsts
-	nginx_https_response="$(http_probe_output proxy / "$traefik_host" "$auth_cookie_header" https)"
+	local nginx_http_response nginx_https_response nginx_hsts traefik_https_response traefik_hsts
+	# Use a non-redirecting API response for the HSTS assertion. The root
+	# Console route may redirect before rendering its document, while Nginx's
+	# server-level header contract applies to both API and Console responses.
+	nginx_http_response="$(http_probe_output proxy /v1/account "$traefik_host" "$auth_cookie_header")"
+	if [ -n "$(http_probe_header "$nginx_http_response" Strict-Transport-Security)" ]; then
+		printf 'Nginx plain HTTP unexpectedly emitted HSTS\n' >&2
+		return 1
+	fi
+	nginx_https_response="$(http_probe_output proxy /v1/account "$traefik_host" "$auth_cookie_header" https)"
 	nginx_hsts="$(http_probe_header "$nginx_https_response" Strict-Transport-Security)"
 	if [ "$nginx_hsts" != 'max-age=31536000; includeSubDomains' ]; then
 		printf 'Nginx HTTPS HSTS policy = %q, want the current edge policy\n' "$nginx_hsts" >&2
