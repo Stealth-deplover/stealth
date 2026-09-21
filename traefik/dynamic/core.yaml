@@ -2,19 +2,49 @@
 # __STEALTH_PUBLIC_HOST__ with the hostname from PUBLIC_APP_URL before
 # activation. Traefik is a derived-state consumer; this file is never the
 # source of truth for application ownership.
+#
+# HSTS is intentionally not emitted here. This file is consumed on the
+# internal HTTP entrypoint during the Nginx-to-Traefik parallel phase, where an
+# unconditional HSTS header would incorrectly pin local HTTP clients. The
+# eventual HTTPS Cloudflare edge remains the HSTS owner and must preserve the
+# Nginx policy before the origin is cut over.
 http:
+  middlewares:
+    stealth-security-headers:
+      headers:
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
+          X-Frame-Options: "DENY"
+          Content-Security-Policy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
+    stealth-request-body-limit:
+      buffering:
+        # Nginx's client_max_body_size 100m is 100 MiB. Traefik buffers only
+        # request bodies, uses its 1 MiB memory threshold, and spills larger
+        # accepted bodies to the container's bounded /tmp tmpfs. Responses
+        # remain unbuffered, so SSE and WebSocket response streams are not
+        # affected.
+        maxRequestBodyBytes: 104857600
+
   routers:
     stealth-api:
       entryPoints:
         - web
-      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && (PathPrefix(`/v1/`) || Path(`/healthz`) || Path(`/readyz`) || Path(`/version`))"
+      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)"
       priority: 100
+      middlewares:
+        - stealth-security-headers
+        - stealth-request-body-limit
       service: stealth-api
     stealth-console:
       entryPoints:
         - web
       rule: "Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)"
       priority: 1
+      middlewares:
+        - stealth-security-headers
+        - stealth-request-body-limit
       service: stealth-console
 
   services:

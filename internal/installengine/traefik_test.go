@@ -51,10 +51,18 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateTraefikStaticAsset(static); err != nil {
+	config, err := GenerateConfig(ConfigOptions{Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	staticText := string(static)
+	renderedStatic, err := renderTraefikStaticAsset(static, Plan{ConfigContents: config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTraefikStaticAsset(renderedStatic); err != nil {
+		t.Fatal(err)
+	}
+	staticText := string(renderedStatic)
 	for _, forbidden := range []string{"docker:", "/var/run/docker.sock", "dashboard: true", "forwardedHeaders.insecure: true"} {
 		if strings.Contains(staticText, forbidden) {
 			t.Fatalf("static Traefik config contains forbidden %q", forbidden)
@@ -107,6 +115,10 @@ func TestGenerateConfigPinsTraefikAndTrustedIngressPeer(t *testing.T) {
 	for _, marker := range []string{
 		"TRAEFIK_IMAGE=" + defaultTraefikImage,
 		"STEALTH_INGRESS_NETWORK_NAME=stealth_ingress",
+		"STEALTH_INGRESS_NETWORK_SUBNET=172.31.0.0/24",
+		"STEALTH_INGRESS_IP_RANGE=172.31.0.64/26",
+		"STEALTH_TRAEFIK_INGRESS_IP=172.31.0.254",
+		"STEALTH_CLOUDFLARED_INGRESS_IP=172.31.0.10",
 		"TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.254/32",
 	} {
 		if !strings.Contains(config, marker) {
@@ -158,6 +170,75 @@ func TestMigrateReleaseConfigAddsTraefikPeerToCustomTrustedProxies(t *testing.T)
 	}
 	if got := values["TRUSTED_PROXY_CIDRS"]; got != "10.0.0.0/8, 192.0.2.0/24,172.31.0.254/32" {
 		t.Fatalf("migrated trusted proxies = %q", got)
+	}
+}
+
+func TestMigrateReleaseConfigUsesPersistedTraefikPeer(t *testing.T) {
+	contents, err := MigrateReleaseConfig(map[string]string{
+		"STEALTH_INGRESS_NETWORK_NAME":   "operator_ingress",
+		"STEALTH_INGRESS_NETWORK_SUBNET": "10.44.8.0/24",
+		"STEALTH_INGRESS_IP_RANGE":       "10.44.8.64/26",
+		"STEALTH_TRAEFIK_INGRESS_IP":     "10.44.8.254",
+		"STEALTH_CLOUDFLARED_INGRESS_IP": "10.44.8.10",
+		"TRUSTED_PROXY_CIDRS":            "172.30.0.0/24",
+	}, "v1.2.4", "v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values["TRUSTED_PROXY_CIDRS"]; got != "172.30.0.0/24,10.44.8.254/32" {
+		t.Fatalf("migrated trusted proxies = %q", got)
+	}
+}
+
+func TestTraefikStaticAssetRendersConfiguredCloudflaredPeer(t *testing.T) {
+	contents := []byte(testTraefikStaticAsset())
+	config, err := GenerateConfig(ConfigOptions{
+		Version:              "v1.2.3",
+		PublicURL:            "https://console.example.test",
+		GitHubAppClientID:    "Iv1.test-client-id",
+		IngressNetworkSubnet: "172.31.7.0/24",
+		TraefikIngressIP:     "172.31.7.254",
+		CloudflaredIngressIP: "172.31.7.10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := renderTraefikStaticAsset(contents, Plan{ConfigContents: config})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rendered), traefikCloudflaredTrustedCIDRPlaceholder) || !strings.Contains(string(rendered), "172.31.7.10/32") {
+		t.Fatalf("rendered trusted peer = %q", rendered)
+	}
+	if err := validateTraefikStaticAsset(rendered); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTraefikCoreAssetRequiresSecurityHeadersAndRequestLimit(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRootForTraefikTest(t), "traefik", "dynamic", "core.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := renderTraefikCoreAsset(contents, Plan{PublicURL: "https://console.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTraefikCoreAsset(rendered); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"Path(`/healthz`)", "Path(`/readyz`)", "Path(`/version`)", "Strict-Transport-Security", "Access-Control-Allow-Origin: \"*\""} {
+		if strings.Contains(string(rendered), forbidden) {
+			t.Fatalf("core asset contains forbidden marker %q", forbidden)
+		}
+	}
+	unsafe := strings.Replace(string(rendered), "PathPrefix(`/v1/`)", "(PathPrefix(`/v1/`) || PathPrefix(`/healthz`))", 1)
+	if err := validateTraefikCoreAsset([]byte(unsafe)); err == nil {
+		t.Fatal("core API route with an internal health prefix was accepted")
 	}
 }
 

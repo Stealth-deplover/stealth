@@ -22,26 +22,28 @@ var (
 // installs and upgrades converge on the same immutable image.
 const defaultTraefikImage = "traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c"
 
-const traefikTrustedProxyCIDR = "172.31.0.254/32"
-
 // ConfigOptions describes the non-secret choices made before the production
 // stack is started. The engine creates all initial credentials in one place so
 // a retry never needs to invent a second secret set.
 type ConfigOptions struct {
-	Version           string
-	PublicURL         string
-	GitHubAppClientID string
-	DockerGID         uint32
-	Setup             bool
-	InstallRoot       string
-	ComposeProject    string
-	NetworkSubnet     string
-	TrustedProxyCIDRs string
-	APIImage          string
-	SetupImage        string
-	StorageDriver     string
-	DatabaseURL       string
-	RedisURL          string
+	Version              string
+	PublicURL            string
+	GitHubAppClientID    string
+	DockerGID            uint32
+	Setup                bool
+	InstallRoot          string
+	ComposeProject       string
+	NetworkSubnet        string
+	TrustedProxyCIDRs    string
+	IngressNetworkSubnet string
+	IngressIPRange       string
+	TraefikIngressIP     string
+	CloudflaredIngressIP string
+	APIImage             string
+	SetupImage           string
+	StorageDriver        string
+	DatabaseURL          string
+	RedisURL             string
 }
 
 func GenerateConfig(options ConfigOptions) (string, error) {
@@ -63,7 +65,11 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	}
 	project := firstNonEmpty(options.ComposeProject, "stealth")
 	subnet := firstNonEmpty(options.NetworkSubnet, "172.30.0.0/24")
-	trustedProxy := ensureTraefikTrustedProxyCIDR(options.TrustedProxyCIDRs, subnet)
+	ingress, err := ingressNetworkConfigFromOptions(options)
+	if err != nil {
+		return "", err
+	}
+	trustedProxy := ensureTraefikTrustedProxyCIDR(options.TrustedProxyCIDRs, subnet, ingress.trustedProxyCIDR())
 	storageDriver := strings.ToLower(firstNonEmpty(options.StorageDriver, "local"))
 	if storageDriver != "local" && storageDriver != "s3" {
 		return "", errorsf("storage driver must be local or s3")
@@ -140,6 +146,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"TRUSTED_PROXY_CIDRS":                   trustedProxy,
 		"STEALTH_NETWORK_SUBNET":                subnet,
 		"STEALTH_NETWORK_NAME":                  "stealth_network",
+		"STEALTH_INGRESS_NETWORK_SUBNET":        ingress.Subnet,
+		"STEALTH_INGRESS_IP_RANGE":              ingress.IPRange,
+		"STEALTH_TRAEFIK_INGRESS_IP":            ingress.TraefikIP,
+		"STEALTH_CLOUDFLARED_INGRESS_IP":        ingress.CloudflaredIP,
 		"DOCKER_GID":                            strconv.FormatUint(uint64(options.DockerGID), 10),
 		"METRICS_TOKEN":                         metricsToken,
 		"CLICKHOUSE_IMAGE":                      "clickhouse/clickhouse-server:26.8.6.5",
@@ -245,7 +255,33 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 			updates[key] = value
 		}
 	}
-	trustedProxy := ensureTraefikTrustedProxyCIDR(result["TRUSTED_PROXY_CIDRS"], result["STEALTH_NETWORK_SUBNET"])
+	if strings.TrimSpace(result["STEALTH_INGRESS_NETWORK_SUBNET"]) == "" {
+		updates["STEALTH_INGRESS_NETWORK_SUBNET"] = defaultIngressSubnet
+	}
+	if strings.TrimSpace(result["STEALTH_INGRESS_NETWORK_NAME"]) == "" {
+		updates["STEALTH_INGRESS_NETWORK_NAME"] = defaultIngressNetworkName
+	}
+	merged := make(map[string]string, len(result)+len(updates))
+	for key, value := range result {
+		merged[key] = value
+	}
+	for key, value := range updates {
+		merged[key] = value
+	}
+	ingress, err := ingressNetworkConfigFromValues(merged)
+	if err != nil {
+		return "", err
+	}
+	for key, value := range map[string]string{
+		"STEALTH_INGRESS_IP_RANGE":       ingress.IPRange,
+		"STEALTH_TRAEFIK_INGRESS_IP":     ingress.TraefikIP,
+		"STEALTH_CLOUDFLARED_INGRESS_IP": ingress.CloudflaredIP,
+	} {
+		if strings.TrimSpace(result[key]) == "" {
+			updates[key] = value
+		}
+	}
+	trustedProxy := ensureTraefikTrustedProxyCIDR(result["TRUSTED_PROXY_CIDRS"], result["STEALTH_NETWORK_SUBNET"], ingress.trustedProxyCIDR())
 	if trustedProxy != strings.TrimSpace(result["TRUSTED_PROXY_CIDRS"]) {
 		updates["TRUSTED_PROXY_CIDRS"] = trustedProxy
 	}
@@ -259,17 +295,17 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 	return MergeEnv(result, updates)
 }
 
-func ensureTraefikTrustedProxyCIDR(value, fallbackSubnet string) string {
+func ensureTraefikTrustedProxyCIDR(value, fallbackSubnet, traefikPeerCIDR string) string {
 	trusted := strings.TrimSpace(value)
 	if trusted == "" {
 		trusted = firstNonEmpty(strings.TrimSpace(fallbackSubnet), "172.30.0.0/24")
 	}
 	for _, entry := range strings.Split(trusted, ",") {
-		if strings.TrimSpace(entry) == traefikTrustedProxyCIDR {
+		if strings.TrimSpace(entry) == strings.TrimSpace(traefikPeerCIDR) {
 			return trusted
 		}
 	}
-	return trusted + "," + traefikTrustedProxyCIDR
+	return trusted + "," + strings.TrimSpace(traefikPeerCIDR)
 }
 
 func validateConfigValues(values map[string]string) error {

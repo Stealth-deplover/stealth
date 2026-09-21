@@ -48,6 +48,11 @@ func TestManagedAssetUpgradeSmoke(t *testing.T) {
 		"STEALTH_TELEMETRY_INGEST_NETWORK_NAME",
 		"TRUSTED_PROXY_CIDRS",
 		"OTEL_DOCKER_LOGS_VOLUME_NAME",
+		"STEALTH_INGRESS_NETWORK_NAME",
+		"STEALTH_INGRESS_NETWORK_SUBNET",
+		"STEALTH_INGRESS_IP_RANGE",
+		"STEALTH_TRAEFIK_INGRESS_IP",
+		"STEALTH_CLOUDFLARED_INGRESS_IP",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
 			t.Fatalf("upgrade migration did not add required config key %s", key)

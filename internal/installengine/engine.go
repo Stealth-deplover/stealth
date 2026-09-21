@@ -381,7 +381,7 @@ func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
-		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, validate: validateTraefikStaticAsset},
+		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, render: renderTraefikStaticAsset, validate: validateTraefikStaticAsset},
 		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
 		{Path: "traefik/dynamic/generated/.gitkeep", RemotePath: "traefik/dynamic/generated/.gitkeep", Marker: "Stealth route reconciler", productionOnly: true},
 		{Path: "telemetry/otel-collector.yaml", RemotePath: "telemetry/otel-collector.yaml", Marker: "receivers:", validate: validateMainCollectorAsset},
@@ -521,6 +521,7 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	prepared := &preparedInstallation{
 		layout: plan.Layout,
 	}
+	var originalValues map[string]string
 	if contents, err := os.ReadFile(plan.Layout.VersionFile); err == nil {
 		prepared.originalVersion = contents
 		prepared.originalVersionSet = true
@@ -543,6 +544,10 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		values, err := ReadEnvFile(plan.Layout.EnvFile)
 		if err != nil {
 			return nil, fmt.Errorf("parse existing configuration: %w", err)
+		}
+		originalValues = make(map[string]string, len(values))
+		for key, value := range values {
+			originalValues[key] = value
 		}
 		installedVersion := strings.TrimSpace(plan.InstalledVersion)
 		if installedVersion == "" && prepared.originalVersionSet {
@@ -572,7 +577,34 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		}
 		prepared.newEnv = []byte(contents)
 	}
-	assets, err := e.stageManagedAssets(ctx, plan)
+	if !plan.Setup {
+		values, err := ParseEnvContents(string(prepared.newEnv))
+		if err != nil {
+			return nil, fmt.Errorf("parse prepared configuration: %w", err)
+		}
+		if originalValues == nil {
+			originalValues = values
+		}
+		ingress, err := e.resolveIngressNetworkConfig(ctx, plan, values, originalValues)
+		if err != nil {
+			return nil, fmt.Errorf("prepare ingress network configuration: %w", err)
+		}
+		if previous, previousErr := ingressNetworkConfigFromValues(originalValues); previousErr == nil && previous.trustedProxyCIDR() != ingress.trustedProxyCIDR() {
+			// The previous peer was installer-derived whenever automatic subnet
+			// selection or legacy-network adoption changes it. Remove only that
+			// exact generated entry; all other operator proxy CIDRs survive.
+			values["TRUSTED_PROXY_CIDRS"] = removeTrustedProxyCIDR(values["TRUSTED_PROXY_CIDRS"], previous.trustedProxyCIDR())
+		}
+		setIngressNetworkValues(values, ingress)
+		trustedProxy := ensureTraefikTrustedProxyCIDR(values["TRUSTED_PROXY_CIDRS"], values["STEALTH_NETWORK_SUBNET"], ingress.trustedProxyCIDR())
+		if trustedProxy != strings.TrimSpace(values["TRUSTED_PROXY_CIDRS"]) {
+			values["TRUSTED_PROXY_CIDRS"] = trustedProxy
+		}
+		prepared.newEnv = []byte(FormatEnvFile(values))
+	}
+	assetPlan := plan
+	assetPlan.ConfigContents = string(prepared.newEnv)
+	assets, err := e.stageManagedAssets(ctx, assetPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -1486,8 +1518,12 @@ func ReadEnvFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseEnvContents(string(contents))
+}
+
+func ParseEnvContents(contents string) (map[string]string, error) {
 	values := make(map[string]string)
-	for lineNumber, rawLine := range strings.Split(string(contents), "\n") {
+	for lineNumber, rawLine := range strings.Split(contents, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

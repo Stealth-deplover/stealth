@@ -436,10 +436,9 @@ services:
       start_period: 10s
     networks:
       stealth_ingress:
-        # Keep the Traefik peer outside Docker's low-address automatic
-        # allocation range. API and Console remain dynamically addressable,
-        # including for safe one-off `docker compose run` operations.
-        ipv4_address: 172.31.0.254
+        # The peer is persisted by the installer and intentionally sits
+        # outside the dynamic workload pool.
+        ipv4_address: "${STEALTH_TRAEFIK_INGRESS_IP:?set STEALTH_TRAEFIK_INGRESS_IP}"
 
   cloudflared:
     image: "${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.9.0}"
@@ -456,7 +455,7 @@ services:
       # Keep the future origin attachment ready without changing the current
       # remotely configured Cloudflare Tunnel origin (still proxy/Nginx).
       stealth_ingress:
-        ipv4_address: 172.31.0.10
+        ipv4_address: "${STEALTH_CLOUDFLARED_INGRESS_IP:?set STEALTH_CLOUDFLARED_INGRESS_IP}"
 
 volumes:
   postgres_data:
@@ -492,7 +491,8 @@ networks:
     internal: true
     ipam:
       config:
-        # Fixed addresses below are part of the forwarded-header trust model;
-        # keep this dedicated subnet stable and customize only the network
-        # name when multiple installations share a Docker host.
-        - subnet: "172.31.0.0/24"
+        # The installer persists the subnet and pool per installation. Fixed
+        # infrastructure peers are outside this range so dynamic app/workload
+        # allocation cannot consume trusted addresses.
+        - subnet: "${STEALTH_INGRESS_NETWORK_SUBNET:?set STEALTH_INGRESS_NETWORK_SUBNET}"
+          ip_range: "${STEALTH_INGRESS_IP_RANGE:?set STEALTH_INGRESS_IP_RANGE}"

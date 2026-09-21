@@ -101,11 +101,11 @@ func testMainCollectorAsset() string {
 }
 
 func testTraefikStaticAsset() string {
-	return "entryPoints:\n  web:\n    address: \":8080\"\n  health:\n    address: \":8081\"\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n"
+	return "entryPoints:\n  web:\n    address: \":8080\"\n    forwardedHeaders:\n      trustedIPs:\n        - \"__STEALTH_CLOUDFLARED_TRUSTED_CIDR__\"\n  health:\n    address: \":8081\"\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n"
 }
 
 func testTraefikCoreAsset() string {
-	return "http:\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n"
+	return "http:\n  middlewares:\n    stealth-security-headers:\n      headers:\n        customResponseHeaders:\n          X-Content-Type-Options: \"nosniff\"\n          Referrer-Policy: \"strict-origin-when-cross-origin\"\n          Permissions-Policy: \"camera=(), microphone=(), geolocation=(), payment=()\"\n          X-Frame-Options: \"DENY\"\n          Content-Security-Policy: \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';\"\n    stealth-request-body-limit:\n      buffering:\n        maxRequestBodyBytes: 104857600\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      middlewares: [stealth-security-headers, stealth-request-body-limit]\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      middlewares: [stealth-security-headers, stealth-request-body-limit]\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n"
 }
 
 func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
@@ -450,6 +450,9 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for asset, want := range targetAssets {
+		if asset == "traefik/traefik.yaml" {
+			want = strings.ReplaceAll(want, "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__", "172.31.0.10/32")
+		}
 		if asset == "traefik/dynamic/core.yaml" {
 			want = strings.ReplaceAll(want, "__STEALTH_PUBLIC_HOST__", "127.0.0.1")
 		}
@@ -481,6 +484,94 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 	}
 	if values["OTEL_DOCKER_LOGS_COLLECTOR_IMAGE"] != ImageName("stealth-otel-docker-logs", targetVersion) {
 		t.Fatalf("migration did not add target Docker-log image: %#v", values)
+	}
+	for key, want := range map[string]string{
+		"STEALTH_INGRESS_NETWORK_SUBNET": "172.31.0.0/24",
+		"STEALTH_INGRESS_IP_RANGE":       "172.31.0.64/26",
+		"STEALTH_TRAEFIK_INGRESS_IP":     "172.31.0.254",
+		"STEALTH_CLOUDFLARED_INGRESS_IP": "172.31.0.10",
+	} {
+		if values[key] != want {
+			t.Fatalf("migration did not add %s=%s: %#v", key, want, values)
+		}
+	}
+	if !strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.0.254/32") {
+		t.Fatalf("migration did not add the rendered Traefik peer: %q", values["TRUSTED_PROXY_CIDRS"])
+	}
+}
+
+func TestPreparePreservesPersistedIngressNetwork(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values["STEALTH_INGRESS_NETWORK_NAME"] = "operator_ingress"
+	values["STEALTH_INGRESS_NETWORK_SUBNET"] = "10.44.8.0/24"
+	values["STEALTH_INGRESS_IP_RANGE"] = "10.44.8.64/26"
+	values["STEALTH_TRAEFIK_INGRESS_IP"] = "10.44.8.254"
+	values["STEALTH_CLOUDFLARED_INGRESS_IP"] = "10.44.8.10"
+	values["TRUSTED_PROXY_CIDRS"] = "172.30.0.0/24,10.44.8.254/32"
+	contents, err := MergeEnv(values, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePrivateFile(layout.EnvFile, contents); err != nil {
+		t.Fatal(err)
+	}
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{AssetBaseURL: assetServer.URL, Runner: &fakeRunner{}})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"STEALTH_INGRESS_NETWORK_NAME":   "operator_ingress",
+		"STEALTH_INGRESS_NETWORK_SUBNET": "10.44.8.0/24",
+		"STEALTH_INGRESS_IP_RANGE":       "10.44.8.64/26",
+		"STEALTH_TRAEFIK_INGRESS_IP":     "10.44.8.254",
+		"STEALTH_CLOUDFLARED_INGRESS_IP": "10.44.8.10",
+	} {
+		if got[key] != want {
+			t.Fatalf("repair changed %s to %q, want %q", key, got[key], want)
+		}
+	}
+	if got["TRUSTED_PROXY_CIDRS"] != "172.30.0.0/24,10.44.8.254/32" {
+		t.Fatalf("repair changed trusted peers: %q", got["TRUSTED_PROXY_CIDRS"])
+	}
+}
+
+func TestPrepareRemovesDefaultPeerWhenAutoSelectingFreeSubnet(t *testing.T) {
+	layout, err := NewLayout(filepath.Join(t.TempDir(), "stealth"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := GenerateConfig(ConfigOptions{Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	engine := New(Options{
+		AssetBaseURL: assetServer.URL,
+		Runner:       ingressNetworkTestRunner{networks: []testDockerNetwork{{name: "unrelated", subnet: defaultIngressSubnet}}},
+	})
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", ConfigContents: config}); err != nil {
+		t.Fatal(err)
+	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["STEALTH_INGRESS_NETWORK_SUBNET"] != "172.31.1.0/24" {
+		t.Fatalf("auto-selected subnet = %q", values["STEALTH_INGRESS_NETWORK_SUBNET"])
+	}
+	if strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.0.254/32") || !strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.1.254/32") {
+		t.Fatalf("trusted peers did not follow auto-selected subnet: %q", values["TRUSTED_PROXY_CIDRS"])
 	}
 }
 
@@ -565,7 +656,7 @@ func TestPrepareFailureLeavesExistingInstallationRecoverable(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer server.Close()
-	engine := New(Options{AssetBaseURL: server.URL})
+	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL})
 	err = engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true})
 	if err == nil || !strings.Contains(err.Error(), "download managed asset") {
 		t.Fatalf("failed preparation error = %v", err)

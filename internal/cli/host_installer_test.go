@@ -116,8 +116,8 @@ func writeHostManagedAsset(w http.ResponseWriter, name string) {
 		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
 		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
 		"console/deploy/nginx.conf":          "server {\n}\n",
-		"traefik/traefik.yaml":               "entryPoints:\n  web:\n    address: :8080\n  health:\n    address: :8081\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n",
-		"traefik/dynamic/core.yaml":          "http:\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n",
+		"traefik/traefik.yaml":               testManagedTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":          testManagedTraefikCoreAsset(),
 		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
 	}
 	if contents, ok := assets[name]; ok {
@@ -143,10 +143,10 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 8 {
+	if len(runner.calls) != 9 {
 		t.Fatalf("host Docker calls = %#v, want both Collector state inits, production steps, and setup cleanup", runner.calls)
 	}
-	if got := runner.command(3).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
+	if got := runner.command(4).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", got)
 	}
 	if got := runner.command(len(runner.calls) - 1).args; !equalStrings(got, []string{"compose", "--env-file", fixture.layout.EnvFile, "-f", fixture.layout.SetupComposeFile, "rm", "-sf", "setup", "setup-console", "setup-proxy"}) {
@@ -315,15 +315,17 @@ func TestHostInstallerFailureIsDurableAndProgressIsSafe(t *testing.T) {
 }
 
 type blockingHostRunner struct {
-	mu      sync.Mutex
-	calls   []recordedCommand
-	started chan struct{}
+	mu       sync.Mutex
+	calls    []recordedCommand
+	runCalls int
+	started  chan struct{}
 }
 
 func (r *blockingHostRunner) Run(ctx context.Context, _ string, _, _ io.Writer, name string, args ...string) error {
 	r.mu.Lock()
 	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
-	first := len(r.calls) == 1
+	r.runCalls++
+	first := r.runCalls == 1
 	r.mu.Unlock()
 	if first {
 		close(r.started)

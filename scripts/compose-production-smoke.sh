@@ -22,6 +22,9 @@ filelog_smoke_pid=""
 core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
 core_backup=""
 core_modified="false"
+static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
+static_backup=""
+static_modified="false"
 cleanup() {
 	local exit_code=$?
 	if [ -n "$filelog_smoke_pid" ]; then
@@ -41,6 +44,9 @@ cleanup() {
 	fi
 	if [ "$core_modified" = "true" ] && [ -n "$core_backup" ]; then
 		cp -- "$core_backup" "$core_file" || true
+	fi
+	if [ "$static_modified" = "true" ] && [ -n "$static_backup" ]; then
+		cp -- "$static_backup" "$static_file" || true
 	fi
 	rm -f "$cookie_file" "$register_response"
 	if [ -n "$core_backup" ]; then
@@ -80,6 +86,69 @@ path, host = sys.argv[1:]
 with open(path, encoding="utf-8") as source:
     contents = source.read()
 contents = contents.replace("__STEALTH_PUBLIC_HOST__", host)
+temporary = path + ".smoke.tmp"
+with open(temporary, "w", encoding="utf-8") as target:
+    target.write(contents)
+    target.flush()
+    os.fsync(target.fileno())
+os.replace(temporary, path)
+PY
+	core_modified="true"
+fi
+cloudflared_ingress_ip="$(awk -F= '$1 == "STEALTH_CLOUDFLARED_INGRESS_IP" { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
+cloudflared_ingress_ip="${cloudflared_ingress_ip%$'\r'}"
+if [ -z "$cloudflared_ingress_ip" ]; then
+	printf 'STEALTH_CLOUDFLARED_INGRESS_IP is required for Traefik smoke rendering\n' >&2
+	exit 2
+fi
+if grep -Fq '__STEALTH_CLOUDFLARED_TRUSTED_CIDR__' "$static_file"; then
+	static_backup="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-static.XXXXXX")"
+	cp -- "$static_file" "$static_backup"
+	python3 - "$static_file" "$cloudflared_ingress_ip" <<'PY'
+import os
+import sys
+
+path, peer = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    contents = source.read()
+contents = contents.replace("__STEALTH_CLOUDFLARED_TRUSTED_CIDR__", peer + "/32")
+temporary = path + ".smoke.tmp"
+with open(temporary, "w", encoding="utf-8") as target:
+    target.write(contents)
+    target.flush()
+    os.fsync(target.fileno())
+os.replace(temporary, path)
+PY
+	static_modified="true"
+fi
+test_body_limit="${TRAEFIK_BODY_LIMIT_TEST_BYTES:-}"
+if [ -z "$test_body_limit" ]; then
+	test_body_limit="$(awk -F= '$1 == "TRAEFIK_BODY_LIMIT_TEST_BYTES" { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
+	test_body_limit="${test_body_limit%$'\r'}"
+fi
+if [ -n "$test_body_limit" ]; then
+	case "$test_body_limit" in
+		*[!0-9]*|0) printf 'TRAEFIK_BODY_LIMIT_TEST_BYTES must be a positive integer\n' >&2; exit 2 ;;
+	esac
+	if [ "$test_body_limit" -ge 104857600 ]; then
+		printf 'TRAEFIK_BODY_LIMIT_TEST_BYTES must be below the production 100 MiB limit\n' >&2
+		exit 2
+	fi
+	if [ -z "$core_backup" ]; then
+		core_backup="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-core.XXXXXX")"
+		cp -- "$core_file" "$core_backup"
+	fi
+	python3 - "$core_file" "$test_body_limit" <<'PY'
+import os
+import sys
+
+path, limit = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    contents = source.read()
+needle = "maxRequestBodyBytes: 104857600"
+if needle not in contents:
+    raise SystemExit("production Traefik body limit marker was not found")
+contents = contents.replace(needle, "maxRequestBodyBytes: " + limit, 1)
 temporary = path + ".smoke.tmp"
 with open(temporary, "w", encoding="utf-8") as target:
     target.write(contents)
@@ -344,41 +413,207 @@ verify_traefik_runtime_boundaries() {
 	printf 'Traefik security, health, and network boundaries passed\n'
 }
 
-traefik_http_status() {
-	local path="$1" host="$2" cookie_header="${3:-}" output status
-	output="$("${compose[@]}" exec -T api sh -ec '
-		path="$1"; host="$2"; cookie="$3"
+ingress_env_value() {
+	local key="$1" value
+	value="$(awk -F= -v key="$key" '$1 == key { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
+	printf '%s\n' "${value%$'\r'}"
+}
+
+verify_traefik_network_address_model() {
+	local ingress_network subnet ip_range traefik_ip cloudflared_ip container actual_ip api_container api_image temp_id temp_ip ipam_json compose_config
+	ingress_network="$(traefik_ingress_network_name)"
+	subnet="$(ingress_env_value STEALTH_INGRESS_NETWORK_SUBNET)"
+	ip_range="$(ingress_env_value STEALTH_INGRESS_IP_RANGE)"
+	traefik_ip="$(ingress_env_value STEALTH_TRAEFIK_INGRESS_IP)"
+	cloudflared_ip="$(ingress_env_value STEALTH_CLOUDFLARED_INGRESS_IP)"
+	container="$("${compose[@]}" ps -q traefik)"
+	actual_ip="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$ingress_network\").IPAddress}}" "$container")"
+	if [ "$actual_ip" != "$traefik_ip" ]; then
+		printf 'Traefik runtime IP = %s, want persisted %s\n' "$actual_ip" "$traefik_ip" >&2
+		return 1
+	fi
+	compose_config="$("${compose[@]}" --profile cloudflare config)"
+	if ! printf '%s\n' "$compose_config" | grep -Fq "ipv4_address: $cloudflared_ip"; then
+		printf 'rendered Cloudflared profile does not reserve persisted IP %s\n' "$cloudflared_ip" >&2
+		return 1
+	fi
+	ipam_json="$(docker network inspect --format '{{json .IPAM.Config}}' "$ingress_network")"
+	if ! python3 -c 'import ipaddress, json, sys; subnet = ipaddress.ip_network(sys.argv[1]); pool = ipaddress.ip_network(sys.argv[2]); configs = json.loads(sys.argv[3]); raise SystemExit(0 if any(item.get("Subnet") == str(subnet) and item.get("IPRange") == str(pool) for item in configs) else 1)' "$subnet" "$ip_range" "$ipam_json"; then
+		printf 'Docker ingress IPAM does not match persisted subnet=%s pool=%s\n' "$subnet" "$ip_range" >&2
+		return 1
+	fi
+	api_container="$("${compose[@]}" ps -q api)"
+	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
+	for _ in 1 2 3; do
+		temp_id="$(docker run -d --rm --network "$ingress_network" --entrypoint sh "$api_image" -ec 'sleep 20')"
+		temp_ip="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$ingress_network\").IPAddress}}" "$temp_id")"
+		if [ "$temp_ip" = "$traefik_ip" ] || [ "$temp_ip" = "$cloudflared_ip" ]; then
+			docker rm -f "$temp_id" >/dev/null 2>&1 || true
+			printf 'dynamic ingress allocation consumed reserved peer %s\n' "$temp_ip" >&2
+			return 1
+		fi
+		if ! python3 -c 'import ipaddress, sys; raise SystemExit(0 if ipaddress.ip_address(sys.argv[2]) in ipaddress.ip_network(sys.argv[1]) else 1)' "$ip_range" "$temp_ip"; then
+			docker rm -f "$temp_id" >/dev/null 2>&1 || true
+			printf 'dynamic ingress allocation escaped pool %s: %s\n' "$ip_range" "$temp_ip" >&2
+			return 1
+		fi
+		docker rm -f "$temp_id" >/dev/null 2>&1 || true
+	done
+	printf 'Traefik persisted IP and reserved dynamic ingress pool passed: subnet=%s pool=%s traefik=%s cloudflared=%s\n' "$subnet" "$ip_range" "$traefik_ip" "$cloudflared_ip"
+}
+
+http_probe_output() {
+	local service="$1" path="$2" host="$3" cookie_header="${4:-}" forwarded_proto="${5:-}" target
+	case "$service" in
+		proxy) target="http://proxy${path}" ;;
+		traefik) target="http://traefik:8080${path}" ;;
+		*) printf 'unknown probe service %s\n' "$service" >&2; return 2 ;;
+	esac
+	"${compose[@]}" exec -T api sh -ec '
+		path="$1"; host="$2"; cookie="$3"; forwarded_proto="$4"; target="$5"
 		set -- --header "Host: $host"
 		if [ -n "$cookie" ]; then set -- "$@" --header "Cookie: $cookie"; fi
-		wget -S -O /dev/null --timeout=8 "$@" "http://traefik:8080$path" 2>&1 || true
-	' sh "$path" "$host" "$cookie_header")"
-	status="$(printf '%s\n' "$output" | awk '/HTTP\/[0-9.]+/ { code=$2 } END { gsub(/\r/, "", code); print code }')"
-	printf '%s\n' "$status"
+		if [ -n "$forwarded_proto" ]; then set -- "$@" --header "X-Forwarded-Proto: $forwarded_proto"; fi
+		wget -S -O /dev/null --timeout=8 "$@" "$target" 2>&1 || true
+	' sh "$path" "$host" "$cookie_header" "$forwarded_proto" "$target"
+}
+
+http_probe_status() {
+	local output="$1"
+	printf '%s\n' "$output" | awk '/HTTP\/[0-9.]+/ { code=$2 } END { gsub(/\r/, "", code); print code }'
+}
+
+http_probe_header() {
+	local output="$1" wanted="$2"
+	printf '%s\n' "$output" | awk -v wanted="$wanted" '
+	BEGIN { wanted = tolower(wanted) }
+	{
+		line = $0
+		sub(/\r$/, "", line)
+		colon = index(line, ":")
+		if (colon > 0 && tolower(substr(line, 1, colon - 1)) == wanted) {
+			value = substr(line, colon + 1)
+			sub(/^[[:space:]]+/, "", value)
+			print value
+			exit
+		}
+	}'
+}
+
+http_probe_body_digest() {
+	local service="$1" path="$2" host="$3" cookie_header="${4:-}" target
+	case "$service" in
+		proxy) target="http://proxy${path}" ;;
+		traefik) target="http://traefik:8080${path}" ;;
+		*) return 2 ;;
+	esac
+	"${compose[@]}" exec -T api sh -ec '
+		path="$1"; host="$2"; cookie="$3"; target="$4"
+		set -- --header "Host: $host"
+		if [ -n "$cookie" ]; then set -- "$@" --header "Cookie: $cookie"; fi
+	wget -q -O - --timeout=8 "$@" "$target" 2>/dev/null | sha256sum | awk "{print \$1}"
+	' sh "$path" "$host" "$cookie_header" "$target"
+}
+
+traefik_http_status() {
+	http_probe_status "$(http_probe_output traefik "$1" "$2" "${3:-}")"
+}
+
+traefik_post_status() {
+	local size="$1" host="$2" output
+	output="$("${compose[@]}" exec -T api sh -ec '
+		size="$1"; host="$2"
+		payload="$(dd if=/dev/zero bs=1 count="$size" 2>/dev/null | tr "\\000" x)"
+		wget -S -O /dev/null --timeout=20 --header "Host: $host" --header "Content-Type: application/octet-stream" --post-data="$payload" "http://traefik:8080/v1/account" 2>&1 || true
+	' sh "$size" "$host")"
+	http_probe_status "$output"
+}
+
+verify_request_body_limit() {
+	local configured="${test_body_limit:-}" small_status large_status
+	if [ -z "$configured" ]; then
+		printf 'Traefik production request body policy validated statically at 100 MiB\n'
+		return 0
+	fi
+	small_status="$(traefik_post_status $((configured - 1)) "$traefik_host")"
+	large_status="$(traefik_post_status "$((configured + 1))" "$traefik_host")"
+	if [ "$small_status" = "413" ] || [ "$large_status" != "413" ]; then
+		printf 'Traefik request body limit statuses small=%s large=%s limit=%s\n' "$small_status" "$large_status" "$configured" >&2
+		return 1
+	fi
+	printf 'Traefik request body limit middleware rejected only the over-limit request (test limit=%s bytes)\n' "$configured"
+}
+
+verify_nginx_traefik_parity() {
+	local path nginx_response traefik_response nginx_status traefik_status nginx_digest traefik_digest header nginx_header traefik_header
+	for path in / /v1/account /healthz /readyz /version /not-a-real-route; do
+		nginx_response="$(http_probe_output proxy "$path" "$traefik_host" "$auth_cookie_header")"
+		traefik_response="$(http_probe_output traefik "$path" "$traefik_host" "$auth_cookie_header")"
+		nginx_status="$(http_probe_status "$nginx_response")"
+		traefik_status="$(http_probe_status "$traefik_response")"
+		if [ "$nginx_status" != "$traefik_status" ]; then
+			printf 'Nginx/Traefik status mismatch path=%s nginx=%s traefik=%s\n' "$path" "$nginx_status" "$traefik_status" >&2
+			return 1
+		fi
+		nginx_digest="$(http_probe_body_digest proxy "$path" "$traefik_host" "$auth_cookie_header")"
+		traefik_digest="$(http_probe_body_digest traefik "$path" "$traefik_host" "$auth_cookie_header")"
+		if [ "$nginx_digest" != "$traefik_digest" ]; then
+			printf 'Nginx/Traefik body mismatch path=%s nginx=%s traefik=%s\n' "$path" "$nginx_digest" "$traefik_digest" >&2
+			return 1
+		fi
+		if [ "$path" = "/" ] || [ "$path" = "/v1/account" ]; then
+			for header in X-Content-Type-Options Referrer-Policy Permissions-Policy X-Frame-Options Content-Security-Policy; do
+				nginx_header="$(http_probe_header "$nginx_response" "$header")"
+				traefik_header="$(http_probe_header "$traefik_response" "$header")"
+				if [ "$nginx_header" != "$traefik_header" ]; then
+					printf 'Nginx/Traefik header mismatch path=%s header=%s nginx=%q traefik=%q\n' "$path" "$header" "$nginx_header" "$traefik_header" >&2
+					return 1
+				fi
+			done
+		fi
+	done
+	local nginx_https_response nginx_hsts traefik_https_response traefik_hsts
+	nginx_https_response="$(http_probe_output proxy / "$traefik_host" "$auth_cookie_header" https)"
+	nginx_hsts="$(http_probe_header "$nginx_https_response" Strict-Transport-Security)"
+	if [ "$nginx_hsts" != 'max-age=31536000; includeSubDomains' ]; then
+		printf 'Nginx HTTPS HSTS policy = %q, want the current edge policy\n' "$nginx_hsts" >&2
+		return 1
+	fi
+	traefik_https_response="$(http_probe_output traefik / "$traefik_host" "$auth_cookie_header" https)"
+	traefik_hsts="$(http_probe_header "$traefik_https_response" Strict-Transport-Security)"
+	if [ -n "$traefik_hsts" ]; then
+		printf 'Traefik trusted-header boundary accepted HSTS-triggering X-Forwarded-Proto from an untrusted smoke peer: %q\n' "$traefik_hsts" >&2
+		return 1
+	fi
+	local unknown_nginx unknown_traefik
+	unknown_nginx="$(http_probe_status "$(http_probe_output proxy / unknown.example.invalid)")"
+	unknown_traefik="$(http_probe_status "$(http_probe_output traefik / unknown.example.invalid)")"
+	if [ "$unknown_traefik" != "404" ]; then
+		printf 'Traefik unknown host status = %s, want 404\n' "$unknown_traefik" >&2
+		return 1
+	fi
+	# The legacy Nginx file has one default server and therefore accepts an
+	# unmatched Host; Traefik deliberately closes that broader legacy surface.
+	printf 'Nginx/Traefik parity passed for core paths and security headers; unknown-host legacy Nginx=%s, Traefik=%s (documented hardening)\n' "$unknown_nginx" "$unknown_traefik"
 }
 
 verify_traefik_routing() {
 	local status sse_headers
-	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" "http://traefik:8080/healthz" >/dev/null' sh "$traefik_host"; then
-		printf 'Traefik API health route did not return successfully\n' >&2
+	status="$(traefik_http_status / "$traefik_host")"
+	if [ "$status" != "200" ]; then
+		printf 'Traefik Console route status = %q, want 200\n' "$status" >&2
 		return 1
 	fi
-	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" "http://traefik:8080/" >/dev/null' sh "$traefik_host"; then
-		printf 'Traefik Console route did not return successfully\n' >&2
-		return 1
-	fi
-	if ! "${compose[@]}" exec -T api sh -ec 'wget -qO- --timeout=8 --header="Host: $1" --header="Cookie: $2" "http://traefik:8080/v1/account" >/dev/null' sh "$traefik_host" "$auth_cookie_header"; then
-		printf 'Traefik API path-preservation request failed\n' >&2
-		return 1
-	fi
-	status="$(traefik_http_status /not-a-real-route "$traefik_host")"
-	if [ "$status" != "404" ]; then
-		printf 'Traefik unknown path status = %q, want 404\n' "$status" >&2
-		return 1
-	fi
-	# A router scoped to PUBLIC_APP_URL must reject an unrelated Host header.
-	status="$(traefik_http_status / unknown.example.invalid "")"
-	if [ "$status" != "404" ]; then
-		printf 'Traefik unknown host status = %q, want 404\n' "$status" >&2
+	for path in /healthz /readyz /version /not-a-real-route; do
+		status="$(traefik_http_status "$path" "$traefik_host" "$auth_cookie_header")"
+		if [ "$status" != "404" ]; then
+			printf 'Traefik Console fallback path=%s status=%q, want 404\n' "$path" "$status" >&2
+			return 1
+		fi
+	done
+	status="$(traefik_http_status /v1/account "$traefik_host" "$auth_cookie_header")"
+	if [ "$status" = "404" ] || [ -z "$status" ]; then
+		printf 'Traefik API path-preservation request status = %q\n' "$status" >&2
 		return 1
 	fi
 	status="$(traefik_http_status /dashboard/ "$traefik_host")"
@@ -401,7 +636,9 @@ verify_traefik_routing() {
 		printf 'Traefik Admin realtime did not preserve SSE content type:\n%s\n' "$sse_headers" >&2
 		return 1
 	fi
-	printf 'Traefik core API, Console, fail-closed, and SSE routing passed\n'
+	verify_request_body_limit
+	verify_nginx_traefik_parity
+	printf 'Traefik core API, Console fallback, fail-closed, SSE, body-size, and Nginx parity checks passed\n'
 }
 
 verify_telemetry_runtime_boundaries() {
@@ -661,6 +898,7 @@ wait_for_healthy proxy
 wait_for_healthy traefik
 verify_telemetry_runtime_boundaries
 verify_traefik_runtime_boundaries
+verify_traefik_network_address_model
 
 api_endpoint="$("${compose[@]}" port api 8080 | head -n 1)"
 console_endpoint="$("${compose[@]}" port console 3000 | head -n 1)"

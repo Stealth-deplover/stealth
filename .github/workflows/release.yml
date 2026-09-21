@@ -265,10 +265,15 @@ jobs:
           GITHUB_APP_CLIENT_ID=smoke-client-id
           PUBLIC_APP_URL=http://127.0.0.1:13000
           COOKIE_SECURE=false
-          TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.2/32
+          TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.254/32
           STEALTH_NETWORK_SUBNET=172.30.0.0/24
           STEALTH_NETWORK_NAME=stealth_release_smoke_network_${GITHUB_RUN_ID}
           STEALTH_INGRESS_NETWORK_NAME=stealth_release_smoke_ingress_${GITHUB_RUN_ID}
+          STEALTH_INGRESS_NETWORK_SUBNET=172.31.0.0/24
+          STEALTH_INGRESS_IP_RANGE=172.31.0.64/26
+          STEALTH_TRAEFIK_INGRESS_IP=172.31.0.254
+          STEALTH_CLOUDFLARED_INGRESS_IP=172.31.0.10
+          TRAEFIK_BODY_LIMIT_TEST_BYTES=4096
           STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_release_smoke_telemetry_store_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_INGEST_NETWORK_NAME=stealth_release_smoke_telemetry_ingest_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_release_smoke_telemetry_docker_${GITHUB_RUN_ID}

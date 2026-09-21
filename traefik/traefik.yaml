@@ -16,7 +16,7 @@ entryPoints:
       # forwarded-header chain. Direct clients on the ingress network are not
       # trusted merely because they can connect to the entrypoint.
       trustedIPs:
-        - "172.31.0.10/32"
+        - "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__"
     transport:
       respondingTimeouts:
         # The API accepts large uploads and long-running requests. SSE and
