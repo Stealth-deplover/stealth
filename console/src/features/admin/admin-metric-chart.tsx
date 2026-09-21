@@ -15,6 +15,7 @@ import {
 } from "echarts/components";
 import { LineChart, type LineSeriesOption } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
+import type { components } from "@/api/generated/schema";
 import { formatDate } from "@/lib/format";
 
 echarts.use([
@@ -34,12 +35,23 @@ type MetricChartOption = ComposeOption<
   | TooltipComponentOption
 >;
 
-type AdminMetric = {
-  timestamp: string;
-  name: string;
-  service: string;
-  value: number;
-};
+type AdminMetric = components["schemas"]["AdminMetric"];
+
+function metricValueLabel(item: AdminMetric) {
+  if (item.value !== undefined) {
+    return item.value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  }
+  if (item.histogram) {
+    return `count=${item.histogram.count.toLocaleString()} sum=${item.histogram.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  }
+  if (item.summary) {
+    return `count=${item.summary.count.toLocaleString()} sum=${item.summary.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  }
+  if (item.exponential_histogram) {
+    return `count=${item.exponential_histogram.count.toLocaleString()} sum=${item.exponential_histogram.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+  }
+  return "Structured value";
+}
 
 export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
   const chartRef = useRef<HTMLDivElement>(null);
@@ -49,8 +61,9 @@ export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
     const element = chartRef.current;
     if (!element || !items.length) return;
     const chart = echarts.init(element, undefined, { renderer: "canvas" });
+    const scalarItems = items.filter((item) => item.value !== undefined);
     const grouped = new Map<string, AdminMetric[]>();
-    for (const item of items) {
+    for (const item of scalarItems) {
       const key = `${item.service} · ${item.name}`;
       const group = grouped.get(key) ?? [];
       group.push(item);
@@ -126,8 +139,9 @@ export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
     };
   }, [items]);
 
+  const scalarItems = items.filter((item) => item.value !== undefined);
   const totalSeriesCount = new Set(
-    items.map((item) => `${item.service} · ${item.name}`),
+    scalarItems.map((item) => `${item.service} · ${item.name}`),
   ).size;
   const seriesCount = Math.min(totalSeriesCount, 8);
   const seriesLabel =
@@ -145,9 +159,10 @@ export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
         aria-describedby={descriptionId}
       />
       <p id={descriptionId} className="sr-only">
-        {items.length} metric points across {totalSeriesCount} series are
-        available. The chart shows up to eight series. Expand the data table to
-        inspect the timestamps, metric names, services, and values.
+        {items.length} metric points are available, including{" "}
+        {scalarItems.length} scalar points across {totalSeriesCount} series. The
+        chart shows up to eight scalar series. Expand the data table to inspect
+        structured metric values.
       </p>
       <details className="rounded-md border border-graphite bg-void">
         <summary className="flex min-h-11 cursor-pointer items-center px-3 text-xs font-medium text-mist hover:text-paper">
@@ -177,9 +192,7 @@ export function AdminMetricChart({ items }: { items: AdminMetric[] }) {
                   <td className="px-2 py-2 font-mono text-mist">{item.name}</td>
                   <td className="px-2 py-2 text-mist">{item.service}</td>
                   <td className="px-2 py-2 text-right font-mono tabular-nums text-mist">
-                    {item.value.toLocaleString(undefined, {
-                      maximumFractionDigits: 4,
-                    })}
+                    {metricValueLabel(item)}
                   </td>
                 </tr>
               ))}

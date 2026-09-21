@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -691,7 +692,7 @@ func parseFloatQuery(r *http.Request, key string, minimum, maximum float64) (flo
 		return 0, nil
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil || parsed < minimum || parsed > maximum {
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < minimum || parsed > maximum {
 		return 0, errors.New("invalid number")
 	}
 	return parsed, nil

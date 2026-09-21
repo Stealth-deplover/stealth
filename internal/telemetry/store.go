@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -214,13 +215,52 @@ type MetricsQuery struct {
 }
 
 type MetricRecord struct {
-	Timestamp          time.Time         `json:"timestamp"`
-	Name               string            `json:"name"`
-	Service            string            `json:"service"`
-	Value              float64           `json:"value"`
-	Kind               string            `json:"kind"`
-	Attributes         map[string]string `json:"attributes,omitempty"`
-	ResourceAttributes map[string]string `json:"resource_attributes,omitempty"`
+	Timestamp          time.Time                   `json:"timestamp"`
+	Name               string                      `json:"name"`
+	Service            string                      `json:"service"`
+	Value              *float64                    `json:"value,omitempty"`
+	Kind               string                      `json:"kind"`
+	Attributes         map[string]string           `json:"attributes,omitempty"`
+	ResourceAttributes map[string]string           `json:"resource_attributes,omitempty"`
+	Histogram          *MetricHistogram            `json:"histogram,omitempty"`
+	Summary            *MetricSummary              `json:"summary,omitempty"`
+	Exponential        *MetricExponentialHistogram `json:"exponential_histogram,omitempty"`
+}
+
+type MetricHistogram struct {
+	Count                  uint64    `json:"count"`
+	Sum                    float64   `json:"sum"`
+	BucketCounts           []uint64  `json:"bucket_counts"`
+	ExplicitBounds         []float64 `json:"explicit_bounds"`
+	Min                    *float64  `json:"min,omitempty"`
+	Max                    *float64  `json:"max,omitempty"`
+	AggregationTemporality int32     `json:"aggregation_temporality"`
+}
+
+type MetricQuantile struct {
+	Quantile float64 `json:"quantile"`
+	Value    float64 `json:"value"`
+}
+
+type MetricSummary struct {
+	Count                  uint64           `json:"count"`
+	Sum                    float64          `json:"sum"`
+	Quantiles              []MetricQuantile `json:"quantiles"`
+	AggregationTemporality int32            `json:"aggregation_temporality,omitempty"`
+}
+
+type MetricExponentialHistogram struct {
+	Count                  uint64   `json:"count"`
+	Sum                    float64  `json:"sum"`
+	Scale                  int32    `json:"scale"`
+	ZeroCount              uint64   `json:"zero_count"`
+	PositiveOffset         int32    `json:"positive_offset"`
+	PositiveBucketCounts   []uint64 `json:"positive_bucket_counts"`
+	NegativeOffset         int32    `json:"negative_offset"`
+	NegativeBucketCounts   []uint64 `json:"negative_bucket_counts"`
+	Min                    *float64 `json:"min,omitempty"`
+	Max                    *float64 `json:"max,omitempty"`
+	AggregationTemporality int32    `json:"aggregation_temporality"`
 }
 
 type MetricsResult struct {
@@ -290,20 +330,67 @@ ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC
 LIMIT {limit:UInt32}`
 
 const metricsQuery = `
-SELECT TimeUnix, MetricName, ServiceName, Value, Attributes, ResourceAttributes, 'gauge' AS MetricKind
-FROM otel_metrics_gauge
+SELECT TimeUnix, MetricName, ServiceName, ScalarValue, Attributes, ResourceAttributes,
+       MetricKind, MetricCount, MetricSum, BucketCounts, ExplicitBounds,
+       Quantiles, QuantileValues, Scale, ZeroCount, PositiveOffset,
+       PositiveBucketCounts, NegativeOffset, NegativeBucketCounts, MetricMin,
+       MetricMax, AggregationTemporality
+FROM (
+  SELECT TimeUnix, MetricName, ServiceName, Value AS ScalarValue, Attributes, ResourceAttributes,
+         'gauge' AS MetricKind, toUInt64(0) AS MetricCount, toFloat64(0) AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         toInt32(0) AS Scale, toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_gauge
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, Value AS ScalarValue, Attributes, ResourceAttributes,
+         'sum' AS MetricKind, toUInt64(0) AS MetricCount, toFloat64(0) AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         toInt32(0) AS Scale, toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_sum
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'histogram' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         BucketCounts, ExplicitBounds, emptyArrayFloat64() AS Quantiles,
+         emptyArrayFloat64() AS QuantileValues, toInt32(0) AS Scale,
+         toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, Min AS MetricMin,
+         Max AS MetricMax, AggregationTemporality
+  FROM otel_metrics_histogram
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'summary' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         ValueAtQuantiles.Quantile AS Quantiles,
+         ValueAtQuantiles.Value AS QuantileValues, toInt32(0) AS Scale,
+         toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_summary
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'exponential_histogram' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         Scale, ZeroCount, PositiveOffset, PositiveBucketCounts, NegativeOffset,
+         NegativeBucketCounts, Min AS MetricMin, Max AS MetricMax,
+         AggregationTemporality
+  FROM otel_metrics_exp_histogram
+)
 WHERE TimeUnix >= {from:DateTime}
   AND TimeUnix < {to:DateTime}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({name:String} = '' OR MetricName = {name:String})
-UNION ALL
-SELECT TimeUnix, MetricName, ServiceName, Value, Attributes, ResourceAttributes, 'sum' AS MetricKind
-FROM otel_metrics_sum
-WHERE TimeUnix >= {from:DateTime}
-  AND TimeUnix < {to:DateTime}
-  AND ({service:String} = '' OR ServiceName = {service:String})
-  AND ({name:String} = '' OR MetricName = {name:String})
-ORDER BY TimeUnix DESC, ServiceName ASC, MetricName ASC
+ORDER BY TimeUnix DESC, ServiceName ASC, MetricName ASC, MetricKind ASC
 LIMIT {limit:UInt32}`
 
 const sourcesQuery = `
@@ -327,7 +414,22 @@ FROM (
 	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
 	  FROM otel_metrics_sum
 	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
-  GROUP BY ServiceName
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_histogram
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_summary
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_exp_histogram
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
 )
 GROUP BY ServiceName, Signal
 ORDER BY LastReceived DESC, ServiceName ASC, Signal ASC
@@ -386,7 +488,7 @@ func (s *ClickHouseStore) QueryTraces(ctx context.Context, query TracesQuery) (T
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return TracesResult{}, err
 	}
-	if query.MinMs < 0 || query.MinMs > 24*60*60*1000 {
+	if math.IsNaN(query.MinMs) || math.IsInf(query.MinMs, 0) || query.MinMs < 0 || query.MinMs > 24*60*60*1000 {
 		return TracesResult{}, fmt.Errorf("%w: min duration is outside the allowed range", ErrInvalidQuery)
 	}
 	limit, err := clickHouseLimit(query.Limit)
@@ -447,8 +549,23 @@ func (s *ClickHouseStore) QueryMetrics(ctx context.Context, query MetricsQuery) 
 	for rows.Next() {
 		var item MetricRecord
 		var attributes, resourceAttributes map[string]string
-		if err := rows.Scan(&item.Timestamp, &item.Name, &item.Service, &item.Value, &attributes, &resourceAttributes, &item.Kind); err != nil {
+		var scalarValue, metricSum, metricMin, metricMax float64
+		var metricCount, zeroCount uint64
+		var bucketCounts, positiveBucketCounts, negativeBucketCounts []uint64
+		var explicitBounds, quantiles, quantileValues []float64
+		var scale, positiveOffset, negativeOffset, aggregationTemporality int32
+		if err := rows.Scan(&item.Timestamp, &item.Name, &item.Service, &scalarValue, &attributes, &resourceAttributes, &item.Kind, &metricCount, &metricSum, &bucketCounts, &explicitBounds, &quantiles, &quantileValues, &scale, &zeroCount, &positiveOffset, &positiveBucketCounts, &negativeOffset, &negativeBucketCounts, &metricMin, &metricMax, &aggregationTemporality); err != nil {
 			return MetricsResult{}, fmt.Errorf("scan telemetry metric: %w", err)
+		}
+		switch item.Kind {
+		case "gauge", "sum":
+			item.Value = finiteMetricValue(scalarValue)
+		case "histogram":
+			item.Histogram = &MetricHistogram{Count: metricCount, Sum: metricSum, BucketCounts: bucketCounts, ExplicitBounds: explicitBounds, Min: finiteMetricValue(metricMin), Max: finiteMetricValue(metricMax), AggregationTemporality: aggregationTemporality}
+		case "summary":
+			item.Summary = &MetricSummary{Count: metricCount, Sum: metricSum, Quantiles: metricQuantiles(quantiles, quantileValues), AggregationTemporality: aggregationTemporality}
+		case "exponential_histogram":
+			item.Exponential = &MetricExponentialHistogram{Count: metricCount, Sum: metricSum, Scale: scale, ZeroCount: zeroCount, PositiveOffset: positiveOffset, PositiveBucketCounts: positiveBucketCounts, NegativeOffset: negativeOffset, NegativeBucketCounts: negativeBucketCounts, Min: finiteMetricValue(metricMin), Max: finiteMetricValue(metricMax), AggregationTemporality: aggregationTemporality}
 		}
 		item.Attributes = redactAttributes(attributes)
 		item.ResourceAttributes = redactAttributes(resourceAttributes)
@@ -458,6 +575,28 @@ func (s *ClickHouseStore) QueryMetrics(ctx context.Context, query MetricsQuery) 
 		return MetricsResult{}, fmt.Errorf("read telemetry metrics: %w", err)
 	}
 	return result, nil
+}
+
+func finiteMetricValue(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func metricQuantiles(quantiles, values []float64) []MetricQuantile {
+	count := len(quantiles)
+	if len(values) < count {
+		count = len(values)
+	}
+	result := make([]MetricQuantile, 0, count)
+	for index := 0; index < count; index++ {
+		if math.IsNaN(quantiles[index]) || math.IsInf(quantiles[index], 0) || math.IsNaN(values[index]) || math.IsInf(values[index], 0) {
+			continue
+		}
+		result = append(result, MetricQuantile{Quantile: quantiles[index], Value: values[index]})
+	}
+	return result
 }
 
 func (s *ClickHouseStore) ListSources(ctx context.Context, query SourcesQuery) (SourcesResult, error) {

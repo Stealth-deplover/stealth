@@ -176,7 +176,7 @@ func TestClickHouseStoreIntegration(t *testing.T) {
 		t.Fatalf("unexpected real Collector trace result = %#v", tracesResult.Items[0])
 	}
 	metric := metricsResult.Items[0]
-	if !metric.Timestamp.Equal(timestamp) || metric.Name != "stealth.compose.smoke" || metric.Service != "telemetry.integration" || metric.Value != 3.5 || metric.Kind != "gauge" || metric.Attributes["smoke.marker"] != marker || metric.ResourceAttributes["smoke.marker"] != marker {
+	if metric.Value == nil || !metric.Timestamp.Equal(timestamp) || metric.Name != "stealth.compose.smoke" || metric.Service != "telemetry.integration" || *metric.Value != 3.5 || metric.Kind != "gauge" || metric.Attributes["smoke.marker"] != marker || metric.ResourceAttributes["smoke.marker"] != marker {
 		t.Fatalf("unexpected real Collector metric result = %#v", metric)
 	}
 	if err := assertRawTelemetrySecretAbsent(ctx, conn, marker, secret, timestamp); err != nil {
@@ -269,6 +269,142 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 			t.Fatalf("cursor returned the boundary row again: %#v", item)
 		}
 		previous = current
+	}
+}
+
+func TestClickHouseStoreMetricKindsIntegration(t *testing.T) {
+	address := os.Getenv("TEST_CLICKHOUSE_ADDR")
+	collectorHTTP := os.Getenv("TEST_OTEL_COLLECTOR_HTTP")
+	if address == "" || collectorHTTP == "" {
+		t.Skip("set TEST_CLICKHOUSE_ADDR and TEST_OTEL_COLLECTOR_HTTP to run the real metric-kind integration test")
+	}
+	database := valueOrDefault("TEST_CLICKHOUSE_DATABASE", "stealth_telemetry")
+	username := valueOrDefault("TEST_CLICKHOUSE_USER", "stealth")
+	password := os.Getenv("TEST_CLICKHOUSE_PASSWORD")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr:        []string{address},
+		Auth:        clickhouse.Auth{Database: database, Username: username, Password: password},
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store := NewWithConn(conn, Config{Database: database, MaxQueryDuration: 5 * time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	t.Cleanup(func() { _ = store.Close() })
+
+	service := fmt.Sprintf("telemetry.metric-kinds-%d", time.Now().UnixNano())
+	marker := fmt.Sprintf("telemetry-metric-kinds-%d", time.Now().UnixNano())
+	timestamp := time.Now().UTC().Truncate(time.Second)
+	attributes := []any{stringAttribute("smoke.marker", marker)}
+	resource := map[string]any{"attributes": []any{
+		stringAttribute("service.name", service),
+		stringAttribute("smoke.marker", marker),
+	}}
+	emitCollectorSignal(t, collectorHTTP, "metrics", map[string]any{
+		"resourceMetrics": []any{map[string]any{
+			"resource": resource,
+			"scopeMetrics": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.metric-kinds"},
+				"metrics": []any{
+					map[string]any{
+						"name": "aud14.histogram",
+						"histogram": map[string]any{
+							"aggregationTemporality": 2,
+							"dataPoints": []any{map[string]any{
+								"timeUnixNano":   fmt.Sprintf("%d", timestamp.UnixNano()),
+								"count":          "3",
+								"sum":            6.0,
+								"bucketCounts":   []string{"1", "2"},
+								"explicitBounds": []float64{1, 2},
+								"min":            0.5,
+								"max":            3.0,
+								"attributes":     attributes,
+							}},
+						},
+					},
+					map[string]any{
+						"name": "aud14.summary",
+						"summary": map[string]any{
+							"dataPoints": []any{map[string]any{
+								"timeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+								"count":        "3",
+								"sum":          6.0,
+								"quantileValues": []any{
+									map[string]any{"quantile": 0.5, "value": 1.5},
+									map[string]any{"quantile": 0.9, "value": 2.5},
+								},
+								"attributes": attributes,
+							}},
+						},
+					},
+					map[string]any{
+						"name": "aud14.exponential",
+						"exponentialHistogram": map[string]any{
+							"aggregationTemporality": 2,
+							"dataPoints": []any{map[string]any{
+								"timeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+								"count":        "3",
+								"sum":          6.0,
+								"scale":        1,
+								"zeroCount":    "1",
+								"positive": map[string]any{
+									"offset":       0,
+									"bucketCounts": []string{"1", "2"},
+								},
+								"negative": map[string]any{
+									"offset":       -1,
+									"bucketCounts": []string{"1"},
+								},
+								"attributes": attributes,
+							}},
+						},
+					},
+				},
+			}},
+		}},
+	})
+
+	rangeQuery := TimeRange{From: timestamp.Add(-time.Minute), To: time.Now().UTC().Add(time.Minute)}
+	var results map[string]MetricRecord
+	var lastErr error
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) {
+		results = make(map[string]MetricRecord)
+		for _, name := range []string{"aud14.histogram", "aud14.summary", "aud14.exponential"} {
+			var result MetricsResult
+			result, lastErr = store.QueryMetrics(ctx, MetricsQuery{Range: rangeQuery, Service: service, Name: name, Limit: 10})
+			if lastErr != nil {
+				break
+			}
+			if len(result.Items) == 1 {
+				results[name] = result.Items[0]
+			}
+		}
+		if lastErr == nil && len(results) == 3 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr != nil || len(results) != 3 {
+		t.Fatalf("metric-kind results = %d, last error = %v", len(results), lastErr)
+	}
+	histogram := results["aud14.histogram"]
+	if histogram.Kind != "histogram" || histogram.Histogram == nil || histogram.Histogram.Count != 3 || histogram.Histogram.Sum != 6 || len(histogram.Histogram.BucketCounts) != 2 || len(histogram.Histogram.ExplicitBounds) != 2 || histogram.Attributes["smoke.marker"] != marker {
+		t.Fatalf("unexpected histogram result = %#v", histogram)
+	}
+	summary := results["aud14.summary"]
+	if summary.Kind != "summary" || summary.Summary == nil || summary.Summary.Count != 3 || len(summary.Summary.Quantiles) != 2 || summary.Summary.Quantiles[0].Quantile != 0.5 || summary.Summary.Quantiles[0].Value != 1.5 {
+		t.Fatalf("unexpected summary result = %#v", summary)
+	}
+	exponential := results["aud14.exponential"]
+	if exponential.Kind != "exponential_histogram" || exponential.Exponential == nil || exponential.Exponential.Count != 3 || exponential.Exponential.Scale != 1 || exponential.Exponential.ZeroCount != 1 || len(exponential.Exponential.PositiveBucketCounts) != 2 || len(exponential.Exponential.NegativeBucketCounts) != 1 {
+		t.Fatalf("unexpected exponential histogram result = %#v", exponential)
 	}
 }
 

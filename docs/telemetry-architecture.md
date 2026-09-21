@@ -143,7 +143,10 @@ The current query surface is deliberately domain-shaped:
 
 - `/v1/admin/telemetry/logs` supports bounded service, level, and text filters.
 - `/v1/admin/telemetry/traces` supports service, trace ID, and minimum duration.
-- `/v1/admin/telemetry/metrics` returns real OTel gauge/sum points.
+- `/v1/admin/telemetry/metrics` returns real OTel gauge, sum, histogram,
+  summary, and exponential-histogram points. Scalar points expose `value`;
+  structured points retain bounded count, sum, bucket, quantile, and
+  exponential-bucket fields.
 - `/v1/admin/telemetry/sources` reports observed services and signal volume.
 - `/v1/admin/overview` combines control-plane health with real HTTP span
   aggregates and host metric samples when those signals exist.

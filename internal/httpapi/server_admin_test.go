@@ -15,14 +15,16 @@ import (
 )
 
 type fakeAdminTelemetryStore struct {
-	logsCalled  bool
-	logsQuery   telemetry.LogsQuery
-	logsQueries []telemetry.LogsQuery
-	logs        telemetry.LogsResult
-	logsResults []telemetry.LogsResult
-	logsErr     error
-	logsStarted chan struct{}
-	logsHook    func(int, telemetry.LogsQuery)
+	logsCalled   bool
+	logsQuery    telemetry.LogsQuery
+	logsQueries  []telemetry.LogsQuery
+	logs         telemetry.LogsResult
+	logsResults  []telemetry.LogsResult
+	logsErr      error
+	logsStarted  chan struct{}
+	logsHook     func(int, telemetry.LogsQuery)
+	tracesCalled bool
+	tracesQuery  telemetry.TracesQuery
 }
 
 func (f *fakeAdminTelemetryStore) Ping(context.Context) error { return nil }
@@ -47,7 +49,9 @@ func (f *fakeAdminTelemetryStore) QueryLogs(_ context.Context, query telemetry.L
 	return f.logs, f.logsErr
 }
 
-func (f *fakeAdminTelemetryStore) QueryTraces(context.Context, telemetry.TracesQuery) (telemetry.TracesResult, error) {
+func (f *fakeAdminTelemetryStore) QueryTraces(_ context.Context, query telemetry.TracesQuery) (telemetry.TracesResult, error) {
+	f.tracesCalled = true
+	f.tracesQuery = query
 	return telemetry.TracesResult{}, nil
 }
 
@@ -109,6 +113,26 @@ func TestAdminTelemetryHandlerRejectsInvalidRangeBeforeStore(t *testing.T) {
 	}
 	if store.logsCalled {
 		t.Fatalf("store was called for invalid range: %+v", store.logsQuery)
+	}
+}
+
+func TestAdminTelemetryTracesRejectsNonFiniteDuration(t *testing.T) {
+	for _, value := range []string{"NaN", "+Inf", "-Inf"} {
+		t.Run(value, func(t *testing.T) {
+			store := &fakeAdminTelemetryStore{}
+			server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
+			request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/traces?min_duration_ms="+value, nil)
+			recorder := httptest.NewRecorder()
+
+			server.adminTelemetryTraces(recorder, request)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+			}
+			if store.tracesCalled {
+				t.Fatalf("store was called for non-finite duration: %+v", store.tracesQuery)
+			}
+		})
 	}
 }
 

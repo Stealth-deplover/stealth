@@ -34,8 +34,9 @@ The runtime schema observed from the pinned `0.161.0` exporter is:
   exporter-specific aggregate columns and still share the common identity and
   attribute columns above.
 
-The production compatibility test starts the pinned Collector, emits OTLP
-logs, traces, and a gauge metric, and reads them through `ClickHouseStore`.
+The production compatibility tests start the pinned Collector, emit OTLP logs,
+traces, and gauge, sum, histogram, summary, and exponential-histogram metrics,
+and read them through `ClickHouseStore`.
 The hand-written tables in the Admin HTTP integration fixture are only an
 isolated route/query fixture; they are not evidence of exporter compatibility.
 

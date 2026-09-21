@@ -3144,14 +3144,59 @@ export interface components {
         AdminTracesResponse: {
             items: components["schemas"]["AdminTraceSpan"][];
         };
+        AdminMetricHistogram: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            bucket_counts: number[];
+            explicit_bounds: number[];
+            min?: number;
+            max?: number;
+            /** Format: int32 */
+            aggregation_temporality: number;
+        };
+        AdminMetricQuantile: {
+            quantile: number;
+            value: number;
+        };
+        AdminMetricSummary: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            quantiles: components["schemas"]["AdminMetricQuantile"][];
+            /** Format: int32 */
+            aggregation_temporality?: number;
+        };
+        AdminMetricExponentialHistogram: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            /** Format: int32 */
+            scale: number;
+            /** Format: int64 */
+            zero_count: number;
+            /** Format: int32 */
+            positive_offset: number;
+            positive_bucket_counts: number[];
+            /** Format: int32 */
+            negative_offset: number;
+            negative_bucket_counts: number[];
+            min?: number;
+            max?: number;
+            /** Format: int32 */
+            aggregation_temporality: number;
+        };
         AdminMetric: {
             /** Format: date-time */
             timestamp: string;
             name: string;
             service: string;
-            value: number;
+            value?: number;
             /** @enum {string} */
             kind: AdminMetricKind;
+            histogram?: components["schemas"]["AdminMetricHistogram"];
+            summary?: components["schemas"]["AdminMetricSummary"];
+            exponential_histogram?: components["schemas"]["AdminMetricExponentialHistogram"];
             attributes?: {
                 [key: string]: string;
             };
@@ -13653,6 +13698,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     activateFunctionDeployment: {
@@ -13882,7 +13928,10 @@ export enum AdminOperationKind {
 }
 export enum AdminMetricKind {
     gauge = "gauge",
-    sum = "sum"
+    sum = "sum",
+    histogram = "histogram",
+    summary = "summary",
+    exponential_histogram = "exponential_histogram"
 }
 export enum AdminErrorGroupStatus {
     open = "open",

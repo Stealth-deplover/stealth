@@ -220,7 +220,7 @@ union; that is tracked as AUD-14.
 
 ### AUD-04 — Alert-rule deletion can fail after notification enqueue
 
-- **Status:** OPEN
+- **Status:** RESOLVED BY PR #87
 - **Severity:** High
 - **Area:** PostgreSQL alert and notification lifecycle
 - **Current-head evidence:** Migration `000043_admin_observability.up.sql`
@@ -477,34 +477,36 @@ union; that is tracked as AUD-14.
 
 ### AUD-14 — Non-gauge/sum metrics are stored but ignored by generic Stealth queries
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** ClickHouse metric query adapter/API
 - **Current-head evidence:** The pinned exporter creates gauge, sum, histogram,
-  summary, and exponential-histogram tables. `metricsQuery` in
-  `internal/telemetry/store.go`, as well as the current source/infrastructure
-  and metric-alert query paths, unions only `otel_metrics_gauge` and
-  `otel_metrics_sum`. The typed histogram/summary/exp-hist tables are therefore
-  persisted but are absent from the generic `QueryMetrics` result and related
-  surfaces.
-- **Minimal proof path:** Emit one real OTLP histogram, summary, and
-  exponential histogram through the pinned Collector, verify rows in their
-  respective ClickHouse tables, and call `/v1/admin/telemetry/metrics` or the
-  related source/infrastructure query. The rows are not projected.
-- **Impact:** Users see an incomplete metric inventory while the product's
-  generic telemetry surfaces appear to support metrics broadly; alerts or
-  dashboards built on those surfaces cannot observe those instruments.
-- **Recommended remediation:** Decide and document supported projections, such
-  as bounded count, sum, bucket, and approved quantiles. Add typed Store/domain
-  adapters without exposing arbitrary ClickHouse SQL or exporter-specific
-  columns to the frontend.
-- **Recommended regression test:** Real Collector integration for all typed
-  metric kinds, asserting either the documented projection or an explicit,
-  stable unsupported response.
+  summary, and exponential-histogram tables. `QueryMetrics` now unions all five
+  runtime tables and projects scalar values or bounded typed aggregates through
+  `MetricRecord`; `ListSources` also counts all metric tables. The OpenAPI
+  model and Console render structured points without coercing them to a scalar.
+  The metric alert evaluator remains intentionally scalar-only because its
+  threshold contract has no typed histogram/summary semantics.
+- **Minimal proof path:** `TestClickHouseStoreMetricKindsIntegration` emits
+  real OTLP histogram, summary, and exponential-histogram points through the
+  pinned Collector and asserts their typed fields via `QueryMetrics`.
+  `TestMetricQueryIncludesEveryPinnedExporterMetricKind` protects the query
+  adapter contract without a live backend.
+- **Impact:** The original generic metrics omission is addressed; structured
+  metric alert evaluation remains a documented product limitation rather than
+  silently pretending those instruments are scalar values.
+- **Recommended remediation:** Keep the typed API projection and re-run the
+  real Collector integration whenever the pinned exporter version changes.
+  Add an explicit typed alert contract before allowing complex instruments in
+  threshold evaluation.
+- **Recommended regression test:** Preserve the real five-table integration
+  test and the pinned schema checkpoint in `internal/telemetry/schema.go`.
 
 ### AUD-15 — Non-finite trace duration values can cross validation
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Low
 - **Area:** Trace query parameter validation
 - **Current-head evidence:** `QueryTraces` checks `MinMs < 0` and an upper bound,
@@ -524,6 +526,13 @@ union; that is tracked as AUD-14.
 - **Recommended regression test:** Table-driven HTTP and Store tests for NaN,
   both infinities, negative values, zero, fractional milliseconds, the maximum,
   and range-boundary values.
+- **Remediation evidence in PR #89:** `parseFloatQuery` rejects NaN and both
+  infinities before the Admin trace handler calls the Store, and
+  `ClickHouseStore.QueryTraces` repeats the finite-number guard before the
+  millisecond-to-UInt64 conversion.
+- **Regression coverage:** `TestAdminTelemetryTracesRejectsNonFiniteDuration`
+  and `TestQueryTracesRejectsNonFiniteDuration` cover NaN, both infinities,
+  negative values, zero, fractional values, and finite values.
 
 ### AUD-16 — Database alert-kind schema drifts from API and evaluator support
 

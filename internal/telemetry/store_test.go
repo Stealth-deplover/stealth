@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,30 @@ func TestQueryRejectsUnboundedRangeAndLimit(t *testing.T) {
 	_, err = store.QueryMetrics(context.Background(), MetricsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 11})
 	if !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("limit error = %v, want ErrInvalidQuery", err)
+	}
+}
+
+func TestQueryTracesRejectsNonFiniteDuration(t *testing.T) {
+	store := NewWithConn(&recordingConn{}, Config{MaxQueryRange: time.Hour, MaxQueryRows: 10})
+	now := time.Now().UTC()
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -1} {
+		_, err := store.QueryTraces(context.Background(), TracesQuery{
+			Range: TimeRange{From: now.Add(-time.Minute), To: now},
+			MinMs: value,
+			Limit: 1,
+		})
+		if !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("MinMs=%v error = %v, want ErrInvalidQuery", value, err)
+		}
+	}
+	for _, value := range []float64{0, 0.5, 1000} {
+		if _, err := store.QueryTraces(context.Background(), TracesQuery{
+			Range: TimeRange{From: now.Add(-time.Minute), To: now},
+			MinMs: value,
+			Limit: 1,
+		}); err != nil {
+			t.Fatalf("finite MinMs=%v returned error: %v", value, err)
+		}
 	}
 }
 
@@ -253,6 +278,30 @@ func TestMetricQueryUsesExporterDateTimeForFractionalRanges(t *testing.T) {
 	for _, argument := range conn.args[:2] {
 		if _, ok := argument.(driver.NamedDateValue); !ok {
 			t.Fatalf("metric range argument %T was not a typed date value", argument)
+		}
+	}
+}
+
+func TestMetricQueryIncludesEveryPinnedExporterMetricKind(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryMetrics(context.Background(), MetricsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"FROM otel_metrics_gauge",
+		"FROM otel_metrics_sum",
+		"FROM otel_metrics_histogram",
+		"FROM otel_metrics_summary",
+		"FROM otel_metrics_exp_histogram",
+		"BucketCounts",
+		"ExplicitBounds",
+		"ValueAtQuantiles.Quantile",
+		"PositiveBucketCounts",
+	} {
+		if !strings.Contains(conn.query, marker) {
+			t.Fatalf("metrics query is missing %q: %s", marker, conn.query)
 		}
 	}
 }
