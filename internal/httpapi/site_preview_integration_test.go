@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -98,6 +99,42 @@ func TestSiteDeploymentPreviewIntegration(t *testing.T) {
 	}
 	requestJSON(t, ownerClient, http.MethodPost, projectURL+"/sites", map[string]string{"name": "preview-site"}, http.StatusCreated, &site)
 	siteID := uuid.MustParse(site.Site.ID)
+	var oversizedBody bytes.Buffer
+	oversizedWriter := multipart.NewWriter(&oversizedBody)
+	oversizedPart, err := oversizedWriter.CreateFormFile("source", "oversized.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oversizedPart.Write(bytes.Repeat([]byte("x"), (1<<20)+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := oversizedWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oversizedRequest, err := http.NewRequest(http.MethodPost, projectURL+"/sites/"+site.Site.ID+"/deployments", &oversizedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedRequest.Header.Set("Content-Type", oversizedWriter.FormDataContentType())
+	oversizedResponse, err := ownerClient.Do(oversizedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedResponseBody, readErr := io.ReadAll(oversizedResponse.Body)
+	closeErr := oversizedResponse.Body.Close()
+	if closeErr != nil || readErr != nil {
+		t.Fatalf("read oversized site response: read=%v close=%v", readErr, closeErr)
+	}
+	if oversizedResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(oversizedResponseBody, []byte("payload_too_large")) {
+		t.Fatalf("oversized site upload status=%d body=%s, want 413 payload_too_large", oversizedResponse.StatusCode, oversizedResponseBody)
+	}
+	var rejectedDeployments int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM site_deployments WHERE site_id=$1`, siteID).Scan(&rejectedDeployments); err != nil {
+		t.Fatal(err)
+	}
+	if rejectedDeployments != 0 {
+		t.Fatalf("oversized site upload created %d deployment rows", rejectedDeployments)
+	}
 	deploymentID := uuid.Must(uuid.NewV7())
 	relative, err := sitestore.ArtifactRelativePath(projectID, siteID, deploymentID)
 	if err != nil {

@@ -63,14 +63,20 @@ func (OSCommandRunner) Output(ctx context.Context, dir, name string, args ...str
 // production files and runs Compose from this root; the setup API only shares
 // the separate encrypted state directory.
 type Layout struct {
-	Root             string
-	EnvFile          string
-	ComposeFile      string
-	SetupComposeFile string
-	TelemetryDir     string
-	ProxyFile        string
-	VersionFile      string
-	StateDir         string
+	Root                string
+	EnvFile             string
+	ComposeFile         string
+	SetupComposeFile    string
+	TelemetryDir        string
+	ProxyFile           string
+	TraefikDir          string
+	TraefikStatic       string
+	TraefikDynamic      string
+	TraefikCore         string
+	TraefikGenerated    string
+	TraefikReloadMarker string
+	VersionFile         string
+	StateDir            string
 }
 
 func NewLayout(root string) (Layout, error) {
@@ -87,14 +93,20 @@ func NewLayout(root string) (Layout, error) {
 		return Layout{}, errors.New("refusing filesystem root as installation root")
 	}
 	return Layout{
-		Root:             clean,
-		EnvFile:          filepath.Join(clean, "config.env"),
-		ComposeFile:      filepath.Join(clean, "compose.production.yaml"),
-		SetupComposeFile: filepath.Join(clean, "compose.setup.yaml"),
-		TelemetryDir:     filepath.Join(clean, "telemetry"),
-		ProxyFile:        filepath.Join(clean, "console", "deploy", "nginx.conf"),
-		VersionFile:      filepath.Join(clean, "VERSION"),
-		StateDir:         filepath.Join(clean, "state"),
+		Root:                clean,
+		EnvFile:             filepath.Join(clean, "config.env"),
+		ComposeFile:         filepath.Join(clean, "compose.production.yaml"),
+		SetupComposeFile:    filepath.Join(clean, "compose.setup.yaml"),
+		TelemetryDir:        filepath.Join(clean, "telemetry"),
+		ProxyFile:           filepath.Join(clean, "console", "deploy", "nginx.conf"),
+		TraefikDir:          filepath.Join(clean, "traefik"),
+		TraefikStatic:       filepath.Join(clean, "traefik", "traefik.yaml"),
+		TraefikDynamic:      filepath.Join(clean, "traefik", "dynamic"),
+		TraefikCore:         filepath.Join(clean, "traefik", "dynamic", "core.yaml"),
+		TraefikGenerated:    filepath.Join(clean, "traefik", "dynamic", "generated"),
+		TraefikReloadMarker: filepath.Join(clean, "traefik", "dynamic", ".reload.yaml"),
+		VersionFile:         filepath.Join(clean, "VERSION"),
+		StateDir:            filepath.Join(clean, "state"),
 	}, nil
 }
 
@@ -118,6 +130,7 @@ type Plan struct {
 	ExternalRedis      bool
 	Cloudflare         bool
 	VerifyPublicURL    bool
+	IngressNetworkName string
 	ConfigContents     string
 	InternalAPIURL     string
 	InternalConsoleURL string
@@ -140,7 +153,7 @@ var StepNames = []string{
 	"Release images",
 	"PostgreSQL and Redis",
 	"Database migrations",
-	"API, Worker, Console, and Proxy",
+	"API, Worker, Console, Proxy, and Traefik",
 	"Health and readiness verification",
 }
 
@@ -326,7 +339,7 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		}
 		return e.runCompose(ctx, plan, "up", "migrate")
 	case StepServices:
-		services := []string{"api", "worker", "console", "proxy"}
+		services := []string{"api", "worker", "console", "proxy", "traefik"}
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
@@ -356,8 +369,10 @@ type ManagedAsset struct {
 	RemotePath string
 	Marker     string
 
-	setupOnly bool
-	validate  func([]byte) error
+	setupOnly      bool
+	productionOnly bool
+	validate       func([]byte) error
+	render         func([]byte, Plan) ([]byte, error)
 }
 
 // DefaultManagedAssets is this release's complete production runtime manifest.
@@ -367,6 +382,9 @@ func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
+		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, render: renderTraefikStaticAsset, validate: validateTraefikStaticAsset},
+		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
+		{Path: "traefik/dynamic/generated/.gitkeep", RemotePath: "traefik/dynamic/generated/.gitkeep", Marker: "Stealth route reconciler", productionOnly: true},
 		{Path: "telemetry/otel-collector.yaml", RemotePath: "telemetry/otel-collector.yaml", Marker: "receivers:", validate: validateMainCollectorAsset},
 		{Path: "telemetry/host-metrics.yaml", RemotePath: "telemetry/host-metrics.yaml", Marker: "hostmetrics:"},
 		{Path: "telemetry/docker-logs.yaml", RemotePath: "telemetry/docker-logs.yaml", Marker: "file_log/docker:"},
@@ -504,6 +522,8 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	prepared := &preparedInstallation{
 		layout: plan.Layout,
 	}
+	var originalValues map[string]string
+	generatedConfig := false
 	if contents, err := os.ReadFile(plan.Layout.VersionFile); err == nil {
 		prepared.originalVersion = contents
 		prepared.originalVersionSet = true
@@ -527,6 +547,10 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		if err != nil {
 			return nil, fmt.Errorf("parse existing configuration: %w", err)
 		}
+		originalValues = make(map[string]string, len(values))
+		for key, value := range values {
+			originalValues[key] = value
+		}
 		installedVersion := strings.TrimSpace(plan.InstalledVersion)
 		if installedVersion == "" && prepared.originalVersionSet {
 			installedVersion = strings.TrimSpace(string(prepared.originalVersion))
@@ -547,19 +571,61 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	} else {
 		contents := plan.ConfigContents
 		if strings.TrimSpace(contents) == "" {
+			generatedConfig = true
 			var err error
-			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root})
+			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root, IngressNetworkName: plan.IngressNetworkName})
 			if err != nil {
 				return nil, fmt.Errorf("generate configuration: %w", err)
 			}
 		}
 		prepared.newEnv = []byte(contents)
 	}
-	assets, err := e.stageManagedAssets(ctx, plan)
+	if !plan.Setup {
+		values, err := ParseEnvContents(string(prepared.newEnv))
+		if err != nil {
+			return nil, fmt.Errorf("parse prepared configuration: %w", err)
+		}
+		if generatedConfig {
+			// GenerateConfig writes complete defaults so it can also be used as a
+			// standalone config generator. For a fresh install, however, those
+			// values are installer defaults rather than an operator's explicit
+			// addressing choice; let collision-aware selection replace them.
+			for _, key := range ingressNetworkEnvKeys {
+				delete(values, key)
+			}
+		}
+		if originalValues == nil {
+			originalValues = values
+		}
+		ingress, err := e.resolveIngressNetworkConfig(ctx, plan, values, originalValues)
+		if err != nil {
+			return nil, fmt.Errorf("prepare ingress network configuration: %w", err)
+		}
+		if previous, previousErr := ingressNetworkConfigFromValues(originalValues); previousErr == nil && previous.trustedProxyCIDR() != ingress.trustedProxyCIDR() {
+			// The previous peer was installer-derived whenever automatic subnet
+			// selection or legacy-network adoption changes it. Remove only that
+			// exact generated entry; all other operator proxy CIDRs survive.
+			values["TRUSTED_PROXY_CIDRS"] = removeTrustedProxyCIDR(values["TRUSTED_PROXY_CIDRS"], previous.trustedProxyCIDR())
+		}
+		setIngressNetworkValues(values, ingress)
+		trustedProxy := ensureTraefikTrustedProxyCIDR(values["TRUSTED_PROXY_CIDRS"], values["STEALTH_NETWORK_SUBNET"], ingress.trustedProxyCIDR())
+		if trustedProxy != strings.TrimSpace(values["TRUSTED_PROXY_CIDRS"]) {
+			values["TRUSTED_PROXY_CIDRS"] = trustedProxy
+		}
+		prepared.newEnv = []byte(FormatEnvFile(values))
+	}
+	assetPlan := plan
+	assetPlan.ConfigContents = string(prepared.newEnv)
+	assets, err := e.stageManagedAssets(ctx, assetPlan)
 	if err != nil {
 		return nil, err
 	}
 	prepared.assets = assets
+	if !plan.Setup {
+		if err := ensureTraefikDirectories(plan.Layout); err != nil {
+			return nil, err
+		}
+	}
 	return prepared, nil
 }
 
@@ -619,6 +685,9 @@ func (p *preparedInstallation) finalize() error {
 func (e *Engine) managedAssetSpecs(plan Plan) []ManagedAsset {
 	assets := make([]ManagedAsset, 0, len(e.managedAssets))
 	for _, asset := range e.managedAssets {
+		if asset.productionOnly && plan.Setup {
+			continue
+		}
 		if asset.setupOnly && (plan.Layout.SetupComposeFile == "" || (!plan.Setup && !(plan.Existing && FileExists(plan.Layout.SetupComposeFile)))) {
 			continue
 		}
@@ -661,6 +730,13 @@ func (e *Engine) stageManagedAssets(ctx context.Context, plan Plan) (*managedAss
 		if !bytes.Contains(contents, []byte(spec.Marker)) {
 			cleanup()
 			return nil, fmt.Errorf("downloaded asset %q is invalid", spec.RemotePath)
+		}
+		if spec.render != nil {
+			contents, err = spec.render(contents, plan)
+			if err != nil {
+				cleanup()
+				return nil, fmt.Errorf("render managed asset %q: %w", spec.RemotePath, err)
+			}
 		}
 		if spec.validate != nil {
 			if err := spec.validate(contents); err != nil {
@@ -989,6 +1065,7 @@ func syncDirectory(path string) error {
 
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
+		"  traefik:",
 		"  otel-collector:",
 		"  telemetry-host:",
 		"  telemetry-docker-logs:",
@@ -1453,8 +1530,12 @@ func ReadEnvFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseEnvContents(string(contents))
+}
+
+func ParseEnvContents(contents string) (map[string]string, error) {
 	values := make(map[string]string)
-	for lineNumber, rawLine := range strings.Split(string(contents), "\n") {
+	for lineNumber, rawLine := range strings.Split(contents, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

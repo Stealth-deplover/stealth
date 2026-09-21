@@ -34,13 +34,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$smoke_root/telemetry" "$smoke_root/console/deploy" "$asset_root/$target_version/telemetry" "$asset_root/$target_version/console/deploy"
+mkdir -p "$smoke_root/telemetry" "$smoke_root/console/deploy" "$asset_root/$target_version/telemetry" "$asset_root/$target_version/console/deploy" "$asset_root/$target_version/traefik/dynamic/generated"
 cp "$repo_root/compose.production.yaml" "$asset_root/$target_version/compose.production.yaml"
 cp "$repo_root/telemetry/otel-collector.yaml" "$asset_root/$target_version/telemetry/otel-collector.yaml"
 cp "$repo_root/telemetry/host-metrics.yaml" "$asset_root/$target_version/telemetry/host-metrics.yaml"
 cp "$repo_root/telemetry/docker-logs.yaml" "$asset_root/$target_version/telemetry/docker-logs.yaml"
 cp "$repo_root/telemetry/docker-stats.yaml" "$asset_root/$target_version/telemetry/docker-stats.yaml"
 cp "$repo_root/console/deploy/nginx.conf" "$asset_root/$target_version/console/deploy/nginx.conf"
+cp "$repo_root/traefik/traefik.yaml" "$asset_root/$target_version/traefik/traefik.yaml"
+cp "$repo_root/traefik/dynamic/core.yaml" "$asset_root/$target_version/traefik/dynamic/core.yaml"
+cp "$repo_root/traefik/dynamic/generated/.gitkeep" "$asset_root/$target_version/traefik/dynamic/generated/.gitkeep"
 cp "$source_env" "$smoke_root/config.env"
 chmod 600 "$smoke_root/config.env"
 

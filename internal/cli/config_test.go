@@ -16,6 +16,85 @@ import (
 
 const testGitHubAppClientID = "Iv1.test-client-id"
 
+func testManagedTraefikStaticAsset() string {
+	return `entryPoints:
+  web:
+    address: :8080
+    forwardedHeaders:
+      trustedIPs:
+        - "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__"
+  health:
+    address: :8081
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+api:
+  dashboard: false
+  insecure: false
+ping:
+  entryPoint: health
+log:
+  format: json
+accessLog:
+  format: json
+  fields:
+    headers:
+      names:
+        Authorization: drop
+        Cookie: drop
+`
+}
+
+func testManagedTraefikCoreAsset() string {
+	asset := `http:
+  middlewares:
+    stealth-security-headers:
+      headers:
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
+          X-Frame-Options: "DENY"
+          Content-Security-Policy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
+  routers:
+    stealth-admin-realtime:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && Path(STEALTH_BACKTICK/v1/admin/realtimeSTEALTH_BACKTICK)"
+      priority: 200
+      middlewares: [stealth-security-headers]
+      service: stealth-api
+    stealth-project-realtime:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathRegexp(STEALTH_BACKTICK^/v1/projects/[0-9a-fA-F-]{36}/realtime$STEALTH_BACKTICK)"
+      priority: 200
+      middlewares: [stealth-security-headers]
+      service: stealth-api
+    stealth-api:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathPrefix(STEALTH_BACKTICK/v1/STEALTH_BACKTICK)"
+      middlewares: [stealth-security-headers]
+      service: stealth-api
+    stealth-console:
+      entryPoints: [web]
+      rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathPrefix(STEALTH_BACKTICK/STEALTH_BACKTICK)"
+      middlewares: [stealth-security-headers]
+      service: stealth-console
+  services:
+    stealth-api:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://api:8080
+    stealth-console:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://console:3000
+
+`
+	return strings.ReplaceAll(asset, "STEALTH_BACKTICK", "`")
+}
+
 func TestValidatePublicURL(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -80,7 +159,19 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
+			_, _ = writer.Write([]byte("services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "traefik/traefik.yaml") {
+			_, _ = writer.Write([]byte(testManagedTraefikStaticAsset()))
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "traefik/dynamic/core.yaml") {
+			_, _ = writer.Write([]byte(testManagedTraefikCoreAsset()))
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "traefik/dynamic/generated/.gitkeep") {
+			_, _ = writer.Write([]byte("# Stealth route reconciler\n"))
 			return
 		}
 		if strings.Contains(request.URL.Path, "/telemetry/") {

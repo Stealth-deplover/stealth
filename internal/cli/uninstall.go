@@ -179,6 +179,12 @@ func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan 
 		layout.EnvFile,
 		layout.ComposeFile,
 		layout.ProxyFile,
+		layout.TraefikDir,
+		layout.TraefikStatic,
+		layout.TraefikDynamic,
+		layout.TraefikCore,
+		layout.TraefikGenerated,
+		layout.TraefikReloadMarker,
 		layout.TelemetryDir,
 		layout.VersionFile,
 		layout.StateDir,
@@ -289,6 +295,7 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 		filepath.Base(layout.VersionFile): true,
 		filepath.Base(layout.StateDir):    true,
 		consoleName:                       true,
+		filepath.Base(layout.TraefikDir):  true,
 	}
 	var unknown []string
 	entries, err := os.ReadDir(layout.Root)
@@ -346,6 +353,71 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 				default:
 					unknown = append(unknown, filepath.Join(telemetryDir, telemetryEntry.Name()))
 				}
+			}
+		case filepath.Base(layout.TraefikDir):
+			traefikDir := filepath.Join(layout.Root, name)
+			if !entry.IsDir() {
+				unknown = append(unknown, traefikDir)
+				continue
+			}
+			traefikEntries, traefikErr := os.ReadDir(traefikDir)
+			if traefikErr != nil {
+				unknown = append(unknown, traefikDir+" (cannot inspect: "+traefikErr.Error()+")")
+				continue
+			}
+			for _, traefikEntry := range traefikEntries {
+				switch traefikEntry.Name() {
+				case filepath.Base(layout.TraefikStatic), filepath.Base(layout.TraefikDynamic):
+				default:
+					unknown = append(unknown, filepath.Join(traefikDir, traefikEntry.Name()))
+				}
+			}
+			dynamicDir := layout.TraefikDynamic
+			dynamicInfo, dynamicErr := os.Lstat(dynamicDir)
+			if dynamicErr != nil {
+				if !errors.Is(dynamicErr, os.ErrNotExist) {
+					unknown = append(unknown, dynamicDir+" (cannot inspect: "+dynamicErr.Error()+")")
+				}
+				continue
+			}
+			if !dynamicInfo.IsDir() || dynamicInfo.Mode()&os.ModeSymlink != 0 {
+				unknown = append(unknown, dynamicDir)
+				continue
+			}
+			dynamicEntries, dynamicErr := os.ReadDir(dynamicDir)
+			if dynamicErr != nil {
+				unknown = append(unknown, dynamicDir+" (cannot inspect: "+dynamicErr.Error()+")")
+				continue
+			}
+			for _, dynamicEntry := range dynamicEntries {
+				switch dynamicEntry.Name() {
+				case filepath.Base(layout.TraefikCore), filepath.Base(layout.TraefikGenerated), filepath.Base(layout.TraefikReloadMarker):
+				default:
+					unknown = append(unknown, filepath.Join(dynamicDir, dynamicEntry.Name()))
+				}
+			}
+			generatedInfo, generatedErr := os.Lstat(layout.TraefikGenerated)
+			if generatedErr == nil {
+				if !generatedInfo.IsDir() || generatedInfo.Mode()&os.ModeSymlink != 0 {
+					unknown = append(unknown, layout.TraefikGenerated)
+					continue
+				}
+				generatedEntries, readErr := os.ReadDir(layout.TraefikGenerated)
+				if readErr != nil {
+					unknown = append(unknown, layout.TraefikGenerated+" (cannot inspect: "+readErr.Error()+")")
+					continue
+				}
+				for _, generatedEntry := range generatedEntries {
+					generatedPath := filepath.Join(layout.TraefikGenerated, generatedEntry.Name())
+					generatedInfo, statErr := os.Lstat(generatedPath)
+					if generatedEntry.Name() != ".gitkeep" || statErr != nil || generatedInfo.Mode()&os.ModeSymlink != 0 || !generatedInfo.Mode().IsRegular() {
+						// Generated route files are host/control-plane state, not
+						// release assets. Keep purge from deleting them implicitly.
+						unknown = append(unknown, generatedPath)
+					}
+				}
+			} else if !errors.Is(generatedErr, os.ErrNotExist) {
+				unknown = append(unknown, layout.TraefikGenerated+" (cannot inspect: "+generatedErr.Error()+")")
 			}
 		}
 	}
@@ -429,6 +501,10 @@ func (p uninstallPlan) localAssets(includeConfig bool) []uninstallAsset {
 		{label: "compose.production.yaml", path: p.layout.ComposeFile, present: p.composePresent},
 		{label: "telemetry/", path: p.layout.TelemetryDir, present: p.telemetryPresent},
 		{label: "console/deploy/nginx.conf", path: p.layout.ProxyFile, present: p.proxyPresent},
+		{label: "traefik/traefik.yaml", path: p.layout.TraefikStatic, present: safeRegularFile(p.layout.TraefikStatic)},
+		{label: "traefik/dynamic/core.yaml", path: p.layout.TraefikCore, present: safeRegularFile(p.layout.TraefikCore)},
+		{label: "traefik/dynamic/.reload.yaml", path: p.layout.TraefikReloadMarker, present: safeRegularFile(p.layout.TraefikReloadMarker)},
+		{label: "traefik/dynamic/generated/.gitkeep", path: filepath.Join(p.layout.TraefikGenerated, ".gitkeep"), present: safeRegularFile(filepath.Join(p.layout.TraefikGenerated, ".gitkeep"))},
 		{label: "VERSION", path: p.layout.VersionFile, present: p.versionPresent},
 		{label: "state/", path: p.layout.StateDir, present: p.statePresent},
 	}
@@ -763,7 +839,7 @@ func removeAllLocalFiles(plan uninstallPlan) error {
 			return fmt.Errorf("remove config.env and local secrets: %w", err)
 		}
 	}
-	for _, path := range []string{filepath.Dir(plan.layout.ProxyFile), filepath.Dir(filepath.Dir(plan.layout.ProxyFile))} {
+	for _, path := range []string{filepath.Dir(plan.layout.ProxyFile), filepath.Dir(filepath.Dir(plan.layout.ProxyFile)), plan.layout.TraefikGenerated, plan.layout.TraefikDynamic, plan.layout.TraefikDir} {
 		if err := removeEmptyDirectory(path); err != nil {
 			return err
 		}

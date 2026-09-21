@@ -18,14 +18,20 @@ func newInstallLayout(root string) InstallLayout {
 		return layout
 	}
 	return InstallLayout{
-		Root:             root,
-		EnvFile:          filepath.Join(root, "config.env"),
-		ComposeFile:      filepath.Join(root, "compose.production.yaml"),
-		SetupComposeFile: filepath.Join(root, "compose.setup.yaml"),
-		TelemetryDir:     filepath.Join(root, "telemetry"),
-		ProxyFile:        filepath.Join(root, "console", "deploy", "nginx.conf"),
-		VersionFile:      filepath.Join(root, "VERSION"),
-		StateDir:         filepath.Join(root, "state"),
+		Root:                root,
+		EnvFile:             filepath.Join(root, "config.env"),
+		ComposeFile:         filepath.Join(root, "compose.production.yaml"),
+		SetupComposeFile:    filepath.Join(root, "compose.setup.yaml"),
+		TelemetryDir:        filepath.Join(root, "telemetry"),
+		ProxyFile:           filepath.Join(root, "console", "deploy", "nginx.conf"),
+		TraefikDir:          filepath.Join(root, "traefik"),
+		TraefikStatic:       filepath.Join(root, "traefik", "traefik.yaml"),
+		TraefikDynamic:      filepath.Join(root, "traefik", "dynamic"),
+		TraefikCore:         filepath.Join(root, "traefik", "dynamic", "core.yaml"),
+		TraefikGenerated:    filepath.Join(root, "traefik", "dynamic", "generated"),
+		TraefikReloadMarker: filepath.Join(root, "traefik", "dynamic", ".reload.yaml"),
+		VersionFile:         filepath.Join(root, "VERSION"),
+		StateDir:            filepath.Join(root, "state"),
 	}
 }
 
@@ -51,12 +57,14 @@ func installationExists(layout InstallLayout) bool {
 	return regularFile(layout.EnvFile) ||
 		regularFile(layout.ComposeFile) ||
 		regularFile(layout.ProxyFile) ||
+		regularFile(layout.TraefikStatic) ||
+		regularFile(layout.TraefikCore) ||
 		regularFile(layout.VersionFile) ||
 		directoryExists(layout.StateDir)
 }
 
 func partialInstallationExists(layout InstallLayout) bool {
-	if regularFile(layout.ComposeFile) || regularFile(layout.ProxyFile) {
+	if regularFile(layout.ComposeFile) || regularFile(layout.ProxyFile) || regularFile(layout.TraefikStatic) || regularFile(layout.TraefikCore) {
 		return true
 	}
 	info, err := os.Stat(layout.StateDir)

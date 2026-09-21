@@ -46,11 +46,20 @@ func TestManagedAssetUpgradeSmoke(t *testing.T) {
 		"OTEL_DOCKER_LOGS_COLLECTOR_IMAGE",
 		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE",
 		"STEALTH_TELEMETRY_INGEST_NETWORK_NAME",
+		"TRUSTED_PROXY_CIDRS",
 		"OTEL_DOCKER_LOGS_VOLUME_NAME",
+		"STEALTH_INGRESS_NETWORK_NAME",
+		"STEALTH_INGRESS_NETWORK_SUBNET",
+		"STEALTH_INGRESS_IP_RANGE",
+		"STEALTH_TRAEFIK_INGRESS_IP",
+		"STEALTH_CLOUDFLARED_INGRESS_IP",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
 			t.Fatalf("upgrade migration did not add required config key %s", key)
 		}
+	}
+	if !strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.0.254/32") {
+		t.Fatal("upgrade migration did not trust the fixed Traefik peer")
 	}
 	if !FileIsPrivate(layout.EnvFile) {
 		t.Fatal("upgrade migration did not retain config.env mode 0600")
@@ -68,7 +77,7 @@ func assertUpgradeSmokeTopology(t *testing.T, layout Layout) {
 		t.Fatal(err)
 	}
 	text := string(compose)
-	for _, marker := range []string{"  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
+	for _, marker := range []string{"  traefik:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("migrated Compose misses %q", marker)
 		}
@@ -88,6 +97,9 @@ func assertUpgradeSmokeTopology(t *testing.T, layout Layout) {
 		}
 	}
 	for _, path := range []string{
+		layout.TraefikStatic,
+		layout.TraefikCore,
+		layout.TraefikGenerated + "/.gitkeep",
 		layout.TelemetryDir + "/host-metrics.yaml",
 		layout.TelemetryDir + "/docker-logs.yaml",
 		layout.TelemetryDir + "/docker-stats.yaml",
@@ -95,5 +107,12 @@ func assertUpgradeSmokeTopology(t *testing.T, layout Layout) {
 		if !FileExists(path) {
 			t.Fatalf("migrated telemetry asset is missing: %s", path)
 		}
+	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(values["TRAEFIK_IMAGE"]) == "" || strings.TrimSpace(values["STEALTH_INGRESS_NETWORK_NAME"]) == "" {
+		t.Fatal("migrated configuration is missing Traefik ingress settings")
 	}
 }

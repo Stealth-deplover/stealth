@@ -342,6 +342,7 @@ services:
       stealth:
         aliases: [stealth-api]
       telemetry_store:
+      stealth_ingress:
 
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
@@ -386,6 +387,7 @@ services:
     networks:
       stealth:
         aliases: [stealth-web]
+      stealth_ingress:
 
   proxy:
     image: nginx:1.27-alpine
@@ -407,6 +409,37 @@ services:
       start_period: 10s
     networks: [stealth]
 
+  traefik:
+    # Traefik is the future data-plane ingress. Nginx remains the active
+    # external entrypoint in this release; this service is intentionally
+    # internal-only so the migration has no public cutover side effect.
+    image: "${TRAEFIK_IMAGE:-traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c}"
+    restart: unless-stopped
+    command: ["--configFile=/etc/traefik/traefik.yaml"]
+    volumes:
+      - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: "${TRAEFIK_MEMORY_LIMIT:-128m}"
+    expose: ["8080", "8081"]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      stealth_ingress:
+        # The peer is persisted by the installer and intentionally sits
+        # outside the dynamic workload pool.
+        ipv4_address: "${STEALTH_TRAEFIK_INGRESS_IP:?set STEALTH_TRAEFIK_INGRESS_IP}"
+
   cloudflared:
     image: "${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.9.0}"
     profiles: [cloudflare]
@@ -417,7 +450,12 @@ services:
     depends_on:
       proxy:
         condition: service_healthy
-    networks: [stealth]
+    networks:
+      stealth:
+      # Keep the future origin attachment ready without changing the current
+      # remotely configured Cloudflare Tunnel origin (still proxy/Nginx).
+      stealth_ingress:
+        ipv4_address: "${STEALTH_CLOUDFLARED_INGRESS_IP:?set STEALTH_CLOUDFLARED_INGRESS_IP}"
 
 volumes:
   postgres_data:
@@ -448,3 +486,13 @@ networks:
   telemetry_docker:
     name: "${STEALTH_TELEMETRY_DOCKER_NETWORK_NAME:-stealth_telemetry_docker}"
     internal: true
+  stealth_ingress:
+    name: "${STEALTH_INGRESS_NETWORK_NAME:-stealth_ingress}"
+    internal: true
+    ipam:
+      config:
+        # The installer persists the subnet and pool per installation. Fixed
+        # infrastructure peers are outside this range so dynamic app/workload
+        # allocation cannot consume trusted addresses.
+        - subnet: "${STEALTH_INGRESS_NETWORK_SUBNET:?set STEALTH_INGRESS_NETWORK_SUBNET}"
+          ip_range: "${STEALTH_INGRESS_IP_RANGE:?set STEALTH_INGRESS_IP_RANGE}"

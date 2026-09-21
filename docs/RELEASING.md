@@ -26,7 +26,7 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   go build -o /tmp/stealth ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/stealth-linux-amd64 ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/stealth-linux-arm64 ./cmd/stealth
-  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/collector-log-parser-smoke.sh
+  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/collector-log-parser-smoke.sh scripts/traefik-security-test.sh
   ./scripts/bootstrap_test.sh
   docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
   ```

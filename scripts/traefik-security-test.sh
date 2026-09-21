@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Validate the production Traefik boundary against the rendered Compose model
+# and the release-managed static/dynamic files. This is intentionally separate
+# from the running smoke: a topology violation must fail before containers
+# start, while the smoke proves the read-only runtime boundary in Docker.
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+compose_file="${COMPOSE_FILE:-$repo_root/compose.production.yaml}"
+env_file="${ENV_FILE:-$repo_root/.env.production.example}"
+
+if ! command -v docker >/dev/null 2>&1; then
+	printf '%s\n' 'Traefik security test requires Docker Compose' >&2
+	exit 2
+fi
+if [ ! -f "$compose_file" ] || [ ! -f "$env_file" ]; then
+	printf 'Compose or environment file is missing: %s %s\n' "$compose_file" "$env_file" >&2
+	exit 2
+fi
+
+env_value() {
+	local key="$1" value
+	value="$(awk -F= -v key="$key" '$1 == key { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
+	printf '%s\n' "${value%$'\r'}"
+}
+
+ingress_network_name="$(env_value STEALTH_INGRESS_NETWORK_NAME)"
+if [ -z "$ingress_network_name" ]; then
+	ingress_network_name='stealth_ingress'
+fi
+
+# Include the optional tunnel profile so the rendered topology also proves the
+# reserved Cloudflared peer. The profile is part of the ingress address model,
+# even though it is not the active public origin during this migration.
+compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile cloudflare)
+"${compose[@]}" config --quiet
+rendered="$(mktemp "${TMPDIR:-/tmp}/stealth-traefik-compose.XXXXXX")"
+cleanup() {
+	rm -f "$rendered"
+}
+trap cleanup EXIT
+"${compose[@]}" config >"$rendered"
+
+service_block() {
+	local service="$1"
+	awk -v wanted="$service" '
+		/^services:[[:space:]]*$/ { in_services=1; next }
+		in_services && $0 ~ "^  " wanted ":[[:space:]]*$" { found=1; print; next }
+		found && $0 ~ /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+		found { print }
+	' "$rendered"
+}
+
+traefik_block="$(service_block traefik)"
+if [ -z "$traefik_block" ]; then
+	printf '%s\n' 'Traefik service is missing from rendered production Compose' >&2
+	exit 1
+fi
+
+for forbidden in \
+	'/var/run/docker.sock' \
+	'privileged: true' \
+	'network_mode: host' \
+	'/hostfs' \
+	'cap_add:' \
+	'providers.docker' \
+	'api.insecure: true' \
+	'dashboard: true' \
+	'forwardedHeaders.insecure: true'; do
+	if printf '%s\n' "$traefik_block" | grep -Fqi -- "$forbidden"; then
+		printf 'Traefik service contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+
+for required in \
+	'read_only: true' \
+	'no-new-privileges:true' \
+	'networks:' \
+	'stealth_ingress:'; do
+	if ! printf '%s\n' "$traefik_block" | grep -Fq -- "$required"; then
+		printf 'Traefik service is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$traefik_block" | grep -Fq 'cap_drop:' || ! printf '%s\n' "$traefik_block" | grep -Eq 'cap_drop: \[ALL\]|^[[:space:]]*-[[:space:]]+ALL[[:space:]]*$'; then
+	printf '%s\n' 'Traefik does not drop all Linux capabilities' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/traefik\.yaml'; then
+	printf '%s\n' 'Traefik static file mount source is not the release-managed traefik directory' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$traefik_block" | grep -Fq 'target: /etc/traefik/traefik.yaml'; then
+	printf '%s\n' 'Traefik static file mount target is incorrect' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/dynamic([[:space:]]|$)' || ! printf '%s\n' "$traefik_block" | grep -Fq 'target: /etc/traefik/dynamic'; then
+	printf '%s\n' 'Traefik dynamic directory mount is incorrect' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$traefik_block" | grep -Fq 'read_only: true'; then
+	printf '%s\n' 'Traefik mounts/root filesystem are not read-only in rendered Compose' >&2
+	exit 1
+fi
+
+if printf '%s\n' "$traefik_block" | grep -Eq '^      (stealth|telemetry_store|telemetry_ingest|telemetry_docker):'; then
+	printf '%s\n' 'Traefik is attached to a prohibited private network' >&2
+	exit 1
+fi
+if printf '%s\n' "$traefik_block" | grep -Eq '^    ports:'; then
+	printf '%s\n' 'Traefik must not publish a host port in the parallel-ingress release' >&2
+	exit 1
+fi
+traefik_networks="$(printf '%s\n' "$traefik_block" | awk '
+/^    networks:[[:space:]]*$/ { in_networks=1; next }
+in_networks && $0 ~ /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_networks && $0 ~ /^      [^[:space:]][^:]*:[[:space:]]*$/ { sub(/^[[:space:]]+/, ""); sub(/:[[:space:]]*$/, ""); print }
+')"
+if [ "$(printf '%s\n' "$traefik_networks" | sed '/^$/d' | sort -u | paste -sd, -)" != 'stealth_ingress' ]; then
+	printf 'Traefik must join only stealth_ingress; rendered networks=%s\n' "$traefik_networks" >&2
+	exit 1
+fi
+
+ingress_block="$(awk '
+	/^networks:[[:space:]]*$/ { in_networks=1; next }
+	in_networks && $0 ~ /^  stealth_ingress:[[:space:]]*$/ { found=1; print; next }
+	found && $0 ~ /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+	found { print }
+' "$rendered")"
+if ! printf '%s\n' "$ingress_block" | grep -Fq 'internal: true'; then
+	printf '%s\n' 'Traefik ingress network is not internal in rendered Compose' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$ingress_block" | grep -Fq "name: $ingress_network_name"; then
+	printf 'rendered ingress network name does not match persisted %s\n' "$ingress_network_name" >&2
+	exit 1
+fi
+
+ingress_subnet="$(env_value STEALTH_INGRESS_NETWORK_SUBNET)"
+ingress_ip_range="$(env_value STEALTH_INGRESS_IP_RANGE)"
+traefik_ingress_ip="$(env_value STEALTH_TRAEFIK_INGRESS_IP)"
+cloudflared_ingress_ip="$(env_value STEALTH_CLOUDFLARED_INGRESS_IP)"
+for value in "$ingress_subnet" "$ingress_ip_range" "$traefik_ingress_ip" "$cloudflared_ingress_ip"; do
+	if [ -z "$value" ]; then
+		printf '%s\n' 'configured Traefik ingress subnet, pool, and peer values are required' >&2
+		exit 1
+	fi
+done
+if ! python3 - "$ingress_subnet" "$ingress_ip_range" "$traefik_ingress_ip" "$cloudflared_ingress_ip" <<'PY'
+import ipaddress
+import sys
+
+subnet = ipaddress.ip_network(sys.argv[1], strict=False)
+pool = ipaddress.ip_network(sys.argv[2], strict=False)
+traefik = ipaddress.ip_address(sys.argv[3])
+cloudflared = ipaddress.ip_address(sys.argv[4])
+private = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+if subnet.version != 4 or pool.version != 4 or not any(subnet.subnet_of(network) for network in private):
+    raise SystemExit("ingress subnet must be an RFC1918 IPv4 network")
+if pool.prefixlen <= subnet.prefixlen or not pool.subnet_of(subnet) or pool.prefixlen > 29:
+    raise SystemExit("ingress dynamic pool is not a usable child subnet")
+for name, address in (("Traefik", traefik), ("Cloudflared", cloudflared)):
+    if address.version != 4 or address not in subnet:
+        raise SystemExit(f"{name} peer is outside the ingress subnet")
+    if address in (subnet.network_address, subnet.broadcast_address) or address in pool:
+        raise SystemExit(f"{name} peer is not reserved outside the dynamic pool")
+if traefik == cloudflared:
+    raise SystemExit("Traefik and Cloudflared peers must be distinct")
+PY
+then
+	printf '%s\n' 'configured ingress subnet/pool/peer model is invalid' >&2
+	exit 1
+fi
+for required in \
+	"subnet: $ingress_subnet" \
+	"ip_range: $ingress_ip_range" \
+	"ipv4_address: $traefik_ingress_ip" \
+	"ipv4_address: $cloudflared_ingress_ip"; do
+	if ! grep -Fq -- "$required" "$rendered"; then
+		printf 'rendered Compose is missing persisted ingress setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for required in \
+	'STEALTH_INGRESS_NETWORK_SUBNET:?set STEALTH_INGRESS_NETWORK_SUBNET' \
+	'STEALTH_INGRESS_IP_RANGE:?set STEALTH_INGRESS_IP_RANGE' \
+	'STEALTH_TRAEFIK_INGRESS_IP:?set STEALTH_TRAEFIK_INGRESS_IP' \
+	'STEALTH_CLOUDFLARED_INGRESS_IP:?set STEALTH_CLOUDFLARED_INGRESS_IP'; do
+	if ! grep -Fq -- "$required" "$compose_file"; then
+		printf 'Compose does not require configurable ingress setting: %s\n' "$required" >&2
+		exit 1
+	fi
+	done
+if grep -Fq '172.31.0.0/24' "$compose_file" || grep -Fq '172.31.0.10' "$compose_file" || grep -Fq '172.31.0.254' "$compose_file"; then
+	printf '%s\n' 'Compose contains an install-wide hard-coded ingress subnet or peer' >&2
+	exit 1
+fi
+
+static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
+core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
+for file in "$static_file" "$core_file"; do
+	if [ ! -f "$file" ]; then
+		printf 'Traefik managed configuration is missing: %s\n' "$file" >&2
+		exit 1
+	fi
+done
+
+for required in \
+	'providers:' \
+	'directory: /etc/traefik/dynamic' \
+	'dashboard: false' \
+	'insecure: false' \
+	'entryPoint: health' \
+	'trustedIPs:' \
+	'__STEALTH_CLOUDFLARED_TRUSTED_CIDR__' \
+	'format: json' \
+	'Authorization: drop' \
+	'Cookie: drop' \
+	'Set-Cookie: drop' \
+	'Proxy-Authorization: drop'; do
+	if ! grep -Fq -- "$required" "$static_file"; then
+		printf 'Traefik static configuration is missing: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if grep -Eiq 'docker[[:space:]]*:' "$static_file" || grep -Eiq 'forwardedHeaders:[[:space:]]*$' "$static_file" && grep -Fq 'insecure: true' "$static_file"; then
+	printf '%s\n' 'Traefik static configuration enables Docker discovery or insecure forwarded headers' >&2
+	exit 1
+fi
+if ! grep -Fq '__STEALTH_CLOUDFLARED_TRUSTED_CIDR__' "$static_file"; then
+	printf '%s\n' 'Traefik static configuration does not use an installation-rendered Cloudflared peer' >&2
+	exit 1
+fi
+
+for required in \
+	'routers:' \
+	'middlewares:' \
+	'stealth-security-headers:' \
+	'stealth-admin-realtime:' \
+	'stealth-project-realtime:' \
+	'Path(`/v1/admin/realtime`)' \
+	'PathRegexp(`^/v1/projects/[0-9a-fA-F-]{36}/realtime$`)' \
+	'X-Content-Type-Options: "nosniff"' \
+	'Referrer-Policy: "strict-origin-when-cross-origin"' \
+	'Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"' \
+	'X-Frame-Options: "DENY"' \
+	'Content-Security-Policy:' \
+	'stealth-api:' \
+	'stealth-console:' \
+	'url: http://api:8080' \
+	'url: http://console:3000'; do
+	if ! grep -Fq -- "$required" "$core_file"; then
+		printf 'Traefik core dynamic configuration is missing: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if grep -Fq 'api@internal' "$core_file" || grep -Fq 'docker@internal' "$core_file"; then
+	printf '%s\n' 'Traefik core dynamic configuration exposes an internal dashboard/Docker service' >&2
+	exit 1
+fi
+if grep -Eq '/(healthz|readyz|version)' "$core_file" && grep -Fq 'stealth-api:' "$core_file"; then
+	printf '%s\n' 'Traefik public API router exposes an internal health or version endpoint' >&2
+	exit 1
+fi
+if ! grep -Fq 'stealth-security-headers' "$core_file"; then
+	printf '%s\n' 'Traefik core routers are missing the release-managed security-header middleware' >&2
+	exit 1
+fi
+if grep -Fq 'stealth-request-body-limit' "$core_file" || grep -Fq 'maxRequestBodyBytes' "$core_file" || grep -Fq 'buffering:' "$core_file"; then
+	printf '%s\n' 'Traefik core routes must not use full-request buffering; application streaming limits are authoritative' >&2
+	exit 1
+fi
+if grep -Fq 'Strict-Transport-Security:' "$core_file"; then
+	printf '%s\n' 'Traefik internal HTTP core configuration unconditionally emits HSTS' >&2
+	exit 1
+fi
+
+printf '%s\n' 'Traefik security regression passed: file provider only, private configurable ingress, reserved peers, read-only config, no socket, no dashboard'
