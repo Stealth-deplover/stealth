@@ -249,17 +249,16 @@ union; that is tracked as AUD-14.
 
 ### AUD-05 — Monitor alert rules can be orphaned or semantically invalid
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Alert-rule validation and monitor lifecycle
-- **Current-head evidence:** `validateAdminAlertCondition` validates that
-  `monitor_id` is a UUID for `monitor_failure`, `heartbeat_failure`, and
-  `certificate_expiry`, but it does not load the monitor, verify existence, or
-  verify that the rule kind matches the monitor kind. Certificate expiry values
-  are numeric and finite but are not required to be positive. `DeleteAdminMonitor`
-  directly deletes a monitor without reconciling its alert rules. The evaluator
-  selects enabled monitor rules by `condition->>'monitor_id'` and does not add
-  the missing semantic validation.
+- **Current-head evidence:** The audited baseline only checked that `monitor_id`
+  was a UUID, did not load the monitor, did not verify rule/monitor kind
+  compatibility, accepted non-positive certificate thresholds, and deleted
+  monitors without checking alert-rule references. The PR #89 remediation adds
+  transaction-scoped existence/kind validation, positive expiry thresholds, and
+  a deterministic `409 monitor_has_alert_rules` delete response while holding
+  the monitor row lock.
 - **Minimal proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
   non-TLS monitor; separately delete a monitor that has a rule. The current
@@ -267,12 +266,15 @@ union; that is tracked as AUD-14.
   defined reconciliation outcome.
 - **Impact:** Rules can never fire, can evaluate against the wrong monitor
   semantics, or can remain misleading orphan records in the control plane.
-- **Recommended remediation:** Validate monitor existence and kind in the
-  create/update transaction; define monitor-delete behavior (disable, delete,
-  or migrate rules); require positive expiry thresholds.
-- **Recommended regression test:** Repository/API tests for nonexistent,
-  deleted, wrong-kind, and zero/negative-threshold cases plus monitor deletion
-  reconciliation.
+- **Regression evidence in PR #89:** `TestAdminAlertMonitorReferenceValidationIntegration`,
+  `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
+  `TestCertificateExpiryAlertRequiresPositiveDays`, and
+  `TestAdminMonitorErrorMapsAlertRuleConflict` cover missing/wrong-kind
+  references, positive expiry thresholds, conflict semantics, and successful
+  deletion after the rule is removed.
+- **Residual risk:** The existing condition JSON remains the storage shape;
+  direct SQL writes outside the supported repository/API contract are not an
+  application path. The evaluator remains intentionally unchanged.
 
 ### AUD-06 — Live-tail can replay large historical ranges and duplicate rows
 
@@ -507,27 +509,32 @@ union; that is tracked as AUD-14.
 
 ### AUD-16 — Database alert-kind schema drifts from API and evaluator support
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Database/API alert contract
 - **Current-head evidence:** Migration `000043_admin_observability.up.sql`
-  allows `backup_failure` and `job_failure` in the SQL CHECK constraint.
-  `validAdminAlertKind` in `internal/repository/admin_controls.go`, the
-  OpenAPI enums, and generated Console enums support the other alert kinds but
-  exclude those two. The repository contains validation branches for the two
-  kinds that are unreachable through the current create/update contract.
+  allowed `backup_failure` and `job_failure` in the SQL CHECK constraint while
+  `validAdminAlertKind`, the OpenAPI enums, generated Console enums, and both
+  evaluator dispatch paths excluded them. PR #89 removes the unreachable
+  validation branch and adds forward migration `000049_admin_alert_kind_contract.up.sql`.
 - **Minimal proof path:** Insert or migrate a row with either SQL-permitted
   kind, then attempt to represent, update, evaluate, or create it through the
   repository/API. The database accepts a state for which the API/evaluator has
   no coherent end-to-end contract.
 - **Impact:** Direct data imports, old rows, or future migrations can create
   alert records that cannot be edited or evaluated consistently.
-- **Recommended remediation:** Either remove the unsupported kinds from the
-  database constraint through a deliberate migration or implement and document
-  their full API, repository, evaluator, and frontend behavior.
-- **Recommended regression test:** Compare the migration constraint, OpenAPI
-  enum, repository validator, evaluator dispatch, and frontend options in a
-  contract test; test existing rows for every supported kind.
+- **Migration behavior:** Existing unsupported definitions are copied to the
+  private `admin_alert_rule_retired` archive, removed from active
+  `admin_alert_rules`, and their event history remains intact through the
+  PR #87 snapshot/nullable-FK contract. The active SQL CHECK then permits only
+  kinds with a current API and evaluator path.
+- **Regression evidence in PR #89:**
+  `TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration` and
+  `TestAdminAlertRuleRejectsRetiredOperationKinds` verify legacy preservation,
+  history detachment, active CHECK rejection, and application rejection.
+- **Residual risk:** `backup_failure` and `job_failure` remain available only as
+  retired historical definitions, not as active alert kinds; implementing them
+  would be a separate product feature.
 
 ### AUD-17 — Existing repair/update paths can retain the pre-PR-#83 telemetry topology
 

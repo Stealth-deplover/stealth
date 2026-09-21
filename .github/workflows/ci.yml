@@ -97,7 +97,7 @@ jobs:
             done
           }
           run_and_require_tests ./internal/repository \
-            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration)$' \
+            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration)$' \
             TestDeleteAlertRuleAfterNotificationDeliveryIntegration \
             TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration \
             TestDeleteAlertRuleNeverFiredIntegration \
@@ -106,11 +106,14 @@ jobs:
             TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration \
             TestQueryAdminAlertEventsGlobalCursorPaginationIntegration \
             TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration \
-            TestQueryAdminAlertEventsTimeRangeIntegration
+            TestQueryAdminAlertEventsTimeRangeIntegration \
+            TestAdminAlertMonitorReferenceValidationIntegration \
+            TestDeleteAdminMonitorWithAlertRuleConflictsIntegration
           run_and_require_tests ./internal/migrate \
-            '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration)$' \
+            '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration|TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration)$' \
             TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration \
-            TestAdminAlertHistoryGlobalIndexMigrationIntegration
+            TestAdminAlertHistoryGlobalIndexMigrationIntegration \
+            TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestDeleteAdminAlertRulePreservesHistoryIntegration$' \
             TestDeleteAdminAlertRulePreservesHistoryIntegration

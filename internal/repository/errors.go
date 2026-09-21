@@ -18,4 +18,5 @@ var (
 	ErrInvalidBootstrapCode = errors.New("invalid bootstrap code")
 	ErrBootstrapDevice      = errors.New("bootstrap GitHub device flow is unavailable")
 	ErrGitHubIdentity       = errors.New("GitHub identity is unavailable")
+	ErrAdminMonitorHasRules = errors.New("admin monitor has alert rules")
 )

@@ -134,6 +134,9 @@ func (r *Repository) CreateAdminAlertRule(ctx context.Context, accountID, id uui
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return domain.AdminAlertRule{}, err
 	}
+	if err := validateAdminAlertMonitorReferenceTx(ctx, tx, normalized.Kind, normalized.Condition); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO admin_alert_rules (id,name,kind,condition,severity,for_seconds,enabled)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, normalized.Name, normalized.Kind, normalized.Condition, normalized.Severity, normalized.ForSeconds, normalized.Enabled); err != nil {
@@ -189,6 +192,9 @@ func (r *Repository) UpdateAdminAlertRule(ctx context.Context, accountID, id uui
 		condition = append(json.RawMessage(nil), normalized.Condition...)
 	}
 	if err := validateAdminAlertCondition(kind, condition); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if err := validateAdminAlertMonitorReferenceTx(ctx, tx, kind, condition); err != nil {
 		return domain.AdminAlertRule{}, err
 	}
 	severity := current.Severity
@@ -375,12 +381,8 @@ func validateAdminAlertCondition(kind string, raw json.RawMessage) error {
 			return fmt.Errorf("%w: monitor alerts require monitor_id", ErrInvalidAdminAlert)
 		}
 	case "certificate_expiry":
-		if !conditionHasUUID(condition, "monitor_id") || (!conditionHasNumber(condition, "days") && !conditionHasNumber(condition, "threshold")) {
+		if !conditionHasUUID(condition, "monitor_id") || !positiveCertificateThresholds(condition) {
 			return fmt.Errorf("%w: certificate alerts require monitor_id and days", ErrInvalidAdminAlert)
-		}
-	case "backup_failure", "job_failure":
-		if value, ok := condition["kind"]; ok && (!isString(value) || len(strings.TrimSpace(value.(string))) > 128) {
-			return fmt.Errorf("%w: operation kind is invalid", ErrInvalidAdminAlert)
 		}
 	default:
 		return fmt.Errorf("%w: alert kind is unsupported", ErrInvalidAdminAlert)
@@ -445,6 +447,66 @@ func conditionHasNumber(condition map[string]any, key string) bool {
 	}
 	number, ok := value.(float64)
 	return ok && !math.IsNaN(number) && !math.IsInf(number, 0)
+}
+
+func conditionHasPositiveNumber(condition map[string]any, key string) bool {
+	value, ok := condition[key]
+	if !ok {
+		return false
+	}
+	number, ok := value.(float64)
+	return ok && number > 0 && !math.IsNaN(number) && !math.IsInf(number, 0)
+}
+
+func positiveCertificateThresholds(condition map[string]any) bool {
+	hasThreshold := false
+	for _, key := range []string{"days", "threshold"} {
+		if _, exists := condition[key]; !exists {
+			continue
+		}
+		hasThreshold = true
+		if !conditionHasPositiveNumber(condition, key) {
+			return false
+		}
+	}
+	return hasThreshold
+}
+
+func validateAdminAlertMonitorReferenceTx(ctx context.Context, tx pgx.Tx, kind string, raw json.RawMessage) error {
+	if kind != "monitor_failure" && kind != "heartbeat_failure" && kind != "certificate_expiry" {
+		return nil
+	}
+	var condition map[string]any
+	if err := json.Unmarshal(raw, &condition); err != nil {
+		return fmt.Errorf("%w: monitor condition is invalid", ErrInvalidAdminAlert)
+	}
+	monitorIDValue, ok := condition["monitor_id"].(string)
+	if !ok {
+		return fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
+	}
+	monitorID, err := uuid.Parse(strings.TrimSpace(monitorIDValue))
+	if err != nil || monitorID == uuid.Nil {
+		return fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
+	}
+	var monitorKind string
+	err = tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, monitorID).Scan(&monitorKind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: monitor does not exist", ErrInvalidAdminAlert)
+	}
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case "heartbeat_failure":
+		if monitorKind != "heartbeat" {
+			return fmt.Errorf("%w: heartbeat_failure requires a heartbeat monitor", ErrInvalidAdminAlert)
+		}
+	case "certificate_expiry":
+		if monitorKind != "tls" {
+			return fmt.Errorf("%w: certificate_expiry requires a TLS monitor", ErrInvalidAdminAlert)
+		}
+	}
+	return nil
 }
 
 func conditionHasString(condition map[string]any, key string, values ...string) bool {

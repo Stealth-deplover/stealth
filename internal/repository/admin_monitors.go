@@ -211,6 +211,25 @@ func (r *Repository) DeleteAdminMonitor(ctx context.Context, accountID, id uuid.
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return err
 	}
+	var monitorKind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&monitorKind); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var hasAlertRules bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM admin_alert_rules
+			WHERE kind IN ('monitor_failure','heartbeat_failure','certificate_expiry')
+			  AND condition->>'monitor_id'=$1
+		)`, id.String()).Scan(&hasAlertRules); err != nil {
+		return err
+	}
+	if hasAlertRules {
+		return ErrAdminMonitorHasRules
+	}
 	result, err := tx.Exec(ctx, `DELETE FROM admin_monitors WHERE id=$1`, id)
 	if err != nil {
 		return err
