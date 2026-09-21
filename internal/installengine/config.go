@@ -22,7 +22,7 @@ var (
 // installs and upgrades converge on the same immutable image.
 const defaultTraefikImage = "traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c"
 
-const traefikTrustedProxyCIDR = "172.31.0.2/32"
+const traefikTrustedProxyCIDR = "172.31.0.254/32"
 
 // ConfigOptions describes the non-secret choices made before the production
 // stack is started. The engine creates all initial credentials in one place so

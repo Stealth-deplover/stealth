@@ -107,7 +107,7 @@ func TestGenerateConfigPinsTraefikAndTrustedIngressPeer(t *testing.T) {
 	for _, marker := range []string{
 		"TRAEFIK_IMAGE=" + defaultTraefikImage,
 		"STEALTH_INGRESS_NETWORK_NAME=stealth_ingress",
-		"TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.2/32",
+		"TRUSTED_PROXY_CIDRS=172.30.0.0/24,172.31.0.254/32",
 	} {
 		if !strings.Contains(config, marker) {
 			t.Fatalf("generated config is missing %q", marker)
@@ -156,7 +156,7 @@ func TestMigrateReleaseConfigAddsTraefikPeerToCustomTrustedProxies(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := values["TRUSTED_PROXY_CIDRS"]; got != "10.0.0.0/8, 192.0.2.0/24,172.31.0.2/32" {
+	if got := values["TRUSTED_PROXY_CIDRS"]; got != "10.0.0.0/8, 192.0.2.0/24,172.31.0.254/32" {
 		t.Fatalf("migrated trusted proxies = %q", got)
 	}
 }

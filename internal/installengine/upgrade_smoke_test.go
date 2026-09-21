@@ -53,7 +53,7 @@ func TestManagedAssetUpgradeSmoke(t *testing.T) {
 			t.Fatalf("upgrade migration did not add required config key %s", key)
 		}
 	}
-	if !strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.0.2/32") {
+	if !strings.Contains(values["TRUSTED_PROXY_CIDRS"], "172.31.0.254/32") {
 		t.Fatal("upgrade migration did not trust the fixed Traefik peer")
 	}
 	if !FileIsPrivate(layout.EnvFile) {

@@ -91,7 +91,7 @@ and provides:
 
 Traefik trusts forwarded headers only from the fixed Cloudflare Tunnel peer
 `172.31.0.10/32`. The API trusts the existing Nginx network and the fixed
-Traefik peer `172.31.0.2/32`. Neither component enables a global insecure
+Traefik peer `172.31.0.254/32`. Neither component enables a global insecure
 forwarded-header mode.
 
 Traefik emits JSON application and access logs. Authorization, Cookie,
