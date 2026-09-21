@@ -496,8 +496,8 @@ http {
   }
 }
 '''
-	with open(path, 'w', encoding='utf-8') as target:
-	    target.write(contents)
+with open(path, 'w', encoding='utf-8') as target:
+    target.write(contents)
 PY
 	nginx_image="$(docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q proxy)")"
 	container_name="${COMPOSE_PROJECT_NAME:-stealth}-forwarded-header-echo-$$"
