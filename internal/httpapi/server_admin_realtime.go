@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	adminRealtimePollInterval = time.Second
-	adminRealtimeHeartbeat    = 15 * time.Second
-	adminRealtimeBatchSize    = 100
+	adminRealtimePollInterval        = time.Second
+	adminRealtimeHeartbeat           = 15 * time.Second
+	adminRealtimeAuthRecheckInterval = 15 * time.Second
+	adminRealtimeBatchSize           = 100
 )
 
 // adminRealtime streams durable, instance-scoped invalidation events. It uses
@@ -48,6 +49,13 @@ func (s *Server) adminRealtime(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "streaming is not supported by this server")
 		return
 	}
+	authorized := func() bool {
+		allowed, checkErr := s.repo.IsInstanceAdminSession(r.Context(), mustUUID(accountFrom(r).ID), sessionFrom(r))
+		return checkErr == nil && allowed
+	}
+	if !authorized() {
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -60,12 +68,34 @@ func (s *Server) adminRealtime(w http.ResponseWriter, r *http.Request) {
 	defer poll.Stop()
 	heartbeat := time.NewTicker(adminRealtimeHeartbeat)
 	defer heartbeat.Stop()
+	authInterval := s.adminRealtimeAuthRecheckInterval
+	if authInterval <= 0 {
+		authInterval = adminRealtimeAuthRecheckInterval
+	}
+	authCheck := time.NewTicker(authInterval)
+	defer authCheck.Stop()
 	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-authCheck.C:
+			if !authorized() {
+				return
+			}
+		default:
+		}
 		items, next, listErr := s.repo.ListAdminRealtimeEvents(r.Context(), after, adminRealtimeBatchSize)
 		if listErr != nil {
 			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", strconv.Quote("admin realtime stream unavailable"))
 			flusher.Flush()
 			return
+		}
+		select {
+		case <-authCheck.C:
+			if !authorized() {
+				return
+			}
+		default:
 		}
 		if next != nil {
 			after = next
@@ -87,6 +117,10 @@ func (s *Server) adminRealtime(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+		case <-authCheck.C:
+			if !authorized() {
+				return
+			}
 		}
 	}
 }

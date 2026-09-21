@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
@@ -61,6 +62,8 @@ type Server struct {
 	cloudflareFactory CloudflareClientFactory
 	telemetry         telemetry.Store
 	redis             *redis.Client
+
+	adminRealtimeAuthRecheckInterval time.Duration
 	// setupMu serializes setup transitions that can have external provider side
 	// effects. The durable setup-state store remains the source of truth; the
 	// host CLI owns installation execution and is not represented here.
@@ -90,6 +93,11 @@ type Dependencies struct {
 	CloudflareFactory CloudflareClientFactory
 	TelemetryStore    telemetry.Store
 	Redis             *redis.Client
+
+	// AdminRealtimeAuthRecheckInterval is primarily useful for deterministic
+	// integration tests. Production defaults to the bounded interval defined by
+	// the admin realtime handler.
+	AdminRealtimeAuthRecheckInterval time.Duration
 }
 
 // New builds the console API with production dependencies.
@@ -209,7 +217,11 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 			return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
 		}
 	}
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
+	authRecheckInterval := deps.AdminRealtimeAuthRecheckInterval
+	if authRecheckInterval <= 0 {
+		authRecheckInterval = adminRealtimeAuthRecheckInterval
+	}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), adminRealtimeAuthRecheckInterval: authRecheckInterval, realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
 	return s.routes()
 }
 

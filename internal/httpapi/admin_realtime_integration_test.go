@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,19 +38,23 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 	if err := migrate.Apply(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(httpapi.New(config.Config{
+	server := httptest.NewServer(httpapi.NewWithDependencies(config.Config{
 		SessionCookieName:  "stealth_session",
 		SessionTTL:         time.Hour,
 		StorageRoot:        t.TempDir(),
 		StorageMaxFileSize: 1 << 20,
 		FunctionsSecretKey: bytes.Repeat([]byte("r"), 32),
-	}, repository.New(pool), slog.New(slog.NewTextHandler(io.Discard, nil))))
+	}, repository.New(pool), slog.New(slog.NewTextHandler(io.Discard, nil)), httpapi.Dependencies{
+		AdminRealtimeAuthRecheckInterval: 20 * time.Millisecond,
+	}))
 	defer server.Close()
 
 	streamClient := newIntegrationClient(t)
 	streamAdmin := registerAdminTestAccount(t, streamClient, server.URL, "admin-realtime-stream")
 	mutatorClient := newIntegrationClient(t)
 	mutatorAdmin := registerAdminTestAccount(t, mutatorClient, server.URL, "admin-realtime-mutator")
+	requestJSON(t, newIntegrationClient(t), http.MethodGet, server.URL+"/v1/admin/realtime", nil, http.StatusUnauthorized, nil)
+	requestJSON(t, mutatorClient, http.MethodGet, server.URL+"/v1/admin/realtime", nil, http.StatusForbidden, nil)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO instance_roles (account_id,role) VALUES ($1,'instance_admin'),($2,'instance_admin')`, streamAdmin.accountID, mutatorAdmin.accountID); err != nil {
 		t.Fatal(err)
@@ -186,6 +191,172 @@ func TestAdminRealtimeSSEIntegration(t *testing.T) {
 	}
 	if !foundRenamed {
 		t.Fatalf("canonical Admin refetch did not observe cross-session update: %#v", alerts.Items)
+	}
+}
+
+func TestAdminRealtimeSSEAuthorizationLifecycleIntegration(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set TEST_DATABASE_URL to run PostgreSQL integration tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := migrate.Apply(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(httpapi.NewWithDependencies(config.Config{
+		SessionCookieName:  "stealth_session",
+		SessionTTL:         time.Hour,
+		StorageRoot:        t.TempDir(),
+		StorageMaxFileSize: 1 << 20,
+		FunctionsSecretKey: bytes.Repeat([]byte("s"), 32),
+	}, repository.New(pool), slog.New(slog.NewTextHandler(io.Discard, nil)), httpapi.Dependencies{
+		AdminRealtimeAuthRecheckInterval: 20 * time.Millisecond,
+	}))
+	defer server.Close()
+
+	roleClient := newIntegrationClient(t)
+	roleAdmin := registerAdminTestAccount(t, roleClient, server.URL, "admin-realtime-role-revocation")
+	sessionClient := newIntegrationClient(t)
+	sessionAdmin := registerAdminTestAccount(t, sessionClient, server.URL, "admin-realtime-session-revocation")
+	mutatorClient := newIntegrationClient(t)
+	mutatorAdmin := registerAdminTestAccount(t, mutatorClient, server.URL, "admin-realtime-auth-mutator")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO instance_roles (account_id,role)
+		VALUES ($1,'instance_admin'),($2,'instance_admin'),($3,'instance_admin')`, roleAdmin.accountID, sessionAdmin.accountID, mutatorAdmin.accountID); err != nil {
+		t.Fatal(err)
+	}
+	var alertIDs []uuid.UUID
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, alertID := range alertIDs {
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM admin_alert_events WHERE rule_id=$1 OR rule_id_snapshot=$1`, alertID)
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM admin_realtime_events WHERE target_id=$1`, alertID)
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM admin_alert_rules WHERE id=$1`, alertID)
+		}
+		_, _ = pool.Exec(cleanupCtx, `DELETE FROM audit_events WHERE actor_account_id IN ($1,$2,$3)`, roleAdmin.accountID, sessionAdmin.accountID, mutatorAdmin.accountID)
+		_, _ = pool.Exec(cleanupCtx, `DELETE FROM organizations WHERE id IN ($1,$2,$3)`, roleAdmin.organizationID, sessionAdmin.organizationID, mutatorAdmin.organizationID)
+		_, _ = pool.Exec(cleanupCtx, `DELETE FROM accounts WHERE id IN ($1,$2,$3)`, roleAdmin.accountID, sessionAdmin.accountID, mutatorAdmin.accountID)
+	})
+
+	roleResponse, roleReader, roleCancel := openAdminRealtimeStream(t, roleClient, server.URL)
+	defer roleCancel()
+	defer roleResponse.Body.Close()
+	if _, err := pool.Exec(ctx, `DELETE FROM instance_roles WHERE account_id=$1 AND role='instance_admin'`, roleAdmin.accountID); err != nil {
+		t.Fatal(err)
+	}
+	var roleAlert struct {
+		Rule struct {
+			ID string `json:"id"`
+		} `json:"rule"`
+	}
+	requestJSON(t, mutatorClient, http.MethodPost, server.URL+"/v1/admin/alerts", map[string]any{
+		"name":        "Role revocation event",
+		"kind":        "metric_threshold",
+		"condition":   map[string]any{"operator": "gte", "threshold": 1, "metric": "system.cpu.utilization"},
+		"severity":    "warning",
+		"for_seconds": 0,
+		"enabled":     true,
+	}, http.StatusCreated, &roleAlert)
+	roleAlertID, err := uuid.Parse(roleAlert.Rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alertIDs = append(alertIDs, roleAlertID)
+	assertAdminRealtimeClosedWithoutEvent(t, roleReader)
+
+	sessionResponse, sessionReader, sessionCancel := openAdminRealtimeStream(t, sessionClient, server.URL)
+	defer sessionCancel()
+	defer sessionResponse.Body.Close()
+	var sessionID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM sessions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 1`, sessionAdmin.accountID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM sessions WHERE account_id=$1 AND id=$2`, sessionAdmin.accountID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var sessionAlert struct {
+		Rule struct {
+			ID string `json:"id"`
+		} `json:"rule"`
+	}
+	requestJSON(t, mutatorClient, http.MethodPost, server.URL+"/v1/admin/alerts", map[string]any{
+		"name":        "Session revocation event",
+		"kind":        "metric_threshold",
+		"condition":   map[string]any{"operator": "gte", "threshold": 2, "metric": "system.cpu.utilization"},
+		"severity":    "warning",
+		"for_seconds": 0,
+		"enabled":     true,
+	}, http.StatusCreated, &sessionAlert)
+	sessionAlertID, err := uuid.Parse(sessionAlert.Rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alertIDs = append(alertIDs, sessionAlertID)
+	assertAdminRealtimeClosedWithoutEvent(t, sessionReader)
+}
+
+func openAdminRealtimeStream(t *testing.T, client *http.Client, baseURL string) (*http.Response, *bufio.Reader, context.CancelFunc) {
+	t.Helper()
+	streamContext, streamCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	request, err := http.NewRequestWithContext(streamContext, http.MethodGet, baseURL+"/v1/admin/realtime", nil)
+	if err != nil {
+		streamCancel()
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		streamCancel()
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		streamCancel()
+		t.Fatalf("admin SSE response status=%d", response.StatusCode)
+	}
+	reader := bufio.NewReader(response.Body)
+	if line, readErr := reader.ReadString('\n'); readErr != nil || strings.TrimSpace(line) != "retry: 3000" {
+		response.Body.Close()
+		streamCancel()
+		t.Fatalf("admin SSE prelude = %q, err = %v", line, readErr)
+	}
+	if line, readErr := reader.ReadString('\n'); readErr != nil || strings.TrimSpace(line) != "" {
+		response.Body.Close()
+		streamCancel()
+		t.Fatalf("admin SSE prelude terminator = %q, err = %v", line, readErr)
+	}
+	return response, reader, streamCancel
+}
+
+func assertAdminRealtimeClosedWithoutEvent(t *testing.T, reader *bufio.Reader) {
+	t.Helper()
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				closed <- err
+				return
+			}
+			if strings.HasPrefix(line, "id: ") {
+				closed <- fmt.Errorf("revoked admin SSE emitted an event: %q", strings.TrimSpace(line))
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-closed:
+		if err != io.EOF {
+			t.Fatalf("revoked admin SSE closed with unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("revoked admin SSE did not close within the authorization recheck bound")
 	}
 }
 

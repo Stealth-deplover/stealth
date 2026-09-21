@@ -35,3 +35,26 @@ func (r *Repository) IsInstanceAdmin(ctx context.Context, accountID uuid.UUID) (
 	}
 	return allowed, nil
 }
+
+// IsInstanceAdminSession verifies both the session lifecycle and the current
+// instance-level role. It is used by long-lived admin streams, whose opening
+// request cannot be the only authorization check.
+func (r *Repository) IsInstanceAdminSession(ctx context.Context, accountID, sessionID uuid.UUID) (bool, error) {
+	if r == nil || r.pool == nil || accountID == uuid.Nil || sessionID == uuid.Nil {
+		return false, ErrNotFound
+	}
+	var allowed bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM sessions s
+			JOIN instance_roles ir ON ir.account_id=s.account_id
+			WHERE s.id=$1
+			  AND s.account_id=$2
+			  AND s.expires_at>now()
+			  AND ir.role IN ('instance_owner','instance_admin')
+		)`, sessionID, accountID).Scan(&allowed); err != nil {
+		return false, err
+	}
+	return allowed, nil
+}
