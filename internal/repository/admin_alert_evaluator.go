@@ -133,6 +133,9 @@ func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid
 	if monitorID == uuid.Nil {
 		return ErrInvalidAdminMonitor
 	}
+	// CompleteAdminMonitorCheck holds the monitor row before reaching this
+	// monitor-specific rule evaluation boundary. Do not introduce rule ->
+	// monitor locking below.
 	rows, err := tx.Query(ctx, `
 		SELECT id,kind,condition
 		FROM admin_alert_rules

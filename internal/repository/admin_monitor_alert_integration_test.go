@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -208,6 +210,304 @@ func TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration(t *testing
 	if monitor.Kind != "http" {
 		t.Fatalf("monitor kind after dependent rule removal = %q, want http", monitor.Kind)
 	}
+}
+
+func TestAdminMonitorAlertLockOrderingIntegration(t *testing.T) {
+	fixture := newAdminMonitorAlertFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ruleID := uuid.Must(uuid.NewV7())
+	if _, err := fixture.repo.CreateAdminAlertRule(ctx, fixture.accountID, ruleID, AdminAlertRuleInput{
+		Name: "lock ordering", Kind: "monitor_failure",
+		Condition: mustJSON(map[string]any{"monitor_id": fixture.httpID.String()}), Severity: "warning", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	txA, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txA.Rollback(ctx)
+	var monitorKind string
+	if err := txA.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, fixture.httpID).Scan(&monitorKind); err != nil {
+		t.Fatal(err)
+	}
+
+	started, done, err := startAdminAlertRuleUpdateTx(ctx, fixture, ruleID, AdminAlertRulePatch{Name: stringPointer("updated while monitor is locked")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := waitForAdminAlertRuleUpdateStart(t, ctx, started, done)
+	if err := waitForPostgresLockWait(ctx, fixture.pool, pid); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validateAdminMonitorKindChangeTx(ctx, txA, fixture.httpID, "tls"); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("monitor-side dependent-rule lock error = %v", err)
+	}
+	if _, err := txA.Exec(ctx, `UPDATE admin_monitors SET kind='tls' WHERE id=$1`, fixture.httpID); err != nil {
+		t.Fatal(err)
+	}
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitAdminAlertRuleUpdate(t, ctx, done); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("alert-rule update after monitor commit = %v", err)
+	}
+
+	monitor, err := fixture.repo.AdminMonitorByID(ctx, fixture.httpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := fixture.repo.AdminAlertRuleByID(ctx, ruleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !monitorAlertRuleCompatible(rule.Kind, monitor.Kind) {
+		t.Fatalf("final monitor/rule relationship is incompatible: rule=%s monitor=%s", rule.Kind, monitor.Kind)
+	}
+}
+
+func TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration(t *testing.T) {
+	fixture := newAdminMonitorAlertFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ruleID := uuid.Must(uuid.NewV7())
+	if _, err := fixture.repo.CreateAdminAlertRule(ctx, fixture.accountID, ruleID, AdminAlertRuleInput{
+		Name: "worker concurrency", Kind: "monitor_failure",
+		Condition: mustJSON(map[string]any{"monitor_id": fixture.httpID.String()}), Severity: "warning", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	txA, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txA.Rollback(ctx)
+	if err := txA.QueryRow(ctx, `SELECT status FROM admin_monitors WHERE id=$1 FOR UPDATE`, fixture.httpID).Scan(new(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	started, done, err := startAdminAlertRuleUpdateTx(ctx, fixture, ruleID, AdminAlertRulePatch{Name: stringPointer("updated during monitor evaluation")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := waitForAdminAlertRuleUpdateStart(t, ctx, started, done)
+	if err := waitForPostgresLockWait(ctx, fixture.pool, pid); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := evaluateAdminMonitorAlertsTx(ctx, txA, fixture.httpID, AdminMonitorCheckInput{
+		Success: false, LatencyMS: 12, Details: json.RawMessage(`{}`), Error: "synthetic worker failure",
+	}); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("monitor evaluator error = %v", err)
+	}
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitAdminAlertRuleUpdate(t, ctx, done); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("alert-rule update after monitor evaluation = %v", err)
+	}
+
+	rule, err := fixture.repo.AdminAlertRuleByID(ctx, ruleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor, err := fixture.repo.AdminMonitorByID(ctx, fixture.httpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !monitorAlertRuleCompatible(rule.Kind, monitor.Kind) {
+		t.Fatalf("final worker/rule relationship is incompatible: rule=%s monitor=%s", rule.Kind, monitor.Kind)
+	}
+	var historyCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM admin_alert_events WHERE rule_id_snapshot=$1`, ruleID).Scan(&historyCount); err != nil {
+		t.Fatal(err)
+	}
+	if historyCount == 0 {
+		t.Fatal("monitor evaluation did not preserve an alert history event")
+	}
+}
+
+func TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration(t *testing.T) {
+	fixture := newAdminMonitorAlertFixture(t)
+	for _, test := range []struct {
+		name         string
+		monitorID    uuid.UUID
+		ruleKind     string
+		condition    map[string]any
+		expectedKind string
+	}{
+		{name: "heartbeat", monitorID: fixture.heartbeatID, ruleKind: "heartbeat_failure", condition: map[string]any{"monitor_id": fixture.heartbeatID.String()}, expectedKind: "heartbeat"},
+		{name: "certificate expiry", monitorID: fixture.tlsID, ruleKind: "certificate_expiry", condition: map[string]any{"monitor_id": fixture.tlsID.String(), "days": 7}, expectedKind: "tls"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			ruleID := uuid.Must(uuid.NewV7())
+			if _, err := fixture.repo.CreateAdminAlertRule(ctx, fixture.accountID, ruleID, AdminAlertRuleInput{
+				Name: "concurrent compatibility", Kind: test.ruleKind,
+				Condition: mustJSON(test.condition), Severity: "warning", Enabled: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			txA, err := fixture.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer txA.Rollback(ctx)
+			if err := txA.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, test.monitorID).Scan(new(string)); err != nil {
+				t.Fatal(err)
+			}
+
+			txC, err := fixture.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer txC.Rollback(ctx)
+			if err := txC.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, fixture.httpID).Scan(new(string)); err != nil {
+				t.Fatal(err)
+			}
+
+			started, done, err := startAdminAlertRuleUpdateTx(ctx, fixture, ruleID, AdminAlertRulePatch{
+				Condition: mustJSON(map[string]any{
+					"monitor_id": fixture.httpID.String(),
+					"days":       7,
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid := waitForAdminAlertRuleUpdateStart(t, ctx, started, done)
+			if err := waitForPostgresLockWait(ctx, fixture.pool, pid); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := validateAdminMonitorKindChangeTx(ctx, txA, test.monitorID, "http"); !errors.Is(err, ErrAdminMonitorRuleConflict) {
+				failOnPostgresDeadlock(t, err)
+				t.Fatalf("monitor kind change error = %v, want compatibility conflict", err)
+			}
+			if err := txA.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := txC.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := awaitAdminAlertRuleUpdate(t, ctx, done); !errors.Is(err, ErrInvalidAdminAlert) {
+				failOnPostgresDeadlock(t, err)
+				t.Fatalf("incompatible retarget error = %v, want invalid alert", err)
+			}
+
+			monitor, err := fixture.repo.AdminMonitorByID(ctx, test.monitorID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule, err := fixture.repo.AdminAlertRuleByID(ctx, ruleID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if monitor.Kind != test.expectedKind {
+				t.Fatalf("monitor kind after rejected concurrent mutation = %q", monitor.Kind)
+			}
+			if !monitorAlertRuleCompatible(rule.Kind, monitor.Kind) {
+				t.Fatalf("final concurrent relationship is incompatible: rule=%s monitor=%s", rule.Kind, monitor.Kind)
+			}
+		})
+	}
+}
+
+func startAdminAlertRuleUpdateTx(ctx context.Context, fixture adminMonitorAlertFixture, ruleID uuid.UUID, patch AdminAlertRulePatch) (<-chan int32, <-chan error, error) {
+	normalized, err := normalizeAdminAlertRulePatch(patch)
+	if err != nil {
+		return nil, nil, err
+	}
+	started := make(chan int32, 1)
+	done := make(chan error, 1)
+	go func() {
+		tx, beginErr := fixture.pool.Begin(ctx)
+		if beginErr != nil {
+			done <- beginErr
+			return
+		}
+		defer tx.Rollback(ctx)
+		var pid int32
+		if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			done <- err
+			return
+		}
+		started <- pid
+		_, updateErr := updateAdminAlertRuleTx(ctx, tx, fixture.accountID, ruleID, normalized)
+		if updateErr == nil {
+			updateErr = tx.Commit(ctx)
+		}
+		done <- updateErr
+	}()
+	return started, done, nil
+}
+
+func waitForAdminAlertRuleUpdateStart(t *testing.T, ctx context.Context, started <-chan int32, done <-chan error) int32 {
+	t.Helper()
+	select {
+	case pid := <-started:
+		return pid
+	case err := <-done:
+		t.Fatalf("alert-rule update finished before lock orchestration: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	return 0
+}
+
+func awaitAdminAlertRuleUpdate(t *testing.T, ctx context.Context, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+		return ctx.Err()
+	}
+}
+
+func waitForPostgresLockWait(ctx context.Context, pool *pgxpool.Pool, pid int32) error {
+	deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		err := pool.QueryRow(deadline, `SELECT COALESCE(wait_event_type='Lock',false) FROM pg_stat_activity WHERE pid=$1`, pid).Scan(&waiting)
+		if err != nil {
+			return err
+		}
+		if waiting {
+			return nil
+		}
+		select {
+		case <-deadline.Done():
+			return fmt.Errorf("postgres backend %d did not wait for a row lock: %w", pid, deadline.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func failOnPostgresDeadlock(t *testing.T, err error) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "40P01" {
+		t.Fatalf("PostgreSQL deadlock detected (SQLSTATE 40P01): %v", err)
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func adminMonitorUpdateInput(kind, target string) AdminMonitorInput {

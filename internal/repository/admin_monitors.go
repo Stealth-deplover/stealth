@@ -205,6 +205,9 @@ func (r *Repository) UpdateAdminMonitor(ctx context.Context, accountID, id uuid.
 }
 
 func validateAdminMonitorKindChangeTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, newKind string) error {
+	// UpdateAdminMonitor holds the monitor row before entering this helper. Keep
+	// dependent-rule locks after that monitor lock so monitor-backed writes use
+	// one monitor -> rule order.
 	rows, err := tx.Query(ctx, `
 		SELECT kind
 		FROM admin_alert_rules

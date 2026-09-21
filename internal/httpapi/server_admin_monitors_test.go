@@ -29,3 +29,14 @@ func TestAdminMonitorErrorMapsAlertRuleConflict(t *testing.T) {
 		})
 	}
 }
+
+func TestAdminAlertRuleErrorMapsConcurrentConflict(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	adminControlError(nil, recorder, repository.ErrAdminAlertRuleConflict)
+	if recorder.Code != 409 {
+		t.Fatalf("status = %d, want 409", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"admin_alert_rule_conflict"`) {
+		t.Fatalf("body = %q, want admin_alert_rule_conflict code", recorder.Body.String())
+	}
+}

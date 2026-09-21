@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -165,10 +166,66 @@ func (r *Repository) UpdateAdminAlertRule(ctx context.Context, accountID, id uui
 		return domain.AdminAlertRule{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := updateAdminAlertRuleTx(ctx, tx, accountID, id, normalized)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	return item, nil
+}
+
+// updateAdminAlertRuleTx locks every monitor involved in the current or final
+// relationship before locking the rule row. Monitor-backed relationship
+// changes therefore use monitor -> rule ordering, matching monitor updates and
+// monitor-worker evaluation. The caller must commit or roll back tx.
+func updateAdminAlertRuleTx(ctx context.Context, tx pgx.Tx, accountID, id uuid.UUID, normalized AdminAlertRulePatch) (domain.AdminAlertRule, error) {
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return domain.AdminAlertRule{}, err
 	}
 	var current domain.AdminAlertRule
+	current, err := scanAdminAlertRule(tx.QueryRow(ctx, `SELECT `+adminAlertRuleProjection+` FROM admin_alert_rules r WHERE r.id=$1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AdminAlertRule{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	name, kind, condition, severity, forSeconds, enabled, err := mergedAdminAlertRuleValues(current, normalized)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if err := validateAdminAlertCondition(kind, condition); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	currentCondition, err := json.Marshal(current.Condition)
+	if err != nil {
+		return domain.AdminAlertRule{}, ErrInvalidAdminAlert
+	}
+	currentMonitorID, currentMonitorBacked, err := adminAlertRuleMonitorID(current.Kind, currentCondition)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	finalMonitorID, finalMonitorBacked, err := adminAlertRuleMonitorID(kind, condition)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	lockedMonitorKinds, err := lockAdminAlertMonitorsTx(ctx, tx, currentMonitorID, finalMonitorID)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if currentMonitorBacked {
+		if err := validateLockedAdminAlertMonitor(current.Kind, currentMonitorID, lockedMonitorKinds); err != nil {
+			return domain.AdminAlertRule{}, err
+		}
+	}
+	if finalMonitorBacked {
+		if err := validateLockedAdminAlertMonitor(kind, finalMonitorID, lockedMonitorKinds); err != nil {
+			return domain.AdminAlertRule{}, err
+		}
+	}
+
 	current, err = scanAdminAlertRule(tx.QueryRow(ctx, `SELECT `+adminAlertRuleProjection+` FROM admin_alert_rules r WHERE r.id=$1 FOR UPDATE`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AdminAlertRule{}, ErrNotFound
@@ -176,26 +233,59 @@ func (r *Repository) UpdateAdminAlertRule(ctx context.Context, accountID, id uui
 	if err != nil {
 		return domain.AdminAlertRule{}, err
 	}
+	name, kind, condition, severity, forSeconds, enabled, err = mergedAdminAlertRuleValues(current, normalized)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if err := validateAdminAlertCondition(kind, condition); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	finalMonitorID, finalMonitorBacked, err = adminAlertRuleMonitorID(kind, condition)
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if finalMonitorBacked {
+		if err := validateLockedAdminAlertMonitor(kind, finalMonitorID, lockedMonitorKinds); err != nil {
+			if errors.Is(err, ErrInvalidAdminAlert) {
+				return domain.AdminAlertRule{}, err
+			}
+			return domain.AdminAlertRule{}, ErrAdminAlertRuleConflict
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE admin_alert_rules
+		SET name=$2,kind=$3,condition=$4,severity=$5,for_seconds=$6,enabled=$7,
+		    state=CASE WHEN $7 THEN CASE WHEN state='muted' THEN 'normal' ELSE state END ELSE 'muted' END,
+		    pending_since=CASE WHEN $7 THEN pending_since ELSE NULL END,updated_at=now()
+		WHERE id=$1`, id, name, kind, condition, severity, forSeconds, enabled); err != nil {
+		return domain.AdminAlertRule{}, mapError(err)
+	}
+	item, err := scanAdminAlertRule(tx.QueryRow(ctx, `SELECT `+adminAlertRuleProjection+` FROM admin_alert_rules r WHERE r.id=$1`, id))
+	if err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.alert.update", "admin_alert_rule", id, map[string]any{"kind": kind, "enabled": enabled}); err != nil {
+		return domain.AdminAlertRule{}, err
+	}
+	return item, nil
+}
+
+func mergedAdminAlertRuleValues(current domain.AdminAlertRule, normalized AdminAlertRulePatch) (string, string, json.RawMessage, string, int, bool, error) {
 	name := current.Name
 	if normalized.Name != nil {
 		name = *normalized.Name
 	}
 	kind := current.Kind
-	condition, err := json.Marshal(current.Condition)
-	if err != nil {
-		return domain.AdminAlertRule{}, ErrInvalidAdminAlert
-	}
 	if normalized.Kind != nil {
 		kind = *normalized.Kind
 	}
+	condition, err := json.Marshal(current.Condition)
+	if err != nil {
+		return "", "", nil, "", 0, false, ErrInvalidAdminAlert
+	}
 	if normalized.Condition != nil {
 		condition = append(json.RawMessage(nil), normalized.Condition...)
-	}
-	if err := validateAdminAlertCondition(kind, condition); err != nil {
-		return domain.AdminAlertRule{}, err
-	}
-	if err := validateAdminAlertMonitorReferenceTx(ctx, tx, kind, condition); err != nil {
-		return domain.AdminAlertRule{}, err
 	}
 	severity := current.Severity
 	if normalized.Severity != nil {
@@ -209,26 +299,75 @@ func (r *Repository) UpdateAdminAlertRule(ctx context.Context, accountID, id uui
 	if normalized.Enabled != nil {
 		enabled = *normalized.Enabled
 	}
-	_, err = tx.Exec(ctx, `
-		UPDATE admin_alert_rules
-		SET name=$2,kind=$3,condition=$4,severity=$5,for_seconds=$6,enabled=$7,
-		    state=CASE WHEN $7 THEN CASE WHEN state='muted' THEN 'normal' ELSE state END ELSE 'muted' END,
-		    pending_since=CASE WHEN $7 THEN pending_since ELSE NULL END,updated_at=now()
-		WHERE id=$1`, id, name, kind, condition, severity, forSeconds, enabled)
+	return name, kind, condition, severity, forSeconds, enabled, nil
+}
+
+func lockAdminAlertMonitorsTx(ctx context.Context, tx pgx.Tx, monitorIDs ...uuid.UUID) (map[uuid.UUID]string, error) {
+	unique := make(map[uuid.UUID]struct{}, len(monitorIDs))
+	ordered := make([]uuid.UUID, 0, len(monitorIDs))
+	for _, monitorID := range monitorIDs {
+		if monitorID == uuid.Nil {
+			continue
+		}
+		if _, ok := unique[monitorID]; ok {
+			continue
+		}
+		unique[monitorID] = struct{}{}
+		ordered = append(ordered, monitorID)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].String() < ordered[j].String() })
+	locked := make(map[uuid.UUID]string, len(ordered))
+	for _, monitorID := range ordered {
+		var monitorKind string
+		err := tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, monitorID).Scan(&monitorKind)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: monitor does not exist", ErrInvalidAdminAlert)
+		}
+		if err != nil {
+			return nil, err
+		}
+		locked[monitorID] = monitorKind
+	}
+	return locked, nil
+}
+
+func validateLockedAdminAlertMonitor(ruleKind string, monitorID uuid.UUID, lockedMonitorKinds map[uuid.UUID]string) error {
+	monitorKind, ok := lockedMonitorKinds[monitorID]
+	if !ok {
+		return ErrAdminAlertRuleConflict
+	}
+	return validateAdminAlertMonitorCompatibility(ruleKind, monitorKind)
+}
+
+func adminAlertRuleMonitorID(kind string, raw json.RawMessage) (uuid.UUID, bool, error) {
+	if kind != "monitor_failure" && kind != "heartbeat_failure" && kind != "certificate_expiry" {
+		return uuid.Nil, false, nil
+	}
+	var condition map[string]any
+	if err := json.Unmarshal(raw, &condition); err != nil {
+		return uuid.Nil, false, fmt.Errorf("%w: monitor condition is invalid", ErrInvalidAdminAlert)
+	}
+	monitorIDValue, ok := condition["monitor_id"].(string)
+	if !ok {
+		return uuid.Nil, false, fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
+	}
+	monitorID, err := uuid.Parse(strings.TrimSpace(monitorIDValue))
+	if err != nil || monitorID == uuid.Nil {
+		return uuid.Nil, false, fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
+	}
+	return monitorID, true, nil
+}
+
+func validateAdminAlertMonitorReferenceTx(ctx context.Context, tx pgx.Tx, kind string, raw json.RawMessage) error {
+	monitorID, monitorBacked, err := adminAlertRuleMonitorID(kind, raw)
+	if err != nil || !monitorBacked {
+		return err
+	}
+	lockedMonitorKinds, err := lockAdminAlertMonitorsTx(ctx, tx, monitorID)
 	if err != nil {
-		return domain.AdminAlertRule{}, mapError(err)
+		return err
 	}
-	item, err := scanAdminAlertRule(tx.QueryRow(ctx, `SELECT `+adminAlertRuleProjection+` FROM admin_alert_rules r WHERE r.id=$1`, id))
-	if err != nil {
-		return domain.AdminAlertRule{}, err
-	}
-	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.alert.update", "admin_alert_rule", id, map[string]any{"kind": kind, "enabled": enabled}); err != nil {
-		return domain.AdminAlertRule{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return domain.AdminAlertRule{}, err
-	}
-	return item, nil
+	return validateLockedAdminAlertMonitor(kind, monitorID, lockedMonitorKinds)
 }
 
 func (r *Repository) DeleteAdminAlertRule(ctx context.Context, accountID, id uuid.UUID) error {
@@ -470,33 +609,6 @@ func positiveCertificateThresholds(condition map[string]any) bool {
 		}
 	}
 	return hasThreshold
-}
-
-func validateAdminAlertMonitorReferenceTx(ctx context.Context, tx pgx.Tx, kind string, raw json.RawMessage) error {
-	if kind != "monitor_failure" && kind != "heartbeat_failure" && kind != "certificate_expiry" {
-		return nil
-	}
-	var condition map[string]any
-	if err := json.Unmarshal(raw, &condition); err != nil {
-		return fmt.Errorf("%w: monitor condition is invalid", ErrInvalidAdminAlert)
-	}
-	monitorIDValue, ok := condition["monitor_id"].(string)
-	if !ok {
-		return fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
-	}
-	monitorID, err := uuid.Parse(strings.TrimSpace(monitorIDValue))
-	if err != nil || monitorID == uuid.Nil {
-		return fmt.Errorf("%w: monitor_id is invalid", ErrInvalidAdminAlert)
-	}
-	var monitorKind string
-	err = tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, monitorID).Scan(&monitorKind)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("%w: monitor does not exist", ErrInvalidAdminAlert)
-	}
-	if err != nil {
-		return err
-	}
-	return validateAdminAlertMonitorCompatibility(kind, monitorKind)
 }
 
 // monitorAlertRuleCompatible is the authoritative monitor/rule compatibility

@@ -37,6 +37,13 @@ audited SHA. Subsequent focused remediation work is recorded in the individual
 finding sections below; those statuses remain pending until their PRs merge.
 Unrelated findings are not changed by the remediation work.
 
+Evidence labels in this document are deliberate: **Audited-baseline evidence**
+describes the original audited SHA and is historical; **PR #89 remediation
+evidence** describes changes on the unmerged PR branch; and **Current PR #89
+verification** describes tests or workflow evidence for that branch. No
+historical baseline statement should be read as a claim about the current PR
+head.
+
 ## Validation sources
 
 The audit used the current source/configuration tree at the audited SHA, current
@@ -159,9 +166,9 @@ union; that is tracked as AUD-14.
 - **Audited-baseline proof path:** Emit a test-only OTLP log or trace containing a
   placeholder value under a key such as `password`, `token`, `authorization`,
   `cookie`, or `client_secret`, then inspect the corresponding raw exporter
-  row directly in ClickHouse before calling the Stealth API. The current
-  pipeline has no stage that removes it before export; the API-only assertion
-  is therefore not storage sanitization.
+  row directly in ClickHouse before calling the Stealth API. The audited
+  baseline pipeline had no stage that removed it before export; the API-only
+  assertion was therefore not storage sanitization.
 - **Impact:** Anyone with ClickHouse read access, backups, exports, or incident
   access can see secret-bearing telemetry that the Admin API would redact.
 - **Recommended remediation:** Sanitize at or before the persistence boundary
@@ -223,7 +230,7 @@ union; that is tracked as AUD-14.
 - **Status:** RESOLVED BY PR #87
 - **Severity:** High
 - **Area:** PostgreSQL alert and notification lifecycle
-- **Current-head evidence:** Migration `000043_admin_observability.up.sql`
+- **Current merged-main evidence (PR #87):** Migration `000043_admin_observability.up.sql`
   defines `admin_alert_events.rule_id` as `NOT NULL REFERENCES
   admin_alert_rules(id) ON DELETE CASCADE` and
   `admin_notification_deliveries.alert_event_id` as `REFERENCES
@@ -260,16 +267,22 @@ union; that is tracked as AUD-14.
   monitor/rule compatibility predicate, transaction-scoped existence/kind
   validation for rule create/update, a locked monitor-kind update check over
   all dependent rules, positive expiry thresholds, and deterministic conflict
-  responses while holding the monitor row lock.
+  responses while holding the monitor row lock. The monitor row is the
+  serialization point for monitor-backed relationship changes: rule updates
+  lock involved monitors before the rule row and re-read the rule before
+  writing it.
 - **Audited-baseline proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
-  non-TLS monitor; separately delete a monitor that has a rule. The current
-  database/repository path accepts or leaves these relationships without a
-  defined reconciliation outcome.
+  non-TLS monitor; separately delete a monitor that has a rule. At the audited
+  SHA, the database/repository path accepted or left these relationships
+  without a defined reconciliation outcome.
 - **Impact:** Rules can never fire, can evaluate against the wrong monitor
   semantics, or can remain misleading orphan records in the control plane.
 - **Current PR #89 verification:** `TestAdminAlertMonitorReferenceValidationIntegration`,
   `TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration`,
+  `TestAdminMonitorAlertLockOrderingIntegration`,
+  `TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration`,
+  `TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration`,
   `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
   `TestCertificateExpiryAlertRequiresPositiveDays`, and
   `TestAdminMonitorErrorMapsAlertRuleConflict` cover missing/wrong-kind
@@ -337,7 +350,7 @@ union; that is tracked as AUD-14.
   implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Docker telemetry identity
-- **Current-head evidence:** `telemetry/docker-logs.yaml` now extracts the
+- **PR #89 remediation evidence:** `telemetry/docker-logs.yaml` now extracts the
   immutable container ID from the Docker JSON path and moves it to
   `resource.container.id`. The Docker stats path maps Compose
   project/service/container-number labels and supplies receiver container
@@ -350,7 +363,7 @@ union; that is tracked as AUD-14.
   retains the stable ID; the Admin query adds the matching metric metadata.
 - **Impact:** File logs are now stably correlated by immutable container ID and
   expose human workload identity when a matching Docker stats sample exists.
-- **Remediation evidence in PR #89:** `docker-container-path` and
+- **PR #89 regression evidence:** `docker-container-path` and
   `container-id-resource` operators, `TestQueryLogsEnrichesDockerIdentityFromScalarMetrics`,
   the Docker stats label mapping, and the Production Compose Smoke assertion
   for Admin-visible `container.name`.
@@ -427,7 +440,7 @@ union; that is tracked as AUD-14.
   and pending merge
 - **Severity:** Medium
 - **Area:** Console admin time-range state
-- **Current-head evidence:** `useAdminTimeRange` keeps failed persistence in
+- **PR #89 remediation evidence:** `useAdminTimeRange` keeps failed persistence in
   session state, uses `useSyncExternalStore` for same-tab and browser storage
   events, validates a custom range to 30 days, and falls back to `1h` when a
   persisted custom selection has malformed endpoints. Selecting Custom with
@@ -507,7 +520,7 @@ union; that is tracked as AUD-14.
   and pending merge
 - **Severity:** Medium
 - **Area:** ClickHouse metric query adapter/API
-- **Current-head evidence:** The pinned exporter creates gauge, sum, histogram,
+- **PR #89 remediation evidence:** The pinned exporter creates gauge, sum, histogram,
   summary, and exponential-histogram tables. `QueryMetrics` now unions all five
   runtime tables and projects scalar values or bounded typed aggregates through
   `MetricRecord`; `ListSources` also counts all metric tables. The OpenAPI
@@ -619,12 +632,12 @@ union; that is tracked as AUD-14.
 - **Area:** Uninstall/purge lifecycle and data cleanup
 - **Audited-baseline evidence:** At the audited SHA, the purge model omitted
   `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` from
-  `configuredUninstallVolumes`, so current post-PR-#83 Compose failed the
+  `configuredUninstallVolumes`, so post-PR-#83 Compose failed the
   exact-set purge guard.
 - **PR #89 remediation evidence:** PR #89 adds all six release-owned volume
   keys, validates their Compose ownership, accepts a known legacy subset, and
   explicitly removes remaining verified managed volume names.
-- **Audited-baseline proof path:** Run `stealth uninstall --purge` against a current
+- **Audited-baseline proof path:** Run `stealth uninstall --purge` against an
   installation using the post-PR-#83 Compose file. The exact-set validation
   sees the ClickHouse and collector state volumes absent from the configured
   model and refuses the purge. If that validation were bypassed, verification
