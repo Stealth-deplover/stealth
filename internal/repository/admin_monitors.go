@@ -167,12 +167,17 @@ func (r *Repository) UpdateAdminMonitor(ctx context.Context, accountID, id uuid.
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return domain.AdminMonitor{}, err
 	}
-	var lockedID uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&lockedID); err != nil {
+	var currentKind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&currentKind); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AdminMonitor{}, ErrNotFound
 		}
 		return domain.AdminMonitor{}, err
+	}
+	if currentKind != input.Kind {
+		if err := validateAdminMonitorKindChangeTx(ctx, tx, id, input.Kind); err != nil {
+			return domain.AdminMonitor{}, err
+		}
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE admin_monitors
@@ -197,6 +202,29 @@ func (r *Repository) UpdateAdminMonitor(ctx context.Context, accountID, id uuid.
 		return domain.AdminMonitor{}, err
 	}
 	return item, nil
+}
+
+func validateAdminMonitorKindChangeTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, newKind string) error {
+	rows, err := tx.Query(ctx, `
+		SELECT kind
+		FROM admin_alert_rules
+		WHERE kind IN ('monitor_failure','heartbeat_failure','certificate_expiry')
+		  AND condition->>'monitor_id'=$1
+		FOR UPDATE`, monitorID.String())
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ruleKind string
+		if err := rows.Scan(&ruleKind); err != nil {
+			return err
+		}
+		if !monitorAlertRuleCompatible(ruleKind, newKind) {
+			return ErrAdminMonitorRuleConflict
+		}
+	}
+	return rows.Err()
 }
 
 func (r *Repository) DeleteAdminMonitor(ctx context.Context, accountID, id uuid.UUID) error {

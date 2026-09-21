@@ -20,3 +20,5 @@ var (
 	ErrGitHubIdentity       = errors.New("GitHub identity is unavailable")
 	ErrAdminMonitorHasRules = errors.New("admin monitor has alert rules")
 )
+
+var ErrAdminMonitorRuleConflict = errors.New("admin monitor alert rule conflict")

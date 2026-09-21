@@ -496,17 +496,38 @@ func validateAdminAlertMonitorReferenceTx(ctx context.Context, tx pgx.Tx, kind s
 	if err != nil {
 		return err
 	}
-	switch kind {
+	return validateAdminAlertMonitorCompatibility(kind, monitorKind)
+}
+
+// monitorAlertRuleCompatible is the authoritative monitor/rule compatibility
+// predicate used by alert writes and monitor kind changes. monitor_failure is
+// intentionally compatible with every monitor kind supported by the current
+// evaluator; the specialized rules retain their kind-specific contracts.
+func monitorAlertRuleCompatible(ruleKind, monitorKind string) bool {
+	switch ruleKind {
+	case "monitor_failure":
+		return monitorKind == "http" || monitorKind == "tcp" || monitorKind == "dns" || monitorKind == "tls" || monitorKind == "heartbeat"
 	case "heartbeat_failure":
-		if monitorKind != "heartbeat" {
-			return fmt.Errorf("%w: heartbeat_failure requires a heartbeat monitor", ErrInvalidAdminAlert)
-		}
+		return monitorKind == "heartbeat"
 	case "certificate_expiry":
-		if monitorKind != "tls" {
-			return fmt.Errorf("%w: certificate_expiry requires a TLS monitor", ErrInvalidAdminAlert)
-		}
+		return monitorKind == "tls"
+	default:
+		return false
 	}
-	return nil
+}
+
+func validateAdminAlertMonitorCompatibility(ruleKind, monitorKind string) error {
+	if monitorAlertRuleCompatible(ruleKind, monitorKind) {
+		return nil
+	}
+	switch ruleKind {
+	case "heartbeat_failure":
+		return fmt.Errorf("%w: heartbeat_failure requires a heartbeat monitor", ErrInvalidAdminAlert)
+	case "certificate_expiry":
+		return fmt.Errorf("%w: certificate_expiry requires a TLS monitor", ErrInvalidAdminAlert)
+	default:
+		return fmt.Errorf("%w: monitor alert rule is incompatible with the monitor kind", ErrInvalidAdminAlert)
+	}
 }
 
 func conditionHasString(condition map[string]any, key string, values ...string) bool {
