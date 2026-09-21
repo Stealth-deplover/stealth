@@ -323,28 +323,34 @@ union; that is tracked as AUD-14.
 
 ### AUD-07 — Docker attribution is improved for metrics but incomplete for file logs
 
-- **Status:** PARTIALLY RESOLVED
+- **Status:** PARTIALLY RESOLVED on the audited baseline; remediation
+  implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Docker telemetry identity
-- **Current-head evidence:** `telemetry/docker-stats.yaml` maps Compose project
-  and service labels into metric labels and the smoke evidence shows real rows
-  with container identity and all six required container metric instruments.
-  `telemetry/docker-logs.yaml`, however, uses `include_file_path` and Docker
-  JSON parsing but does not derive a stable container ID, container name,
-  image, Compose project, or Compose service from the Docker log filename or
-  metadata. It inserts the generic `service.name=stealth-host` resource value.
+- **Current-head evidence:** `telemetry/docker-logs.yaml` now extracts the
+  immutable container ID from the Docker JSON path and moves it to
+  `resource.container.id`. The Docker stats path maps Compose
+  project/service/container-number labels and supplies receiver container
+  name/image metadata. `ClickHouseStore.QueryLogs` performs a bounded
+  server-side join on container ID and adds available name, image, and Compose
+  attributes to Admin log results without changing the log collector's
+  privilege boundary.
 - **Minimal proof path:** Compare a Docker metric row with a Docker file-log
-  row from the same container in ClickHouse/Admin Logs. The metric has
-  container/Compose identity, while the log pipeline has a file path and
-  generic service identity without an equivalent container resource projection.
-- **Impact:** Metrics can be attributed to infrastructure entities while their
-  associated logs cannot be reliably scoped or correlated by container/service.
-- **Recommended remediation:** Parse and validate the Docker log filename or
-  add a bounded metadata enrichment step that emits container ID, name, image,
-  Compose project, and Compose service as approved resource attributes.
-- **Recommended regression test:** Emit Docker metrics and file logs from a
-  known Compose service and assert equivalent identity fields through
-  ClickHouse and the Admin Sources/Logs APIs.
+  row from the same container in ClickHouse/Admin Logs. The raw file-log row
+  retains the stable ID; the Admin query adds the matching metric metadata.
+- **Impact:** File logs are now stably correlated by immutable container ID and
+  expose human workload identity when a matching Docker stats sample exists.
+- **Remediation evidence in PR #89:** `docker-container-path` and
+  `container-id-resource` operators, `TestQueryLogsEnrichesDockerIdentityFromScalarMetrics`,
+  the Docker stats label mapping, and the Production Compose Smoke assertion
+  for Admin-visible `container.name`.
+- **Residual risk:** A stopped/deleted container may have no retained metrics
+  sample, so historical logs retain the ID but cannot be guaranteed a name or
+  image indefinitely. Giving the log collector Docker socket authority remains
+  out of scope and would violate the established boundary.
+- **Recommended regression test:** Keep the Compose smoke ID/name checks and
+  add a live Collector + ClickHouse correlation assertion before calling this
+  finding fully resolved.
 
 ### AUD-08 — Monitor SSRF policy omits special-use ranges
 

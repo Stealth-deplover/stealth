@@ -29,6 +29,7 @@ receivers:
     container_labels_to_metric_labels:
       com.docker.compose.project: docker.compose.project
       com.docker.compose.service: service.name
+      com.docker.compose.container-number: docker.compose.container_number
 
 processors:
   memory_limiter:

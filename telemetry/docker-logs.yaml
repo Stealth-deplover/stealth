@@ -23,6 +23,23 @@ receivers:
         parse_from: body
         parse_to: attributes
         on_error: send
+      # The Docker json-file path is the only metadata available to this
+      # least-privileged reader. Extract the immutable container identity
+      # before forwarding the record; names/images/Compose labels remain
+      # available from the restricted docker_stats metadata path and can be
+      # correlated by container.id without giving this collector a socket.
+      - type: regex_parser
+        id: docker-container-path
+        regex: '^/hostfs/var/lib/docker/containers/(?P<container_id>[a-fA-F0-9]{12,64})/[a-fA-F0-9]{12,64}-json\.log$'
+        parse_from: attributes["log.file.path"]
+        if: 'attributes["log.file.path"] != nil'
+        on_error: send
+      - type: move
+        id: container-id-resource
+        from: attributes.container_id
+        to: resource["container.id"]
+        if: 'attributes.container_id != nil'
+        on_error: send
       - type: move
         id: move-message
         from: attributes.log

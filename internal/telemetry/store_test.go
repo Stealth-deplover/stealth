@@ -71,8 +71,8 @@ func TestQueryUsesTypedParametersAndDoesNotEmbedFilters(t *testing.T) {
 	if strings.Contains(conn.query, injection) || !strings.Contains(conn.query, "{service:String}") || !strings.Contains(conn.query, "{search:String}") {
 		t.Fatalf("query embedded an untrusted filter: %s", conn.query)
 	}
-	if len(conn.args) != 6 {
-		t.Fatalf("argument count = %d, want 6", len(conn.args))
+	if len(conn.args) != 8 {
+		t.Fatalf("argument count = %d, want 8", len(conn.args))
 	}
 	for _, argument := range conn.args {
 		switch named := argument.(type) {
@@ -102,8 +102,42 @@ func TestQueryLogsAfterUsesCompleteStableCursor(t *testing.T) {
 	if !strings.Contains(conn.query, "cityHash64") || !strings.Contains(conn.query, "after_timestamp") || !strings.Contains(conn.query, "ORDER BY Timestamp ASC, TraceId ASC, SpanId ASC, CursorKey ASC") {
 		t.Fatalf("cursor query does not include complete ascending ordering: %s", conn.query)
 	}
-	if len(conn.args) != 10 {
-		t.Fatalf("cursor query argument count = %d, want 10", len(conn.args))
+	if len(conn.args) != 12 {
+		t.Fatalf("cursor query argument count = %d, want 12", len(conn.args))
+	}
+}
+
+func TestQueryLogsEnrichesDockerIdentityFromScalarMetrics(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryLogs(context.Background(), LogsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"container_metadata",
+		"otel_metrics_gauge",
+		"otel_metrics_sum",
+		"container.name",
+		"container.image.name",
+		"docker.compose.project",
+		"docker.compose.service",
+		"docker.compose.container_number",
+		"from_metrics:DateTime",
+	} {
+		if !strings.Contains(conn.query, marker) {
+			t.Fatalf("Docker log query is missing %q: %s", marker, conn.query)
+		}
+	}
+}
+
+func TestEnrichContainerAttributesPreservesExistingValues(t *testing.T) {
+	got := enrichContainerAttributes(
+		map[string]string{"container.id": "abc", "container.name": "file-log-name"},
+		"stats-name", "image:tag", "image-id", "project", "service", "1",
+	)
+	if got["container.id"] != "abc" || got["container.name"] != "file-log-name" || got["container.image.name"] != "image:tag" || got["docker.compose.project"] != "project" {
+		t.Fatalf("container metadata enrichment = %#v", got)
 	}
 }
 

@@ -212,6 +212,34 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 
 	marker := fmt.Sprintf("telemetry-log-cursor-%d", time.Now().UnixNano())
 	timestamp := time.Now().UTC().Truncate(time.Millisecond)
+	containerID := "abcdef123456"
+	emitCollectorSignal(t, collectorHTTP, "metrics", map[string]any{
+		"resourceMetrics": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{
+				stringAttribute("service.name", "telemetry.cursor"),
+				stringAttribute("container.id", containerID),
+				stringAttribute("container.name", "cursor-api"),
+				stringAttribute("container.image.name", "cursor-api:test"),
+				stringAttribute("container.image.id", "sha256:cursor"),
+			}},
+			"scopeMetrics": []any{map[string]any{
+				"scope": map[string]any{"name": "telemetry.cursor"},
+				"metrics": []any{map[string]any{
+					"name": "container.cpu.usage.total",
+					"gauge": map[string]any{"dataPoints": []any{map[string]any{
+						"timeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+						"asDouble":     1.0,
+						"attributes": []any{
+							stringAttribute("docker.compose.project", "stealth"),
+							stringAttribute("service.name", "api"),
+							stringAttribute("docker.compose.container_number", "1"),
+						},
+					}},
+					},
+				}},
+			}},
+		}},
+	})
 	logRecords := make([]any, 0, 3)
 	for _, suffix := range []string{"a", "b", "c"} {
 		traceID := fmt.Sprintf("%032x", time.Now().UnixNano())
@@ -226,7 +254,10 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 	}
 	emitCollectorSignal(t, collectorHTTP, "logs", map[string]any{
 		"resourceLogs": []any{map[string]any{
-			"resource":  map[string]any{"attributes": []any{stringAttribute("service.name", "telemetry.cursor")}},
+			"resource": map[string]any{"attributes": []any{
+				stringAttribute("service.name", "telemetry.cursor"),
+				stringAttribute("container.id", containerID),
+			}},
 			"scopeLogs": []any{map[string]any{"scope": map[string]any{"name": "telemetry.cursor"}, "logRecords": logRecords}},
 		}},
 	})
@@ -244,6 +275,28 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 	}
 	if lastErr != nil || len(page.Items) != 3 {
 		t.Fatalf("cursor seed rows = %d, last error = %v", len(page.Items), lastErr)
+	}
+	metadataDeadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(metadataDeadline) && page.Items[0].ResourceAttributes["container.name"] != "cursor-api" {
+		page, lastErr = store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Service: "telemetry.cursor", Search: marker, Limit: 10})
+		if lastErr != nil {
+			t.Fatal(lastErr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	metadata := page.Items[0].ResourceAttributes
+	for key, want := range map[string]string{
+		"container.id":                    containerID,
+		"container.name":                  "cursor-api",
+		"container.image.name":            "cursor-api:test",
+		"container.image.id":              "sha256:cursor",
+		"docker.compose.project":          "stealth",
+		"docker.compose.service":          "api",
+		"docker.compose.container_number": "1",
+	} {
+		if metadata[key] != want {
+			t.Fatalf("log metadata %s = %q, want %q (all=%#v)", key, metadata[key], want, metadata)
+		}
 	}
 	oldest := page.Items[len(page.Items)-1]
 	after, err := store.QueryLogs(ctx, LogsQuery{

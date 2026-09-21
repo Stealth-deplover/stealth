@@ -283,11 +283,50 @@ type SourcesResult struct {
 	Items []SourceRecord `json:"items"`
 }
 
+const dockerContainerMetadataQuery = `
+SELECT ContainerID,
+       argMax(ContainerName, TimeUnix) AS ContainerName,
+       argMax(ImageName, TimeUnix) AS ImageName,
+       argMax(ImageID, TimeUnix) AS ImageID,
+       argMax(ComposeProject, TimeUnix) AS ComposeProject,
+       argMax(ComposeService, TimeUnix) AS ComposeService,
+       argMax(ComposeContainerNumber, TimeUnix) AS ComposeContainerNumber
+FROM (
+  SELECT TimeUnix,
+         ResourceAttributes['container.id'] AS ContainerID,
+         if(ResourceAttributes['container.name'] != '', ResourceAttributes['container.name'], Attributes['container.name']) AS ContainerName,
+         if(ResourceAttributes['container.image.name'] != '', ResourceAttributes['container.image.name'], Attributes['container.image.name']) AS ImageName,
+         if(ResourceAttributes['container.image.id'] != '', ResourceAttributes['container.image.id'], Attributes['container.image.id']) AS ImageID,
+         if(Attributes['docker.compose.project'] != '', Attributes['docker.compose.project'], ResourceAttributes['docker.compose.project']) AS ComposeProject,
+         if(Attributes['service.name'] != '', Attributes['service.name'], ResourceAttributes['docker.compose.service']) AS ComposeService,
+         if(Attributes['docker.compose.container_number'] != '', Attributes['docker.compose.container_number'], ResourceAttributes['docker.compose.container_number']) AS ComposeContainerNumber
+  FROM otel_metrics_gauge
+  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+  UNION ALL
+  SELECT TimeUnix,
+         ResourceAttributes['container.id'] AS ContainerID,
+         if(ResourceAttributes['container.name'] != '', ResourceAttributes['container.name'], Attributes['container.name']) AS ContainerName,
+         if(ResourceAttributes['container.image.name'] != '', ResourceAttributes['container.image.name'], Attributes['container.image.name']) AS ImageName,
+         if(ResourceAttributes['container.image.id'] != '', ResourceAttributes['container.image.id'], Attributes['container.image.id']) AS ImageID,
+         if(Attributes['docker.compose.project'] != '', Attributes['docker.compose.project'], ResourceAttributes['docker.compose.project']) AS ComposeProject,
+         if(Attributes['service.name'] != '', Attributes['service.name'], ResourceAttributes['docker.compose.service']) AS ComposeService,
+         if(Attributes['docker.compose.container_number'] != '', Attributes['docker.compose.container_number'], ResourceAttributes['docker.compose.container_number']) AS ComposeContainerNumber
+  FROM otel_metrics_sum
+  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+)
+WHERE ContainerID != ''
+GROUP BY ContainerID`
+
 const logsQuery = `
+WITH container_metadata AS (` + dockerContainerMetadataQuery + `)
 SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
        LogAttributes, ResourceAttributes,
+       ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
+       ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
+       ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
        cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
 FROM otel_logs
+LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
 WHERE Timestamp >= {from:DateTime64(9)}
   AND Timestamp < {to:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
@@ -302,10 +341,15 @@ LIMIT {limit:UInt32}`
 // every ORDER BY key; timestamp-only polling is not sufficient when several
 // records share the same timestamp.
 const logsAfterQuery = `
+WITH container_metadata AS (` + dockerContainerMetadataQuery + `)
 SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
        LogAttributes, ResourceAttributes,
+       ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
+       ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
+       ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
        cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
 FROM otel_logs
+LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
 WHERE Timestamp >= {from:DateTime64(9)}
   AND Timestamp < {to:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
@@ -447,6 +491,8 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	args := []any{
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
+		clickhouse.DateNamed("from_metrics", query.Range.From.UTC(), clickhouse.Seconds),
+		clickhouse.DateNamed("to_metrics", query.Range.To.UTC(), clickhouse.Seconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("level", boundedFilter(query.Level, 64)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
@@ -470,18 +516,54 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	for rows.Next() {
 		var item LogRecord
 		var attributes, resourceAttributes map[string]string
-		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &item.CursorKey); err != nil {
+		var containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string
+		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &containerName, &imageName, &imageID, &composeProject, &composeService, &composeContainerNumber, &item.CursorKey); err != nil {
 			return LogsResult{}, fmt.Errorf("scan telemetry log: %w", err)
 		}
 		item.Body = redactText(item.Body)
 		item.Attributes = redactAttributes(attributes)
 		item.ResourceAttributes = redactAttributes(resourceAttributes)
+		item.ResourceAttributes = enrichContainerAttributes(item.ResourceAttributes, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber)
 		result.Items = append(result.Items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return LogsResult{}, fmt.Errorf("read telemetry logs: %w", err)
 	}
 	return result, nil
+}
+
+func enrichContainerAttributes(attributes map[string]string, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string) map[string]string {
+	values := map[string]string{
+		"container.name":                  containerName,
+		"container.image.name":            imageName,
+		"container.image.id":              imageID,
+		"docker.compose.project":          composeProject,
+		"docker.compose.service":          composeService,
+		"docker.compose.container_number": composeContainerNumber,
+	}
+	for key, value := range values {
+		if value == "" {
+			delete(values, key)
+		}
+	}
+	if len(values) == 0 {
+		return attributes
+	}
+	if attributes == nil {
+		attributes = make(map[string]string, len(values))
+	} else {
+		copy := make(map[string]string, len(attributes)+len(values))
+		for key, value := range attributes {
+			copy[key] = value
+		}
+		attributes = copy
+	}
+	for key, value := range values {
+		if _, exists := attributes[key]; !exists || attributes[key] == "" {
+			attributes[key] = value
+		}
+	}
+	return attributes
 }
 
 func (s *ClickHouseStore) QueryTraces(ctx context.Context, query TracesQuery) (TracesResult, error) {

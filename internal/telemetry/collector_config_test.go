@@ -30,6 +30,9 @@ func TestDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "docker-logs.yaml")
 	for _, expected := range []string{
 		"poll_interval: 200ms",
+		"id: docker-container-path",
+		"parse_from: attributes[\"log.file.path\"]",
+		"to: resource[\"container.id\"]",
 		"layout_type: gotime",
 		"layout: '2006-01-02T15:04:05.999999999Z07:00'",
 		"id: stream-severity",
@@ -109,6 +112,9 @@ func TestDockerStatsExplicitlyEnablesInfrastructureMetrics(t *testing.T) {
 		"container.blockio.io_service_bytes_recursive:",
 		"container.state.status:",
 		"container.state.health.status:",
+		"com.docker.compose.project: docker.compose.project",
+		"com.docker.compose.service: service.name",
+		"com.docker.compose.container-number: docker.compose.container_number",
 	} {
 		if !strings.Contains(config, expected) {
 			t.Fatalf("Docker stats config is missing %q", expected)
