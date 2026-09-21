@@ -343,6 +343,10 @@ services:
         aliases: [stealth-api]
       telemetry_store:
       stealth_ingress:
+        # Reserve stable addresses on the dedicated ingress network so the
+        # Traefik and Cloudflare peer addresses used by header trust cannot be
+        # claimed by Compose's automatic allocator during concurrent startup.
+        ipv4_address: 172.31.0.11
 
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
@@ -388,6 +392,7 @@ services:
       stealth:
         aliases: [stealth-web]
       stealth_ingress:
+        ipv4_address: 172.31.0.12
 
   proxy:
     image: nginx:1.27-alpine
