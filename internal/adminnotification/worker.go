@@ -157,7 +157,13 @@ func (w *Worker) deliver(ctx context.Context, job repository.AdminNotificationDe
 			return errors.New("notification webhook URL is missing")
 		}
 		parsed, err := url.Parse(endpoint)
-		if err != nil || monitoring.ValidatePublicHTTPSURL(parsed) != nil {
+		if err != nil {
+			return errors.New("notification webhook URL is invalid")
+		}
+		if validationErr := monitoring.ValidatePublicHTTPSURL(ctx, parsed); validationErr != nil {
+			if errors.Is(validationErr, context.Canceled) || errors.Is(validationErr, context.DeadlineExceeded) {
+				return validationErr
+			}
 			return errors.New("notification webhook URL is invalid")
 		}
 		payload := map[string]any{"source": "stealth", "alert": map[string]any{

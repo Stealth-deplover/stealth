@@ -618,6 +618,8 @@ func adminConfigLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
 
 func adminControlError(s *Server, w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, repository.ErrAdminAlertRuleConflict):
+		writeError(w, http.StatusConflict, "admin_alert_rule_conflict", "the alert rule changed concurrently")
 	case errors.Is(err, repository.ErrInvalidAdminAlert), errors.Is(err, repository.ErrInvalidAdminAlertHistory), errors.Is(err, repository.ErrInvalidAdminNotification), errors.Is(err, repository.ErrInvalidAdminIncident), errors.Is(err, repository.ErrInvalidAdminDashboard), errors.Is(err, repository.ErrInvalidAdminStatus):
 		writeError(w, http.StatusBadRequest, "validation_error", "admin configuration is invalid")
 	case errors.Is(err, repository.ErrNotFound):

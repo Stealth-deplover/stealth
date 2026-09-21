@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -70,8 +71,8 @@ func TestQueryUsesTypedParametersAndDoesNotEmbedFilters(t *testing.T) {
 	if strings.Contains(conn.query, injection) || !strings.Contains(conn.query, "{service:String}") || !strings.Contains(conn.query, "{search:String}") {
 		t.Fatalf("query embedded an untrusted filter: %s", conn.query)
 	}
-	if len(conn.args) != 6 {
-		t.Fatalf("argument count = %d, want 6", len(conn.args))
+	if len(conn.args) != 9 {
+		t.Fatalf("argument count = %d, want 9", len(conn.args))
 	}
 	for _, argument := range conn.args {
 		switch named := argument.(type) {
@@ -86,6 +87,60 @@ func TestQueryUsesTypedParametersAndDoesNotEmbedFilters(t *testing.T) {
 	}
 }
 
+func TestQueryLogsAfterUsesCompleteStableCursor(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	_, err := store.QueryLogs(context.Background(), LogsQuery{
+		Range: TimeRange{From: now.Add(-time.Minute), To: now},
+		Limit: 10,
+		After: &LogCursor{Timestamp: now.Add(-time.Second), EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conn.query, "cityHash64") || !strings.Contains(conn.query, "after_event_id") || !strings.Contains(conn.query, "ORDER BY Timestamp ASC, EventID ASC") || !strings.Contains(conn.query, "stealth.log.event_id") {
+		t.Fatalf("cursor query does not include complete ascending ordering: %s", conn.query)
+	}
+	if len(conn.args) != 10 {
+		t.Fatalf("cursor query argument count = %d, want 10", len(conn.args))
+	}
+}
+
+func TestQueryLogsEnrichesDockerIdentityFromScalarMetrics(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryLogs(context.Background(), LogsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"container_metadata",
+		"otel_metrics_gauge",
+		"otel_metrics_sum",
+		"container.name",
+		"container.image.name",
+		"docker.compose.project",
+		"docker.compose.service",
+		"docker.compose.container_number",
+		"from_metrics:DateTime",
+	} {
+		if !strings.Contains(conn.query, marker) {
+			t.Fatalf("Docker log query is missing %q: %s", marker, conn.query)
+		}
+	}
+}
+
+func TestEnrichContainerAttributesPreservesExistingValues(t *testing.T) {
+	got := enrichContainerAttributes(
+		map[string]string{"container.id": "abc", "container.name": "file-log-name"},
+		"stats-name", "image:tag", "image-id", "project", "service", "1",
+	)
+	if got["container.id"] != "abc" || got["container.name"] != "file-log-name" || got["container.image.name"] != "image:tag" || got["docker.compose.project"] != "project" {
+		t.Fatalf("container metadata enrichment = %#v", got)
+	}
+}
+
 func TestQueryRejectsUnboundedRangeAndLimit(t *testing.T) {
 	store := NewWithConn(&recordingConn{}, Config{MaxQueryRange: time.Hour, MaxQueryRows: 10})
 	now := time.Now().UTC()
@@ -96,6 +151,30 @@ func TestQueryRejectsUnboundedRangeAndLimit(t *testing.T) {
 	_, err = store.QueryMetrics(context.Background(), MetricsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 11})
 	if !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("limit error = %v, want ErrInvalidQuery", err)
+	}
+}
+
+func TestQueryTracesRejectsNonFiniteDuration(t *testing.T) {
+	store := NewWithConn(&recordingConn{}, Config{MaxQueryRange: time.Hour, MaxQueryRows: 10})
+	now := time.Now().UTC()
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1), -1} {
+		_, err := store.QueryTraces(context.Background(), TracesQuery{
+			Range: TimeRange{From: now.Add(-time.Minute), To: now},
+			MinMs: value,
+			Limit: 1,
+		})
+		if !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("MinMs=%v error = %v, want ErrInvalidQuery", value, err)
+		}
+	}
+	for _, value := range []float64{0, 0.5, 1000} {
+		if _, err := store.QueryTraces(context.Background(), TracesQuery{
+			Range: TimeRange{From: now.Add(-time.Minute), To: now},
+			MinMs: value,
+			Limit: 1,
+		}); err != nil {
+			t.Fatalf("finite MinMs=%v returned error: %v", value, err)
+		}
 	}
 }
 
@@ -119,6 +198,18 @@ func TestTelemetryOutputRedactsSensitiveFields(t *testing.T) {
 	}
 	if got := redactText("Authorization: Bearer abc.def"); !strings.Contains(got, "[REDACTED]") || strings.Contains(got, "abc.def") {
 		t.Fatalf("authorization was not redacted: %q", got)
+	}
+	for _, value := range []string{
+		`refresh_token=top-secret`,
+		`https://user:top-secret@example.test/health`,
+		`{"password":"top-secret"}`,
+	} {
+		if got := redactText(value); strings.Contains(got, "top-secret") {
+			t.Fatalf("sensitive value survived redaction: input=%q output=%q", value, got)
+		}
+	}
+	if got := redactAttributes(map[string]string{"client_secret": "top-secret"})["client_secret"]; got != "[REDACTED]" {
+		t.Fatalf("client secret was not redacted: %q", got)
 	}
 }
 
@@ -221,6 +312,30 @@ func TestMetricQueryUsesExporterDateTimeForFractionalRanges(t *testing.T) {
 	for _, argument := range conn.args[:2] {
 		if _, ok := argument.(driver.NamedDateValue); !ok {
 			t.Fatalf("metric range argument %T was not a typed date value", argument)
+		}
+	}
+}
+
+func TestMetricQueryIncludesEveryPinnedExporterMetricKind(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC()
+	if _, err := store.QueryMetrics(context.Background(), MetricsQuery{Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"FROM otel_metrics_gauge",
+		"FROM otel_metrics_sum",
+		"FROM otel_metrics_histogram",
+		"FROM otel_metrics_summary",
+		"FROM otel_metrics_exp_histogram",
+		"BucketCounts",
+		"ExplicitBounds",
+		"ValueAtQuantiles.Quantile",
+		"PositiveBucketCounts",
+	} {
+		if !strings.Contains(conn.query, marker) {
+			t.Fatalf("metrics query is missing %q: %s", marker, conn.query)
 		}
 	}
 }

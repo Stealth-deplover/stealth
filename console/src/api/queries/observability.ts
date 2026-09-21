@@ -40,9 +40,6 @@ export function useAdminLogTail(
   > & { limit?: number },
   enabled: boolean,
 ) {
-  const [items, setItems] = useState<AdminTailLog[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
   const params = useMemo(() => {
     const search = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) {
@@ -50,11 +47,21 @@ export function useAdminLogTail(
     }
     return search.toString();
   }, [query]);
+  const streamKey = useMemo(() => ({ enabled, params }), [enabled, params]);
+  const [stream, setStream] = useState<{
+    key: typeof streamKey | null;
+    items: AdminTailLog[];
+    error: string | null;
+    connected: boolean;
+  }>({ key: null, items: [], error: null, connected: false });
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") {
       return;
     }
+    // A query/filter change starts a fresh bounded stream. Reconnects on the
+    // same EventSource retain the current items while the browser resumes
+    // from the last SSE event id.
     const source = new EventSource(
       apiUrl(`/v1/admin/telemetry/logs/tail?${params}`),
       { withCredentials: true },
@@ -62,19 +69,32 @@ export function useAdminLogTail(
     const onLog = (event: Event) => {
       try {
         const item = JSON.parse((event as MessageEvent).data) as AdminTailLog;
-        setItems((current) => {
+        setStream((current) => {
+          const base =
+            current.key === streamKey
+              ? current
+              : {
+                  key: streamKey,
+                  items: [],
+                  error: null,
+                  connected: false,
+                };
           const seen = new Set<string>();
-          const next = [item, ...current].filter((candidate) => {
+          const next = [item, ...base.items].filter((candidate) => {
             const candidateKey = `${candidate.timestamp}\u0000${candidate.trace_id ?? ""}\u0000${candidate.span_id ?? ""}\u0000${candidate.service}\u0000${candidate.message}`;
             if (seen.has(candidateKey)) return false;
             seen.add(candidateKey);
             return true;
           });
-          return next.slice(0, 250);
+          return { ...base, items: next.slice(0, 250), error: null };
         });
-        setError(null);
       } catch {
-        setError("The live log stream returned an invalid event.");
+        setStream((current) => ({
+          ...(current.key === streamKey
+            ? current
+            : { key: streamKey, items: [], connected: false }),
+          error: "The live log stream returned an invalid event.",
+        }));
       }
     };
     const onStreamError = (event: Event) => {
@@ -82,36 +102,56 @@ export function useAdminLogTail(
         const payload = JSON.parse((event as MessageEvent).data) as {
           message?: string;
         };
-        setError(payload.message ?? "Live log stream is unavailable.");
+        setStream((current) => ({
+          ...(current.key === streamKey
+            ? current
+            : { key: streamKey, items: [], connected: false }),
+          error: payload.message ?? "Live log stream is unavailable.",
+        }));
       } catch {
-        setError("Live log stream is unavailable.");
+        setStream((current) => ({
+          ...(current.key === streamKey
+            ? current
+            : { key: streamKey, items: [], connected: false }),
+          error: "Live log stream is unavailable.",
+        }));
       }
     };
     const onConnectionError = () => {
-      setConnected(false);
-      setError("Live log stream disconnected. The browser will retry.");
+      setStream((current) => ({
+        ...(current.key === streamKey
+          ? current
+          : { key: streamKey, items: [], connected: false }),
+        connected: false,
+        error: "Live log stream disconnected. The browser will retry.",
+      }));
     };
     source.addEventListener("log", onLog);
     source.addEventListener("stream_error", onStreamError);
     source.onerror = onConnectionError;
     source.onopen = () => {
-      setItems([]);
-      setConnected(true);
-      setError(null);
+      setStream((current) => ({
+        ...(current.key === streamKey
+          ? current
+          : { key: streamKey, items: [], connected: false }),
+        connected: true,
+        error: null,
+      }));
     };
     return () => {
       source.removeEventListener("log", onLog);
       source.removeEventListener("stream_error", onStreamError);
       source.onerror = null;
       source.close();
-      setConnected(false);
     };
-  }, [enabled, params]);
+  }, [enabled, params, streamKey]);
+
+  const isCurrentStream = stream.key === streamKey && enabled;
 
   return {
-    items: enabled ? items : [],
-    error,
-    connected: enabled && connected,
+    items: isCurrentStream ? stream.items : [],
+    error: isCurrentStream ? stream.error : null,
+    connected: isCurrentStream && stream.connected,
   };
 }
 

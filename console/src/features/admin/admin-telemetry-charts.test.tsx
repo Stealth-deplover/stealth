@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AdminMetricKind } from "@/api/generated/schema";
 import { AdminLogVolumeChart } from "./admin-log-volume-chart";
 import { AdminMetricChart } from "./admin-metric-chart";
 
@@ -70,6 +71,7 @@ describe("Admin telemetry charts", () => {
             name: "system.cpu.utilization",
             service: "telemetry-host",
             value: 0.42,
+            kind: AdminMetricKind.gauge,
           },
         ]}
       />,
@@ -83,5 +85,33 @@ describe("Admin telemetry charts", () => {
       screen.getByRole("table", { name: "Metric time series data" }),
     ).toBeInTheDocument();
     expect(screen.getByText("system.cpu.utilization")).toBeInTheDocument();
+  });
+
+  it("renders structured metric summaries without coercing them to scalars", () => {
+    render(
+      <AdminMetricChart
+        items={[
+          {
+            timestamp: "2026-09-20T00:00:00.000Z",
+            name: "http.server.request.duration",
+            service: "api",
+            kind: AdminMetricKind.histogram,
+            histogram: {
+              count: 3,
+              sum: 6,
+              bucket_counts: [1, 2],
+              explicit_bounds: [1, 2],
+              aggregation_temporality: 2,
+            },
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("View data table"));
+    expect(screen.getByText("count=3 sum=6")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Metric time series with 0 series" }),
+    ).toBeInTheDocument();
   });
 });

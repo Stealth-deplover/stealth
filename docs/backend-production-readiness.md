@@ -72,10 +72,14 @@ console can be a separate origin, CSRF protection relies on the same-origin
 deployment recommendation, explicit CORS/Origin checks, and the cookie
 SameSite policy; a deployment that permits arbitrary origins is not supported.
 
-Webhook and Git fetch clients disable proxy use and redirects, resolve targets
-before dialing, block loopback/private/link-local/multicast/unspecified
-addresses, and bound response bodies. This reduces DNS-rebinding/SSRF risk;
-operators must still treat outbound delivery as a network policy boundary.
+Webhook and monitor/Git fetch clients disable proxy use and redirects, resolve
+targets before dialing, and apply an explicit public-destination policy that
+blocks private, shared, loopback, link-local, multicast, unspecified,
+documentation, benchmarking, reserved, and other special-use ranges. Every
+resolved DNS answer must pass that policy, and the dial-time resolution uses
+the caller's context so a DNS deadline or cancellation is honored. Response
+bodies remain bounded; operators must still treat outbound delivery as a
+network policy boundary.
 
 ## Remaining production gaps
 

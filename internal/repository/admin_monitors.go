@@ -167,12 +167,17 @@ func (r *Repository) UpdateAdminMonitor(ctx context.Context, accountID, id uuid.
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return domain.AdminMonitor{}, err
 	}
-	var lockedID uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT id FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&lockedID); err != nil {
+	var currentKind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&currentKind); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.AdminMonitor{}, ErrNotFound
 		}
 		return domain.AdminMonitor{}, err
+	}
+	if currentKind != input.Kind {
+		if err := validateAdminMonitorKindChangeTx(ctx, tx, id, input.Kind); err != nil {
+			return domain.AdminMonitor{}, err
+		}
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE admin_monitors
@@ -199,6 +204,32 @@ func (r *Repository) UpdateAdminMonitor(ctx context.Context, accountID, id uuid.
 	return item, nil
 }
 
+func validateAdminMonitorKindChangeTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, newKind string) error {
+	// UpdateAdminMonitor holds the monitor row before entering this helper. Keep
+	// dependent-rule locks after that monitor lock so monitor-backed writes use
+	// one monitor -> rule order.
+	rows, err := tx.Query(ctx, `
+		SELECT kind
+		FROM admin_alert_rules
+		WHERE kind IN ('monitor_failure','heartbeat_failure','certificate_expiry')
+		  AND condition->>'monitor_id'=$1
+		FOR UPDATE`, monitorID.String())
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ruleKind string
+		if err := rows.Scan(&ruleKind); err != nil {
+			return err
+		}
+		if !monitorAlertRuleCompatible(ruleKind, newKind) {
+			return ErrAdminMonitorRuleConflict
+		}
+	}
+	return rows.Err()
+}
+
 func (r *Repository) DeleteAdminMonitor(ctx context.Context, accountID, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return ErrNotFound
@@ -210,6 +241,25 @@ func (r *Repository) DeleteAdminMonitor(ctx context.Context, accountID, id uuid.
 	defer tx.Rollback(ctx)
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return err
+	}
+	var monitorKind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM admin_monitors WHERE id=$1 FOR UPDATE`, id).Scan(&monitorKind); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var hasAlertRules bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM admin_alert_rules
+			WHERE kind IN ('monitor_failure','heartbeat_failure','certificate_expiry')
+			  AND condition->>'monitor_id'=$1
+		)`, id.String()).Scan(&hasAlertRules); err != nil {
+		return err
+	}
+	if hasAlertRules {
+		return ErrAdminMonitorHasRules
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM admin_monitors WHERE id=$1`, id)
 	if err != nil {
@@ -308,14 +358,21 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if !json.Valid(input.Details) || len(input.Details) > 16<<10 {
 		return ErrInvalidAdminMonitor
 	}
-	errorMessage := normalizeAdminMonitorError(input.Error)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := completeAdminMonitorCheckTx(ctx, tx, monitorID, workerID, input); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func completeAdminMonitorCheckTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, workerID string, input AdminMonitorCheckInput) error {
+	errorMessage := normalizeAdminMonitorError(input.Error)
 	var status string
-	err = tx.QueryRow(ctx, `SELECT status FROM admin_monitors WHERE id=$1 AND worker_id=$2 FOR UPDATE`, monitorID, workerID).Scan(&status)
+	err := tx.QueryRow(ctx, `SELECT status FROM admin_monitors WHERE id=$1 AND worker_id=$2 FOR UPDATE`, monitorID, workerID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoAdminMonitor
 	}
@@ -357,7 +414,15 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if err := evaluateAdminMonitorAlertsTx(ctx, tx, monitorID, input); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	// Monitor alert evaluation locks dependent rules and may publish alert
+	// events. Acquire the realtime ordering lock only after that relationship
+	// work, so this transaction cannot hold realtime while waiting on a rule.
+	if status != newStatus {
+		if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.monitor.status", "admin_monitor", monitorID, map[string]any{"status": newStatus}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ListAdminMonitorChecks(ctx context.Context, monitorID uuid.UUID, limit int) ([]domain.AdminMonitorCheck, error) {
@@ -494,5 +559,8 @@ func writeInstanceAuditTx(ctx context.Context, tx pgx.Tx, actor uuid.UUID, actio
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO audit_events (id,organization_id,actor_account_id,action,target_type,target_id,metadata) VALUES ($1,NULL,$2,$3,$4,$5,$6)`, id, actor, action, targetType, target, encoded)
-	return err
+	if err != nil {
+		return err
+	}
+	return enqueueAdminRealtimeEventTx(ctx, tx, action, targetType, target, nil)
 }

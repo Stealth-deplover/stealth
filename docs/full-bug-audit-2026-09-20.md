@@ -32,8 +32,17 @@ gave the collectors live health probes, and constrained telemetry Docker API
 access behind a read-only proxy. It did not resolve the unrelated application,
 query, frontend, lifecycle, and data-retention findings below.
 
-This PR does not remediate any finding. Product, SQL, Collector, Compose,
-installer, workflow, frontend, and test changes belong in separate focused PRs.
+The counts above describe the original post-PR-#83 audit baseline at the
+audited SHA. Subsequent focused remediation work is recorded in the individual
+finding sections below; those statuses remain pending until their PRs merge.
+Unrelated findings are not changed by the remediation work.
+
+Evidence labels in this document are deliberate: **Audited-baseline evidence**
+describes the original audited SHA and is historical; **PR #89 remediation
+evidence** describes changes on the unmerged PR branch; and **Current PR #89
+verification** describes tests or workflow evidence for that branch. No
+historical baseline statement should be read as a claim about the current PR
+head.
 
 ## Validation sources
 
@@ -128,10 +137,22 @@ union; that is tracked as AUD-14.
 
 ### AUD-01 — Raw telemetry secrets can be persisted before Admin API redaction
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation complete in PR #89
+  pending merge.
 - **Severity:** High
 - **Area:** Telemetry privacy; ClickHouse persistence; Admin telemetry
-- **Current-head evidence:** `telemetry/otel-collector.yaml` has no redaction
+- **PR #89 remediation evidence:** PR #89 adds pre-export redaction to every main
+  Collector logs, metrics, and traces pipeline, retains Store/API redaction as
+  defense in depth, and verifies the pinned Collector configuration.
+- **Current PR #89 verification:** The real Collector + ClickHouse integration now
+  searches raw exporter rows for deterministic fake secrets before checking
+  the Admin API; the Admin integration also verifies the authenticated API
+  result contains no raw secret. CI runs both suites with the pinned Collector.
+- **Residual risk:** This historical document's open-finding count remains
+  tied to the audited pre-remediation SHA until PR #89 is merged. Future
+  Collector upgrades must revalidate the processor behavior and exporter
+  schema.
+- **Audited-baseline evidence:** At the audited SHA, `telemetry/otel-collector.yaml` had no redaction
   processor before the ClickHouse exporter. The Docker file-log pipeline also
   forwards parsed bodies without a secret-removal processor. In
   `internal/telemetry/store.go`, `QueryLogs`, `QueryTraces`, and
@@ -142,12 +163,12 @@ union; that is tracked as AUD-14.
 - **Affected code/config:** `telemetry/otel-collector.yaml`,
   `telemetry/docker-logs.yaml`, `internal/telemetry/store.go`,
   `internal/telemetry/store_integration_test.go`.
-- **Minimal proof path:** Emit a test-only OTLP log or trace containing a
+- **Audited-baseline proof path:** Emit a test-only OTLP log or trace containing a
   placeholder value under a key such as `password`, `token`, `authorization`,
   `cookie`, or `client_secret`, then inspect the corresponding raw exporter
-  row directly in ClickHouse before calling the Stealth API. The current
-  pipeline has no stage that removes it before export; the API-only assertion
-  is therefore not storage sanitization.
+  row directly in ClickHouse before calling the Stealth API. The audited
+  baseline pipeline had no stage that removed it before export; the API-only
+  assertion was therefore not storage sanitization.
 - **Impact:** Anyone with ClickHouse read access, backups, exports, or incident
   access can see secret-bearing telemetry that the Admin API would redact.
 - **Recommended remediation:** Sanitize at or before the persistence boundary
@@ -206,10 +227,10 @@ union; that is tracked as AUD-14.
 
 ### AUD-04 — Alert-rule deletion can fail after notification enqueue
 
-- **Status:** OPEN
+- **Status:** RESOLVED BY PR #87
 - **Severity:** High
 - **Area:** PostgreSQL alert and notification lifecycle
-- **Current-head evidence:** Migration `000043_admin_observability.up.sql`
+- **Current merged-main evidence (PR #87):** Migration `000043_admin_observability.up.sql`
   defines `admin_alert_events.rule_id` as `NOT NULL REFERENCES
   admin_alert_rules(id) ON DELETE CASCADE` and
   `admin_notification_deliveries.alert_event_id` as `REFERENCES
@@ -235,37 +256,55 @@ union; that is tracked as AUD-14.
 
 ### AUD-05 — Monitor alert rules can be orphaned or semantically invalid
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation complete in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Alert-rule validation and monitor lifecycle
-- **Current-head evidence:** `validateAdminAlertCondition` validates that
-  `monitor_id` is a UUID for `monitor_failure`, `heartbeat_failure`, and
-  `certificate_expiry`, but it does not load the monitor, verify existence, or
-  verify that the rule kind matches the monitor kind. Certificate expiry values
-  are numeric and finite but are not required to be positive. `DeleteAdminMonitor`
-  directly deletes a monitor without reconciling its alert rules. The evaluator
-  selects enabled monitor rules by `condition->>'monitor_id'` and does not add
-  the missing semantic validation.
-- **Minimal proof path:** Submit a rule with a nonexistent monitor UUID, a
+- **Audited-baseline evidence:** At the audited SHA, validation only checked
+  that `monitor_id` was a UUID, did not load the monitor, did not verify
+  rule/monitor kind compatibility, accepted non-positive certificate
+  thresholds, and deleted monitors without checking alert-rule references.
+- **PR #89 remediation evidence:** The remediation adds one authoritative
+  monitor/rule compatibility predicate, transaction-scoped existence/kind
+  validation for rule create/update, a locked monitor-kind update check over
+  all dependent rules, positive expiry thresholds, and deterministic conflict
+  responses while holding the monitor row lock. The monitor row is the
+  serialization point for monitor-backed relationship changes: rule updates
+  lock involved monitors before the rule row and re-read the rule before
+  writing it. Monitor-backed paths complete relationship locking before
+  acquiring the Admin realtime ordering lock; worker-versus-rule-update and
+  worker-versus-rule-delete concurrency coverage protects that graph.
+- **Audited-baseline proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
-  non-TLS monitor; separately delete a monitor that has a rule. The current
-  database/repository path accepts or leaves these relationships without a
-  defined reconciliation outcome.
+  non-TLS monitor; separately delete a monitor that has a rule. At the audited
+  SHA, the database/repository path accepted or left these relationships
+  without a defined reconciliation outcome.
 - **Impact:** Rules can never fire, can evaluate against the wrong monitor
   semantics, or can remain misleading orphan records in the control plane.
-- **Recommended remediation:** Validate monitor existence and kind in the
-  create/update transaction; define monitor-delete behavior (disable, delete,
-  or migrate rules); require positive expiry thresholds.
-- **Recommended regression test:** Repository/API tests for nonexistent,
-  deleted, wrong-kind, and zero/negative-threshold cases plus monitor deletion
-  reconciliation.
+- **Current PR #89 verification:** `TestAdminAlertMonitorReferenceValidationIntegration`,
+  `TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration`,
+  `TestAdminMonitorAlertLockOrderingIntegration`,
+  `TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration`,
+  `TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration`,
+  `TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration`,
+  `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
+  `TestCertificateExpiryAlertRequiresPositiveDays`, and
+  `TestAdminMonitorErrorMapsAlertRuleConflict` cover missing/wrong-kind
+  references, heartbeat/TLS kind-change conflicts, compatible kind changes,
+  positive expiry thresholds, conflict semantics, and successful deletion or
+  update after the dependent rule is removed.
+- **Residual risk:** The existing condition JSON remains the storage shape;
+  direct SQL writes outside the supported repository/API contract are not an
+  application path. The evaluator remains intentionally unchanged, and the
+  documented `monitor_failure` compatibility contract remains the product
+  authority for the monitor kinds it supports.
 
 ### AUD-06 — Live-tail can replay large historical ranges and duplicate rows
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Admin telemetry log streaming
-- **Current-head evidence:** `adminTelemetryLogTail` in
+- **Audited-baseline evidence:** At the audited SHA, `adminTelemetryLogTail` in
   `internal/httpapi/server_admin.go` initializes its cursor from the selected
   explorer range. Every two seconds it queries from `cursor - 1ns` through now,
   clamped to the maximum range, so a 30-day selection can cause every poll to
@@ -274,7 +313,7 @@ union; that is tracked as AUD-14.
   on a strictly later timestamp, and the `seen` map is reset after a bounded
   size. Same-timestamp rows and rows preceding a reset can therefore be
   emitted again.
-- **Minimal proof path:** Select a 30-day range, start live tail with many
+- **Audited-baseline proof path:** Select a 30-day range, start live tail with many
   same-timestamp rows, let polling continue until the bounded seen map resets,
   and observe repeated historical rows or large repeated queries.
 - **Impact:** High-volume tenants can receive duplicate events, incur repeated
@@ -286,155 +325,177 @@ union; that is tracked as AUD-14.
   larger than the live window; assert monotonic cursor delivery, bounded query
   windows, no duplicates after reconnect, and correct behavior after a seen-set
   eviction.
+- **PR #89 remediation evidence:** The pinned ClickHouse exporter schema has
+  no native physical log-row ID, so the Collector now assigns one UUIDv7
+  ingestion attribute (`stealth.log.event_id`) before persistence. It is
+  stored in the existing `LogAttributes` map for both OTLP and Docker file-log
+  paths, removed from public API records, and used by `ClickHouseStore` in a
+  versioned `(Timestamp, EventID)` cursor. Live-tail keeps its bounded initial
+  lookback, orders and filters on the persisted event ID, and rejects old v1
+  cursors rather than reinterpreting their hash.
+- **Current PR #89 verification:** `TestClickHouseStoreIdenticalLogRowsPaginateByPersistedEventIDIntegration`
+  inserts two real ClickHouse log rows with identical visible fields, uses
+  page size one, and verifies both rows are returned on successive pages with
+  an empty third page. `TestQueryLogsAfterUsesCompleteStableCursor`,
+  `TestAdminTelemetryLogTailUsesShortStableCursorWindow`,
+  `TestAdminTelemetryLogTailResumesFromLastEventID`, and
+  `TestLogCursorRoundTrip` cover same-timestamp ordering, bounded windows,
+  polling cursors, and reconnect behavior.
+- **Residual risk:** Rows persisted before the event-ID rollout have no
+  lossless cursor identity and are excluded from live-tail pagination; they
+  remain available to normal explorer queries. New rows receive the ID once
+  before exporter persistence, and the exact-duplicate integration test covers
+  the no-loss rollout invariant.
 
 ### AUD-07 — Docker attribution is improved for metrics but incomplete for file logs
 
-- **Status:** PARTIALLY RESOLVED
+- **Status:** PARTIALLY RESOLVED on the audited baseline; remediation
+  implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Docker telemetry identity
-- **Current-head evidence:** `telemetry/docker-stats.yaml` maps Compose project
-  and service labels into metric labels and the smoke evidence shows real rows
-  with container identity and all six required container metric instruments.
-  `telemetry/docker-logs.yaml`, however, uses `include_file_path` and Docker
-  JSON parsing but does not derive a stable container ID, container name,
-  image, Compose project, or Compose service from the Docker log filename or
-  metadata. It inserts the generic `service.name=stealth-host` resource value.
+- **PR #89 remediation evidence:** `telemetry/docker-logs.yaml` now extracts the
+  immutable container ID from the Docker JSON path and moves it to
+  `resource.container.id`. The Docker stats path maps Compose
+  project/service/container-number labels and supplies receiver container
+  name/image metadata. `ClickHouseStore.QueryLogs` performs a bounded
+  server-side join on container ID and adds available name, image, and Compose
+  attributes to Admin log results without changing the log collector's
+  privilege boundary.
 - **Minimal proof path:** Compare a Docker metric row with a Docker file-log
-  row from the same container in ClickHouse/Admin Logs. The metric has
-  container/Compose identity, while the log pipeline has a file path and
-  generic service identity without an equivalent container resource projection.
-- **Impact:** Metrics can be attributed to infrastructure entities while their
-  associated logs cannot be reliably scoped or correlated by container/service.
-- **Recommended remediation:** Parse and validate the Docker log filename or
-  add a bounded metadata enrichment step that emits container ID, name, image,
-  Compose project, and Compose service as approved resource attributes.
-- **Recommended regression test:** Emit Docker metrics and file logs from a
-  known Compose service and assert equivalent identity fields through
-  ClickHouse and the Admin Sources/Logs APIs.
+  row from the same container in ClickHouse/Admin Logs. The raw file-log row
+  retains the stable ID; the Admin query adds the matching metric metadata.
+- **Impact:** File logs are now stably correlated by immutable container ID and
+  expose human workload identity when a matching Docker stats sample exists.
+- **PR #89 regression evidence:** `docker-container-path` and
+  `container-id-resource` operators, `TestQueryLogsEnrichesDockerIdentityFromScalarMetrics`,
+  the Docker stats label mapping, and the Production Compose Smoke assertion
+  for Admin-visible `container.name`.
+- **Residual risk:** A stopped/deleted container may have no retained metrics
+  sample, so historical logs retain the ID but cannot be guaranteed a name or
+  image indefinitely. Giving the log collector Docker socket authority remains
+  out of scope and would violate the established boundary.
+- **Recommended regression test:** Keep the Compose smoke ID/name checks and
+  add a live Collector + ClickHouse correlation assertion before calling this
+  finding fully resolved.
 
 ### AUD-08 — Monitor SSRF policy omits special-use ranges
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Medium
 - **Area:** Monitor destination validation / SSRF defense
-- **Current-head evidence:** `resolvePublicHost` in
-  `internal/monitoring/checker.go` rejects loopback, RFC1918 private,
-  link-local, unspecified, and multicast IPs. It does not explicitly reject
-  all special-use ranges, including CGNAT `100.64.0.0/10`, benchmark
-  `198.18.0.0/15`, documentation/test ranges, reserved ranges, metadata
-  endpoints where applicable, or every IPv4-mapped IPv6 representation. DNS
-  results are checked after lookup, but the policy is not expressed as a
-  complete table-driven public-destination policy.
-- **Minimal proof path:** Resolve or use an IP literal/DNS answer in each
-  omitted special-use class and inspect the current acceptance result. Add
-  IPv4-mapped IPv6 forms to the same matrix.
-- **Impact:** A monitor destination may reach non-public or infrastructure-only
-  address space that the product's public-destination policy intends to block.
-- **Recommended remediation:** Define an explicit approved public-address
-  policy for IPv4 and IPv6, including all required special-use and metadata
-  ranges, and apply it consistently to literals and DNS answers.
-- **Recommended regression test:** Table-driven tests for every range above,
-  mapped forms, redirects, and DNS answers, with an allowlist test for ordinary
-  public addresses.
+- **Original root cause:** `isPublicIP` relied only on the standard library's
+  broad private/loopback/link-local checks, and mixed public/private DNS
+  answers were reduced to their public subset.
+- **Fix evidence in PR #89:** `monitorDeniedPrefixes` provides an explicit
+  IPv4/IPv6 special-use policy, normalizes IPv4-mapped IPv6 addresses, and
+  rejects any non-public answer rather than filtering it out. Dial-time DNS
+  resolution applies the same policy, including redirect targets.
+- **Regression coverage:** `TestMonitorPublicAddressPolicyRejectsSpecialUseAndMappedPrivateIPs`
+  and `TestResolvePublicHostRejectsMixedDNSAnswers` cover the range matrix,
+  mapped forms, and mixed DNS answers.
+- **Residual risk:** The deny table must be reviewed if the monitor egress
+  policy or relevant IANA special-purpose allocations change.
 
 ### AUD-09 — DNS validation uses a detached background context
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Medium
 - **Area:** Monitor and notification URL validation
-- **Current-head evidence:** `validatePublicURL` and
-  `ValidatePublicHTTPSURL` call `resolvePublicHost` with
-  `context.Background()`. The monitor probe itself has a timeout context, and
-  `safeDialContext` can receive a caller context, but the preflight DNS lookup
-  is detached from the monitor/request deadline.
-- **Minimal proof path:** Point validation at a deliberately slow or
-  nonresponsive resolver and cancel the request or let the configured probe
-  timeout expire. The detached lookup can continue after the caller has
-  returned and consume resolver/worker resources.
-- **Impact:** Slow DNS can outlive configured timeouts, tie up monitor or
-  notification workers, and reduce the effectiveness of cancellation under
-  load.
-- **Recommended remediation:** Thread the request, worker, or probe context
-  through every resolver call and use a context-aware resolver seam for tests.
-- **Recommended regression test:** A blocking resolver test that asserts
-  cancellation at the caller deadline and verifies no resolver goroutine or
-  worker remains active after validation returns.
+- **Original root cause:** URL preflight validation detached DNS lookup with
+  `context.Background()` even when the monitor or notification worker had a
+  deadline.
+- **Fix evidence in PR #89:** monitor validation and notification webhook
+  validation now accept and pass the caller context through the resolver;
+  redirect validation uses the redirected request context as well.
+- **Regression coverage:** `TestMonitorURLValidationHonorsResolverCancellationAndDeadline`
+  uses a blocking resolver seam and verifies both cancellation and deadline
+  termination.
+- **Residual risk:** Resolver behavior remains dependent on the host resolver,
+  but no application-owned preflight lookup intentionally outlives its caller.
 
 ### AUD-10 — Monitor URL query strings are rejected and DNS matching semantics are implicit
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89,
+  pending merge
 - **Severity:** Low
 - **Area:** Monitor URL/API contract
-- **Current-head evidence:** `validatePublicURL` rejects any non-empty
-  `RawQuery`, so a normal monitor URL such as
-  `https://example.test/health?region=eu` is not accepted. The notification
-  HTTPS validator does not apply that same query rejection, making the URL
-  contract inconsistent. DNS result matching uses `sameValues`, which requires
-  every expected value to appear but allows additional actual values; the API
-  schema/frontend wording do not make the exact-set versus subset contract
-  explicit.
-- **Minimal proof path:** Create an HTTP monitor with a valid query string and
-  observe validation rejection. Create a DNS monitor where the resolver
-  returns expected plus extra values and observe subset acceptance.
-- **Impact:** Valid HTTP checks cannot express query-based health endpoints;
-  DNS checks may not enforce the operator's intended exact-answer policy.
-- **Recommended remediation:** Permit query components while retaining
-  userinfo, fragment, scheme, SSRF, and redirect protections. Explicitly
-  document and choose DNS exact-set, subset, or contains-any semantics, then
-  align API, frontend, and checker behavior.
-- **Recommended regression test:** URL matrix tests for paths/queries and
-  security exclusions, plus DNS tests for exact, missing, extra, and duplicate
-  values.
+- **Original root cause:** monitor HTTP validation rejected every non-empty
+  query while the notification validator allowed queries; DNS matching allowed
+  additional records without stating that subset contract.
+- **Fix evidence in PR #89:** HTTP monitor targets now allow query components
+  while still rejecting credentials and fragments. DNS matching is explicitly
+  documented as subset semantics in the OpenAPI schema and Console hint:
+  every configured expected value must be present, while additional records
+  are allowed.
+- **Regression coverage:** `TestMonitorURLValidationAllowsQueriesAndRejectsUnsafeComponents`
+  covers query, userinfo, fragment, and scheme cases;
+  `TestExpectedDNSValuesUseDocumentedSubsetSemantics` covers present, missing,
+  extra, and normalized values.
+- **Residual risk:** DNS operators who require exact answer-set semantics must
+  configure every expected value; this PR intentionally preserves the existing
+  compatible subset behavior rather than silently changing it.
 
 ### AUD-11 — Custom admin time range still depends on localStorage for active state
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Console admin time-range state
-- **Current-head evidence:** `console/src/features/admin/admin-time-range.tsx`
-  catches `localStorage.getItem` errors in `readStoredRange` and returns
-  `"1h"`. The hook uses that storage-backed snapshot directly through
-  `useSyncExternalStore`. `setItem` failures are caught, but there is no
-  in-memory active-range fallback. Thus a storage failure can cause the
-  currently selected custom range to be read back as `1h`, not merely lose
-  persistence across reloads.
-- **Minimal proof path:** Make `localStorage.getItem` and `setItem` throw,
-  select a custom range, and trigger the preference snapshot update. The
-  active range falls back to the default instead of remaining custom for the
-  current session.
-- **Impact:** Admin telemetry views silently query a different time window in
-  private browsing, restricted storage, or embedded browser environments.
-- **Recommended remediation:** Keep the active range in React/in-memory state
-  and treat localStorage only as best-effort persistence. Emit a storage event
-  only after updating the in-memory value.
-- **Recommended regression test:** Mock throwing get/set storage operations
-  and assert that the selected custom range remains active during the current
-  session while remount persistence is unavailable.
+- **PR #89 remediation evidence:** `useAdminTimeRange` keeps failed persistence in
+  session state, uses `useSyncExternalStore` for same-tab and browser storage
+  events, validates a custom range to 30 days, and falls back to `1h` when a
+  persisted custom selection has malformed endpoints. Selecting Custom with
+  no valid stored draft remains active while the operator edits it; the range
+  is persisted only after Apply succeeds.
+- **Minimal proof path:** `admin-time-range.test.tsx` covers storage failure,
+  successful persistence/remount, malformed custom data, same-tab updates,
+  cross-tab storage events, bounded custom ranges, and moving refresh windows.
+- **Impact:** The active query no longer silently falls back to `1h` when
+  browser storage is unavailable or a persisted custom draft is invalid.
+- **Remediation evidence in PR #89:** session-first preference resolution,
+  safe malformed-data fallback, draft activation, and mounted-control tests.
+- **Residual risk:** Browser storage can still be unavailable for persistence
+  across a full reload; the documented behavior is to preserve the current
+  session selection and use the safe default on a later session.
+- **Recommended regression test:** Keep the existing ten-case time-range suite
+  and run it in the Console CI test job.
 
 ### AUD-12 — Admin control-plane mutations do not propagate cross-session in realtime
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Console admin realtime behavior
-- **Current-head evidence:** `console/src/realtime/project-realtime-listener.tsx`
-  subscribes to project-scoped realtime events only. Admin monitor, alert,
-  notification, incident, dashboard, and status-page mutations in
-  `console/src/api/mutations/admin.ts` invalidate local TanStack Query keys;
-  they do not publish or subscribe to an authenticated instance-admin event
-  stream. Admin query hooks use optional polling intervals, which is not
-  realtime delivery.
-- **Minimal proof path:** Open the same admin screen as Admin A and Admin B.
+- **Audited-baseline evidence:** At the audited SHA, only the project-scoped
+  `console/src/realtime/project-realtime-listener.tsx`; Admin mutations only
+  invalidated the initiating browser's TanStack Query cache.
+- **Audited-baseline proof path:** Open the same admin screen as Admin A and Admin B.
   Have A mutate a control-plane object. B receives no instance-admin event and
   sees the change only after polling, manual refresh, navigation, or another
   invalidation.
-- **Impact:** Operators can act on stale alert, incident, monitor, dashboard,
-  or status-page state during concurrent administration.
-- **Recommended remediation:** Add an authenticated instance-admin event
-  channel with per-resource invalidation, or explicitly document polling as the
-  product contract and expose its freshness guarantees.
-- **Recommended regression test:** Two authenticated admin clients with an
-  event assertion that a mutation invalidates the second client's relevant
-  query without manual refresh.
+- **Impact:** The baseline allowed operators to act on stale alert, incident,
+  monitor, dashboard, or status-page state during concurrent administration.
+- **PR #89 remediation evidence:** PR #89 adds the bounded PostgreSQL
+  `admin_realtime_events` outbox, a sequence-based durable cursor, and a
+  transaction-scoped advisory lock that serializes sequence allocation through
+  producer commit. `TestAdminRealtimeSSEIntegration` uses two independent
+  authenticated instance-admin sessions, proves cross-session delivery, and
+  proves `Last-Event-ID` resume. The stream rechecks the session row and
+  current instance role on a bounded interval and closes fail-closed when
+  either is revoked. The payload is an invalidation envelope rather than a
+  resource snapshot and is sanitized before persistence.
+- **Current PR #89 verification:** `TestAdminRealtimeSequenceCommitOrderingIntegration`
+  and `TestAdminRealtimeSequenceRollbackIntegration` verify commit ordering
+  and rollback behavior. `TestAdminRealtimeSSEAuthorizationLifecycleIntegration`
+  covers direct role removal and session-row deletion while a stream is open.
+- **Residual risk:** The stream uses bounded PostgreSQL polling and periodic
+  authorization checks rather than a Redis fanout channel because
+  instance-admin events have no project scope. Revocation is therefore bounded
+  by the configured recheck interval; the global ordering lock serializes the
+  low-volume admin invalidation writes; and expired rows are pruned by the
+  realtime publisher worker.
 
 ### AUD-13 — Collector healthchecks validated configuration instead of runtime health
 
@@ -458,43 +519,45 @@ union; that is tracked as AUD-14.
 
 ### AUD-14 — Non-gauge/sum metrics are stored but ignored by generic Stealth queries
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** ClickHouse metric query adapter/API
-- **Current-head evidence:** The pinned exporter creates gauge, sum, histogram,
-  summary, and exponential-histogram tables. `metricsQuery` in
-  `internal/telemetry/store.go`, as well as the current source/infrastructure
-  and metric-alert query paths, unions only `otel_metrics_gauge` and
-  `otel_metrics_sum`. The typed histogram/summary/exp-hist tables are therefore
-  persisted but are absent from the generic `QueryMetrics` result and related
-  surfaces.
-- **Minimal proof path:** Emit one real OTLP histogram, summary, and
-  exponential histogram through the pinned Collector, verify rows in their
-  respective ClickHouse tables, and call `/v1/admin/telemetry/metrics` or the
-  related source/infrastructure query. The rows are not projected.
-- **Impact:** Users see an incomplete metric inventory while the product's
-  generic telemetry surfaces appear to support metrics broadly; alerts or
-  dashboards built on those surfaces cannot observe those instruments.
-- **Recommended remediation:** Decide and document supported projections, such
-  as bounded count, sum, bucket, and approved quantiles. Add typed Store/domain
-  adapters without exposing arbitrary ClickHouse SQL or exporter-specific
-  columns to the frontend.
-- **Recommended regression test:** Real Collector integration for all typed
-  metric kinds, asserting either the documented projection or an explicit,
-  stable unsupported response.
+- **PR #89 remediation evidence:** The pinned exporter creates gauge, sum, histogram,
+  summary, and exponential-histogram tables. `QueryMetrics` now unions all five
+  runtime tables and projects scalar values or bounded typed aggregates through
+  `MetricRecord`; `ListSources` also counts all metric tables. The OpenAPI
+  model and Console render structured points without coercing them to a scalar.
+  The metric alert evaluator remains intentionally scalar-only because its
+  threshold contract has no typed histogram/summary semantics.
+- **Minimal proof path:** `TestClickHouseStoreMetricKindsIntegration` emits
+  real OTLP histogram, summary, and exponential-histogram points through the
+  pinned Collector and asserts their typed fields via `QueryMetrics`.
+  `TestMetricQueryIncludesEveryPinnedExporterMetricKind` protects the query
+  adapter contract without a live backend.
+- **Impact:** The original generic metrics omission is addressed; structured
+  metric alert evaluation remains a documented product limitation rather than
+  silently pretending those instruments are scalar values.
+- **Recommended remediation:** Keep the typed API projection and re-run the
+  real Collector integration whenever the pinned exporter version changes.
+  Add an explicit typed alert contract before allowing complex instruments in
+  threshold evaluation.
+- **Recommended regression test:** Preserve the real five-table integration
+  test and the pinned schema checkpoint in `internal/telemetry/schema.go`.
 
 ### AUD-15 — Non-finite trace duration values can cross validation
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Low
 - **Area:** Trace query parameter validation
-- **Current-head evidence:** `QueryTraces` checks `MinMs < 0` and an upper bound,
+- **Audited-baseline evidence:** At the audited SHA, `QueryTraces` checked `MinMs < 0` and an upper bound,
   then converts `query.MinMs * time.Millisecond` to `uint64`. NaN and positive
   or negative infinity do not satisfy the ordinary comparisons, so they can
   reach the conversion and ClickHouse parameter construction. HTTP validation
   must be checked separately; the Store/domain guard is currently not
   sufficient.
-- **Minimal proof path:** Call the HTTP endpoint and Store query with
+- **Audited-baseline proof path:** Call the HTTP endpoint and Store query with
   `min_duration_ms=NaN`, `+Inf`, and `-Inf`, observing whether conversion or a
   ClickHouse error occurs instead of a clean validation error.
 - **Impact:** Invalid input can produce implementation-dependent conversion,
@@ -505,79 +568,79 @@ union; that is tracked as AUD-14.
 - **Recommended regression test:** Table-driven HTTP and Store tests for NaN,
   both infinities, negative values, zero, fractional milliseconds, the maximum,
   and range-boundary values.
+- **PR #89 remediation evidence:** `parseFloatQuery` rejects NaN and both
+  infinities before the Admin trace handler calls the Store, and
+  `ClickHouseStore.QueryTraces` repeats the finite-number guard before the
+  millisecond-to-UInt64 conversion.
+- **Current PR #89 verification:** `TestAdminTelemetryTracesRejectsNonFiniteDuration`
+  and `TestQueryTracesRejectsNonFiniteDuration` cover NaN, both infinities,
+  negative values, zero, fractional values, and finite values.
 
 ### AUD-16 — Database alert-kind schema drifts from API and evaluator support
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Database/API alert contract
-- **Current-head evidence:** Migration `000043_admin_observability.up.sql`
-  allows `backup_failure` and `job_failure` in the SQL CHECK constraint.
-  `validAdminAlertKind` in `internal/repository/admin_controls.go`, the
-  OpenAPI enums, and generated Console enums support the other alert kinds but
-  exclude those two. The repository contains validation branches for the two
-  kinds that are unreachable through the current create/update contract.
-- **Minimal proof path:** Insert or migrate a row with either SQL-permitted
+- **Audited-baseline evidence:** At the audited SHA, migration
+  `000043_admin_observability.up.sql` allowed `backup_failure` and
+  `job_failure` in the SQL CHECK constraint while `validAdminAlertKind`, the
+  OpenAPI enums, generated Console enums, and both evaluator dispatch paths
+  excluded them.
+- **PR #89 remediation evidence:** PR #89 removes the unreachable validation
+  branch and adds forward migration `000049_admin_alert_kind_contract.up.sql`.
+- **Audited-baseline proof path:** Insert or migrate a row with either SQL-permitted
   kind, then attempt to represent, update, evaluate, or create it through the
   repository/API. The database accepts a state for which the API/evaluator has
   no coherent end-to-end contract.
 - **Impact:** Direct data imports, old rows, or future migrations can create
   alert records that cannot be edited or evaluated consistently.
-- **Recommended remediation:** Either remove the unsupported kinds from the
-  database constraint through a deliberate migration or implement and document
-  their full API, repository, evaluator, and frontend behavior.
-- **Recommended regression test:** Compare the migration constraint, OpenAPI
-  enum, repository validator, evaluator dispatch, and frontend options in a
-  contract test; test existing rows for every supported kind.
+- **Migration behavior:** Existing unsupported definitions are copied to the
+  private `admin_alert_rule_retired` archive, removed from active
+  `admin_alert_rules`, and their event history remains intact through the
+  PR #87 snapshot/nullable-FK contract. The active SQL CHECK then permits only
+  kinds with a current API and evaluator path.
+- **Regression evidence in PR #89:**
+  `TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration` and
+  `TestAdminAlertRuleRejectsRetiredOperationKinds` verify legacy preservation,
+  history detachment, active CHECK rejection, and application rejection.
+- **Residual risk:** `backup_failure` and `job_failure` remain available only as
+  retired historical definitions, not as active alert kinds; implementing them
+  would be a separate product feature.
 
 ### AUD-17 — Existing repair/update paths can retain the pre-PR-#83 telemetry topology
 
-- **Status:** OPEN
-- **Severity:** High
+- **Status:** RESOLVED BY PR #85
+- **Severity:** High (historical)
 - **Area:** Installer/update lifecycle; security boundary rollout
-- **Current-head evidence:** `internal/installengine/engine.go` uses
-  `ensureAsset`, which returns immediately when a destination file already
-  exists. Existing-install preparation is intentionally non-destructive, and
-  `--repair` is documented as reusing an existing installation without
-  replacing its configuration. The asset list can add the split files, but an
-  existing `compose.production.yaml` and existing telemetry configuration are
-  not migrated or replaced. `docs/upgrade.md` likewise describes manual image
-  and service recreation rather than a schema-aware telemetry asset migration.
-- **Minimal proof path:** Start with an installation created before PR #83,
-  retaining its old Compose and Collector assets, then run the current repair
-  or update path. Existing files satisfy `ensureAsset`; no transformation
-  changes the old main-Collector host mount, file-log pipeline, or capability
-  topology. The installation can therefore continue running the superseded
-  boundary after the new release is installed.
-- **Impact:** The security separation delivered by PR #83 is not reliably
-  applied to existing installations, leaving the former broad Collector
-  privilege boundary in place after an operator follows the supported lifecycle
-  path.
-- **Recommended remediation:** Add an explicit, versioned telemetry asset
-  migration with backup/confirmation semantics, or fail/warn clearly when an
-  existing installation needs a manual security migration. Make Compose,
-  configs, images, networks, and state-volume changes a coherent upgrade unit.
-- **Recommended regression test:** Fixture an old installation, run repair and
-  update, then assert the resulting Compose/config uses the split collectors,
-  has no main-Collector DAC capability or host-root mount, and preserves
-  operator-owned settings according to the documented policy.
+- **Fix:** PR #85, merged into current `main`, moved target-release asset
+  ownership to the verified target CLI, added coordinated managed-asset
+  staging/recovery, preserved operator state, and validated the migrated
+  Compose topology before activation.
+- **Current verification:** `internal/installengine/engine.go` contains the
+  managed-asset transaction/journal and target-binary migration path;
+  `internal/cli/real_upgrade_smoke_test.go` covers the real v0.2.5 bridge
+  lifecycle; and the release/installer checks passed on the merged PR #85
+  implementation. The current production topology therefore migrates old
+  installations instead of treating an existing file as proof that it is
+  current.
+- **Residual risk:** A fresh VPS upgrade was not run in this environment. The
+  migration intentionally preserves operator-owned `config.env` and unknown
+  local files, while release-managed runtime assets advance according to the
+  documented policy.
 
 ### AUD-18 — Purge validation omits the post-PR-#83 ClickHouse and Collector volumes
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89 and pending merge
 - **Severity:** Medium
 - **Area:** Uninstall/purge lifecycle and data cleanup
-- **Current-head evidence:** Current production Compose declares
-  `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` in addition
-  to the older PostgreSQL, storage, and function-runner volumes. The
-  `configuredUninstallVolumes` model in `internal/cli/uninstall.go` still
-  contains only the older three categories. `validatePurgeScope` compares the
-  declared Compose volume set with that model and refuses a purge when
-  unexpected persistent resources exist. Current post-PR-#83 Compose therefore
-  fails closed with an unexpected-persistent-resource error instead of
-  completing the requested purge. Existing uninstall fixtures cover only the
-  old volume set.
-- **Minimal proof path:** Run `stealth uninstall --purge` against a current
+- **Audited-baseline evidence:** At the audited SHA, the purge model omitted
+  `clickhouse_data`, `otelcol_state`, and `otel_docker_logs_state` from
+  `configuredUninstallVolumes`, so post-PR-#83 Compose failed the
+  exact-set purge guard.
+- **PR #89 remediation evidence:** PR #89 adds all six release-owned volume
+  keys, validates their Compose ownership, accepts a known legacy subset, and
+  explicitly removes remaining verified managed volume names.
+- **Audited-baseline proof path:** Run `stealth uninstall --purge` against an
   installation using the post-PR-#83 Compose file. The exact-set validation
   sees the ClickHouse and collector state volumes absent from the configured
   model and refuses the purge. If that validation were bypassed, verification
@@ -586,13 +649,13 @@ union; that is tracked as AUD-14.
   telemetry data/state through the supported purge command, and the lifecycle
   model does not provide an auditable policy for retaining or deleting those
   volumes.
-- **Recommended remediation:** Add all current persistent resources to the
-  uninstall model with explicit retention semantics, preserve custom volume
-  names, and verify deletion/retention for ClickHouse and both Collector state
-  volumes. Keep the fail-closed behavior for genuinely unknown resources.
-- **Recommended regression test:** Use a current Compose fixture and assert
-  normal uninstall, purge, custom names, and unknown-volume rejection for the
-  complete six-volume set.
+- **Regression evidence in PR #89:** `TestPurgeRemovesCurrentManagedTelemetryVolumesAndPreservesSentinel`
+  verifies all six managed volumes are removed without touching an unrelated
+  sentinel; `TestPurgeAcceptsKnownLegacyVolumeSubset` protects pre-split
+  installations; existing ownership and unknown-layout tests remain in place.
+- **Residual risk:** Purge still fails closed for an unknown Compose volume,
+  an unowned managed-name collision, unreadable configuration, or unsafe local
+  path. External S3 data remains intentionally outside the purge scope.
 
 ## Installer, update, release, and rollback audit
 
@@ -603,12 +666,11 @@ collector, Docker-log collector), the Docker proxy image, and the
 `telemetry-collector`, `telemetry-docker-logs`, and `telemetry-docker-proxy`
 targets. Asset names include the four current telemetry configuration files.
 
-The confirmed lifecycle gaps are AUD-17 and AUD-18. No separate release image
-tag mismatch, wrong fresh-install network name, missing fresh-install asset, or
-rollback-specific defect was confirmed in this refresh. The update/repair
-behavior is intentionally non-destructive, but it lacks a versioned migration
-for the security-sensitive telemetry split; that is why the gap is recorded
-instead of treating the fresh-install path as sufficient.
+The refreshed baseline confirmed AUD-17 and AUD-18 as lifecycle gaps. PR #85
+resolved the versioned telemetry migration gap; PR #89 adds the current-volume
+purge coverage for AUD-18. No separate release image tag mismatch, wrong fresh-
+install network name, missing fresh-install asset, or rollback-specific defect
+was confirmed in this refresh.
 
 ## Telemetry failure isolation
 
@@ -679,10 +741,9 @@ docs/full-bug-audit-2026-09-20.md
 
 No credential values, access tokens, or private host data are included in this
 document. Fresh VPS E2E and a post-merge Production Compose Smoke run were not
-performed/available. A direct raw-secret ClickHouse assertion was not run in a
-live environment during this docs-only refresh; the open AUD-01 status is based
-on the current exporter path, absence of a pre-persistence redaction stage, and
-the fact that the existing integration asserts only read-time redaction.
+performed/available. A direct raw-secret ClickHouse assertion was not run in the
+docs-only refresh represented by this document; PR #89 adds that live assertion
+and records the remediation status above.
 
 ## Remediation backlog
 

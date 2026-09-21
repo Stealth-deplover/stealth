@@ -30,6 +30,9 @@ func TestDockerLogPipelinePreservesUnstructuredRecords(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "docker-logs.yaml")
 	for _, expected := range []string{
 		"poll_interval: 200ms",
+		"id: docker-container-path",
+		"parse_from: attributes[\"log.file.path\"]",
+		"to: resource[\"container.id\"]",
 		"layout_type: gotime",
 		"layout: '2006-01-02T15:04:05.999999999Z07:00'",
 		"id: stream-severity",
@@ -61,6 +64,38 @@ func TestMainCollectorDoesNotOwnHostCollectors(t *testing.T) {
 	}
 }
 
+func TestMainCollectorRedactsSignalsBeforeClickHouse(t *testing.T) {
+	config := readRepositoryFile(t, "telemetry", "otel-collector.yaml")
+	for _, expected := range []string{
+		"redaction/telemetry:",
+		"transform/telemetry:",
+		"blocked_key_patterns:",
+		"blocked_values:",
+		"summary: silent",
+		"context: log",
+		"stealth.log.event_id",
+		"UUIDv7()",
+		"context: span",
+		"context: spanevent",
+		"context: metric",
+		"replace_pattern(span.status.message",
+		"replace_pattern(span.name",
+		"replace_pattern(metric.description",
+		"exporters: [clickhouse]",
+	} {
+		if !strings.Contains(config, expected) {
+			t.Fatalf("main collector redaction contract is missing %q", expected)
+		}
+	}
+	for _, pipeline := range []string{
+		"processors: [memory_limiter, redaction/telemetry, transform/telemetry, resource, batch]",
+	} {
+		if strings.Count(config, pipeline) != 3 {
+			t.Fatalf("expected all three ClickHouse pipelines to use %q exactly three times", pipeline)
+		}
+	}
+}
+
 func TestHostMetricsCollectorUsesReadOnlyHostRootWithoutOTLPReceiver(t *testing.T) {
 	config := readRepositoryFile(t, "telemetry", "host-metrics.yaml")
 	if !strings.Contains(config, "hostmetrics:") || !strings.Contains(config, "root_path: /hostfs") {
@@ -80,6 +115,9 @@ func TestDockerStatsExplicitlyEnablesInfrastructureMetrics(t *testing.T) {
 		"container.blockio.io_service_bytes_recursive:",
 		"container.state.status:",
 		"container.state.health.status:",
+		"com.docker.compose.project: docker.compose.project",
+		"com.docker.compose.service: service.name",
+		"com.docker.compose.container-number: docker.compose.container_number",
 	} {
 		if !strings.Contains(config, expected) {
 			t.Fatalf("Docker stats config is missing %q", expected)

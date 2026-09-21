@@ -61,6 +61,31 @@ func TestAdminAlertRuleAcceptsBoundedTelemetryKinds(t *testing.T) {
 	}
 }
 
+func TestAdminAlertRuleRejectsRetiredOperationKinds(t *testing.T) {
+	for _, kind := range []string{"backup_failure", "job_failure"} {
+		t.Run(kind, func(t *testing.T) {
+			_, err := normalizeAdminAlertRuleInput(AdminAlertRuleInput{
+				Name: "retired operation rule", Kind: kind, Condition: json.RawMessage(`{"kind":"operation"}`), Severity: "warning", Enabled: true,
+			})
+			if !errors.Is(err, ErrInvalidAdminAlert) {
+				t.Fatalf("normalizeAdminAlertRuleInput() error = %v, want retired kind rejection", err)
+			}
+		})
+	}
+}
+
+func TestCertificateExpiryAlertRequiresPositiveDays(t *testing.T) {
+	monitorID := "018f4e6f-7c2a-7b6b-8c77-123456789abc"
+	for _, days := range []string{"0", "-1"} {
+		t.Run(days, func(t *testing.T) {
+			raw := json.RawMessage(`{"monitor_id":"` + monitorID + `","days":` + days + `}`)
+			if err := validateAdminAlertCondition("certificate_expiry", raw); !errors.Is(err, ErrInvalidAdminAlert) {
+				t.Fatalf("validateAdminAlertCondition() error = %v, want positive expiry threshold rejection", err)
+			}
+		})
+	}
+}
+
 func TestAdminDashboardDefinitionRejectsRawSQL(t *testing.T) {
 	definition := map[string]any{
 		"panels": []any{

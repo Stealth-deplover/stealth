@@ -273,6 +273,10 @@ func heartbeatEndpoint(id, token string) string {
 
 func adminMonitorError(s *Server, w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, repository.ErrAdminMonitorRuleConflict):
+		writeError(w, http.StatusConflict, "monitor_alert_rule_conflict", "the monitor kind conflicts with an existing alert rule")
+	case errors.Is(err, repository.ErrAdminMonitorHasRules):
+		writeError(w, http.StatusConflict, "monitor_has_alert_rules", "delete the monitor's alert rules before deleting this monitor")
 	case errors.Is(err, repository.ErrInvalidAdminMonitor):
 		writeError(w, http.StatusBadRequest, "validation_error", "monitor configuration is invalid")
 	case errors.Is(err, repository.ErrNotFound), errors.Is(err, repository.ErrNoAdminMonitor):

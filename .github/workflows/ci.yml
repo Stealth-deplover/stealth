@@ -97,7 +97,7 @@ jobs:
             done
           }
           run_and_require_tests ./internal/repository \
-            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration)$' \
+            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration|TestAdminMonitorAlertLockOrderingIntegration|TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration|TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration|TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration|TestAdminRealtimeSequenceCommitOrderingIntegration|TestAdminRealtimeSequenceRollbackIntegration)$' \
             TestDeleteAlertRuleAfterNotificationDeliveryIntegration \
             TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration \
             TestDeleteAlertRuleNeverFiredIntegration \
@@ -106,14 +106,26 @@ jobs:
             TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration \
             TestQueryAdminAlertEventsGlobalCursorPaginationIntegration \
             TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration \
-            TestQueryAdminAlertEventsTimeRangeIntegration
+            TestQueryAdminAlertEventsTimeRangeIntegration \
+            TestAdminAlertMonitorReferenceValidationIntegration \
+            TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration \
+            TestAdminMonitorAlertLockOrderingIntegration \
+            TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration \
+            TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration \
+            TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration \
+            TestDeleteAdminMonitorWithAlertRuleConflictsIntegration \
+            TestAdminRealtimeSequenceCommitOrderingIntegration \
+            TestAdminRealtimeSequenceRollbackIntegration
           run_and_require_tests ./internal/migrate \
-            '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration)$' \
+            '^(TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration|TestAdminAlertHistoryGlobalIndexMigrationIntegration|TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration)$' \
             TestAdminAlertHistoryMigrationBackfillsAndPreservesDeliveriesIntegration \
-            TestAdminAlertHistoryGlobalIndexMigrationIntegration
+            TestAdminAlertHistoryGlobalIndexMigrationIntegration \
+            TestAdminAlertKindContractMigrationRetiresUnsupportedKindsIntegration
           run_and_require_tests ./internal/httpapi \
-            '^TestDeleteAdminAlertRulePreservesHistoryIntegration$' \
-            TestDeleteAdminAlertRulePreservesHistoryIntegration
+            '^(TestDeleteAdminAlertRulePreservesHistoryIntegration|TestAdminRealtimeSSEIntegration|TestAdminRealtimeSSEAuthorizationLifecycleIntegration)$' \
+            TestDeleteAdminAlertRulePreservesHistoryIntegration \
+            TestAdminRealtimeSSEIntegration \
+            TestAdminRealtimeSSEAuthorizationLifecycleIntegration
 
       - name: Real Collector and telemetry integration suites
         env:
@@ -160,8 +172,8 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:13133/ >/dev/null
-          go test ./internal/httpapi -run Integration -count=1
-          go test ./internal/telemetry -run Integration -count=1
+          go test ./internal/httpapi -run Integration -count=1 -v
+          go test ./internal/telemetry -run Integration -count=1 -v
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
@@ -226,6 +238,11 @@ jobs:
 
       - name: Validate production Compose file
         run: docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
+
+      - name: Docker uninstall purge integration
+        env:
+          TEST_DOCKER_INTEGRATION: "1"
+        run: go test ./internal/cli -run '^TestPurgeCurrentManagedVolumesDockerIntegration$' -count=1 -v
 
   console:
     name: Console checks

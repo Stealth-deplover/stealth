@@ -583,7 +583,7 @@ function CreateMonitorDialog({
               <Field
                 label="Expected values"
                 htmlFor="monitor-expected-values"
-                hint="Comma-separated; leave blank to assert lookup success only."
+                hint="Comma-separated; every value must be present, extra DNS records are allowed. Leave blank to assert lookup success only."
               >
                 <Input
                   id="monitor-expected-values"

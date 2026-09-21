@@ -123,6 +123,9 @@ func evaluateAdminAlertTx(ctx context.Context, tx pgx.Tx, ruleID uuid.UUID, trig
 	if err := enqueueAdminNotificationDeliveriesTx(ctx, tx, eventID); err != nil {
 		return uuid.Nil, err
 	}
+	if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.alert.updated", "admin_alert_rule", ruleID, map[string]any{"state": transition.EventState}); err != nil {
+		return uuid.Nil, err
+	}
 	return eventID, nil
 }
 
@@ -130,6 +133,9 @@ func evaluateAdminMonitorAlertsTx(ctx context.Context, tx pgx.Tx, monitorID uuid
 	if monitorID == uuid.Nil {
 		return ErrInvalidAdminMonitor
 	}
+	// CompleteAdminMonitorCheck holds the monitor row before reaching this
+	// monitor-specific rule evaluation boundary. Do not introduce rule ->
+	// monitor locking below.
 	rows, err := tx.Query(ctx, `
 		SELECT id,kind,condition
 		FROM admin_alert_rules

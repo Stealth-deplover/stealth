@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -123,7 +124,7 @@ func validate(kind, target string, config monitorConfig) error {
 	switch kind {
 	case "http":
 		parsed, err := url.Parse(target)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
 			return errors.New("HTTP target must be an absolute HTTP(S) URL")
 		}
 		method := strings.ToUpper(strings.TrimSpace(config.Method))
@@ -198,18 +199,16 @@ func checkHTTP(ctx context.Context, job repository.AdminMonitorJob, config monit
 			MaxIdleConnsPerHost:   2,
 		},
 	}
-	redirects := 0
-	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
-		redirects++
-		if redirects > maxRedirects {
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) > maxRedirects {
 			return errors.New("too many redirects")
 		}
-		if err := validatePublicURL(next.URL); err != nil {
+		if err := validatePublicURL(next.Context(), next.URL); err != nil {
 			return err
 		}
 		return nil
 	}
-	if err := validatePublicURL(request.URL); err != nil {
+	if err := validatePublicURL(ctx, request.URL); err != nil {
 		return nil, err
 	}
 	response, err := client.Do(request)
@@ -280,7 +279,7 @@ func checkDNS(ctx context.Context, job repository.AdminMonitorJob, config monito
 	if err != nil {
 		return errors.New("DNS lookup failed")
 	}
-	if len(config.ExpectedValues) > 0 && !sameValues(values, config.ExpectedValues) {
+	if len(config.ExpectedValues) > 0 && !expectedDNSValuesPresent(values, config.ExpectedValues) {
 		return errors.New("DNS values did not match")
 	}
 	encoded, _ := json.Marshal(map[string]any{"record_type": recordType, "record_count": len(values)})
@@ -351,11 +350,15 @@ func hostPort(target string, config monitorConfig) (string, int, error) {
 	return strings.Trim(host, "[]"), port, nil
 }
 
-func validatePublicURL(value *url.URL) error {
-	if value == nil || (value.Scheme != "http" && value.Scheme != "https") || value.Hostname() == "" || value.User != nil || value.RawQuery != "" || value.Fragment != "" {
+func validatePublicURL(ctx context.Context, value *url.URL) error {
+	return validatePublicURLWithResolver(ctx, net.DefaultResolver, value)
+}
+
+func validatePublicURLWithResolver(ctx context.Context, resolver ipResolver, value *url.URL) error {
+	if value == nil || (value.Scheme != "http" && value.Scheme != "https") || value.Hostname() == "" || value.User != nil || value.Fragment != "" {
 		return errors.New("monitor URL is invalid")
 	}
-	if _, err := resolvePublicHost(context.Background(), value.Hostname()); err != nil {
+	if _, err := resolvePublicHostWithResolver(ctx, resolver, value.Hostname()); err != nil {
 		return err
 	}
 	return nil
@@ -364,11 +367,15 @@ func validatePublicURL(value *url.URL) error {
 // ValidatePublicHTTPSURL is shared by trusted outbound workers such as alert
 // notifications. It preserves the monitor SSRF boundary while allowing the
 // query parameters used by provider webhook endpoints.
-func ValidatePublicHTTPSURL(value *url.URL) error {
+func ValidatePublicHTTPSURL(ctx context.Context, value *url.URL) error {
+	return validatePublicHTTPSURLWithResolver(ctx, net.DefaultResolver, value)
+}
+
+func validatePublicHTTPSURLWithResolver(ctx context.Context, resolver ipResolver, value *url.URL) error {
 	if value == nil || value.Scheme != "https" || value.Hostname() == "" || value.User != nil || value.Fragment != "" {
 		return errors.New("notification URL is invalid")
 	}
-	if _, err := resolvePublicHost(context.Background(), value.Hostname()); err != nil {
+	if _, err := resolvePublicHostWithResolver(ctx, resolver, value.Hostname()); err != nil {
 		return err
 	}
 	return nil
@@ -392,13 +399,11 @@ func NewSafeHTTPSClient(timeout time.Duration) *http.Client {
 			MaxIdleConnsPerHost:   2,
 		},
 	}
-	redirects := 0
-	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
-		redirects++
-		if redirects > maxRedirects {
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) > maxRedirects {
 			return errors.New("too many redirects")
 		}
-		return ValidatePublicHTTPSURL(next.URL)
+		return ValidatePublicHTTPSURL(next.Context(), next.URL)
 	}
 	return client
 }
@@ -427,31 +432,113 @@ func safeDialContext(ctx context.Context, network, address string) (net.Conn, er
 	return nil, lastErr
 }
 
+type ipResolver interface {
+	LookupIP(context.Context, string, string) ([]net.IP, error)
+}
+
 func resolvePublicHost(ctx context.Context, host string) ([]net.IP, error) {
+	return resolvePublicHostWithResolver(ctx, net.DefaultResolver, host)
+}
+
+func resolvePublicHostWithResolver(ctx context.Context, resolver ipResolver, host string) ([]net.IP, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
 		if isPublicIP(ip) {
 			return []net.IP{ip}, nil
 		}
 		return nil, errors.New("monitor target resolves to a private address")
 	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	ips, err := resolver.LookupIP(ctx, "ip", host)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, errors.New("monitor target could not be resolved")
+	}
+	if len(ips) == 0 {
 		return nil, errors.New("monitor target could not be resolved")
 	}
 	public := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
-		if isPublicIP(ip) {
-			public = append(public, ip)
+		if !isPublicIP(ip) {
+			return nil, errors.New("monitor target resolves to a private address")
 		}
-	}
-	if len(public) == 0 {
-		return nil, errors.New("monitor target resolves to a private address")
+		public = append(public, ip)
 	}
 	return public, nil
 }
 
 func isPublicIP(ip net.IP) bool {
-	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast()
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	if address.Is4In6() {
+		address = address.Unmap()
+	}
+	if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range monitorDeniedPrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
+}
+
+// monitorDeniedPrefixes is the explicit monitor egress policy. The standard
+// library's IsPrivate and IsGlobalUnicast methods intentionally do not cover
+// every special-use allocation, so the monitor policy denies the documented
+// shared, documentation, benchmarking, reserved, and non-global ranges here.
+// The list is maintained against the IANA IPv4/IPv6 special-purpose registries
+// and deliberately errs on the side of rejecting special-purpose destinations.
+var monitorDeniedPrefixes = mustParseMonitorPrefixes([]string{
+	"0.0.0.0/8",         // IPv4 "this network" and other unspecified uses.
+	"10.0.0.0/8",        // RFC 1918 private.
+	"100.64.0.0/10",     // RFC 6598 shared address space.
+	"127.0.0.0/8",       // IPv4 loopback.
+	"169.254.0.0/16",    // IPv4 link-local and cloud metadata endpoints.
+	"172.16.0.0/12",     // RFC 1918 private.
+	"192.0.0.0/24",      // IETF protocol assignments.
+	"192.0.2.0/24",      // TEST-NET-1 documentation.
+	"192.31.196.0/24",   // AS112-v4.
+	"192.52.193.0/24",   // AMT.
+	"192.88.99.0/24",    // 6to4 relay anycast (deprecated).
+	"192.168.0.0/16",    // RFC 1918 private.
+	"192.175.48.0/24",   // Direct Delegation AS112.
+	"198.18.0.0/15",     // Benchmarking.
+	"198.51.100.0/24",   // TEST-NET-2 documentation.
+	"203.0.113.0/24",    // TEST-NET-3 documentation.
+	"224.0.0.0/4",       // IPv4 multicast.
+	"240.0.0.0/4",       // IPv4 reserved and future use.
+	"::/128",            // IPv6 unspecified.
+	"::1/128",           // IPv6 loopback.
+	"100::/64",          // IPv6 discard-only.
+	"100:0:0:1::/64",    // IPv6 dummy prefix.
+	"2001::/23",         // IETF protocol assignments and special subranges.
+	"2001:db8::/32",     // IPv6 documentation.
+	"2002::/16",         // 6to4.
+	"2620:4f:8000::/48", // Direct Delegation AS112.
+	"3fff::/20",         // IPv6 documentation.
+	"5f00::/16",         // Segment Routing SIDs.
+	"fc00::/7",          // IPv6 unique local.
+	"fe80::/10",         // IPv6 link-local.
+	"ff00::/8",          // IPv6 multicast.
+})
+
+func mustParseMonitorPrefixes(values []string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			panic("invalid monitor egress policy prefix: " + value)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
 }
 
 func validHTTPMethod(value string) bool {
@@ -486,7 +573,11 @@ func validDNSName(value string) bool {
 	return true
 }
 
-func sameValues(actual, expected []string) bool {
+// expectedDNSValuesPresent implements the monitor contract: every configured
+// expected value must be present, while additional DNS records are allowed.
+// This is a subset check rather than an exact-set check because public DNS
+// names commonly return additional healthy addresses over time.
+func expectedDNSValuesPresent(actual, expected []string) bool {
 	seen := make(map[string]struct{}, len(actual))
 	for _, value := range actual {
 		seen[strings.TrimSpace(strings.TrimSuffix(value, "."))] = struct{}{}
@@ -500,7 +591,7 @@ func sameValues(actual, expected []string) bool {
 }
 
 func classifyNetworkError(err error) error {
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("monitor probe timed out")
 	}
 	return errors.New("monitor probe could not connect")

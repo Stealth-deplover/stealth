@@ -15,11 +15,16 @@ import (
 )
 
 type fakeAdminTelemetryStore struct {
-	logsCalled  bool
-	logsQuery   telemetry.LogsQuery
-	logs        telemetry.LogsResult
-	logsErr     error
-	logsStarted chan struct{}
+	logsCalled   bool
+	logsQuery    telemetry.LogsQuery
+	logsQueries  []telemetry.LogsQuery
+	logs         telemetry.LogsResult
+	logsResults  []telemetry.LogsResult
+	logsErr      error
+	logsStarted  chan struct{}
+	logsHook     func(int, telemetry.LogsQuery)
+	tracesCalled bool
+	tracesQuery  telemetry.TracesQuery
 }
 
 func (f *fakeAdminTelemetryStore) Ping(context.Context) error { return nil }
@@ -27,16 +32,26 @@ func (f *fakeAdminTelemetryStore) Ping(context.Context) error { return nil }
 func (f *fakeAdminTelemetryStore) QueryLogs(_ context.Context, query telemetry.LogsQuery) (telemetry.LogsResult, error) {
 	f.logsCalled = true
 	f.logsQuery = query
+	call := len(f.logsQueries)
+	f.logsQueries = append(f.logsQueries, query)
+	if f.logsHook != nil {
+		f.logsHook(call, query)
+	}
 	if f.logsStarted != nil {
 		select {
 		case f.logsStarted <- struct{}{}:
 		default:
 		}
 	}
+	if call < len(f.logsResults) {
+		return f.logsResults[call], f.logsErr
+	}
 	return f.logs, f.logsErr
 }
 
-func (f *fakeAdminTelemetryStore) QueryTraces(context.Context, telemetry.TracesQuery) (telemetry.TracesResult, error) {
+func (f *fakeAdminTelemetryStore) QueryTraces(_ context.Context, query telemetry.TracesQuery) (telemetry.TracesResult, error) {
+	f.tracesCalled = true
+	f.tracesQuery = query
 	return telemetry.TracesResult{}, nil
 }
 
@@ -101,6 +116,26 @@ func TestAdminTelemetryHandlerRejectsInvalidRangeBeforeStore(t *testing.T) {
 	}
 }
 
+func TestAdminTelemetryTracesRejectsNonFiniteDuration(t *testing.T) {
+	for _, value := range []string{"NaN", "+Inf", "-Inf"} {
+		t.Run(value, func(t *testing.T) {
+			store := &fakeAdminTelemetryStore{}
+			server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
+			request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/traces?min_duration_ms="+value, nil)
+			recorder := httptest.NewRecorder()
+
+			server.adminTelemetryTraces(recorder, request)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+			}
+			if store.tracesCalled {
+				t.Fatalf("store was called for non-finite duration: %+v", store.tracesQuery)
+			}
+		})
+	}
+}
+
 func TestAdminTelemetryHandlerDoesNotExposeBackendError(t *testing.T) {
 	store := &fakeAdminTelemetryStore{logsErr: errors.New("clickhouse password=do-not-return")}
 	server := &Server{
@@ -140,7 +175,7 @@ func TestAdminTelemetryLogTailStreamsRedactedDomainRecords(t *testing.T) {
 	store := &fakeAdminTelemetryStore{
 		logsStarted: started,
 		logs: telemetry.LogsResult{Items: []telemetry.LogRecord{{
-			Timestamp: time.Now().UTC(), TraceID: "trace-1", Service: "api", Body: "request failed",
+			Timestamp: time.Now().UTC(), TraceID: "trace-1", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c", Service: "api", Body: "request failed",
 		}}},
 	}
 	server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
@@ -170,5 +205,103 @@ func TestAdminTelemetryLogTailStreamsRedactedDomainRecords(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "event: log") || !strings.Contains(body, "trace-1") {
 		t.Fatalf("stream body = %s", body)
+	}
+}
+
+func TestAdminTelemetryLogTailUsesShortStableCursorWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &fakeAdminTelemetryStore{
+		logsResults: []telemetry.LogsResult{
+			// QueryLogs is newest-first for the initial window. These records
+			// share a timestamp, so event-id ordering must be retained.
+			{Items: []telemetry.LogRecord{
+				{Timestamp: now, TraceID: "trace-b", SpanID: "span-b", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e", Service: "api", Body: "same-time-b"},
+				{Timestamp: now, TraceID: "trace-a", SpanID: "span-a", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c", Service: "api", Body: "same-time-a"},
+			}},
+			{Items: nil},
+		},
+	}
+	// The second poll is the first cursor query. Cancel after it has been
+	// observed so the handler exits without waiting for the two-second ticker.
+	store.logsResults[1] = telemetry.LogsResult{Items: []telemetry.LogRecord{{
+		Timestamp: now.Add(time.Second), TraceID: "trace-c", SpanID: "span-c", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3f", Service: "api", Body: "new-row",
+	}}}
+	store.logsHook = func(call int, _ telemetry.LogsQuery) {
+		if call == 1 {
+			cancel()
+		}
+	}
+	server := &Server{config: config.Config{TelemetryMaxQueryRange: 31 * 24 * time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
+	from := now.Add(-29 * 24 * time.Hour).Format(time.RFC3339Nano)
+	to := now.Add(time.Second).Format(time.RFC3339Nano)
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/logs/tail?from="+from+"&to="+to+"&limit=10", nil).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.adminTelemetryLogTail(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("tail did not stop after the cursor poll")
+	}
+	if len(store.logsQueries) != 2 {
+		t.Fatalf("query count = %d, want two polls", len(store.logsQueries))
+	}
+	if store.logsQueries[0].Range.To.Sub(store.logsQueries[0].Range.From) > 10*time.Minute {
+		t.Fatalf("initial tail window = %s, want bounded lookback", store.logsQueries[0].Range.To.Sub(store.logsQueries[0].Range.From))
+	}
+	if !store.logsQueries[0].LiveTail {
+		t.Fatalf("initial tail query did not request lossless live-tail filtering")
+	}
+	if store.logsQueries[1].After == nil || store.logsQueries[1].After.EventID != "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e" {
+		t.Fatalf("second query cursor = %+v, want last same-timestamp row", store.logsQueries[1].After)
+	}
+	body := recorder.Body.String()
+	for _, marker := range []string{"same-time-a", "same-time-b", "new-row"} {
+		if strings.Count(body, marker) != 1 {
+			t.Fatalf("stream marker %q count = %d, body = %s", marker, strings.Count(body, marker), body)
+		}
+	}
+	if strings.Count(body, "event: log") != 3 || !strings.Contains(body, "id: ") {
+		t.Fatalf("stream did not emit one resumable event per row: %s", body)
+	}
+}
+
+func TestAdminTelemetryLogTailResumesFromLastEventID(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	previous := telemetry.LogCursor{Timestamp: now, EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &fakeAdminTelemetryStore{logs: telemetry.LogsResult{Items: []telemetry.LogRecord{{
+		Timestamp: now.Add(time.Second), TraceID: "trace-next", SpanID: "span-next", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e", Service: "api", Body: "resumed-row",
+	}}}}
+	store.logsHook = func(call int, _ telemetry.LogsQuery) {
+		if call == 0 {
+			cancel()
+		}
+	}
+	server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/telemetry/logs/tail?limit=10", nil).WithContext(ctx)
+	request.Header.Set("Last-Event-ID", telemetry.EncodeLogCursor(previous))
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		server.adminTelemetryLogTail(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tail did not stop after resume poll")
+	}
+	if len(store.logsQueries) != 1 || store.logsQueries[0].After == nil || store.logsQueries[0].After.EventID != previous.EventID {
+		t.Fatalf("resume query = %+v, want Last-Event-ID cursor", store.logsQueries)
+	}
+	if !strings.Contains(recorder.Body.String(), "resumed-row") {
+		t.Fatalf("resume body = %s", recorder.Body.String())
 	}
 }

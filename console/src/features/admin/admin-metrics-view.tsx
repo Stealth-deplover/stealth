@@ -109,9 +109,17 @@ export function AdminMetricsView() {
                         <Badge variant="neutral">{item.kind}</Badge>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-xs tabular-nums text-mist">
-                        {item.value.toLocaleString(undefined, {
-                          maximumFractionDigits: 4,
-                        })}
+                        {item.value !== undefined
+                          ? item.value.toLocaleString(undefined, {
+                              maximumFractionDigits: 4,
+                            })
+                          : item.histogram
+                            ? `count=${item.histogram.count.toLocaleString()} sum=${item.histogram.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+                            : item.summary
+                              ? `count=${item.summary.count.toLocaleString()} sum=${item.summary.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+                              : item.exponential_histogram
+                                ? `count=${item.exponential_histogram.count.toLocaleString()} sum=${item.exponential_histogram.sum.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+                                : "Structured value"}
                       </td>
                     </tr>
                   ))}

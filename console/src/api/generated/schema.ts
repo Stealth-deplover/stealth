@@ -104,6 +104,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/realtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Stream bounded invalidation notifications for authenticated instance-owner/admin Console sessions. Events contain no resource snapshots; clients refetch canonical Admin API state. */
+        get: operations["streamAdminRealtime"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/telemetry/logs": {
         parameters: {
             query?: never;
@@ -304,7 +321,7 @@ export interface paths {
         /** @description Replace an encrypted instance monitor definition. A heartbeat token is rotated and returned once. */
         put: operations["updateAdminMonitor"];
         post?: never;
-        /** @description Delete a monitor and its bounded check history. */
+        /** @description Delete a monitor and its bounded check history. A monitor with alert rules must have those rules deleted first. */
         delete: operations["deleteAdminMonitor"];
         options?: never;
         head?: never;
@@ -3144,14 +3161,59 @@ export interface components {
         AdminTracesResponse: {
             items: components["schemas"]["AdminTraceSpan"][];
         };
+        AdminMetricHistogram: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            bucket_counts: number[];
+            explicit_bounds: number[];
+            min?: number;
+            max?: number;
+            /** Format: int32 */
+            aggregation_temporality: number;
+        };
+        AdminMetricQuantile: {
+            quantile: number;
+            value: number;
+        };
+        AdminMetricSummary: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            quantiles: components["schemas"]["AdminMetricQuantile"][];
+            /** Format: int32 */
+            aggregation_temporality?: number;
+        };
+        AdminMetricExponentialHistogram: {
+            /** Format: int64 */
+            count: number;
+            sum: number;
+            /** Format: int32 */
+            scale: number;
+            /** Format: int64 */
+            zero_count: number;
+            /** Format: int32 */
+            positive_offset: number;
+            positive_bucket_counts: number[];
+            /** Format: int32 */
+            negative_offset: number;
+            negative_bucket_counts: number[];
+            min?: number;
+            max?: number;
+            /** Format: int32 */
+            aggregation_temporality: number;
+        };
         AdminMetric: {
             /** Format: date-time */
             timestamp: string;
             name: string;
             service: string;
-            value: number;
+            value?: number;
             /** @enum {string} */
             kind: AdminMetricKind;
+            histogram?: components["schemas"]["AdminMetricHistogram"];
+            summary?: components["schemas"]["AdminMetricSummary"];
+            exponential_histogram?: components["schemas"]["AdminMetricExponentialHistogram"];
             attributes?: {
                 [key: string]: string;
             };
@@ -3307,6 +3369,7 @@ export interface components {
             name: string;
             /** @enum {string} */
             kind: CreateAdminMonitorRequestKind;
+            /** @description HTTP(S) targets may include query parameters; credentials and fragments are rejected. */
             target: string;
             /** @default 60 */
             interval_seconds: number;
@@ -3328,6 +3391,7 @@ export interface components {
             port?: number;
             /** @enum {string} */
             record_type?: CreateAdminMonitorRequestRecord_type;
+            /** @description For DNS monitors every configured value must be present; additional records are allowed. */
             expected_values?: string[];
             grace_seconds?: number;
             certificate_expiry_days?: number;
@@ -6194,6 +6258,33 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    streamAdminRealtime: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque UUIDv7 cursor sent by the browser on SSE reconnect */
+                "Last-Event-ID"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Admin invalidation events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["ValidationError"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listAdminTelemetryLogs: {
         parameters: {
             query?: {
@@ -6624,6 +6715,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     recordAdminMonitorHeartbeat: {
@@ -13880,7 +13972,10 @@ export enum AdminOperationKind {
 }
 export enum AdminMetricKind {
     gauge = "gauge",
-    sum = "sum"
+    sum = "sum",
+    histogram = "histogram",
+    summary = "summary",
+    exponential_histogram = "exponential_histogram"
 }
 export enum AdminErrorGroupStatus {
     open = "open",

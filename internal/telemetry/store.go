@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,6 +54,8 @@ type ClickHouseStore struct {
 	maxQueryRows     int
 	retention        time.Duration
 }
+
+const logEventIDAttribute = "stealth.log.event_id"
 
 func New(cfg Config) (*ClickHouseStore, error) {
 	if strings.TrimSpace(cfg.Address) == "" {
@@ -155,11 +158,13 @@ func (r TimeRange) validate(maxRange time.Duration) error {
 }
 
 type LogsQuery struct {
-	Range   TimeRange
-	Service string
-	Level   string
-	Search  string
-	Limit   int
+	Range    TimeRange
+	Service  string
+	Level    string
+	Search   string
+	Limit    int
+	After    *LogCursor
+	LiveTail bool
 }
 
 type LogRecord struct {
@@ -171,6 +176,7 @@ type LogRecord struct {
 	Body               string            `json:"message"`
 	Attributes         map[string]string `json:"attributes,omitempty"`
 	ResourceAttributes map[string]string `json:"resource_attributes,omitempty"`
+	EventID            string            `json:"-"`
 }
 
 type LogsResult struct {
@@ -212,13 +218,52 @@ type MetricsQuery struct {
 }
 
 type MetricRecord struct {
-	Timestamp          time.Time         `json:"timestamp"`
-	Name               string            `json:"name"`
-	Service            string            `json:"service"`
-	Value              float64           `json:"value"`
-	Kind               string            `json:"kind"`
-	Attributes         map[string]string `json:"attributes,omitempty"`
-	ResourceAttributes map[string]string `json:"resource_attributes,omitempty"`
+	Timestamp          time.Time                   `json:"timestamp"`
+	Name               string                      `json:"name"`
+	Service            string                      `json:"service"`
+	Value              *float64                    `json:"value,omitempty"`
+	Kind               string                      `json:"kind"`
+	Attributes         map[string]string           `json:"attributes,omitempty"`
+	ResourceAttributes map[string]string           `json:"resource_attributes,omitempty"`
+	Histogram          *MetricHistogram            `json:"histogram,omitempty"`
+	Summary            *MetricSummary              `json:"summary,omitempty"`
+	Exponential        *MetricExponentialHistogram `json:"exponential_histogram,omitempty"`
+}
+
+type MetricHistogram struct {
+	Count                  uint64    `json:"count"`
+	Sum                    float64   `json:"sum"`
+	BucketCounts           []uint64  `json:"bucket_counts"`
+	ExplicitBounds         []float64 `json:"explicit_bounds"`
+	Min                    *float64  `json:"min,omitempty"`
+	Max                    *float64  `json:"max,omitempty"`
+	AggregationTemporality int32     `json:"aggregation_temporality"`
+}
+
+type MetricQuantile struct {
+	Quantile float64 `json:"quantile"`
+	Value    float64 `json:"value"`
+}
+
+type MetricSummary struct {
+	Count                  uint64           `json:"count"`
+	Sum                    float64          `json:"sum"`
+	Quantiles              []MetricQuantile `json:"quantiles"`
+	AggregationTemporality int32            `json:"aggregation_temporality,omitempty"`
+}
+
+type MetricExponentialHistogram struct {
+	Count                  uint64   `json:"count"`
+	Sum                    float64  `json:"sum"`
+	Scale                  int32    `json:"scale"`
+	ZeroCount              uint64   `json:"zero_count"`
+	PositiveOffset         int32    `json:"positive_offset"`
+	PositiveBucketCounts   []uint64 `json:"positive_bucket_counts"`
+	NegativeOffset         int32    `json:"negative_offset"`
+	NegativeBucketCounts   []uint64 `json:"negative_bucket_counts"`
+	Min                    *float64 `json:"min,omitempty"`
+	Max                    *float64 `json:"max,omitempty"`
+	AggregationTemporality int32    `json:"aggregation_temporality"`
 }
 
 type MetricsResult struct {
@@ -241,16 +286,84 @@ type SourcesResult struct {
 	Items []SourceRecord `json:"items"`
 }
 
+const dockerContainerMetadataQuery = `
+SELECT ContainerID,
+       argMax(ContainerName, TimeUnix) AS ContainerName,
+       argMax(ImageName, TimeUnix) AS ImageName,
+       argMax(ImageID, TimeUnix) AS ImageID,
+       argMax(ComposeProject, TimeUnix) AS ComposeProject,
+       argMax(ComposeService, TimeUnix) AS ComposeService,
+       argMax(ComposeContainerNumber, TimeUnix) AS ComposeContainerNumber
+FROM (
+  SELECT TimeUnix,
+         ResourceAttributes['container.id'] AS ContainerID,
+         if(ResourceAttributes['container.name'] != '', ResourceAttributes['container.name'], Attributes['container.name']) AS ContainerName,
+         if(ResourceAttributes['container.image.name'] != '', ResourceAttributes['container.image.name'], Attributes['container.image.name']) AS ImageName,
+         if(ResourceAttributes['container.image.id'] != '', ResourceAttributes['container.image.id'], Attributes['container.image.id']) AS ImageID,
+         if(Attributes['docker.compose.project'] != '', Attributes['docker.compose.project'], ResourceAttributes['docker.compose.project']) AS ComposeProject,
+         if(Attributes['service.name'] != '', Attributes['service.name'], ResourceAttributes['docker.compose.service']) AS ComposeService,
+         if(Attributes['docker.compose.container_number'] != '', Attributes['docker.compose.container_number'], ResourceAttributes['docker.compose.container_number']) AS ComposeContainerNumber
+  FROM otel_metrics_gauge
+  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+  UNION ALL
+  SELECT TimeUnix,
+         ResourceAttributes['container.id'] AS ContainerID,
+         if(ResourceAttributes['container.name'] != '', ResourceAttributes['container.name'], Attributes['container.name']) AS ContainerName,
+         if(ResourceAttributes['container.image.name'] != '', ResourceAttributes['container.image.name'], Attributes['container.image.name']) AS ImageName,
+         if(ResourceAttributes['container.image.id'] != '', ResourceAttributes['container.image.id'], Attributes['container.image.id']) AS ImageID,
+         if(Attributes['docker.compose.project'] != '', Attributes['docker.compose.project'], ResourceAttributes['docker.compose.project']) AS ComposeProject,
+         if(Attributes['service.name'] != '', Attributes['service.name'], ResourceAttributes['docker.compose.service']) AS ComposeService,
+         if(Attributes['docker.compose.container_number'] != '', Attributes['docker.compose.container_number'], ResourceAttributes['docker.compose.container_number']) AS ComposeContainerNumber
+  FROM otel_metrics_sum
+  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+)
+WHERE ContainerID != ''
+GROUP BY ContainerID`
+
 const logsQuery = `
+WITH container_metadata AS (` + dockerContainerMetadataQuery + `)
 SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
-       LogAttributes, ResourceAttributes
+       LogAttributes, ResourceAttributes,
+       ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
+       ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
+       ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
+       LogAttributes['stealth.log.event_id'] AS EventID
 FROM otel_logs
+LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
 WHERE Timestamp >= {from:DateTime64(9)}
   AND Timestamp < {to:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({level:String} = '' OR SeverityText = {level:String})
   AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
-ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC
+  AND ({live_tail:UInt8} = 0 OR LogAttributes['stealth.log.event_id'] != '')
+ORDER BY Timestamp DESC, EventID DESC
+LIMIT {limit:UInt32}`
+
+// logsAfterQuery is intentionally separate from logsQuery so the normal
+// explorer keeps its newest-first contract while the live tail can advance in
+// chronological order from a complete cursor. The tuple predicate mirrors
+// every ORDER BY key; timestamp-only polling is not sufficient when several
+// records share the same timestamp. Rows without the Collector-generated
+// event ID are excluded because they cannot participate in a lossless cursor.
+const logsAfterQuery = `
+WITH container_metadata AS (` + dockerContainerMetadataQuery + `)
+SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
+       LogAttributes, ResourceAttributes,
+       ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
+       ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
+       ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
+       LogAttributes['stealth.log.event_id'] AS EventID
+FROM otel_logs
+LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND Timestamp < {to:DateTime64(9)}
+  AND ({service:String} = '' OR ServiceName = {service:String})
+  AND ({level:String} = '' OR SeverityText = {level:String})
+  AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
+  AND LogAttributes['stealth.log.event_id'] != ''
+  AND (Timestamp, LogAttributes['stealth.log.event_id']) >
+      ({after_timestamp:DateTime64(9)}, {after_event_id:String})
+ORDER BY Timestamp ASC, EventID ASC
 LIMIT {limit:UInt32}`
 
 const tracesQuery = `
@@ -267,20 +380,67 @@ ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC
 LIMIT {limit:UInt32}`
 
 const metricsQuery = `
-SELECT TimeUnix, MetricName, ServiceName, Value, Attributes, ResourceAttributes, 'gauge' AS MetricKind
-FROM otel_metrics_gauge
+SELECT TimeUnix, MetricName, ServiceName, ScalarValue, Attributes, ResourceAttributes,
+       MetricKind, MetricCount, MetricSum, BucketCounts, ExplicitBounds,
+       Quantiles, QuantileValues, Scale, ZeroCount, PositiveOffset,
+       PositiveBucketCounts, NegativeOffset, NegativeBucketCounts, MetricMin,
+       MetricMax, AggregationTemporality
+FROM (
+  SELECT TimeUnix, MetricName, ServiceName, Value AS ScalarValue, Attributes, ResourceAttributes,
+         'gauge' AS MetricKind, toUInt64(0) AS MetricCount, toFloat64(0) AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         toInt32(0) AS Scale, toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_gauge
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, Value AS ScalarValue, Attributes, ResourceAttributes,
+         'sum' AS MetricKind, toUInt64(0) AS MetricCount, toFloat64(0) AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         toInt32(0) AS Scale, toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_sum
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'histogram' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         BucketCounts, ExplicitBounds, emptyArrayFloat64() AS Quantiles,
+         emptyArrayFloat64() AS QuantileValues, toInt32(0) AS Scale,
+         toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, Min AS MetricMin,
+         Max AS MetricMax, AggregationTemporality
+  FROM otel_metrics_histogram
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'summary' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         ValueAtQuantiles.Quantile AS Quantiles,
+         ValueAtQuantiles.Value AS QuantileValues, toInt32(0) AS Scale,
+         toUInt64(0) AS ZeroCount, toInt32(0) AS PositiveOffset,
+         emptyArrayUInt64() AS PositiveBucketCounts, toInt32(0) AS NegativeOffset,
+         emptyArrayUInt64() AS NegativeBucketCounts, toFloat64(0) AS MetricMin,
+         toFloat64(0) AS MetricMax, toInt32(0) AS AggregationTemporality
+  FROM otel_metrics_summary
+  UNION ALL
+  SELECT TimeUnix, MetricName, ServiceName, toFloat64(0) AS ScalarValue, Attributes, ResourceAttributes,
+         'exponential_histogram' AS MetricKind, Count AS MetricCount, Sum AS MetricSum,
+         emptyArrayUInt64() AS BucketCounts, emptyArrayFloat64() AS ExplicitBounds,
+         emptyArrayFloat64() AS Quantiles, emptyArrayFloat64() AS QuantileValues,
+         Scale, ZeroCount, PositiveOffset, PositiveBucketCounts, NegativeOffset,
+         NegativeBucketCounts, Min AS MetricMin, Max AS MetricMax,
+         AggregationTemporality
+  FROM otel_metrics_exp_histogram
+)
 WHERE TimeUnix >= {from:DateTime}
   AND TimeUnix < {to:DateTime}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({name:String} = '' OR MetricName = {name:String})
-UNION ALL
-SELECT TimeUnix, MetricName, ServiceName, Value, Attributes, ResourceAttributes, 'sum' AS MetricKind
-FROM otel_metrics_sum
-WHERE TimeUnix >= {from:DateTime}
-  AND TimeUnix < {to:DateTime}
-  AND ({service:String} = '' OR ServiceName = {service:String})
-  AND ({name:String} = '' OR MetricName = {name:String})
-ORDER BY TimeUnix DESC, ServiceName ASC, MetricName ASC
+ORDER BY TimeUnix DESC, ServiceName ASC, MetricName ASC, MetricKind ASC
 LIMIT {limit:UInt32}`
 
 const sourcesQuery = `
@@ -304,7 +464,22 @@ FROM (
 	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
 	  FROM otel_metrics_sum
 	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
-  GROUP BY ServiceName
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_histogram
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_summary
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
+	  UNION ALL
+	  SELECT ServiceName, 'metrics' AS Signal, max(TimeUnix) AS LastReceived, count() AS Volume
+	  FROM otel_metrics_exp_histogram
+	  WHERE TimeUnix >= {from_metrics:DateTime} AND TimeUnix < {to_metrics:DateTime}
+	  GROUP BY ServiceName
 )
 GROUP BY ServiceName, Signal
 ORDER BY LastReceived DESC, ServiceName ASC, Signal ASC
@@ -318,14 +493,27 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	if err != nil {
 		return LogsResult{}, err
 	}
-	rows, err := s.query(ctx, logsQuery,
+	statement := logsQuery
+	args := []any{
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
+		clickhouse.DateNamed("from_metrics", query.Range.From.UTC(), clickhouse.Seconds),
+		clickhouse.DateNamed("to_metrics", query.Range.To.UTC(), clickhouse.Seconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("level", boundedFilter(query.Level, 64)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
-		clickhouse.Named("limit", limit),
-	)
+	}
+	if query.After != nil {
+		statement = logsAfterQuery
+		args = append(args,
+			clickhouse.DateNamed("after_timestamp", query.After.Timestamp.UTC(), clickhouse.NanoSeconds),
+			clickhouse.Named("after_event_id", boundedFilter(query.After.EventID, 256)),
+		)
+	} else {
+		args = append(args, clickhouse.Named("live_tail", boolToUint(query.LiveTail)))
+	}
+	args = append(args, clickhouse.Named("limit", limit))
+	rows, err := s.query(ctx, statement, args...)
 	if err != nil {
 		return LogsResult{}, err
 	}
@@ -334,12 +522,15 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	for rows.Next() {
 		var item LogRecord
 		var attributes, resourceAttributes map[string]string
-		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes); err != nil {
+		var containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string
+		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &containerName, &imageName, &imageID, &composeProject, &composeService, &composeContainerNumber, &item.EventID); err != nil {
 			return LogsResult{}, fmt.Errorf("scan telemetry log: %w", err)
 		}
 		item.Body = redactText(item.Body)
+		delete(attributes, logEventIDAttribute)
 		item.Attributes = redactAttributes(attributes)
 		item.ResourceAttributes = redactAttributes(resourceAttributes)
+		item.ResourceAttributes = enrichContainerAttributes(item.ResourceAttributes, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber)
 		result.Items = append(result.Items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -348,11 +539,52 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	return result, nil
 }
 
+func boolToUint(value bool) uint8 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func enrichContainerAttributes(attributes map[string]string, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string) map[string]string {
+	values := map[string]string{
+		"container.name":                  containerName,
+		"container.image.name":            imageName,
+		"container.image.id":              imageID,
+		"docker.compose.project":          composeProject,
+		"docker.compose.service":          composeService,
+		"docker.compose.container_number": composeContainerNumber,
+	}
+	for key, value := range values {
+		if value == "" {
+			delete(values, key)
+		}
+	}
+	if len(values) == 0 {
+		return attributes
+	}
+	if attributes == nil {
+		attributes = make(map[string]string, len(values))
+	} else {
+		copy := make(map[string]string, len(attributes)+len(values))
+		for key, value := range attributes {
+			copy[key] = value
+		}
+		attributes = copy
+	}
+	for key, value := range values {
+		if _, exists := attributes[key]; !exists || attributes[key] == "" {
+			attributes[key] = value
+		}
+	}
+	return attributes
+}
+
 func (s *ClickHouseStore) QueryTraces(ctx context.Context, query TracesQuery) (TracesResult, error) {
 	if err := s.validate(query.Range, query.Limit); err != nil {
 		return TracesResult{}, err
 	}
-	if query.MinMs < 0 || query.MinMs > 24*60*60*1000 {
+	if math.IsNaN(query.MinMs) || math.IsInf(query.MinMs, 0) || query.MinMs < 0 || query.MinMs > 24*60*60*1000 {
 		return TracesResult{}, fmt.Errorf("%w: min duration is outside the allowed range", ErrInvalidQuery)
 	}
 	limit, err := clickHouseLimit(query.Limit)
@@ -413,8 +645,23 @@ func (s *ClickHouseStore) QueryMetrics(ctx context.Context, query MetricsQuery) 
 	for rows.Next() {
 		var item MetricRecord
 		var attributes, resourceAttributes map[string]string
-		if err := rows.Scan(&item.Timestamp, &item.Name, &item.Service, &item.Value, &attributes, &resourceAttributes, &item.Kind); err != nil {
+		var scalarValue, metricSum, metricMin, metricMax float64
+		var metricCount, zeroCount uint64
+		var bucketCounts, positiveBucketCounts, negativeBucketCounts []uint64
+		var explicitBounds, quantiles, quantileValues []float64
+		var scale, positiveOffset, negativeOffset, aggregationTemporality int32
+		if err := rows.Scan(&item.Timestamp, &item.Name, &item.Service, &scalarValue, &attributes, &resourceAttributes, &item.Kind, &metricCount, &metricSum, &bucketCounts, &explicitBounds, &quantiles, &quantileValues, &scale, &zeroCount, &positiveOffset, &positiveBucketCounts, &negativeOffset, &negativeBucketCounts, &metricMin, &metricMax, &aggregationTemporality); err != nil {
 			return MetricsResult{}, fmt.Errorf("scan telemetry metric: %w", err)
+		}
+		switch item.Kind {
+		case "gauge", "sum":
+			item.Value = finiteMetricValue(scalarValue)
+		case "histogram":
+			item.Histogram = &MetricHistogram{Count: metricCount, Sum: metricSum, BucketCounts: bucketCounts, ExplicitBounds: explicitBounds, Min: finiteMetricValue(metricMin), Max: finiteMetricValue(metricMax), AggregationTemporality: aggregationTemporality}
+		case "summary":
+			item.Summary = &MetricSummary{Count: metricCount, Sum: metricSum, Quantiles: metricQuantiles(quantiles, quantileValues), AggregationTemporality: aggregationTemporality}
+		case "exponential_histogram":
+			item.Exponential = &MetricExponentialHistogram{Count: metricCount, Sum: metricSum, Scale: scale, ZeroCount: zeroCount, PositiveOffset: positiveOffset, PositiveBucketCounts: positiveBucketCounts, NegativeOffset: negativeOffset, NegativeBucketCounts: negativeBucketCounts, Min: finiteMetricValue(metricMin), Max: finiteMetricValue(metricMax), AggregationTemporality: aggregationTemporality}
 		}
 		item.Attributes = redactAttributes(attributes)
 		item.ResourceAttributes = redactAttributes(resourceAttributes)
@@ -424,6 +671,28 @@ func (s *ClickHouseStore) QueryMetrics(ctx context.Context, query MetricsQuery) 
 		return MetricsResult{}, fmt.Errorf("read telemetry metrics: %w", err)
 	}
 	return result, nil
+}
+
+func finiteMetricValue(value float64) *float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func metricQuantiles(quantiles, values []float64) []MetricQuantile {
+	count := len(quantiles)
+	if len(values) < count {
+		count = len(values)
+	}
+	result := make([]MetricQuantile, 0, count)
+	for index := 0; index < count; index++ {
+		if math.IsNaN(quantiles[index]) || math.IsInf(quantiles[index], 0) || math.IsNaN(values[index]) || math.IsInf(values[index], 0) {
+			continue
+		}
+		result = append(result, MetricQuantile{Quantile: quantiles[index], Value: values[index]})
+	}
+	return result
 }
 
 func (s *ClickHouseStore) ListSources(ctx context.Context, query SourcesQuery) (SourcesResult, error) {
@@ -526,8 +795,9 @@ func boundedFilter(value string, maximum int) string {
 	return value
 }
 
-var sensitiveKeyPattern = regexp.MustCompile(`(?i)(pass(word)?|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|client[_-]?secret)`)
-var sensitiveTextPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/-]+|((?:password|secret|token|api[_-]?key|authorization)\s*[:=]\s*(?:bearer\s+)?)` + "[^\\s,;]+")
+var sensitiveKeyPattern = regexp.MustCompile(`(?i)(^|[._-])(password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)([._-]|$)`)
+var sensitiveTextPattern = regexp.MustCompile(`(?i)((?:bearer|basic)\s+|(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)['"]?\s*[:=]\s*(?:(?:bearer|basic)\s+)?)(["']?)[^\s,;{}"']+`)
+var sensitiveURLPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^:/\s]+:)[^@/\s]+`)
 
 func redactAttributes(attributes map[string]string) map[string]string {
 	if len(attributes) == 0 {
@@ -548,5 +818,6 @@ func redactText(value string) string {
 	if value == "" {
 		return value
 	}
-	return sensitiveTextPattern.ReplaceAllString(value, `$1$2[REDACTED]`)
+	value = sensitiveTextPattern.ReplaceAllString(value, `$1$2[REDACTED]`)
+	return sensitiveURLPattern.ReplaceAllString(value, `$1[REDACTED]`)
 }

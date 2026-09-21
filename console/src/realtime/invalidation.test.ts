@@ -1,11 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminRealtimeInvalidationKeys,
   eventTypesForProjectStream,
   realtimeInvalidationKeys,
   type RealtimeNotification,
 } from "@/realtime/invalidation";
 
 describe("realtime query invalidation", () => {
+  it("maps admin notifications to bounded control-room queries", () => {
+    expect(
+      adminRealtimeInvalidationKeys({
+        type: "admin.alert.updated",
+        resource_id: "alert-1",
+      }),
+    ).toEqual([
+      ["admin", "audit-events"],
+      ["admin", "alerts"],
+      ["admin", "alert-events"],
+      ["admin", "alert", "alert-1"],
+    ]);
+  });
+
   it("invalidates an Agent run list and detail without treating the event as state", () => {
     const event: RealtimeNotification = {
       type: "agent.run.running",

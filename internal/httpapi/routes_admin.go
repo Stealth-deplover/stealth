@@ -6,6 +6,7 @@ func (s *Server) registerAdminRoutes(r chi.Router) {
 	r.With(s.requireInstanceAdmin).Get("/admin/overview", s.adminOverview)
 	r.With(s.requireInstanceAdmin).Get("/admin/operations", s.adminOperations)
 	r.With(s.requireInstanceAdmin).Get("/admin/audit-events", s.adminAuditEvents)
+	r.With(s.requireInstanceAdmin).Get("/admin/realtime", s.adminRealtime)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/logs", s.adminTelemetryLogs)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/logs/tail", s.adminTelemetryLogTail)
 	r.With(s.requireInstanceAdmin).Get("/admin/telemetry/log-volume", s.adminTelemetryLogVolume)
