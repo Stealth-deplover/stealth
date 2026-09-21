@@ -199,10 +199,8 @@ func checkHTTP(ctx context.Context, job repository.AdminMonitorJob, config monit
 			MaxIdleConnsPerHost:   2,
 		},
 	}
-	redirects := 0
-	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
-		redirects++
-		if redirects > maxRedirects {
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) > maxRedirects {
 			return errors.New("too many redirects")
 		}
 		if err := validatePublicURL(next.Context(), next.URL); err != nil {
@@ -401,10 +399,8 @@ func NewSafeHTTPSClient(timeout time.Duration) *http.Client {
 			MaxIdleConnsPerHost:   2,
 		},
 	}
-	redirects := 0
-	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
-		redirects++
-		if redirects > maxRedirects {
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) > maxRedirects {
 			return errors.New("too many redirects")
 		}
 		return ValidatePublicHTTPSURL(next.Context(), next.URL)

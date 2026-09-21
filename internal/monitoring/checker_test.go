@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +19,78 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestNewSafeHTTPSClientRedirectLimitIsPerRequest(t *testing.T) {
+	client := NewSafeHTTPSClient(time.Second)
+	client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/" {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"/one"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    request,
+		}, nil
+	})
+	for i := 0; i < 10; i++ {
+		response, err := client.Get("https://8.8.8.8/")
+		if err != nil {
+			t.Fatalf("sequential redirect request %d: %v", i, err)
+		}
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("sequential redirect request %d status = %d", i, response.StatusCode)
+		}
+		response.Body.Close()
+	}
+}
+
+func TestNewSafeHTTPSClientRedirectLimitAndSSRFValidation(t *testing.T) {
+	t.Run("exceeds per-chain limit", func(t *testing.T) {
+		client := NewSafeHTTPSClient(time.Second)
+		hops := 0
+		client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			hops++
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"/loop/" + strconv.Itoa(hops)}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		})
+		_, err := client.Get("https://8.8.8.8/")
+		if err == nil || !strings.Contains(err.Error(), "too many redirects") {
+			t.Fatalf("redirect depth error = %v", err)
+		}
+	})
+
+	t.Run("rejects private redirect", func(t *testing.T) {
+		client := NewSafeHTTPSClient(time.Second)
+		client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://127.0.0.1/blocked"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		})
+		_, err := client.Get("https://8.8.8.8/")
+		if err == nil || !strings.Contains(err.Error(), "private") {
+			t.Fatalf("private redirect error = %v", err)
+		}
+	})
+}
 
 func TestHeartbeatCheckUsesHashedTokenAndGracePeriod(t *testing.T) {
 	token := strings.Repeat("a", 32)
