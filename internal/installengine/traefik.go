@@ -15,13 +15,11 @@ import (
 )
 
 const (
-	traefikPublicHostPlaceholder                   = "__STEALTH_PUBLIC_HOST__"
-	traefikCloudflaredTrustedCIDRPlaceholder       = "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__"
-	traefikSecurityHeadersMiddleware               = "stealth-security-headers"
-	traefikRequestBodyLimitMiddleware              = "stealth-request-body-limit"
-	traefikAdminRealtimeRouter                     = "stealth-admin-realtime"
-	traefikProjectRealtimeRouter                   = "stealth-project-realtime"
-	traefikRequestBodyLimitBytes             int64 = 104857600
+	traefikPublicHostPlaceholder             = "__STEALTH_PUBLIC_HOST__"
+	traefikCloudflaredTrustedCIDRPlaceholder = "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__"
+	traefikSecurityHeadersMiddleware         = "stealth-security-headers"
+	traefikAdminRealtimeRouter               = "stealth-admin-realtime"
+	traefikProjectRealtimeRouter             = "stealth-project-realtime"
 )
 
 var expectedTraefikSecurityHeaders = map[string]string{
@@ -238,7 +236,8 @@ func validateTraefikCoreAsset(contents []byte) error {
 		"routers:",
 		"middlewares:",
 		traefikSecurityHeadersMiddleware + ":",
-		traefikRequestBodyLimitMiddleware + ":",
+		traefikAdminRealtimeRouter + ":",
+		traefikProjectRealtimeRouter + ":",
 		"stealth-api:",
 		"stealth-console:",
 		"PathPrefix(`/v1/`)",
@@ -255,9 +254,6 @@ func validateTraefikCoreAsset(contents []byte) error {
 				Headers struct {
 					CustomResponseHeaders map[string]string `yaml:"customResponseHeaders"`
 				} `yaml:"headers"`
-				Buffering struct {
-					MaxRequestBodyBytes int64 `yaml:"maxRequestBodyBytes"`
-				} `yaml:"buffering"`
 			} `yaml:"middlewares"`
 			Routers map[string]struct {
 				EntryPoints []string `yaml:"entryPoints"`
@@ -293,9 +289,8 @@ func validateTraefikCoreAsset(contents []byte) error {
 	if _, hasHSTS := securityHeaders.Headers.CustomResponseHeaders["Strict-Transport-Security"]; hasHSTS {
 		return errors.New("Traefik internal HTTP core routes must not emit unconditional HSTS")
 	}
-	bodyLimit, ok := config.HTTP.Middlewares[traefikRequestBodyLimitMiddleware]
-	if !ok || bodyLimit.Buffering.MaxRequestBodyBytes != traefikRequestBodyLimitBytes {
-		return fmt.Errorf("Traefik request body limit must be %d bytes", traefikRequestBodyLimitBytes)
+	if strings.Contains(text, "buffering:") || strings.Contains(text, "maxRequestBodyBytes") || strings.Contains(text, "stealth-request-body-limit") {
+		return errors.New("Traefik core routes must not buffer complete request bodies")
 	}
 	for routerName, router := range config.HTTP.Routers {
 		if strings.TrimSpace(router.Rule) == "" || !containsString(router.EntryPoints, "web") {
@@ -306,14 +301,6 @@ func validateTraefikCoreAsset(contents []byte) error {
 		}
 		if !containsString(router.Middlewares, traefikSecurityHeadersMiddleware) {
 			return fmt.Errorf("Traefik core router %q is missing the release-managed security-header middleware", routerName)
-		}
-		streamingRouter := routerName == traefikAdminRealtimeRouter || routerName == traefikProjectRealtimeRouter
-		if streamingRouter {
-			if containsString(router.Middlewares, traefikRequestBodyLimitMiddleware) {
-				return fmt.Errorf("Traefik streaming router %q must not use the buffering body-limit middleware", routerName)
-			}
-		} else if !containsString(router.Middlewares, traefikRequestBodyLimitMiddleware) {
-			return fmt.Errorf("Traefik core router %q is missing the release-managed request-body middleware", routerName)
 		}
 		service, ok := config.HTTP.Services[router.Service]
 		if !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 {

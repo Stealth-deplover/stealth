@@ -25,8 +25,24 @@ core_modified="false"
 static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
 static_backup=""
 static_modified="false"
+forwarded_echo_container_id=""
+forwarded_echo_dir=""
+forwarded_echo_route_file=""
+forwarded_echo_host="stealth-forwarded-header-echo.test"
 cleanup() {
 	local exit_code=$?
+	if [ -n "$forwarded_echo_container_id" ]; then
+		docker rm -f "$forwarded_echo_container_id" >/dev/null 2>&1 || true
+		forwarded_echo_container_id=""
+	fi
+	if [ -n "$forwarded_echo_route_file" ]; then
+		rm -f -- "$forwarded_echo_route_file"
+		forwarded_echo_route_file=""
+	fi
+	if [ -n "$forwarded_echo_dir" ]; then
+		rm -rf -- "$forwarded_echo_dir"
+		forwarded_echo_dir=""
+	fi
 	if [ -n "$filelog_smoke_pid" ]; then
 		kill "$filelog_smoke_pid" 2>/dev/null || true
 		wait "$filelog_smoke_pid" 2>/dev/null || true
@@ -120,43 +136,6 @@ with open(temporary, "w", encoding="utf-8") as target:
 os.replace(temporary, path)
 PY
 	static_modified="true"
-fi
-test_body_limit="${TRAEFIK_BODY_LIMIT_TEST_BYTES:-}"
-if [ -z "$test_body_limit" ]; then
-	test_body_limit="$(awk -F= '$1 == "TRAEFIK_BODY_LIMIT_TEST_BYTES" { value = substr($0, index($0, "=") + 1) } END { print value }' "$env_file")"
-	test_body_limit="${test_body_limit%$'\r'}"
-fi
-if [ -n "$test_body_limit" ]; then
-	case "$test_body_limit" in
-		*[!0-9]*|0) printf 'TRAEFIK_BODY_LIMIT_TEST_BYTES must be a positive integer\n' >&2; exit 2 ;;
-	esac
-	if [ "$test_body_limit" -ge 104857600 ]; then
-		printf 'TRAEFIK_BODY_LIMIT_TEST_BYTES must be below the production 100 MiB limit\n' >&2
-		exit 2
-	fi
-	if [ -z "$core_backup" ]; then
-		core_backup="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-core.XXXXXX")"
-		cp -- "$core_file" "$core_backup"
-	fi
-	python3 - "$core_file" "$test_body_limit" <<'PY'
-import os
-import sys
-
-path, limit = sys.argv[1:]
-with open(path, encoding="utf-8") as source:
-    contents = source.read()
-needle = "maxRequestBodyBytes: 104857600"
-if needle not in contents:
-    raise SystemExit("production Traefik body limit marker was not found")
-contents = contents.replace(needle, "maxRequestBodyBytes: " + limit, 1)
-temporary = path + ".smoke.tmp"
-with open(temporary, "w", encoding="utf-8") as target:
-    target.write(contents)
-    target.flush()
-    os.fsync(target.fileno())
-os.replace(temporary, path)
-PY
-	core_modified="true"
 fi
 
 wait_for_healthy() {
@@ -462,6 +441,115 @@ verify_traefik_network_address_model() {
 	printf 'Traefik persisted IP and reserved dynamic ingress pool passed: subnet=%s pool=%s traefik=%s cloudflared=%s\n' "$subnet" "$ip_range" "$traefik_ip" "$cloudflared_ip"
 }
 
+start_forwarded_header_echo() {
+	local ingress_network api_container api_image container_name dynamic_dir
+	ingress_network="$(traefik_ingress_network_name)"
+	dynamic_dir="$(dirname -- "$core_file")"
+	forwarded_echo_route_file="$dynamic_dir/smoke-forwarded-headers-$$.yaml"
+	if [ -e "$forwarded_echo_route_file" ]; then
+		printf 'refusing to overwrite existing smoke route file: %s\n' "$forwarded_echo_route_file" >&2
+		return 1
+	fi
+	python3 - "$forwarded_echo_route_file" "$forwarded_echo_host" <<'PY'
+import os
+import sys
+
+path, host = sys.argv[1:]
+contents = f'''http:
+  routers:
+    smoke-forwarded-header-echo:
+      entryPoints:
+        - web
+      rule: "Host(`{host}`) && Path(`/cgi-bin/headers`)"
+      priority: 300
+      middlewares:
+        - stealth-security-headers
+      service: smoke-forwarded-header-echo
+  services:
+    smoke-forwarded-header-echo:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://forwarded-header-echo:8080
+'''
+temporary = path + '.tmp'
+with open(temporary, 'w', encoding='utf-8') as target:
+    target.write(contents)
+    target.flush()
+    os.fsync(target.fileno())
+os.replace(temporary, path)
+PY
+	forwarded_echo_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-forwarded-header-echo.XXXXXX")"
+	python3 - "$forwarded_echo_dir/cgi-bin/headers" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+contents = '''#!/bin/sh
+body="remote_addr=${REMOTE_ADDR}\nx_forwarded_for=${HTTP_X_FORWARDED_FOR}\nx_forwarded_proto=${HTTP_X_FORWARDED_PROTO}\nx_real_ip=${HTTP_X_REAL_IP}\n"
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s' "$body"
+'''
+with open(path, 'w', encoding='utf-8') as target:
+    target.write(contents)
+os.chmod(path, 0o755)
+PY
+	api_container="$("${compose[@]}" ps -q api)"
+	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
+	container_name="${COMPOSE_PROJECT_NAME:-stealth}-forwarded-header-echo-$$"
+	forwarded_echo_container_id="$(docker run -d --rm --name "$container_name" --network "$ingress_network" --network-alias forwarded-header-echo --volume "$forwarded_echo_dir:/www:ro" --entrypoint /bin/busybox "$api_image" httpd -f -p 8080 -h /www)"
+	for _ in $(seq 1 20); do
+		if forwarded_header_probe_from_api 1.2.3.4 https >/dev/null 2>&1; then
+			printf 'forwarded-header echo backend is reachable through Traefik\n'
+			return 0
+		fi
+		sleep 1
+	done
+	printf '%s\n' 'forwarded-header echo backend did not become reachable through Traefik' >&2
+	return 1
+}
+
+forwarded_header_probe_from_api() {
+	local spoofed_for="$1" spoofed_proto="$2"
+	"${compose[@]}" exec -T api sh -ec '
+		wget -qO- --timeout=5 \
+			--header "Host: $1" \
+			--header "X-Forwarded-For: $2" \
+			--header "X-Forwarded-Proto: $3" \
+			http://traefik:8080/cgi-bin/headers
+	' sh "$forwarded_echo_host" "$spoofed_for" "$spoofed_proto"
+}
+
+forwarded_header_probe_from_trusted_peer() {
+	local spoofed_for="$1" spoofed_proto="$2" ingress_network api_container api_image cloudflared_ip
+	ingress_network="$(traefik_ingress_network_name)"
+	cloudflared_ip="$(ingress_env_value STEALTH_CLOUDFLARED_INGRESS_IP)"
+	api_container="$("${compose[@]}" ps -q api)"
+	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
+	docker run --rm --network "$ingress_network" --ip "$cloudflared_ip" --entrypoint sh "$api_image" -ec '
+		wget -qO- --timeout=5 \
+			--header "Host: $1" \
+			--header "X-Forwarded-For: $2" \
+			--header "X-Forwarded-Proto: $3" \
+			http://traefik:8080/cgi-bin/headers
+	' sh "$forwarded_echo_host" "$spoofed_for" "$spoofed_proto"
+}
+
+verify_traefik_forwarded_header_boundary() {
+	local untrusted trusted
+	untrusted="$(forwarded_header_probe_from_api 1.2.3.4 https)"
+	if printf '%s\n' "$untrusted" | grep -Fq 'x_forwarded_for=1.2.3.4' || printf '%s\n' "$untrusted" | grep -Fq 'x_forwarded_proto=https'; then
+		printf 'untrusted client spoof reached the echo backend as trusted metadata:\n%s\n' "$untrusted" >&2
+		return 1
+	fi
+	trusted="$(forwarded_header_probe_from_trusted_peer 1.2.3.4 https)"
+	if ! printf '%s\n' "$trusted" | grep -Fq 'x_forwarded_for=1.2.3.4' || ! printf '%s\n' "$trusted" | grep -Fq 'x_forwarded_proto=https'; then
+		printf 'configured Cloudflared peer did not preserve the trusted forwarded chain:\n%s\n' "$trusted" >&2
+		return 1
+	fi
+	printf 'Traefik forwarded-header trust boundary passed: untrusted spoof stripped, configured Cloudflared peer preserved\n'
+}
+
 http_probe_output() {
 	local service="$1" path="$2" host="$3" cookie_header="${4:-}" forwarded_proto="${5:-}" target
 	case "$service" in
@@ -518,31 +606,6 @@ http_probe_body_digest() {
 
 traefik_http_status() {
 	http_probe_status "$(http_probe_output traefik "$1" "$2" "${3:-}")"
-}
-
-traefik_post_status() {
-	local size="$1" host="$2" output
-	output="$("${compose[@]}" exec -T api sh -ec '
-		size="$1"; host="$2"
-		payload="$(dd if=/dev/zero bs=1 count="$size" 2>/dev/null | tr "\\000" x)"
-		wget -S -O /dev/null --timeout=20 --header "Host: $host" --header "Content-Type: application/octet-stream" --post-data="$payload" "http://traefik:8080/v1/account" 2>&1 || true
-	' sh "$size" "$host")"
-	http_probe_status "$output"
-}
-
-verify_request_body_limit() {
-	local configured="${test_body_limit:-}" small_status large_status
-	if [ -z "$configured" ]; then
-		printf 'Traefik production request body policy validated statically at 100 MiB\n'
-		return 0
-	fi
-	small_status="$(traefik_post_status $((configured - 1)) "$traefik_host")"
-	large_status="$(traefik_post_status "$((configured + 1))" "$traefik_host")"
-	if [ "$small_status" = "413" ] || [ "$large_status" != "413" ]; then
-		printf 'Traefik request body limit statuses small=%s large=%s limit=%s\n' "$small_status" "$large_status" "$configured" >&2
-		return 1
-	fi
-	printf 'Traefik request body limit middleware rejected only the over-limit request (test limit=%s bytes)\n' "$configured"
 }
 
 verify_nginx_traefik_parity() {
@@ -646,9 +709,9 @@ verify_traefik_routing() {
 		printf 'Traefik Admin realtime did not preserve SSE content type:\n%s\n' "$sse_headers" >&2
 		return 1
 	fi
-	verify_request_body_limit
+	verify_traefik_forwarded_header_boundary
 	verify_nginx_traefik_parity
-	printf 'Traefik core API, Console fallback, fail-closed, SSE, body-size, and Nginx parity checks passed\n'
+	printf 'Traefik core API, Console fallback, fail-closed, SSE, and Nginx parity checks passed; upload limits remain API-owned\n'
 }
 
 verify_telemetry_runtime_boundaries() {
@@ -909,6 +972,7 @@ wait_for_healthy traefik
 verify_telemetry_runtime_boundaries
 verify_traefik_runtime_boundaries
 verify_traefik_network_address_model
+start_forwarded_header_echo
 
 api_endpoint="$("${compose[@]}" port api 8080 | head -n 1)"
 console_endpoint="$("${compose[@]}" port console 3000 | head -n 1)"

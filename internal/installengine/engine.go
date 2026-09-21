@@ -130,6 +130,7 @@ type Plan struct {
 	ExternalRedis      bool
 	Cloudflare         bool
 	VerifyPublicURL    bool
+	IngressNetworkName string
 	ConfigContents     string
 	InternalAPIURL     string
 	InternalConsoleURL string
@@ -522,6 +523,7 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		layout: plan.Layout,
 	}
 	var originalValues map[string]string
+	generatedConfig := false
 	if contents, err := os.ReadFile(plan.Layout.VersionFile); err == nil {
 		prepared.originalVersion = contents
 		prepared.originalVersionSet = true
@@ -569,8 +571,9 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	} else {
 		contents := plan.ConfigContents
 		if strings.TrimSpace(contents) == "" {
+			generatedConfig = true
 			var err error
-			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root})
+			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root, IngressNetworkName: plan.IngressNetworkName})
 			if err != nil {
 				return nil, fmt.Errorf("generate configuration: %w", err)
 			}
@@ -581,6 +584,15 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		values, err := ParseEnvContents(string(prepared.newEnv))
 		if err != nil {
 			return nil, fmt.Errorf("parse prepared configuration: %w", err)
+		}
+		if generatedConfig {
+			// GenerateConfig writes complete defaults so it can also be used as a
+			// standalone config generator. For a fresh install, however, those
+			// values are installer defaults rather than an operator's explicit
+			// addressing choice; let collision-aware selection replace them.
+			for _, key := range ingressNetworkEnvKeys {
+				delete(values, key)
+			}
 		}
 		if originalValues == nil {
 			originalValues = values

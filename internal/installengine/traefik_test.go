@@ -127,6 +127,25 @@ func TestGenerateConfigPinsTraefikAndTrustedIngressPeer(t *testing.T) {
 	}
 }
 
+func TestGenerateConfigPersistsConfiguredIngressNetworkName(t *testing.T) {
+	config, err := GenerateConfig(ConfigOptions{
+		Version:            "v1.2.3",
+		PublicURL:          "https://console.example.test",
+		GitHubAppClientID:  "Iv1.test-client-id",
+		IngressNetworkName: "stealth_b_ingress",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["STEALTH_INGRESS_NETWORK_NAME"] != "stealth_b_ingress" {
+		t.Fatalf("generated ingress network name = %q, want custom name", values["STEALTH_INGRESS_NETWORK_NAME"])
+	}
+}
+
 func TestTraefikConfigValidationRejectsMalformedAndDanglingRoutes(t *testing.T) {
 	if err := validateTraefikStaticAsset([]byte("entryPoints: [")); err == nil {
 		t.Fatal("malformed static YAML was accepted")
@@ -219,7 +238,7 @@ func TestTraefikStaticAssetRendersConfiguredCloudflaredPeer(t *testing.T) {
 	}
 }
 
-func TestTraefikCoreAssetRequiresSecurityHeadersAndRequestLimit(t *testing.T) {
+func TestTraefikCoreAssetRequiresSecurityHeadersAndNoProxyBuffering(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(repoRootForTraefikTest(t), "traefik", "dynamic", "core.yaml"))
 	if err != nil {
 		t.Fatal(err)

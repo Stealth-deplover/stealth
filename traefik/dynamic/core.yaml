@@ -18,19 +18,10 @@ http:
           Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
           X-Frame-Options: "DENY"
           Content-Security-Policy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
-    stealth-request-body-limit:
-      buffering:
-        # Nginx's client_max_body_size 100m is 100 MiB. Traefik buffers only
-        # ordinary request bodies, uses its 1 MiB memory threshold, and spills
-        # larger accepted bodies to the container's bounded /tmp tmpfs. The
-        # explicit streaming routers below intentionally omit this middleware
-        # so SSE flushes are not delayed by intermediary buffering.
-        maxRequestBodyBytes: 104857600
-
   routers:
-    # Streaming responses must not pass through the request-body buffering
-    # middleware: the explicit routes preserve immediate SSE header/flush
-    # behavior while the handlers continue to enforce their own auth.
+    # Keep streaming endpoints explicit so their no-buffering contract remains
+    # visible when future core middleware is added. The API owns request-body
+    # limits for these and all other routes.
     stealth-admin-realtime:
       entryPoints:
         - web
@@ -54,7 +45,6 @@ http:
       priority: 100
       middlewares:
         - stealth-security-headers
-        - stealth-request-body-limit
       service: stealth-api
     stealth-console:
       entryPoints:
@@ -63,7 +53,6 @@ http:
       priority: 1
       middlewares:
         - stealth-security-headers
-        - stealth-request-body-limit
       service: stealth-console
 
   services:

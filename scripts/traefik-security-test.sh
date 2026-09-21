@@ -24,6 +24,11 @@ env_value() {
 	printf '%s\n' "${value%$'\r'}"
 }
 
+ingress_network_name="$(env_value STEALTH_INGRESS_NETWORK_NAME)"
+if [ -z "$ingress_network_name" ]; then
+	ingress_network_name='stealth_ingress'
+fi
+
 # Include the optional tunnel profile so the rendered topology also proves the
 # reserved Cloudflared peer. The profile is part of the ingress address model,
 # even though it is not the active public origin during this migration.
@@ -125,6 +130,10 @@ ingress_block="$(awk '
 ' "$rendered")"
 if ! printf '%s\n' "$ingress_block" | grep -Fq 'internal: true'; then
 	printf '%s\n' 'Traefik ingress network is not internal in rendered Compose' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$ingress_block" | grep -Fq "name: $ingress_network_name"; then
+	printf 'rendered ingress network name does not match persisted %s\n' "$ingress_network_name" >&2
 	exit 1
 fi
 
@@ -232,7 +241,6 @@ for required in \
 	'routers:' \
 	'middlewares:' \
 	'stealth-security-headers:' \
-	'stealth-request-body-limit:' \
 	'stealth-admin-realtime:' \
 	'stealth-project-realtime:' \
 	'Path(`/v1/admin/realtime`)' \
@@ -242,7 +250,6 @@ for required in \
 	'Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"' \
 	'X-Frame-Options: "DENY"' \
 	'Content-Security-Policy:' \
-	'maxRequestBodyBytes: 104857600' \
 	'stealth-api:' \
 	'stealth-console:' \
 	'url: http://api:8080' \
@@ -260,8 +267,12 @@ if grep -Eq '/(healthz|readyz|version)' "$core_file" && grep -Fq 'stealth-api:' 
 	printf '%s\n' 'Traefik public API router exposes an internal health or version endpoint' >&2
 	exit 1
 fi
-if ! grep -Fq 'stealth-security-headers' "$core_file" || ! grep -Fq 'stealth-request-body-limit' "$core_file"; then
-	printf '%s\n' 'Traefik core routers are missing release-managed middleware references' >&2
+if ! grep -Fq 'stealth-security-headers' "$core_file"; then
+	printf '%s\n' 'Traefik core routers are missing the release-managed security-header middleware' >&2
+	exit 1
+fi
+if grep -Fq 'stealth-request-body-limit' "$core_file" || grep -Fq 'maxRequestBodyBytes' "$core_file" || grep -Fq 'buffering:' "$core_file"; then
+	printf '%s\n' 'Traefik core routes must not use full-request buffering; application streaming limits are authoritative' >&2
 	exit 1
 fi
 if grep -Fq 'Strict-Transport-Security:' "$core_file"; then

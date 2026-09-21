@@ -35,6 +35,7 @@ type ConfigOptions struct {
 	ComposeProject       string
 	NetworkSubnet        string
 	TrustedProxyCIDRs    string
+	IngressNetworkName   string
 	IngressNetworkSubnet string
 	IngressIPRange       string
 	TraefikIngressIP     string
@@ -162,7 +163,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"OTEL_DOCKER_LOGS_VOLUME_NAME":          "stealth_otel_docker_logs_state",
 		"STEALTH_TELEMETRY_STORE_NETWORK_NAME":  "stealth_telemetry_store",
 		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
-		"STEALTH_INGRESS_NETWORK_NAME":          "stealth_ingress",
+		"STEALTH_INGRESS_NETWORK_NAME":          ingress.Name,
 		"FUNCTIONS_RUNNER_ENABLED":              "true",
 		"FUNCTIONS_WORKER_ID":                   "stealth-worker",
 		"FUNCTIONS_RUNNER_STAGING_VOLUME":       "stealth_function_runner_staging",

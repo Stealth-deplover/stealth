@@ -87,21 +87,24 @@ matches the current Nginx behavior:
   Compose checks;
 - project/Admin SSE requests use explicit higher-priority API routers with the
   security-header middleware only. They bypass request-body buffering so the
-  initial headers and subsequent flushes are delivered promptly. Other API
-  requests use the 100 MiB body-limit middleware;
+  initial headers and subsequent flushes are delivered promptly. The ordinary
+  API and Console routes are also streaming at the proxy boundary; request
+  bodies are enforced by the API's application middleware and endpoint limits;
 - unmatched hosts fail closed with Traefik's 404. The legacy Nginx server has a
   default server block and can accept an unmatched Host; this intentional
   hardening difference is covered by the parity smoke and is not used as the
   future external contract;
 - unknown paths on the matched host retain the Console fallback behavior.
 
-The ordinary release API and Console routers use the same release-managed
-headers and request-body limit middleware. The two streaming routers use the
-headers middleware without request buffering. The production smoke compares
-Nginx and Traefik status/body behavior for `/`, `/v1/account`, `/healthz`,
-`/readyz`, `/version`, and an unknown path, plus the browser-facing security
-headers on representative Console and API responses and an Admin SSE
-connection.
+All release core routers use the same release-managed security-header
+middleware. None uses full-request proxy buffering. The production smoke
+compares Nginx and Traefik status/body behavior for `/`, `/v1/account`,
+`/healthz`, `/readyz`, `/version`, and an unknown path, plus the browser-facing
+security headers on representative Console and API responses and an Admin SSE
+connection. It also runs a temporary echo backend through Traefik to verify the
+forwarded-header trust boundary at runtime: an untrusted ingress peer cannot
+preserve spoofed forwarding metadata, while the configured Cloudflared `/32`
+can.
 
 ## Browser security headers and HSTS
 
@@ -125,15 +128,22 @@ Traefik's other browser security headers remain present after Nginx removal.
 
 ## Request-body policy
 
-Nginx currently applies `client_max_body_size 100m`; ordinary Traefik API and
-Console requests apply the same explicit 100 MiB limit with
-`stealth-request-body-limit`. The middleware rejects an over-limit request
-with 413, uses its bounded memory threshold, and can spill an accepted body to
-the container's bounded `/tmp`. The Admin and project SSE routers deliberately
-omit it so streaming headers and flushes are not delayed; those endpoints do
-not accept request bodies as part of their contract. The production smoke uses
-a temporary smaller limit to prove both accepted and rejected paths without
-uploading 100 MiB in CI; release configuration remains 104857600 bytes.
+Nginx currently applies `client_max_body_size 100m` as an outer edge ceiling.
+Traefik deliberately does not reproduce that ceiling with a full-request
+buffering middleware: the pinned Traefik container has a bounded memory model,
+and buffering a valid 100 MiB upload before the API receives it would make
+memory/tmpfs consumption depend on proxy concurrency. The parallel Traefik
+routes therefore remain unbuffered.
+
+The API remains authoritative and streaming. Its `http.MaxBytesReader`
+middleware selects the configured multipart limit for Storage, Functions, and
+Sites, while the endpoint-specific artifact/file stores enforce their own
+limits during streaming. Existing Storage, Functions, and Sites integration
+tests cover rejected oversized uploads without committing partial artifacts.
+The production smoke validates routing and SSE behavior rather than pretending
+that a proxy-side 100 MiB buffer is equivalent. Any future external edge
+limit must be documented and bounded independently of Traefik's container
+memory/tmpfs budget.
 
 ## Ingress network and reserved peers
 
@@ -146,6 +156,16 @@ STEALTH_INGRESS_IP_RANGE
 STEALTH_TRAEFIK_INGRESS_IP
 STEALTH_CLOUDFLARED_INGRESS_IP
 ```
+
+`STEALTH_INGRESS_NETWORK_NAME` is an installation identity choice and is
+independent from addressing intent. A custom name does not suppress fresh
+installation subnet collision detection or automatic candidate selection. If
+the operator supplies an explicit subnet, pool, or fixed peer addressing set,
+that addressing is validated as chosen state and an overlap fails rather than
+silently selecting a different subnet. The name alone can therefore be
+changed for a second installation while the installer still selects the first
+free bounded candidate. This does not claim complete multi-install support:
+other Compose-wide resource names remain shared unless separately configured.
 
 The checked-in `172.31.0.0/24`, `.64/26`, `.254`, and `.10` values are only
 defaults/candidates, not host-wide constants. The default layout is:

@@ -273,7 +273,6 @@ jobs:
           STEALTH_INGRESS_IP_RANGE=172.31.0.64/26
           STEALTH_TRAEFIK_INGRESS_IP=172.31.0.254
           STEALTH_CLOUDFLARED_INGRESS_IP=172.31.0.10
-          TRAEFIK_BODY_LIMIT_TEST_BYTES=4096
           STEALTH_TELEMETRY_STORE_NETWORK_NAME=stealth_release_smoke_telemetry_store_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_INGEST_NETWORK_NAME=stealth_release_smoke_telemetry_ingest_${GITHUB_RUN_ID}
           STEALTH_TELEMETRY_DOCKER_NETWORK_NAME=stealth_release_smoke_telemetry_docker_${GITHUB_RUN_ID}

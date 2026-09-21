@@ -98,6 +98,22 @@ func TestIngressNetworkAutoSelectionUsesCIDROverlaps(t *testing.T) {
 	}
 }
 
+func TestIngressNetworkAutoSelectionIgnoresCustomNetworkName(t *testing.T) {
+	values := map[string]string{
+		"STEALTH_INGRESS_NETWORK_NAME": "stealth_b_ingress",
+	}
+	got, err := resolveTestIngressNetwork(t, false, []testDockerNetwork{{name: "installation-a", subnet: defaultIngressSubnet}}, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "stealth_b_ingress" {
+		t.Fatalf("selected network name = %q, want custom name", got.Name)
+	}
+	if got.Subnet != "172.31.1.0/24" || got.IPRange != "172.31.1.64/26" || got.TraefikIP != "172.31.1.254" || got.CloudflaredIP != "172.31.1.10" {
+		t.Fatalf("custom-name installation did not select and derive the next free addressing set: %#v", got)
+	}
+}
+
 func TestIngressNetworkExplicitCollisionAndNameLifecycle(t *testing.T) {
 	values := map[string]string{
 		"STEALTH_INGRESS_NETWORK_NAME":   "custom_ingress",
@@ -108,6 +124,13 @@ func TestIngressNetworkExplicitCollisionAndNameLifecycle(t *testing.T) {
 	}
 	if _, err := resolveTestIngressNetwork(t, false, []testDockerNetwork{{name: "other", subnet: "172.31.4.128/25"}}, values); err == nil || !strings.Contains(err.Error(), "overlaps existing Docker network") {
 		t.Fatalf("explicit overlapping subnet did not fail: %v", err)
+	}
+	defaultValues := map[string]string{
+		"STEALTH_INGRESS_NETWORK_NAME":   "custom_default_ingress",
+		"STEALTH_INGRESS_NETWORK_SUBNET": defaultIngressSubnet,
+	}
+	if _, err := resolveTestIngressNetwork(t, false, []testDockerNetwork{{name: "other", subnet: defaultIngressSubnet}}, defaultValues); err == nil || !strings.Contains(err.Error(), "overlaps existing Docker network") {
+		t.Fatalf("explicit default subnet collision did not fail: %v", err)
 	}
 	if _, err := resolveTestIngressNetwork(t, false, []testDockerNetwork{{name: "custom_ingress", subnet: "172.31.4.0/24"}}, values); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("fresh install reused an existing network name: %v", err)
@@ -175,8 +198,7 @@ func (r ingressNetworkTestRunner) Output(_ context.Context, _ string, _ string, 
 func resolveTestIngressNetwork(t *testing.T, existing bool, networks []testDockerNetwork, args ...map[string]string) (IngressNetworkConfig, error) {
 	t.Helper()
 	values := map[string]string{
-		"STEALTH_INGRESS_NETWORK_NAME":   defaultIngressNetworkName,
-		"STEALTH_INGRESS_NETWORK_SUBNET": defaultIngressSubnet,
+		"STEALTH_INGRESS_NETWORK_NAME": defaultIngressNetworkName,
 	}
 	if len(args) > 0 && args[0] != nil {
 		values = args[0]

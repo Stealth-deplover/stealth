@@ -41,12 +41,13 @@ func validatePublicURL(raw string) (string, error) {
 
 func generateConfig(plan InstallPlan) (string, error) {
 	return installengine.GenerateConfig(installengine.ConfigOptions{
-		Version:           plan.Version,
-		PublicURL:         plan.PublicURL,
-		GitHubAppClientID: plan.GitHubAppClientID,
-		DockerGID:         plan.DockerGID,
-		Setup:             plan.Setup,
-		InstallRoot:       plan.Layout.Root,
+		Version:            plan.Version,
+		PublicURL:          plan.PublicURL,
+		GitHubAppClientID:  plan.GitHubAppClientID,
+		DockerGID:          plan.DockerGID,
+		Setup:              plan.Setup,
+		InstallRoot:        plan.Layout.Root,
+		IngressNetworkName: plan.IngressNetworkName,
 	})
 }
 

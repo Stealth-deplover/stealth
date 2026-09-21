@@ -56,9 +56,6 @@ func testManagedTraefikCoreAsset() string {
           Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"
           X-Frame-Options: "DENY"
           Content-Security-Policy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
-    stealth-request-body-limit:
-      buffering:
-        maxRequestBodyBytes: 104857600
   routers:
     stealth-admin-realtime:
       entryPoints: [web]
@@ -75,12 +72,12 @@ func testManagedTraefikCoreAsset() string {
     stealth-api:
       entryPoints: [web]
       rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathPrefix(STEALTH_BACKTICK/v1/STEALTH_BACKTICK)"
-      middlewares: [stealth-security-headers, stealth-request-body-limit]
+      middlewares: [stealth-security-headers]
       service: stealth-api
     stealth-console:
       entryPoints: [web]
       rule: "Host(STEALTH_BACKTICK__STEALTH_PUBLIC_HOST__STEALTH_BACKTICK) && PathPrefix(STEALTH_BACKTICK/STEALTH_BACKTICK)"
-      middlewares: [stealth-security-headers, stealth-request-body-limit]
+      middlewares: [stealth-security-headers]
       service: stealth-console
   services:
     stealth-api:

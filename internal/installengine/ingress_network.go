@@ -94,7 +94,7 @@ func ingressNetworkConfigFromValues(values map[string]string) (IngressNetworkCon
 
 func ingressNetworkConfigFromOptions(options ConfigOptions) (IngressNetworkConfig, error) {
 	values := map[string]string{
-		"STEALTH_INGRESS_NETWORK_NAME":   defaultIngressNetworkName,
+		"STEALTH_INGRESS_NETWORK_NAME":   options.IngressNetworkName,
 		"STEALTH_INGRESS_NETWORK_SUBNET": options.IngressNetworkSubnet,
 		"STEALTH_INGRESS_IP_RANGE":       options.IngressIPRange,
 		"STEALTH_TRAEFIK_INGRESS_IP":     options.TraefikIngressIP,
@@ -282,21 +282,18 @@ func (config IngressNetworkConfig) trustedProxyCIDR() string {
 	return net.ParseIP(config.TraefikIP).To4().String() + "/32"
 }
 
-func networkConfigHasOperatorValues(values map[string]string) bool {
-	defaults := defaultIngressNetworkConfig()
-	if name := strings.TrimSpace(values["STEALTH_INGRESS_NETWORK_NAME"]); name != "" && name != defaults.Name {
-		return true
+func hasExplicitIngressNetworkName(values map[string]string) bool {
+	name := strings.TrimSpace(values["STEALTH_INGRESS_NETWORK_NAME"])
+	return name != "" && name != defaultIngressNetworkName
+}
+
+func hasExplicitIngressAddressing(values map[string]string) bool {
+	for _, key := range ingressNetworkEnvKeys {
+		if strings.TrimSpace(values[key]) != "" {
+			return true
+		}
 	}
-	if value := strings.TrimSpace(values["STEALTH_INGRESS_NETWORK_SUBNET"]); value != "" && value != defaults.Subnet {
-		return true
-	}
-	if value := strings.TrimSpace(values["STEALTH_INGRESS_IP_RANGE"]); value != "" && value != defaults.IPRange {
-		return true
-	}
-	if value := strings.TrimSpace(values["STEALTH_TRAEFIK_INGRESS_IP"]); value != "" && value != defaults.TraefikIP {
-		return true
-	}
-	return strings.TrimSpace(values["STEALTH_CLOUDFLARED_INGRESS_IP"]) != "" && strings.TrimSpace(values["STEALTH_CLOUDFLARED_INGRESS_IP"]) != defaults.CloudflaredIP
+	return false
 }
 
 func missingIngressNetworkValues(values map[string]string) bool {
@@ -440,7 +437,7 @@ func (e *Engine) resolveIngressNetworkConfig(ctx context.Context, plan Plan, val
 	if err != nil {
 		return IngressNetworkConfig{}, err
 	}
-	autoSelect := !plan.Existing && !networkConfigHasOperatorValues(values)
+	autoSelect := !plan.Existing && !hasExplicitIngressAddressing(values)
 	if plan.Existing && missingIngressNetworkValues(original) {
 		if subnet, found, subnetErr := dockerNetworkSubnetForName(networks, current.Name); subnetErr != nil {
 			return IngressNetworkConfig{}, subnetErr
@@ -464,7 +461,7 @@ func (e *Engine) resolveIngressNetworkConfig(ctx context.Context, plan Plan, val
 			}
 			autoSelect = false
 		} else {
-			autoSelect = !networkConfigHasOperatorValues(original)
+			autoSelect = !hasExplicitIngressAddressing(original)
 		}
 	}
 	if plan.Existing && !missingIngressNetworkValues(original) {
@@ -475,6 +472,9 @@ func (e *Engine) resolveIngressNetworkConfig(ctx context.Context, plan Plan, val
 		}
 	}
 	if !plan.Existing && dockerNetworkNameExists(networks, current.Name) {
+		if hasExplicitIngressNetworkName(values) {
+			return IngressNetworkConfig{}, fmt.Errorf("Docker network %q already exists; choose a different STEALTH_INGRESS_NETWORK_NAME for this installation", current.Name)
+		}
 		return IngressNetworkConfig{}, fmt.Errorf("Docker network %q already exists; choose a unique STEALTH_INGRESS_NETWORK_NAME for this installation", current.Name)
 	}
 	if autoSelect {

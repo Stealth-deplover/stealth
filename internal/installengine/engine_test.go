@@ -104,8 +104,14 @@ func testTraefikStaticAsset() string {
 	return "entryPoints:\n  web:\n    address: \":8080\"\n    forwardedHeaders:\n      trustedIPs:\n        - \"__STEALTH_CLOUDFLARED_TRUSTED_CIDR__\"\n  health:\n    address: \":8081\"\nproviders:\n  file:\n    directory: /etc/traefik/dynamic\napi:\n  dashboard: false\n  insecure: false\nping:\n  entryPoint: health\nlog:\n  format: json\naccessLog:\n  format: json\n  fields:\n    headers:\n      names:\n        Authorization: drop\n        Cookie: drop\n"
 }
 
+func testTraefikCoreAssetBase() string {
+	return "http:\n  middlewares:\n    stealth-security-headers:\n      headers:\n        customResponseHeaders:\n          X-Content-Type-Options: \"nosniff\"\n          Referrer-Policy: \"strict-origin-when-cross-origin\"\n          Permissions-Policy: \"camera=(), microphone=(), geolocation=(), payment=()\"\n          X-Frame-Options: \"DENY\"\n          Content-Security-Policy: \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';\"\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      middlewares: [stealth-security-headers]\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      middlewares: [stealth-security-headers]\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n"
+}
+
 func testTraefikCoreAsset() string {
-	return "http:\n  middlewares:\n    stealth-security-headers:\n      headers:\n        customResponseHeaders:\n          X-Content-Type-Options: \"nosniff\"\n          Referrer-Policy: \"strict-origin-when-cross-origin\"\n          Permissions-Policy: \"camera=(), microphone=(), geolocation=(), payment=()\"\n          X-Frame-Options: \"DENY\"\n          Content-Security-Policy: \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';\"\n    stealth-request-body-limit:\n      buffering:\n        maxRequestBodyBytes: 104857600\n  routers:\n    stealth-api:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/v1/`)\"\n      middlewares: [stealth-security-headers, stealth-request-body-limit]\n      service: stealth-api\n    stealth-console:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathPrefix(`/`)\"\n      middlewares: [stealth-security-headers, stealth-request-body-limit]\n      service: stealth-console\n  services:\n    stealth-api:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://api:8080\n    stealth-console:\n      loadBalancer:\n        passHostHeader: true\n        servers:\n          - url: http://console:3000\n"
+	contents := testTraefikCoreAssetBase()
+	streaming := "    stealth-admin-realtime:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && Path(`/v1/admin/realtime`)\"\n      middlewares: [stealth-security-headers]\n      service: stealth-api\n    stealth-project-realtime:\n      entryPoints: [web]\n      rule: \"Host(`__STEALTH_PUBLIC_HOST__`) && PathRegexp(`^/v1/projects/[0-9a-fA-F-]{36}/realtime$`)\"\n      middlewares: [stealth-security-headers]\n      service: stealth-api\n"
+	return strings.Replace(contents, "    stealth-console:\n", streaming+"    stealth-console:\n", 1)
 }
 
 func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
@@ -550,22 +556,21 @@ func TestPrepareRemovesDefaultPeerWhenAutoSelectingFreeSubnet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := GenerateConfig(ConfigOptions{Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	defer assetServer.Close()
 	engine := New(Options{
 		AssetBaseURL: assetServer.URL,
 		Runner:       ingressNetworkTestRunner{networks: []testDockerNetwork{{name: "unrelated", subnet: defaultIngressSubnet}}},
 	})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", ConfigContents: config}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id", IngressNetworkName: "stealth_b_ingress"}); err != nil {
 		t.Fatal(err)
 	}
 	values, err := ReadEnvFile(layout.EnvFile)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if values["STEALTH_INGRESS_NETWORK_NAME"] != "stealth_b_ingress" {
+		t.Fatalf("persisted network name = %q", values["STEALTH_INGRESS_NETWORK_NAME"])
 	}
 	if values["STEALTH_INGRESS_NETWORK_SUBNET"] != "172.31.1.0/24" {
 		t.Fatalf("auto-selected subnet = %q", values["STEALTH_INGRESS_NETWORK_SUBNET"])
