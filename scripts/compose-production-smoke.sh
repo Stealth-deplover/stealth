@@ -480,6 +480,7 @@ with open(temporary, 'w', encoding='utf-8') as target:
 os.replace(temporary, path)
 PY
 	forwarded_echo_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-forwarded-header-echo.XXXXXX")"
+	chmod 0755 "$forwarded_echo_dir"
 	python3 - "$forwarded_echo_dir/cgi-bin/headers" <<'PY'
 import os
 import sys
@@ -505,6 +506,7 @@ PY
 		fi
 		sleep 1
 	done
+	docker logs "$forwarded_echo_container_id" >&2 2>/dev/null || true
 	printf '%s\n' 'forwarded-header echo backend did not become reachable through Traefik' >&2
 	return 1
 }
