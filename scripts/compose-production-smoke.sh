@@ -421,6 +421,8 @@ verify_traefik_network_address_model() {
 		printf 'Docker ingress IPAM does not match persisted subnet=%s pool=%s\n' "$subnet" "$ip_range" >&2
 		return 1
 	fi
+	api_container="$("${compose[@]}" ps -q api)"
+	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
 	for _ in 1 2 3; do
 		temp_id="$(docker run -d --rm --network "$ingress_network" --entrypoint sh "$api_image" -ec 'sleep 20')"
 		temp_ip="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$ingress_network\").IPAddress}}" "$temp_id")"
@@ -494,11 +496,9 @@ http {
   }
 }
 '''
-with open(path, 'w', encoding='utf-8') as target:
-    target.write(contents)
+	with open(path, 'w', encoding='utf-8') as target:
+	    target.write(contents)
 PY
-	api_container="$("${compose[@]}" ps -q api)"
-	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
 	nginx_image="$(docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q proxy)")"
 	container_name="${COMPOSE_PROJECT_NAME:-stealth}-forwarded-header-echo-$$"
 	forwarded_echo_container_id="$(docker run -d --rm --name "$container_name" --network "$ingress_network" --network-alias forwarded-header-echo --volume "$forwarded_echo_dir/nginx.conf:/etc/nginx/nginx.conf:ro" "$nginx_image")"
