@@ -421,8 +421,6 @@ verify_traefik_network_address_model() {
 		printf 'Docker ingress IPAM does not match persisted subnet=%s pool=%s\n' "$subnet" "$ip_range" >&2
 		return 1
 	fi
-	api_container="$("${compose[@]}" ps -q api)"
-	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
 	for _ in 1 2 3; do
 		temp_id="$(docker run -d --rm --network "$ingress_network" --entrypoint sh "$api_image" -ec 'sleep 20')"
 		temp_ip="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$ingress_network\").IPAddress}}" "$temp_id")"
@@ -481,24 +479,29 @@ os.replace(temporary, path)
 PY
 	forwarded_echo_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-forwarded-header-echo.XXXXXX")"
 	chmod 0755 "$forwarded_echo_dir"
-	python3 - "$forwarded_echo_dir/cgi-bin/headers" <<'PY'
-import os
+	python3 - "$forwarded_echo_dir/nginx.conf" <<'PY'
 import sys
 
 path = sys.argv[1]
-os.makedirs(os.path.dirname(path), exist_ok=True)
-contents = '''#!/bin/sh
-body="remote_addr=${REMOTE_ADDR}\nx_forwarded_for=${HTTP_X_FORWARDED_FOR}\nx_forwarded_proto=${HTTP_X_FORWARDED_PROTO}\nx_real_ip=${HTTP_X_REAL_IP}\n"
-printf 'Content-Type: text/plain\\r\\n\\r\\n%s' "$body"
+contents = '''events {}
+http {
+  server {
+    listen 8080;
+    location = /cgi-bin/headers {
+      default_type text/plain;
+      return 200 "remote_addr=$remote_addr\\nx_forwarded_for=$http_x_forwarded_for\\nx_forwarded_proto=$http_x_forwarded_proto\\nx_real_ip=$http_x_real_ip\\n";
+    }
+  }
+}
 '''
 with open(path, 'w', encoding='utf-8') as target:
     target.write(contents)
-os.chmod(path, 0o755)
 PY
 	api_container="$("${compose[@]}" ps -q api)"
 	api_image="$(docker inspect --format '{{.Config.Image}}' "$api_container")"
+	nginx_image="$(docker inspect --format '{{.Config.Image}}' "$("${compose[@]}" ps -q proxy)")"
 	container_name="${COMPOSE_PROJECT_NAME:-stealth}-forwarded-header-echo-$$"
-	forwarded_echo_container_id="$(docker run -d --rm --name "$container_name" --network "$ingress_network" --network-alias forwarded-header-echo --volume "$forwarded_echo_dir:/www:ro" --entrypoint /bin/busybox "$api_image" httpd -f -p 8080 -h /www)"
+	forwarded_echo_container_id="$(docker run -d --rm --name "$container_name" --network "$ingress_network" --network-alias forwarded-header-echo --volume "$forwarded_echo_dir/nginx.conf:/etc/nginx/nginx.conf:ro" "$nginx_image")"
 	for _ in $(seq 1 20); do
 		if forwarded_header_probe_from_api 1.2.3.4 https >/dev/null 2>&1; then
 			printf 'forwarded-header echo backend is reachable through Traefik\n'
