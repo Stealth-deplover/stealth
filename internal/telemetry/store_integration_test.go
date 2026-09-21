@@ -184,6 +184,94 @@ func TestClickHouseStoreIntegration(t *testing.T) {
 	}
 }
 
+func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
+	address := os.Getenv("TEST_CLICKHOUSE_ADDR")
+	collectorHTTP := os.Getenv("TEST_OTEL_COLLECTOR_HTTP")
+	if address == "" || collectorHTTP == "" {
+		t.Skip("set TEST_CLICKHOUSE_ADDR and TEST_OTEL_COLLECTOR_HTTP to run the real log cursor integration test")
+	}
+	database := valueOrDefault("TEST_CLICKHOUSE_DATABASE", "stealth_telemetry")
+	username := valueOrDefault("TEST_CLICKHOUSE_USER", "stealth")
+	password := os.Getenv("TEST_CLICKHOUSE_PASSWORD")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr:        []string{address},
+		Auth:        clickhouse.Auth{Database: database, Username: username, Password: password},
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewWithConn(conn, Config{Database: database, MaxQueryDuration: 5 * time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	t.Cleanup(func() { _ = store.Close() })
+	if err := conn.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	marker := fmt.Sprintf("telemetry-log-cursor-%d", time.Now().UnixNano())
+	timestamp := time.Now().UTC().Truncate(time.Millisecond)
+	logRecords := make([]any, 0, 3)
+	for _, suffix := range []string{"a", "b", "c"} {
+		traceID := fmt.Sprintf("%032x", time.Now().UnixNano())
+		logRecords = append(logRecords, map[string]any{
+			"timeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+			"severityText": "INFO",
+			"body":         map[string]any{"stringValue": marker + "-" + suffix},
+			"attributes":   []any{stringAttribute("smoke.marker", marker)},
+			"traceId":      traceID,
+			"spanId":       fmt.Sprintf("%016x", time.Now().UnixNano()),
+		})
+	}
+	emitCollectorSignal(t, collectorHTTP, "logs", map[string]any{
+		"resourceLogs": []any{map[string]any{
+			"resource":  map[string]any{"attributes": []any{stringAttribute("service.name", "telemetry.cursor")}},
+			"scopeLogs": []any{map[string]any{"scope": map[string]any{"name": "telemetry.cursor"}, "logRecords": logRecords}},
+		}},
+	})
+
+	rangeQuery := TimeRange{From: timestamp.Add(-time.Minute), To: time.Now().UTC().Add(time.Minute)}
+	var page LogsResult
+	var lastErr error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		page, lastErr = store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Service: "telemetry.cursor", Search: marker, Limit: 10})
+		if lastErr == nil && len(page.Items) == 3 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr != nil || len(page.Items) != 3 {
+		t.Fatalf("cursor seed rows = %d, last error = %v", len(page.Items), lastErr)
+	}
+	oldest := page.Items[len(page.Items)-1]
+	after, err := store.QueryLogs(ctx, LogsQuery{
+		Range:   rangeQuery,
+		Service: "telemetry.cursor",
+		Search:  marker,
+		Limit:   10,
+		After:   &LogCursor{Timestamp: oldest.Timestamp, TraceID: oldest.TraceID, SpanID: oldest.SpanID, Tie: oldest.CursorKey},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Items) != 2 {
+		t.Fatalf("cursor page = %d rows, want 2 newer rows", len(after.Items))
+	}
+	previous := LogCursor{Timestamp: oldest.Timestamp, TraceID: oldest.TraceID, SpanID: oldest.SpanID, Tie: oldest.CursorKey}
+	for _, item := range after.Items {
+		current := LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+		if !current.After(previous) {
+			t.Fatalf("cursor result did not advance: previous=%+v current=%+v", previous, current)
+		}
+		if item.Body == oldest.Body {
+			t.Fatalf("cursor returned the boundary row again: %#v", item)
+		}
+		previous = current
+	}
+}
+
 func assertRawTelemetrySecretAbsent(ctx context.Context, conn clickhouse.Conn, marker, secret string, timestamp time.Time) error {
 	from := timestamp.Add(-time.Minute)
 	to := timestamp.Add(time.Minute)

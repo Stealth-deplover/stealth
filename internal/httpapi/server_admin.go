@@ -238,11 +238,19 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seen := make(map[string]struct{}, limit*4)
-	cursor := queryRange.From
+	var cursor *telemetry.LogCursor
+	if raw := strings.TrimSpace(r.Header.Get("Last-Event-ID")); raw != "" {
+		if decoded, err := telemetry.DecodeLogCursor(raw); err == nil {
+			cursor = &decoded
+		}
+	}
 	maxRange := s.config.TelemetryMaxQueryRange
 	if maxRange <= 0 {
 		maxRange = 30 * 24 * time.Hour
+	}
+	lookback := 5 * time.Minute
+	if maxRange < lookback {
+		lookback = maxRange
 	}
 	deadline := time.NewTimer(30 * time.Minute)
 	defer deadline.Stop()
@@ -260,6 +268,23 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return true
 	}
+	writeLogEvent := func(item telemetry.LogRecord) bool {
+		payload, err := json.Marshal(item)
+		if err != nil {
+			return false
+		}
+		id := telemetry.EncodeLogCursor(telemetry.LogCursor{
+			Timestamp: item.Timestamp,
+			TraceID:   item.TraceID,
+			SpanID:    item.SpanID,
+			Tie:       item.CursorKey,
+		})
+		if _, err := io.WriteString(w, "id: "+id+"\nevent: log\ndata: "+string(payload)+"\n\n"); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
 	writeHeartbeat := func() bool {
 		if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
 			return false
@@ -270,36 +295,57 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		to := time.Now().UTC()
-		from := cursor.Add(-time.Nanosecond)
-		if from.Before(to.Add(-maxRange)) {
-			from = to.Add(-maxRange)
-		}
-		result, err := s.telemetry.QueryLogs(r.Context(), telemetry.LogsQuery{
+		from := to.Add(-lookback)
+		query := telemetry.LogsQuery{
 			Range:   telemetry.TimeRange{From: from, To: to},
 			Service: service,
 			Level:   level,
 			Search:  search,
 			Limit:   limit,
-		})
+		}
+		if cursor == nil {
+			if queryRange.From.After(from) {
+				query.Range.From = queryRange.From
+			}
+		} else {
+			query.After = cursor
+			query.Range.From = cursor.Timestamp
+			if query.Range.From.Before(to.Add(-maxRange)) {
+				query.Range.From = to.Add(-maxRange)
+			}
+			if !to.After(query.Range.From) {
+				query.Range.From = to.Add(-time.Nanosecond)
+			}
+		}
+		result, err := s.telemetry.QueryLogs(r.Context(), query)
 		if err != nil {
 			_ = writeEvent("stream_error", map[string]string{"message": "telemetry backend is unavailable"})
 			return
 		}
-		for index := len(result.Items) - 1; index >= 0; index-- {
-			item := result.Items[index]
-			key := item.Timestamp.UTC().Format(time.RFC3339Nano) + "\x00" + item.TraceID + "\x00" + item.SpanID + "\x00" + item.Service + "\x00" + item.Body
-			if _, exists := seen[key]; exists {
-				continue
+		if cursor == nil {
+			// The normal query is newest-first. Emit the initial bounded window
+			// oldest-first so the cursor advances monotonically to its tail.
+			for index := len(result.Items) - 1; index >= 0; index-- {
+				item := result.Items[index]
+				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+				cursor = &itemCursor
+				if !writeLogEvent(item) {
+					return
+				}
 			}
-			seen[key] = struct{}{}
-			if len(seen) > limit*8 {
-				seen = make(map[string]struct{}, limit*4)
-			}
-			if item.Timestamp.After(cursor) {
-				cursor = item.Timestamp
-			}
-			if !writeEvent("log", item) {
-				return
+		} else {
+			// Cursor queries are already chronological. The comparison is kept
+			// here as a defense-in-depth guard for test doubles and future store
+			// implementations.
+			for _, item := range result.Items {
+				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+				if !itemCursor.After(*cursor) {
+					continue
+				}
+				cursor = &itemCursor
+				if !writeLogEvent(item) {
+					return
+				}
 			}
 		}
 		if !writeHeartbeat() {

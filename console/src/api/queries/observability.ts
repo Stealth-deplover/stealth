@@ -55,6 +55,11 @@ export function useAdminLogTail(
     if (!enabled || typeof EventSource === "undefined") {
       return;
     }
+    // A query/filter change starts a fresh bounded stream. Reconnects on the
+    // same EventSource retain the current items while the browser resumes
+    // from the last SSE event id.
+    setItems([]);
+    setError(null);
     const source = new EventSource(
       apiUrl(`/v1/admin/telemetry/logs/tail?${params}`),
       { withCredentials: true },
@@ -95,7 +100,6 @@ export function useAdminLogTail(
     source.addEventListener("stream_error", onStreamError);
     source.onerror = onConnectionError;
     source.onopen = () => {
-      setItems([]);
       setConnected(true);
       setError(null);
     };

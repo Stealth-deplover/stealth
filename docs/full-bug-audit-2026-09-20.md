@@ -278,7 +278,8 @@ union; that is tracked as AUD-14.
 
 ### AUD-06 — Live-tail can replay large historical ranges and duplicate rows
 
-- **Status:** OPEN
+- **Status:** OPEN on the audited baseline; remediation implemented in PR #89
+  and pending merge
 - **Severity:** Medium
 - **Area:** Admin telemetry log streaming
 - **Current-head evidence:** `adminTelemetryLogTail` in
@@ -302,6 +303,23 @@ union; that is tracked as AUD-14.
   larger than the live window; assert monotonic cursor delivery, bounded query
   windows, no duplicates after reconnect, and correct behavior after a seen-set
   eviction.
+- **Remediation evidence in PR #89:** `ClickHouseStore.QueryLogs` now exposes a
+  versioned cursor over timestamp, trace ID, span ID, and a deterministic
+  tie-breaker. `adminTelemetryLogTail` uses a five-minute initial lookback,
+  advances with the cursor on subsequent polls, and emits opaque SSE event IDs
+  so browser reconnects resume from the last delivered row. The browser keeps
+  only bounded defense-in-depth deduplication and no longer clears rows on a
+  transport reconnect.
+- **Regression coverage:** `TestQueryLogsAfterUsesCompleteStableCursor`,
+  `TestAdminTelemetryLogTailUsesShortStableCursorWindow`,
+  `TestAdminTelemetryLogTailResumesFromLastEventID`, and
+  `TestLogCursorRoundTrip` cover same-timestamp ordering, bounded windows,
+  polling cursors, and reconnect behavior.
+- **Residual risk:** The pinned exporter schema has no physical log-row ID;
+  the final cursor component is a deterministic hash of visible log fields.
+  Exact byte-for-byte duplicate rows are therefore logically indistinguishable
+  and are treated as one stream position. A future exporter schema with a
+  stable row identity should replace that hash component.
 
 ### AUD-07 — Docker attribution is improved for metrics but incomplete for file logs
 

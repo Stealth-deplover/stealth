@@ -86,6 +86,26 @@ func TestQueryUsesTypedParametersAndDoesNotEmbedFilters(t *testing.T) {
 	}
 }
 
+func TestQueryLogsAfterUsesCompleteStableCursor(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	_, err := store.QueryLogs(context.Background(), LogsQuery{
+		Range: TimeRange{From: now.Add(-time.Minute), To: now},
+		Limit: 10,
+		After: &LogCursor{Timestamp: now.Add(-time.Second), TraceID: "trace", SpanID: "span", Tie: 7},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conn.query, "cityHash64") || !strings.Contains(conn.query, "after_timestamp") || !strings.Contains(conn.query, "ORDER BY Timestamp ASC, TraceId ASC, SpanId ASC, CursorKey ASC") {
+		t.Fatalf("cursor query does not include complete ascending ordering: %s", conn.query)
+	}
+	if len(conn.args) != 10 {
+		t.Fatalf("cursor query argument count = %d, want 10", len(conn.args))
+	}
+}
+
 func TestQueryRejectsUnboundedRangeAndLimit(t *testing.T) {
 	store := NewWithConn(&recordingConn{}, Config{MaxQueryRange: time.Hour, MaxQueryRows: 10})
 	now := time.Now().UTC()

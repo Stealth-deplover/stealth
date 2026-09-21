@@ -160,6 +160,7 @@ type LogsQuery struct {
 	Level   string
 	Search  string
 	Limit   int
+	After   *LogCursor
 }
 
 type LogRecord struct {
@@ -171,6 +172,7 @@ type LogRecord struct {
 	Body               string            `json:"message"`
 	Attributes         map[string]string `json:"attributes,omitempty"`
 	ResourceAttributes map[string]string `json:"resource_attributes,omitempty"`
+	CursorKey          uint64            `json:"-"`
 }
 
 type LogsResult struct {
@@ -243,14 +245,35 @@ type SourcesResult struct {
 
 const logsQuery = `
 SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
-       LogAttributes, ResourceAttributes
+       LogAttributes, ResourceAttributes,
+       cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
 FROM otel_logs
 WHERE Timestamp >= {from:DateTime64(9)}
   AND Timestamp < {to:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({level:String} = '' OR SeverityText = {level:String})
   AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
-ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC
+ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC, CursorKey DESC
+LIMIT {limit:UInt32}`
+
+// logsAfterQuery is intentionally separate from logsQuery so the normal
+// explorer keeps its newest-first contract while the live tail can advance in
+// chronological order from a complete cursor. The tuple predicate mirrors
+// every ORDER BY key; timestamp-only polling is not sufficient when several
+// records share the same timestamp.
+const logsAfterQuery = `
+SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
+       LogAttributes, ResourceAttributes,
+       cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
+FROM otel_logs
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND Timestamp < {to:DateTime64(9)}
+  AND ({service:String} = '' OR ServiceName = {service:String})
+  AND ({level:String} = '' OR SeverityText = {level:String})
+  AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
+  AND (Timestamp, TraceId, SpanId, cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body)) >
+      ({after_timestamp:DateTime64(9)}, {after_trace_id:String}, {after_span_id:String}, {after_tie:UInt64})
+ORDER BY Timestamp ASC, TraceId ASC, SpanId ASC, CursorKey ASC
 LIMIT {limit:UInt32}`
 
 const tracesQuery = `
@@ -318,14 +341,25 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	if err != nil {
 		return LogsResult{}, err
 	}
-	rows, err := s.query(ctx, logsQuery,
+	statement := logsQuery
+	args := []any{
 		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
 		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
 		clickhouse.Named("service", boundedFilter(query.Service, 128)),
 		clickhouse.Named("level", boundedFilter(query.Level, 64)),
 		clickhouse.Named("search", boundedFilter(query.Search, 256)),
-		clickhouse.Named("limit", limit),
-	)
+	}
+	if query.After != nil {
+		statement = logsAfterQuery
+		args = append(args,
+			clickhouse.DateNamed("after_timestamp", query.After.Timestamp.UTC(), clickhouse.NanoSeconds),
+			clickhouse.Named("after_trace_id", boundedFilter(query.After.TraceID, 256)),
+			clickhouse.Named("after_span_id", boundedFilter(query.After.SpanID, 256)),
+			clickhouse.Named("after_tie", query.After.Tie),
+		)
+	}
+	args = append(args, clickhouse.Named("limit", limit))
+	rows, err := s.query(ctx, statement, args...)
 	if err != nil {
 		return LogsResult{}, err
 	}
@@ -334,7 +368,7 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 	for rows.Next() {
 		var item LogRecord
 		var attributes, resourceAttributes map[string]string
-		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes); err != nil {
+		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &item.CursorKey); err != nil {
 			return LogsResult{}, fmt.Errorf("scan telemetry log: %w", err)
 		}
 		item.Body = redactText(item.Body)
