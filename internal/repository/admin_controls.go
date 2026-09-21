@@ -379,6 +379,13 @@ func (r *Repository) DeleteAdminAlertRule(ctx context.Context, accountID, id uui
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := deleteAdminAlertRuleTx(ctx, tx, accountID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteAdminAlertRuleTx(ctx context.Context, tx pgx.Tx, accountID, id uuid.UUID) error {
 	if err := requireInstanceAdminTx(ctx, tx, accountID); err != nil {
 		return err
 	}
@@ -406,7 +413,7 @@ func (r *Repository) DeleteAdminAlertRule(ctx context.Context, accountID, id uui
 	}); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (r *Repository) ListAdminAlertEvents(ctx context.Context, ruleID uuid.UUID, limit int) ([]domain.AdminAlertEvent, error) {

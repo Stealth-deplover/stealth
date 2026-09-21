@@ -97,7 +97,7 @@ jobs:
             done
           }
           run_and_require_tests ./internal/repository \
-            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration|TestAdminMonitorAlertLockOrderingIntegration|TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration|TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration|TestAdminRealtimeSequenceCommitOrderingIntegration|TestAdminRealtimeSequenceRollbackIntegration)$' \
+            '^(TestDeleteAlertRuleAfterNotificationDeliveryIntegration|TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration|TestDeleteAlertRuleNeverFiredIntegration|TestDeleteAlertRuleRetainsCompletedAndRetryableDeliveriesIntegration|TestDeleteAlertRuleRetainsMultipleNotificationDeliveriesIntegration|TestEvaluateAndDeleteAdminAlertRuleRaceProducesValidHistoryIntegration|TestQueryAdminAlertEventsGlobalCursorPaginationIntegration|TestQueryAdminAlertEventsPerRulePaginationSurvivesDeletionIntegration|TestQueryAdminAlertEventsTimeRangeIntegration|TestAdminAlertMonitorReferenceValidationIntegration|TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration|TestAdminMonitorAlertLockOrderingIntegration|TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration|TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration|TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration|TestDeleteAdminMonitorWithAlertRuleConflictsIntegration|TestAdminRealtimeSequenceCommitOrderingIntegration|TestAdminRealtimeSequenceRollbackIntegration)$' \
             TestDeleteAlertRuleAfterNotificationDeliveryIntegration \
             TestDeleteAlertRuleAfterResolveRetainsAllHistoryIntegration \
             TestDeleteAlertRuleNeverFiredIntegration \
@@ -111,6 +111,7 @@ jobs:
             TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration \
             TestAdminMonitorAlertLockOrderingIntegration \
             TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration \
+            TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration \
             TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration \
             TestDeleteAdminMonitorWithAlertRuleConflictsIntegration \
             TestAdminRealtimeSequenceCommitOrderingIntegration \

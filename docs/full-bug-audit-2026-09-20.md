@@ -270,7 +270,9 @@ union; that is tracked as AUD-14.
   responses while holding the monitor row lock. The monitor row is the
   serialization point for monitor-backed relationship changes: rule updates
   lock involved monitors before the rule row and re-read the rule before
-  writing it.
+  writing it. Monitor-backed paths complete relationship locking before
+  acquiring the Admin realtime ordering lock; worker-versus-rule-update and
+  worker-versus-rule-delete concurrency coverage protects that graph.
 - **Audited-baseline proof path:** Submit a rule with a nonexistent monitor UUID, a
   heartbeat rule for an HTTP monitor, or a certificate-expiry rule for a
   non-TLS monitor; separately delete a monitor that has a rule. At the audited
@@ -282,6 +284,7 @@ union; that is tracked as AUD-14.
   `TestUpdateAdminMonitorPreservesAlertRuleCompatibilityIntegration`,
   `TestAdminMonitorAlertLockOrderingIntegration`,
   `TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration`,
+  `TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration`,
   `TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration`,
   `TestDeleteAdminMonitorWithAlertRuleConflictsIntegration`,
   `TestCertificateExpiryAlertRequiresPositiveDays`, and

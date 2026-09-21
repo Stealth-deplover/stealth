@@ -358,14 +358,21 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if !json.Valid(input.Details) || len(input.Details) > 16<<10 {
 		return ErrInvalidAdminMonitor
 	}
-	errorMessage := normalizeAdminMonitorError(input.Error)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := completeAdminMonitorCheckTx(ctx, tx, monitorID, workerID, input); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func completeAdminMonitorCheckTx(ctx context.Context, tx pgx.Tx, monitorID uuid.UUID, workerID string, input AdminMonitorCheckInput) error {
+	errorMessage := normalizeAdminMonitorError(input.Error)
 	var status string
-	err = tx.QueryRow(ctx, `SELECT status FROM admin_monitors WHERE id=$1 AND worker_id=$2 FOR UPDATE`, monitorID, workerID).Scan(&status)
+	err := tx.QueryRow(ctx, `SELECT status FROM admin_monitors WHERE id=$1 AND worker_id=$2 FOR UPDATE`, monitorID, workerID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNoAdminMonitor
 	}
@@ -396,11 +403,6 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if err != nil {
 		return err
 	}
-	if status != newStatus {
-		if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.monitor.status", "admin_monitor", monitorID, map[string]any{"status": newStatus}); err != nil {
-			return err
-		}
-	}
 	checkID, err := uuid.NewV7()
 	if err != nil {
 		return err
@@ -412,7 +414,15 @@ func (r *Repository) CompleteAdminMonitorCheck(ctx context.Context, monitorID uu
 	if err := evaluateAdminMonitorAlertsTx(ctx, tx, monitorID, input); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	// Monitor alert evaluation locks dependent rules and may publish alert
+	// events. Acquire the realtime ordering lock only after that relationship
+	// work, so this transaction cannot hold realtime while waiting on a rule.
+	if status != newStatus {
+		if err := enqueueAdminRealtimeEventTx(ctx, tx, "admin.monitor.status", "admin_monitor", monitorID, map[string]any{"status": newStatus}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ListAdminMonitorChecks(ctx context.Context, monitorID uuid.UUID, limit int) ([]domain.AdminMonitorCheck, error) {

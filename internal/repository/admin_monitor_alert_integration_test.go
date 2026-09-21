@@ -335,6 +335,90 @@ func TestAdminMonitorWorkerAndRuleUpdateConcurrencyIntegration(t *testing.T) {
 	}
 }
 
+func TestAdminMonitorWorkerAndRuleDeleteConcurrencyIntegration(t *testing.T) {
+	fixture := newAdminMonitorAlertFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ruleID := uuid.Must(uuid.NewV7())
+	if _, err := fixture.repo.CreateAdminAlertRule(ctx, fixture.accountID, ruleID, AdminAlertRuleInput{
+		Name: "worker delete concurrency", Kind: "monitor_failure",
+		Condition: mustJSON(map[string]any{"monitor_id": fixture.httpID.String()}), Severity: "warning", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	workerID := "worker-delete-race"
+	if _, err := fixture.pool.Exec(ctx, `UPDATE admin_monitors SET status='unknown',worker_id=$2 WHERE id=$1`, fixture.httpID, workerID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleteTx, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deleteTx.Rollback(ctx)
+	if err := deleteTx.QueryRow(ctx, `SELECT id FROM admin_alert_rules WHERE id=$1 FOR UPDATE`, ruleID).Scan(new(uuid.UUID)); err != nil {
+		t.Fatal(err)
+	}
+
+	started, done, err := startAdminMonitorCheckTx(ctx, fixture, fixture.httpID, workerID, AdminMonitorCheckInput{
+		Success: false, LatencyMS: 12, Details: json.RawMessage(`{}`), Error: "synthetic worker failure",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerPID := waitForAdminMonitorCheckStart(t, ctx, started, done)
+	if err := waitForPostgresLockWait(ctx, fixture.pool, workerPID); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatal(err)
+	}
+	if err := assertNoAdminRealtimeOrderingLock(ctx, fixture.pool, workerPID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deleteAdminAlertRuleTx(ctx, deleteTx, fixture.accountID, ruleID); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("delete transaction error = %v", err)
+	}
+	if err := deleteTx.Commit(ctx); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatal(err)
+	}
+	if err := awaitAdminMonitorCheck(t, ctx, done); err != nil {
+		failOnPostgresDeadlock(t, err)
+		t.Fatalf("worker transaction after rule deletion = %v", err)
+	}
+
+	var ruleCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM admin_alert_rules WHERE id=$1`, ruleID).Scan(&ruleCount); err != nil {
+		t.Fatal(err)
+	}
+	if ruleCount != 0 {
+		t.Fatalf("deleted alert rule count = %d, want 0", ruleCount)
+	}
+	var monitorStatus string
+	var workerStillLeased bool
+	if err := fixture.pool.QueryRow(ctx, `SELECT status,worker_id IS NOT NULL FROM admin_monitors WHERE id=$1`, fixture.httpID).Scan(&monitorStatus, &workerStillLeased); err != nil {
+		t.Fatal(err)
+	}
+	if monitorStatus != "failing" || workerStillLeased {
+		t.Fatalf("monitor after worker/delete race = status %q, worker leased %v; want failing, false", monitorStatus, workerStillLeased)
+	}
+	var checkCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM admin_monitor_checks WHERE monitor_id=$1`, fixture.httpID).Scan(&checkCount); err != nil {
+		t.Fatal(err)
+	}
+	if checkCount != 1 {
+		t.Fatalf("monitor check count = %d, want 1", checkCount)
+	}
+	var statusEventCount int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM admin_realtime_events WHERE event_name='admin.monitor.status' AND target_id=$1`, fixture.httpID).Scan(&statusEventCount); err != nil {
+		t.Fatal(err)
+	}
+	if statusEventCount != 1 {
+		t.Fatalf("monitor status realtime event count = %d, want 1", statusEventCount)
+	}
+}
+
 func TestAdminMonitorRuleCompatibilityConcurrentMutationIntegration(t *testing.T) {
 	fixture := newAdminMonitorAlertFixture(t)
 	for _, test := range []struct {
@@ -452,6 +536,31 @@ func startAdminAlertRuleUpdateTx(ctx context.Context, fixture adminMonitorAlertF
 	return started, done, nil
 }
 
+func startAdminMonitorCheckTx(ctx context.Context, fixture adminMonitorAlertFixture, monitorID uuid.UUID, workerID string, input AdminMonitorCheckInput) (<-chan int32, <-chan error, error) {
+	started := make(chan int32, 1)
+	done := make(chan error, 1)
+	go func() {
+		tx, beginErr := fixture.pool.Begin(ctx)
+		if beginErr != nil {
+			done <- beginErr
+			return
+		}
+		defer tx.Rollback(ctx)
+		var pid int32
+		if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			done <- err
+			return
+		}
+		started <- pid
+		checkErr := completeAdminMonitorCheckTx(ctx, tx, monitorID, workerID, input)
+		if checkErr == nil {
+			checkErr = tx.Commit(ctx)
+		}
+		done <- checkErr
+	}()
+	return started, done, nil
+}
+
 func waitForAdminAlertRuleUpdateStart(t *testing.T, ctx context.Context, started <-chan int32, done <-chan error) int32 {
 	t.Helper()
 	select {
@@ -466,6 +575,30 @@ func waitForAdminAlertRuleUpdateStart(t *testing.T, ctx context.Context, started
 }
 
 func awaitAdminAlertRuleUpdate(t *testing.T, ctx context.Context, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+		return ctx.Err()
+	}
+}
+
+func waitForAdminMonitorCheckStart(t *testing.T, ctx context.Context, started <-chan int32, done <-chan error) int32 {
+	t.Helper()
+	select {
+	case pid := <-started:
+		return pid
+	case err := <-done:
+		t.Fatalf("monitor check finished before lock orchestration: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	return 0
+}
+
+func awaitAdminMonitorCheck(t *testing.T, ctx context.Context, done <-chan error) error {
 	t.Helper()
 	select {
 	case err := <-done:
@@ -496,6 +629,22 @@ func waitForPostgresLockWait(ctx context.Context, pool *pgxpool.Pool, pid int32)
 		case <-ticker.C:
 		}
 	}
+}
+
+func assertNoAdminRealtimeOrderingLock(ctx context.Context, pool *pgxpool.Pool, pid int32) error {
+	var held bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_locks
+			WHERE locktype='advisory' AND pid=$1 AND granted
+		)`, pid).Scan(&held); err != nil {
+		return err
+	}
+	if held {
+		return fmt.Errorf("worker backend %d holds an advisory lock while blocked on an alert rule", pid)
+	}
+	return nil
 }
 
 func failOnPostgresDeadlock(t *testing.T, err error) {
