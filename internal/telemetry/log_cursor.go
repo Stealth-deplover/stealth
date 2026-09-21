@@ -10,25 +10,20 @@ import (
 	"time"
 )
 
-const logCursorVersion = 1
+const logCursorVersion = 2
 
-// LogCursor is the complete ordering key used by the live log tail. The
-// exporter schema does not provide a synthetic row id, so the final key is a
-// deterministic hash of the visible log fields in addition to the OTel trace
-// identity fields.
+// LogCursor is the complete ordering key used by the live log tail. EventID is
+// generated once by the pinned Collector before export and is persisted in the
+// log record's attributes; it is not derived from visible log fields.
 type LogCursor struct {
 	Timestamp time.Time
-	TraceID   string
-	SpanID    string
-	Tie       uint64
+	EventID   string
 }
 
 type logCursorPayload struct {
 	Version   int       `json:"v"`
 	Timestamp time.Time `json:"at"`
-	TraceID   string    `json:"trace_id"`
-	SpanID    string    `json:"span_id"`
-	Tie       uint64    `json:"tie"`
+	EventID   string    `json:"event_id"`
 }
 
 // EncodeLogCursor produces an opaque, versioned value suitable for an SSE
@@ -37,9 +32,7 @@ func EncodeLogCursor(cursor LogCursor) string {
 	payload := logCursorPayload{
 		Version:   logCursorVersion,
 		Timestamp: cursor.Timestamp.UTC(),
-		TraceID:   cursor.TraceID,
-		SpanID:    cursor.SpanID,
-		Tie:       cursor.Tie,
+		EventID:   cursor.EventID,
 	}
 	data, _ := json.Marshal(payload)
 	return base64.RawURLEncoding.EncodeToString(data)
@@ -65,14 +58,12 @@ func DecodeLogCursor(value string) (LogCursor, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return LogCursor{}, ErrInvalidQuery
 	}
-	if payload.Version != logCursorVersion || payload.Timestamp.IsZero() || len(payload.TraceID) > 256 || len(payload.SpanID) > 256 {
+	if payload.Version != logCursorVersion || payload.Timestamp.IsZero() || strings.TrimSpace(payload.EventID) == "" || len(payload.EventID) > 256 {
 		return LogCursor{}, ErrInvalidQuery
 	}
 	return LogCursor{
 		Timestamp: payload.Timestamp.UTC(),
-		TraceID:   payload.TraceID,
-		SpanID:    payload.SpanID,
-		Tie:       payload.Tie,
+		EventID:   payload.EventID,
 	}, nil
 }
 
@@ -83,11 +74,5 @@ func (c LogCursor) After(other LogCursor) bool {
 	if !c.Timestamp.Equal(other.Timestamp) {
 		return false
 	}
-	if c.TraceID != other.TraceID {
-		return c.TraceID > other.TraceID
-	}
-	if c.SpanID != other.SpanID {
-		return c.SpanID > other.SpanID
-	}
-	return c.Tie > other.Tie
+	return c.EventID > other.EventID
 }

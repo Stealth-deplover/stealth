@@ -276,9 +276,7 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 		}
 		id := telemetry.EncodeLogCursor(telemetry.LogCursor{
 			Timestamp: item.Timestamp,
-			TraceID:   item.TraceID,
-			SpanID:    item.SpanID,
-			Tie:       item.CursorKey,
+			EventID:   item.EventID,
 		})
 		if _, err := io.WriteString(w, "id: "+id+"\nevent: log\ndata: "+string(payload)+"\n\n"); err != nil {
 			return false
@@ -298,11 +296,12 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 		to := time.Now().UTC()
 		from := to.Add(-lookback)
 		query := telemetry.LogsQuery{
-			Range:   telemetry.TimeRange{From: from, To: to},
-			Service: service,
-			Level:   level,
-			Search:  search,
-			Limit:   limit,
+			Range:    telemetry.TimeRange{From: from, To: to},
+			Service:  service,
+			Level:    level,
+			Search:   search,
+			Limit:    limit,
+			LiveTail: true,
 		}
 		if cursor == nil {
 			if queryRange.From.After(from) {
@@ -328,7 +327,7 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 			// oldest-first so the cursor advances monotonically to its tail.
 			for index := len(result.Items) - 1; index >= 0; index-- {
 				item := result.Items[index]
-				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, EventID: item.EventID}
 				cursor = &itemCursor
 				if !writeLogEvent(item) {
 					return
@@ -339,7 +338,7 @@ func (s *Server) adminTelemetryLogTail(w http.ResponseWriter, r *http.Request) {
 			// here as a defense-in-depth guard for test doubles and future store
 			// implementations.
 			for _, item := range result.Items {
-				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+				itemCursor := telemetry.LogCursor{Timestamp: item.Timestamp, EventID: item.EventID}
 				if !itemCursor.After(*cursor) {
 					continue
 				}

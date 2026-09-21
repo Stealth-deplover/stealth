@@ -34,6 +34,18 @@ The runtime schema observed from the pinned `0.161.0` exporter is:
   exporter-specific aggregate columns and still share the common identity and
   attribute columns above.
 
+The pinned exporter does not persist a native unique log-row ID: its log table
+contains the OTel identity fields and attribute maps, but no event identity
+column. The main Collector therefore assigns `UUIDv7()` to the internal
+`stealth.log.event_id` log attribute after redaction and before the ClickHouse
+exporter. This attribute is persisted in `LogAttributes` for both OTLP logs and
+Docker file logs (which are forwarded through the same main Collector), then
+removed from Admin API attributes. The API's live-tail cursor uses the persisted
+`(Timestamp, stealth.log.event_id)` pair; it never derives identity from the
+body, trace fields, or a hash. Legacy rows without this attribute remain
+available to normal log exploration but are excluded from lossless live-tail
+pagination until they age out.
+
 The production compatibility tests start the pinned Collector, emit OTLP logs,
 traces, and gauge, sum, histogram, summary, and exponential-histogram metrics,
 and read them through `ClickHouseStore`.

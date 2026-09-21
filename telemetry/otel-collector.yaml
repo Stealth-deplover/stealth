@@ -76,6 +76,10 @@ processors:
   # and need the same common-form secret scrub.
   transform/telemetry:
     error_mode: silent
+    log_statements:
+      - context: log
+        statements:
+          - set(log.attributes["stealth.log.event_id"], UUIDv7())
     trace_statements:
       - context: span
         statements:

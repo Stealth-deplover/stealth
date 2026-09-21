@@ -71,8 +71,8 @@ func TestQueryUsesTypedParametersAndDoesNotEmbedFilters(t *testing.T) {
 	if strings.Contains(conn.query, injection) || !strings.Contains(conn.query, "{service:String}") || !strings.Contains(conn.query, "{search:String}") {
 		t.Fatalf("query embedded an untrusted filter: %s", conn.query)
 	}
-	if len(conn.args) != 8 {
-		t.Fatalf("argument count = %d, want 8", len(conn.args))
+	if len(conn.args) != 9 {
+		t.Fatalf("argument count = %d, want 9", len(conn.args))
 	}
 	for _, argument := range conn.args {
 		switch named := argument.(type) {
@@ -94,16 +94,16 @@ func TestQueryLogsAfterUsesCompleteStableCursor(t *testing.T) {
 	_, err := store.QueryLogs(context.Background(), LogsQuery{
 		Range: TimeRange{From: now.Add(-time.Minute), To: now},
 		Limit: 10,
-		After: &LogCursor{Timestamp: now.Add(-time.Second), TraceID: "trace", SpanID: "span", Tie: 7},
+		After: &LogCursor{Timestamp: now.Add(-time.Second), EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(conn.query, "cityHash64") || !strings.Contains(conn.query, "after_timestamp") || !strings.Contains(conn.query, "ORDER BY Timestamp ASC, TraceId ASC, SpanId ASC, CursorKey ASC") {
+	if strings.Contains(conn.query, "cityHash64") || !strings.Contains(conn.query, "after_event_id") || !strings.Contains(conn.query, "ORDER BY Timestamp ASC, EventID ASC") || !strings.Contains(conn.query, "stealth.log.event_id") {
 		t.Fatalf("cursor query does not include complete ascending ordering: %s", conn.query)
 	}
-	if len(conn.args) != 12 {
-		t.Fatalf("cursor query argument count = %d, want 12", len(conn.args))
+	if len(conn.args) != 10 {
+		t.Fatalf("cursor query argument count = %d, want 10", len(conn.args))
 	}
 }
 

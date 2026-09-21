@@ -276,6 +276,14 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 	if lastErr != nil || len(page.Items) != 3 {
 		t.Fatalf("cursor seed rows = %d, last error = %v", len(page.Items), lastErr)
 	}
+	for _, item := range page.Items {
+		if item.EventID == "" {
+			t.Fatalf("Collector did not persist a log event ID: %#v", item)
+		}
+		if _, exposed := item.Attributes[logEventIDAttribute]; exposed {
+			t.Fatalf("internal log event ID leaked through log attributes: %#v", item.Attributes)
+		}
+	}
 	metadataDeadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(metadataDeadline) && page.Items[0].ResourceAttributes["container.name"] != "cursor-api" {
 		page, lastErr = store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Service: "telemetry.cursor", Search: marker, Limit: 10})
@@ -304,7 +312,7 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 		Service: "telemetry.cursor",
 		Search:  marker,
 		Limit:   10,
-		After:   &LogCursor{Timestamp: oldest.Timestamp, TraceID: oldest.TraceID, SpanID: oldest.SpanID, Tie: oldest.CursorKey},
+		After:   &LogCursor{Timestamp: oldest.Timestamp, EventID: oldest.EventID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -312,9 +320,9 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 	if len(after.Items) != 2 {
 		t.Fatalf("cursor page = %d rows, want 2 newer rows", len(after.Items))
 	}
-	previous := LogCursor{Timestamp: oldest.Timestamp, TraceID: oldest.TraceID, SpanID: oldest.SpanID, Tie: oldest.CursorKey}
+	previous := LogCursor{Timestamp: oldest.Timestamp, EventID: oldest.EventID}
 	for _, item := range after.Items {
-		current := LogCursor{Timestamp: item.Timestamp, TraceID: item.TraceID, SpanID: item.SpanID, Tie: item.CursorKey}
+		current := LogCursor{Timestamp: item.Timestamp, EventID: item.EventID}
 		if !current.After(previous) {
 			t.Fatalf("cursor result did not advance: previous=%+v current=%+v", previous, current)
 		}
@@ -322,6 +330,110 @@ func TestClickHouseStoreLogCursorIntegration(t *testing.T) {
 			t.Fatalf("cursor returned the boundary row again: %#v", item)
 		}
 		previous = current
+	}
+}
+
+func TestClickHouseStoreIdenticalLogRowsPaginateByPersistedEventIDIntegration(t *testing.T) {
+	address := os.Getenv("TEST_CLICKHOUSE_ADDR")
+	collectorHTTP := os.Getenv("TEST_OTEL_COLLECTOR_HTTP")
+	if address == "" || collectorHTTP == "" {
+		t.Skip("set TEST_CLICKHOUSE_ADDR and TEST_OTEL_COLLECTOR_HTTP to run the real Collector telemetry integration test")
+	}
+	database := valueOrDefault("TEST_CLICKHOUSE_DATABASE", "stealth_telemetry")
+	username := valueOrDefault("TEST_CLICKHOUSE_USER", "stealth")
+	password := os.Getenv("TEST_CLICKHOUSE_PASSWORD")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr:        []string{address},
+		Auth:        clickhouse.Auth{Database: database, Username: username, Password: password},
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewWithConn(conn, Config{Database: database, MaxQueryDuration: 5 * time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})
+	t.Cleanup(func() { _ = store.Close() })
+	if err := conn.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	marker := fmt.Sprintf("telemetry-identical-log-cursor-%d", time.Now().UnixNano())
+	timestamp := time.Now().UTC().Truncate(time.Millisecond)
+	identicalRecord := map[string]any{
+		"timeUnixNano":         fmt.Sprintf("%d", timestamp.UnixNano()),
+		"observedTimeUnixNano": fmt.Sprintf("%d", timestamp.UnixNano()),
+		"severityText":         "INFO",
+		"body":                 map[string]any{"stringValue": marker},
+		"attributes":           []any{stringAttribute("smoke.marker", marker)},
+		"traceId":              "11111111111111111111111111111111",
+		"spanId":               "2222222222222222",
+	}
+	emitCollectorSignal(t, collectorHTTP, "logs", map[string]any{
+		"resourceLogs": []any{map[string]any{
+			"resource": map[string]any{"attributes": []any{stringAttribute("service.name", "telemetry.identical")}},
+			"scopeLogs": []any{map[string]any{
+				"scope":      map[string]any{"name": "telemetry.identical"},
+				"logRecords": []any{identicalRecord, identicalRecord},
+			}},
+		}},
+	})
+
+	rangeQuery := TimeRange{From: timestamp.Add(-time.Minute), To: time.Now().UTC().Add(time.Minute)}
+	var seeded LogsResult
+	var lastErr error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		seeded, lastErr = store.QueryLogs(ctx, LogsQuery{Range: rangeQuery, Service: "telemetry.identical", Search: marker, Limit: 10})
+		if lastErr == nil && len(seeded.Items) == 2 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastErr != nil || len(seeded.Items) != 2 {
+		t.Fatalf("identical log rows = %d, last error = %v", len(seeded.Items), lastErr)
+	}
+	if seeded.Items[0].EventID == "" || seeded.Items[1].EventID == "" || seeded.Items[0].EventID == seeded.Items[1].EventID {
+		t.Fatalf("identical log rows did not receive distinct persisted event IDs: %#v", seeded.Items)
+	}
+
+	page, err := store.QueryLogs(ctx, LogsQuery{
+		Range: rangeQuery, Service: "telemetry.identical", Search: marker, Limit: 1,
+		After: &LogCursor{Timestamp: timestamp.Add(-time.Nanosecond)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("identical log page 1 = %d rows, want 1", len(page.Items))
+	}
+	first := page.Items[0]
+
+	page, err = store.QueryLogs(ctx, LogsQuery{
+		Range: rangeQuery, Service: "telemetry.identical", Search: marker, Limit: 1,
+		After: &LogCursor{Timestamp: first.Timestamp, EventID: first.EventID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("identical log page 2 = %d rows, want 1", len(page.Items))
+	}
+	second := page.Items[0]
+	if second.EventID == first.EventID || second.Body != first.Body || second.TraceID != first.TraceID || second.SpanID != first.SpanID || second.Timestamp != first.Timestamp {
+		t.Fatalf("identical log page 2 did not return the distinct duplicate row: first=%#v second=%#v", first, second)
+	}
+
+	page, err = store.QueryLogs(ctx, LogsQuery{
+		Range: rangeQuery, Service: "telemetry.identical", Search: marker, Limit: 1,
+		After: &LogCursor{Timestamp: second.Timestamp, EventID: second.EventID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("identical log page 3 = %d rows, want empty", len(page.Items))
 	}
 }
 

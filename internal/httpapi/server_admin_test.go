@@ -175,7 +175,7 @@ func TestAdminTelemetryLogTailStreamsRedactedDomainRecords(t *testing.T) {
 	store := &fakeAdminTelemetryStore{
 		logsStarted: started,
 		logs: telemetry.LogsResult{Items: []telemetry.LogRecord{{
-			Timestamp: time.Now().UTC(), TraceID: "trace-1", Service: "api", Body: "request failed",
+			Timestamp: time.Now().UTC(), TraceID: "trace-1", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c", Service: "api", Body: "request failed",
 		}}},
 	}
 	server := &Server{config: config.Config{TelemetryMaxQueryRange: time.Hour, TelemetryMaxQueryRows: 100}, telemetry: store}
@@ -215,10 +215,10 @@ func TestAdminTelemetryLogTailUsesShortStableCursorWindow(t *testing.T) {
 	store := &fakeAdminTelemetryStore{
 		logsResults: []telemetry.LogsResult{
 			// QueryLogs is newest-first for the initial window. These records
-			// share a timestamp, so trace/span/tie ordering must be retained.
+			// share a timestamp, so event-id ordering must be retained.
 			{Items: []telemetry.LogRecord{
-				{Timestamp: now, TraceID: "trace-b", SpanID: "span-b", CursorKey: 2, Service: "api", Body: "same-time-b"},
-				{Timestamp: now, TraceID: "trace-a", SpanID: "span-a", CursorKey: 1, Service: "api", Body: "same-time-a"},
+				{Timestamp: now, TraceID: "trace-b", SpanID: "span-b", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e", Service: "api", Body: "same-time-b"},
+				{Timestamp: now, TraceID: "trace-a", SpanID: "span-a", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c", Service: "api", Body: "same-time-a"},
 			}},
 			{Items: nil},
 		},
@@ -226,7 +226,7 @@ func TestAdminTelemetryLogTailUsesShortStableCursorWindow(t *testing.T) {
 	// The second poll is the first cursor query. Cancel after it has been
 	// observed so the handler exits without waiting for the two-second ticker.
 	store.logsResults[1] = telemetry.LogsResult{Items: []telemetry.LogRecord{{
-		Timestamp: now.Add(time.Second), TraceID: "trace-c", SpanID: "span-c", CursorKey: 3, Service: "api", Body: "new-row",
+		Timestamp: now.Add(time.Second), TraceID: "trace-c", SpanID: "span-c", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3f", Service: "api", Body: "new-row",
 	}}}
 	store.logsHook = func(call int, _ telemetry.LogsQuery) {
 		if call == 1 {
@@ -254,7 +254,10 @@ func TestAdminTelemetryLogTailUsesShortStableCursorWindow(t *testing.T) {
 	if store.logsQueries[0].Range.To.Sub(store.logsQueries[0].Range.From) > 10*time.Minute {
 		t.Fatalf("initial tail window = %s, want bounded lookback", store.logsQueries[0].Range.To.Sub(store.logsQueries[0].Range.From))
 	}
-	if store.logsQueries[1].After == nil || store.logsQueries[1].After.TraceID != "trace-b" || store.logsQueries[1].After.Tie != 2 {
+	if !store.logsQueries[0].LiveTail {
+		t.Fatalf("initial tail query did not request lossless live-tail filtering")
+	}
+	if store.logsQueries[1].After == nil || store.logsQueries[1].After.EventID != "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e" {
 		t.Fatalf("second query cursor = %+v, want last same-timestamp row", store.logsQueries[1].After)
 	}
 	body := recorder.Body.String()
@@ -270,11 +273,11 @@ func TestAdminTelemetryLogTailUsesShortStableCursorWindow(t *testing.T) {
 
 func TestAdminTelemetryLogTailResumesFromLastEventID(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	previous := telemetry.LogCursor{Timestamp: now, TraceID: "trace-previous", SpanID: "span-previous", Tie: 9}
+	previous := telemetry.LogCursor{Timestamp: now, EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c"}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store := &fakeAdminTelemetryStore{logs: telemetry.LogsResult{Items: []telemetry.LogRecord{{
-		Timestamp: now.Add(time.Second), TraceID: "trace-next", SpanID: "span-next", CursorKey: 10, Service: "api", Body: "resumed-row",
+		Timestamp: now.Add(time.Second), TraceID: "trace-next", SpanID: "span-next", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e", Service: "api", Body: "resumed-row",
 	}}}}
 	store.logsHook = func(call int, _ telemetry.LogsQuery) {
 		if call == 0 {
@@ -295,7 +298,7 @@ func TestAdminTelemetryLogTailResumesFromLastEventID(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tail did not stop after resume poll")
 	}
-	if len(store.logsQueries) != 1 || store.logsQueries[0].After == nil || store.logsQueries[0].After.TraceID != previous.TraceID {
+	if len(store.logsQueries) != 1 || store.logsQueries[0].After == nil || store.logsQueries[0].After.EventID != previous.EventID {
 		t.Fatalf("resume query = %+v, want Last-Event-ID cursor", store.logsQueries)
 	}
 	if !strings.Contains(recorder.Body.String(), "resumed-row") {

@@ -55,6 +55,8 @@ type ClickHouseStore struct {
 	retention        time.Duration
 }
 
+const logEventIDAttribute = "stealth.log.event_id"
+
 func New(cfg Config) (*ClickHouseStore, error) {
 	if strings.TrimSpace(cfg.Address) == "" {
 		return nil, ErrDisabled
@@ -156,12 +158,13 @@ func (r TimeRange) validate(maxRange time.Duration) error {
 }
 
 type LogsQuery struct {
-	Range   TimeRange
-	Service string
-	Level   string
-	Search  string
-	Limit   int
-	After   *LogCursor
+	Range    TimeRange
+	Service  string
+	Level    string
+	Search   string
+	Limit    int
+	After    *LogCursor
+	LiveTail bool
 }
 
 type LogRecord struct {
@@ -173,7 +176,7 @@ type LogRecord struct {
 	Body               string            `json:"message"`
 	Attributes         map[string]string `json:"attributes,omitempty"`
 	ResourceAttributes map[string]string `json:"resource_attributes,omitempty"`
-	CursorKey          uint64            `json:"-"`
+	EventID            string            `json:"-"`
 }
 
 type LogsResult struct {
@@ -324,7 +327,7 @@ SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
        ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
        ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
        ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
-       cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
+       LogAttributes['stealth.log.event_id'] AS EventID
 FROM otel_logs
 LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
 WHERE Timestamp >= {from:DateTime64(9)}
@@ -332,14 +335,16 @@ WHERE Timestamp >= {from:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({level:String} = '' OR SeverityText = {level:String})
   AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
-ORDER BY Timestamp DESC, TraceId DESC, SpanId DESC, CursorKey DESC
+  AND ({live_tail:UInt8} = 0 OR LogAttributes['stealth.log.event_id'] != '')
+ORDER BY Timestamp DESC, EventID DESC
 LIMIT {limit:UInt32}`
 
 // logsAfterQuery is intentionally separate from logsQuery so the normal
 // explorer keeps its newest-first contract while the live tail can advance in
 // chronological order from a complete cursor. The tuple predicate mirrors
 // every ORDER BY key; timestamp-only polling is not sufficient when several
-// records share the same timestamp.
+// records share the same timestamp. Rows without the Collector-generated
+// event ID are excluded because they cannot participate in a lossless cursor.
 const logsAfterQuery = `
 WITH container_metadata AS (` + dockerContainerMetadataQuery + `)
 SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
@@ -347,7 +352,7 @@ SELECT Timestamp, TraceId, SpanId, SeverityText, ServiceName, Body,
        ifNull(container_metadata.ContainerName, ''), ifNull(container_metadata.ImageName, ''),
        ifNull(container_metadata.ImageID, ''), ifNull(container_metadata.ComposeProject, ''),
        ifNull(container_metadata.ComposeService, ''), ifNull(container_metadata.ComposeContainerNumber, ''),
-       cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body) AS CursorKey
+       LogAttributes['stealth.log.event_id'] AS EventID
 FROM otel_logs
 LEFT JOIN container_metadata ON ResourceAttributes['container.id'] = container_metadata.ContainerID
 WHERE Timestamp >= {from:DateTime64(9)}
@@ -355,9 +360,10 @@ WHERE Timestamp >= {from:DateTime64(9)}
   AND ({service:String} = '' OR ServiceName = {service:String})
   AND ({level:String} = '' OR SeverityText = {level:String})
   AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
-  AND (Timestamp, TraceId, SpanId, cityHash64(TraceId, SpanId, SeverityText, ServiceName, Body)) >
-      ({after_timestamp:DateTime64(9)}, {after_trace_id:String}, {after_span_id:String}, {after_tie:UInt64})
-ORDER BY Timestamp ASC, TraceId ASC, SpanId ASC, CursorKey ASC
+  AND LogAttributes['stealth.log.event_id'] != ''
+  AND (Timestamp, LogAttributes['stealth.log.event_id']) >
+      ({after_timestamp:DateTime64(9)}, {after_event_id:String})
+ORDER BY Timestamp ASC, EventID ASC
 LIMIT {limit:UInt32}`
 
 const tracesQuery = `
@@ -501,10 +507,10 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 		statement = logsAfterQuery
 		args = append(args,
 			clickhouse.DateNamed("after_timestamp", query.After.Timestamp.UTC(), clickhouse.NanoSeconds),
-			clickhouse.Named("after_trace_id", boundedFilter(query.After.TraceID, 256)),
-			clickhouse.Named("after_span_id", boundedFilter(query.After.SpanID, 256)),
-			clickhouse.Named("after_tie", query.After.Tie),
+			clickhouse.Named("after_event_id", boundedFilter(query.After.EventID, 256)),
 		)
+	} else {
+		args = append(args, clickhouse.Named("live_tail", boolToUint(query.LiveTail)))
 	}
 	args = append(args, clickhouse.Named("limit", limit))
 	rows, err := s.query(ctx, statement, args...)
@@ -517,10 +523,11 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 		var item LogRecord
 		var attributes, resourceAttributes map[string]string
 		var containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string
-		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &containerName, &imageName, &imageID, &composeProject, &composeService, &composeContainerNumber, &item.CursorKey); err != nil {
+		if err := rows.Scan(&item.Timestamp, &item.TraceID, &item.SpanID, &item.Severity, &item.Service, &item.Body, &attributes, &resourceAttributes, &containerName, &imageName, &imageID, &composeProject, &composeService, &composeContainerNumber, &item.EventID); err != nil {
 			return LogsResult{}, fmt.Errorf("scan telemetry log: %w", err)
 		}
 		item.Body = redactText(item.Body)
+		delete(attributes, logEventIDAttribute)
 		item.Attributes = redactAttributes(attributes)
 		item.ResourceAttributes = redactAttributes(resourceAttributes)
 		item.ResourceAttributes = enrichContainerAttributes(item.ResourceAttributes, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber)
@@ -530,6 +537,13 @@ func (s *ClickHouseStore) QueryLogs(ctx context.Context, query LogsQuery) (LogsR
 		return LogsResult{}, fmt.Errorf("read telemetry logs: %w", err)
 	}
 	return result, nil
+}
+
+func boolToUint(value bool) uint8 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func enrichContainerAttributes(attributes map[string]string, containerName, imageName, imageID, composeProject, composeService, composeContainerNumber string) map[string]string {
