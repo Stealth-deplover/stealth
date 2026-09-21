@@ -85,19 +85,23 @@ matches the current Nginx behavior:
   With the current Console fallback they receive the same Console response as
   Nginx, while API readiness/liveness/build checks remain direct internal
   Compose checks;
-- project/Admin SSE and other long-lived API requests use the same API route;
-  Traefik has no short write timeout and does not buffer responses;
+- project/Admin SSE requests use explicit higher-priority API routers with the
+  security-header middleware only. They bypass request-body buffering so the
+  initial headers and subsequent flushes are delivered promptly. Other API
+  requests use the 100 MiB body-limit middleware;
 - unmatched hosts fail closed with Traefik's 404. The legacy Nginx server has a
   default server block and can accept an unmatched Host; this intentional
   hardening difference is covered by the parity smoke and is not used as the
   future external contract;
 - unknown paths on the matched host retain the Console fallback behavior.
 
-Both the release API and Console routers use the same release-managed headers
-middleware and request-body limit middleware. The production smoke compares
+The ordinary release API and Console routers use the same release-managed
+headers and request-body limit middleware. The two streaming routers use the
+headers middleware without request buffering. The production smoke compares
 Nginx and Traefik status/body behavior for `/`, `/v1/account`, `/healthz`,
 `/readyz`, `/version`, and an unknown path, plus the browser-facing security
-headers on representative Console and API responses.
+headers on representative Console and API responses and an Admin SSE
+connection.
 
 ## Browser security headers and HSTS
 
@@ -121,14 +125,15 @@ Traefik's other browser security headers remain present after Nginx removal.
 
 ## Request-body policy
 
-Nginx currently applies `client_max_body_size 100m`; Traefik applies the same
-explicit 100 MiB limit with `stealth-request-body-limit`. Traefik's buffering
-middleware rejects an over-limit request with 413, uses its bounded memory
-threshold, and can spill an accepted body to the container's bounded `/tmp`.
-It does not buffer response streams, so SSE and WebSockets are unaffected.
-The production smoke uses a temporary smaller limit to prove both accepted and
-rejected paths without uploading 100 MiB in CI; release configuration remains
-104857600 bytes.
+Nginx currently applies `client_max_body_size 100m`; ordinary Traefik API and
+Console requests apply the same explicit 100 MiB limit with
+`stealth-request-body-limit`. The middleware rejects an over-limit request
+with 413, uses its bounded memory threshold, and can spill an accepted body to
+the container's bounded `/tmp`. The Admin and project SSE routers deliberately
+omit it so streaming headers and flushes are not delayed; those endpoints do
+not accept request bodies as part of their contract. The production smoke uses
+a temporary smaller limit to prove both accepted and rejected paths without
+uploading 100 MiB in CI; release configuration remains 104857600 bytes.
 
 ## Ingress network and reserved peers
 

@@ -233,6 +233,10 @@ for required in \
 	'middlewares:' \
 	'stealth-security-headers:' \
 	'stealth-request-body-limit:' \
+	'stealth-admin-realtime:' \
+	'stealth-project-realtime:' \
+	'Path(`/v1/admin/realtime`)' \
+	'PathRegexp(`^/v1/projects/[0-9a-fA-F-]{36}/realtime$`)' \
 	'X-Content-Type-Options: "nosniff"' \
 	'Referrer-Policy: "strict-origin-when-cross-origin"' \
 	'Permissions-Policy: "camera=(), microphone=(), geolocation=(), payment=()"' \

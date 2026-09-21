@@ -242,6 +242,30 @@ func TestTraefikCoreAssetRequiresSecurityHeadersAndRequestLimit(t *testing.T) {
 	}
 }
 
+func TestTraefikCoreAssetKeepsStreamingRoutesOutOfRequestBuffering(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRootForTraefikTest(t), "traefik", "dynamic", "core.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := renderTraefikCoreAsset(contents, Plan{PublicURL: "https://console.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"stealth-admin-realtime:",
+		"Path(`/v1/admin/realtime`)",
+		"stealth-project-realtime:",
+		"PathRegexp(`^/v1/projects/[0-9a-fA-F-]{36}/realtime$`)",
+	} {
+		if !strings.Contains(string(rendered), marker) {
+			t.Fatalf("core asset is missing unbuffered streaming route marker %q", marker)
+		}
+	}
+	if err := validateTraefikCoreAsset(rendered); err != nil {
+		t.Fatalf("streaming route core validation failed: %v", err)
+	}
+}
+
 func TestTraefikManagedAssetsInstallAndRepair(t *testing.T) {
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	t.Run("fresh installation", func(t *testing.T) {

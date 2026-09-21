@@ -19,6 +19,8 @@ const (
 	traefikCloudflaredTrustedCIDRPlaceholder       = "__STEALTH_CLOUDFLARED_TRUSTED_CIDR__"
 	traefikSecurityHeadersMiddleware               = "stealth-security-headers"
 	traefikRequestBodyLimitMiddleware              = "stealth-request-body-limit"
+	traefikAdminRealtimeRouter                     = "stealth-admin-realtime"
+	traefikProjectRealtimeRouter                   = "stealth-project-realtime"
 	traefikRequestBodyLimitBytes             int64 = 104857600
 )
 
@@ -302,8 +304,16 @@ func validateTraefikCoreAsset(contents []byte) error {
 		if !strings.Contains(router.Rule, "Host(`") {
 			return fmt.Errorf("Traefik core router %q has no Host matcher", routerName)
 		}
-		if !containsString(router.Middlewares, traefikSecurityHeadersMiddleware) || !containsString(router.Middlewares, traefikRequestBodyLimitMiddleware) {
-			return fmt.Errorf("Traefik core router %q is missing the release-managed security middleware chain", routerName)
+		if !containsString(router.Middlewares, traefikSecurityHeadersMiddleware) {
+			return fmt.Errorf("Traefik core router %q is missing the release-managed security-header middleware", routerName)
+		}
+		streamingRouter := routerName == traefikAdminRealtimeRouter || routerName == traefikProjectRealtimeRouter
+		if streamingRouter {
+			if containsString(router.Middlewares, traefikRequestBodyLimitMiddleware) {
+				return fmt.Errorf("Traefik streaming router %q must not use the buffering body-limit middleware", routerName)
+			}
+		} else if !containsString(router.Middlewares, traefikRequestBodyLimitMiddleware) {
+			return fmt.Errorf("Traefik core router %q is missing the release-managed request-body middleware", routerName)
 		}
 		service, ok := config.HTTP.Services[router.Service]
 		if !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 {

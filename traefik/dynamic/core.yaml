@@ -21,13 +21,32 @@ http:
     stealth-request-body-limit:
       buffering:
         # Nginx's client_max_body_size 100m is 100 MiB. Traefik buffers only
-        # request bodies, uses its 1 MiB memory threshold, and spills larger
-        # accepted bodies to the container's bounded /tmp tmpfs. Responses
-        # remain unbuffered, so SSE and WebSocket response streams are not
-        # affected.
+        # ordinary request bodies, uses its 1 MiB memory threshold, and spills
+        # larger accepted bodies to the container's bounded /tmp tmpfs. The
+        # explicit streaming routers below intentionally omit this middleware
+        # so SSE flushes are not delayed by intermediary buffering.
         maxRequestBodyBytes: 104857600
 
   routers:
+    # Streaming responses must not pass through the request-body buffering
+    # middleware: the explicit routes preserve immediate SSE header/flush
+    # behavior while the handlers continue to enforce their own auth.
+    stealth-admin-realtime:
+      entryPoints:
+        - web
+      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && Path(`/v1/admin/realtime`)"
+      priority: 200
+      middlewares:
+        - stealth-security-headers
+      service: stealth-api
+    stealth-project-realtime:
+      entryPoints:
+        - web
+      rule: "Host(`__STEALTH_PUBLIC_HOST__`) && PathRegexp(`^/v1/projects/[0-9a-fA-F-]{36}/realtime$`)"
+      priority: 200
+      middlewares:
+        - stealth-security-headers
+      service: stealth-api
     stealth-api:
       entryPoints:
         - web
