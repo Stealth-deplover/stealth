@@ -83,6 +83,25 @@ func (s *Server) requireInstanceAdmin(next http.Handler) http.Handler {
 	}))
 }
 
+func (s *Server) requireInstanceOwner(next http.Handler) http.Handler {
+	return s.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.repo == nil {
+			internalError(s, w, errors.New("repository is unavailable"))
+			return
+		}
+		allowed, err := s.repo.IsInstanceOwner(r.Context(), mustUUID(accountFrom(r).ID))
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			internalError(s, w, err)
+			return
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "forbidden", "instance owner permission is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
 func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
 	checkedAt := time.Now().UTC()
 	queryRange, ok := s.adminTimeRange(w, r)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/domainname"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -43,31 +44,14 @@ func scanSiteDomain(row siteScanner) (domain.SiteDomain, error) {
 	return item, err
 }
 
-// NormalizeSiteHostname canonicalizes a DNS hostname for uniqueness and Host
-// lookup. Internationalized names are intentionally rejected until an IDNA
-// policy is added; accepting ASCII DNS names only keeps verification and
-// routing deterministic.
+// NormalizeSiteHostname canonicalizes a registrable DNS hostname for
+// uniqueness, verification, and Host lookup.
 func NormalizeSiteHostname(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.TrimSuffix(value, ".")
-	if len(value) < 4 || len(value) > 253 || strings.ContainsAny(value, "\x00\r\n /\\:@") || net.ParseIP(value) != nil {
+	normalized, err := domainname.NormalizeDomain(value)
+	if err != nil {
 		return "", ErrInvalidSiteDomain
 	}
-	labels := strings.Split(value, ".")
-	if len(labels) < 2 {
-		return "", ErrInvalidSiteDomain
-	}
-	for _, label := range labels {
-		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "", ErrInvalidSiteDomain
-		}
-		for _, char := range label {
-			if !(char == '-' || char >= 'a' && char <= 'z' || char >= '0' && char <= '9') {
-				return "", ErrInvalidSiteDomain
-			}
-		}
-	}
-	return value, nil
+	return normalized, nil
 }
 
 func newSiteDomainVerificationToken() (string, error) {

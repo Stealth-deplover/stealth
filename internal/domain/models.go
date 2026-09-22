@@ -355,6 +355,14 @@ type AdminPublicIncident struct {
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
+// InstanceDomainSettings separates the Console hostname derived from
+// PUBLIC_APP_URL from the optional workload-hosting suffix stored in
+// PostgreSQL.
+type InstanceDomainSettings struct {
+	InstanceHostname   string  `json:"instance_hostname"`
+	WorkloadBaseDomain *string `json:"workload_base_domain"`
+}
+
 type Project struct {
 	ID             string    `json:"id"`
 	OrganizationID string    `json:"organization_id"`

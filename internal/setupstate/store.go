@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,8 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
 
+	"github.com/Stealth-deplover/stealth/internal/domainname"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 )
 
@@ -796,40 +795,19 @@ func ValidatePublicURL(raw string) (string, error) {
 }
 
 func ValidateHostname(raw string) (string, error) {
-	host := strings.ToLower(strings.TrimSpace(raw))
-	if host == "" || len(host) > 253 || strings.ContainsAny(host, "\x00\r\n/:?#[\\]") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+	host, err := domainname.NormalizeDomain(raw)
+	if err != nil {
 		return "", errors.New("hostname is invalid")
-	}
-	if net.ParseIP(host) != nil || strings.Contains(host, "*") {
-		return "", errors.New("hostname must be a DNS name, not an IP address or wildcard")
-	}
-	labels := strings.Split(host, ".")
-	if len(labels) < 2 {
-		return "", errors.New("hostname must include a DNS zone")
-	}
-	for _, label := range labels {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "", errors.New("hostname label is invalid")
-		}
-		for _, character := range label {
-			if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-' {
-				continue
-			}
-			if unicode.IsLetter(character) {
-				return "", errors.New("hostname must use ASCII DNS labels")
-			}
-			return "", errors.New("hostname label is invalid")
-		}
 	}
 	return host, nil
 }
 
 func ZoneNameForHostname(host string) string {
-	parts := strings.Split(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."), ".")
-	if len(parts) < 2 {
-		return strings.Join(parts, ".")
+	zone, err := domainname.RegistrableDomain(host)
+	if err != nil {
+		return ""
 	}
-	return strings.Join(parts[len(parts)-2:], ".")
+	return zone
 }
 
 func sha256Bytes(value []byte) []byte {

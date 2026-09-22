@@ -212,3 +212,24 @@ owns paginated object listing, deletion, upload completion, and file selection;
 `BucketSettingsPanel` owns bucket-limit updates. The shell keeps only the
 permission projection and route-level selection so object and settings
 changes remain local to their modules.
+
+## Instance domain capability
+
+`PUBLIC_APP_URL` remains the configured Console/public application URL. The
+canonical hostname derived from that URL is the instance hostname and is not a
+second PostgreSQL setting.
+
+`workload_base_domain` is a separate optional singleton PostgreSQL setting
+owned by the Instance Owner. It is normalized through the shared
+`internal/domainname` capability, which applies IDNA ASCII canonicalization and
+public-suffix-aware registrable-domain validation. Instance Admin and
+organization roles do not grant mutation access.
+
+The domain settings API exposes the derived instance hostname and stored
+workload base domain at `/v1/admin/domain-settings`. `GET` follows existing
+instance-admin visibility, while `PATCH` is Instance Owner-only. Sending JSON
+`null` explicitly clears the workload setting; an omitted field is rejected.
+
+This capability does not provision DNS, change Cloudflare Tunnel origins,
+generate workload hostnames, or reconcile Traefik routes. Those effects belong
+to later platform-hostname and routing capabilities.

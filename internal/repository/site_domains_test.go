@@ -13,6 +13,7 @@ func TestNormalizeSiteHostname(t *testing.T) {
 	}{
 		{name: "lowercases and strips root dot", input: "WWW.Example.COM.", want: "www.example.com"},
 		{name: "accepts nested labels", input: "preview.eu.example.test", want: "preview.eu.example.test"},
+		{name: "canonicalizes IDN", input: "例え.テスト", want: "xn--r8jz45g.xn--zckzah"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -40,7 +41,6 @@ func TestNormalizeSiteHostnameRejectsUnsafeValues(t *testing.T) {
 		"example.com/asset",
 		"example.com\\asset",
 		"*.example.com",
-		"例え.テスト",
 	} {
 		if _, err := NormalizeSiteHostname(input); !errors.Is(err, ErrInvalidSiteDomain) {
 			t.Errorf("NormalizeSiteHostname(%q) error = %v, want ErrInvalidSiteDomain", input, err)

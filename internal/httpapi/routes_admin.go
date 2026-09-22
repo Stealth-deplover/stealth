@@ -47,4 +47,6 @@ func (s *Server) registerAdminRoutes(r chi.Router) {
 	r.With(s.requireInstanceAdmin).Delete("/admin/dashboards/{dashboardID}", s.deleteAdminDashboard)
 	r.With(s.requireInstanceAdmin).Get("/admin/status-page", s.getAdminStatusPage)
 	r.With(s.requireInstanceAdmin).Put("/admin/status-page", s.updateAdminStatusPage)
+	r.With(s.requireInstanceAdmin).Get("/admin/domain-settings", s.getInstanceDomainSettings)
+	r.With(s.requireInstanceOwner).Patch("/admin/domain-settings", s.updateInstanceDomainSettings)
 }

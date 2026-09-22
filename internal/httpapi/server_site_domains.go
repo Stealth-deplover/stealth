@@ -51,7 +51,7 @@ func (s *Server) createSiteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	hostname, err := repository.NormalizeSiteHostname(req.Hostname)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", "hostname must be a lowercase DNS hostname with at least two labels")
+		writeError(w, http.StatusUnprocessableEntity, "validation_error", "hostname is not a valid DNS hostname")
 		return
 	}
 	item, err := s.repo.CreateSiteDomain(r.Context(), uuid.Must(uuid.NewV7()), projectID, siteID, siteActorFrom(r), repository.SiteDomainInput{Hostname: hostname})
