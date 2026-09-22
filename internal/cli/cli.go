@@ -40,10 +40,11 @@ type CommandRunner interface {
 type execCommandRunner struct{}
 
 type cliTestOverrides struct {
-	assetBase    string
-	runner       CommandRunner
-	pollAttempts int
-	pollInterval time.Duration
+	assetBase              string
+	runner                 CommandRunner
+	traefikOwnershipSetter func(string, int, int) error
+	pollAttempts           int
+	pollInterval           time.Duration
 }
 
 // App owns process dependencies and CLI configuration. A single App is used
@@ -79,6 +80,7 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	homeDir, _ := os.UserHomeDir()
 	runner := CommandRunner(execCommandRunner{})
 	assetBase := defaultRawBaseURL
+	traefikOwnershipSetter := os.Chown
 	pollAttempts := 60
 	pollInterval := 2 * time.Second
 	if overrides := compiledCLITestOverrides(); overrides != nil {
@@ -87,6 +89,9 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 		}
 		if overrides.runner != nil {
 			runner = overrides.runner
+		}
+		if overrides.traefikOwnershipSetter != nil {
+			traefikOwnershipSetter = overrides.traefikOwnershipSetter
 		}
 		if overrides.pollAttempts > 0 {
 			pollAttempts = overrides.pollAttempts
@@ -108,7 +113,7 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 		executablePath:         os.Executable,
 		renameFile:             os.Rename,
 		currentVersion:         func() string { return buildinfo.Version },
-		traefikOwnershipSetter: os.Chown,
+		traefikOwnershipSetter: traefikOwnershipSetter,
 		pollAttempts:           pollAttempts,
 		pollInterval:           pollInterval,
 	}
