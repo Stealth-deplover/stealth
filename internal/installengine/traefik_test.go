@@ -354,6 +354,138 @@ func assertInstalledTraefikAssets(t *testing.T, layout Layout, host string) {
 	}
 }
 
+func TestEnsureTraefikDirectoriesRepairsNarrowWorkerOwnership(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "stealth")
+	layout, err := NewLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.TraefikDynamic, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.TraefikDynamic, ".reload.yaml"), []byte("legacy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.TraefikStatic, []byte("static\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.TraefikCore, []byte("core\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.TraefikGenerated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("generated state must survive repair\n")
+	if err := os.WriteFile(filepath.Join(layout.TraefikGenerated, "platform-sites.yaml"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	type ownershipCall struct {
+		path string
+		uid  int
+		gid  int
+	}
+	var calls []ownershipCall
+	setter := func(path string, uid, gid int) error {
+		calls = append(calls, ownershipCall{path: path, uid: uid, gid: gid})
+		return nil
+	}
+	if err := ensureTraefikDirectories(layout, setter); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(layout.TraefikReloadMarker)
+	if err != nil {
+		t.Fatalf("top-level reload marker missing: %v", err)
+	}
+	if string(marker) != "legacy\n" {
+		t.Fatalf("existing reload marker was changed: %q", marker)
+	}
+	got, err := os.ReadFile(filepath.Join(layout.TraefikGenerated, "platform-sites.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("generated state changed during repair: %q", got)
+	}
+	var dynamicCall, generatedCall, markerCall, staticCall, coreCall bool
+	for _, call := range calls {
+		if call.path == layout.TraefikDynamic && call.uid == StealthRuntimeUID && call.gid == StealthRuntimeGID {
+			dynamicCall = true
+		}
+		if call.path == layout.TraefikGenerated && call.uid == StealthRuntimeUID && call.gid == StealthRuntimeGID {
+			generatedCall = true
+		}
+		if call.path == layout.TraefikReloadMarker && call.uid == StealthRuntimeUID && call.gid == StealthRuntimeGID {
+			markerCall = true
+		}
+		if call.path == layout.TraefikStatic && call.uid == os.Geteuid() && call.gid == os.Getegid() {
+			staticCall = true
+		}
+		if call.path == layout.TraefikCore && call.uid == os.Geteuid() && call.gid == os.Getegid() {
+			coreCall = true
+		}
+	}
+	if !dynamicCall || !generatedCall || !markerCall || !staticCall || !coreCall {
+		t.Fatalf("runtime ownership was not repaired: %+v", calls)
+	}
+	for _, path := range []string{layout.TraefikDir, layout.TraefikDynamic, layout.TraefikGenerated} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s mode = %o, want 755", path, info.Mode().Perm())
+		}
+	}
+	markerInfo, err := os.Stat(layout.TraefikReloadMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if markerInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("reload marker mode = %o, want 644", markerInfo.Mode().Perm())
+	}
+}
+
+func TestEnsureTraefikDirectoriesRejectsSymlinkAndNonDirectory(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "stealth")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.MkdirAll(outside, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "traefik")); err != nil {
+			t.Skipf("symlink test unavailable: %v", err)
+		}
+		layout, err := NewLayout(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureTraefikDirectories(layout, func(string, int, int) error { return nil }); err == nil {
+			t.Fatal("Traefik directory symlink was accepted")
+		}
+	})
+
+	t.Run("non-directory", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "stealth")
+		layout, err := NewLayout(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(layout.TraefikDynamic, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(layout.TraefikGenerated, []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureTraefikDirectories(layout, func(string, int, int) error { return nil }); err == nil {
+			t.Fatal("Traefik generated file was accepted as a directory")
+		}
+	})
+}
+
 func repoRootForTraefikTest(t *testing.T) string {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)

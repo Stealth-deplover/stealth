@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -20,6 +21,11 @@ const (
 	traefikSecurityHeadersMiddleware         = "stealth-security-headers"
 	traefikAdminRealtimeRouter               = "stealth-admin-realtime"
 	traefikProjectRealtimeRouter             = "stealth-project-realtime"
+	// These IDs are part of the bind-mount contract between the host installer
+	// and the production worker image. They are deliberately fixed rather than
+	// operator-configurable.
+	StealthRuntimeUID = 10001
+	StealthRuntimeGID = 10001
 )
 
 var expectedTraefikSecurityHeaders = map[string]string{
@@ -108,34 +114,53 @@ func traefikPublicHost(plan Plan) (string, error) {
 	return host, nil
 }
 
-func ensureTraefikDirectories(layout Layout) error {
+func ensureTraefikDirectories(layout Layout, ownershipSetter func(string, int, int) error) error {
+	root := filepath.Clean(strings.TrimSpace(layout.Root))
+	if root == "" || root == string(filepath.Separator) {
+		return errors.New("refusing filesystem root as Traefik installation root")
+	}
+	expected := map[string]string{
+		"TraefikDir":          filepath.Join(root, "traefik"),
+		"TraefikDynamic":      filepath.Join(root, "traefik", "dynamic"),
+		"TraefikStatic":       filepath.Join(root, "traefik", "traefik.yaml"),
+		"TraefikCore":         filepath.Join(root, "traefik", "dynamic", "core.yaml"),
+		"TraefikGenerated":    filepath.Join(root, "traefik", "dynamic", "generated"),
+		"TraefikReloadMarker": filepath.Join(root, "traefik", "dynamic", ".reload.yaml"),
+	}
+	for name, actual := range map[string]string{
+		"TraefikDir":          layout.TraefikDir,
+		"TraefikDynamic":      layout.TraefikDynamic,
+		"TraefikStatic":       layout.TraefikStatic,
+		"TraefikCore":         layout.TraefikCore,
+		"TraefikGenerated":    layout.TraefikGenerated,
+		"TraefikReloadMarker": layout.TraefikReloadMarker,
+	} {
+		if filepath.Clean(strings.TrimSpace(actual)) != expected[name] || !pathWithinInstallRoot(root, actual) {
+			return fmt.Errorf("Traefik %s path escapes the installation root", name)
+		}
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return fmt.Errorf("inspect installation root: %w", err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("installation root %q is not a normal directory", root)
+	}
 	for _, path := range []string{layout.TraefikDir, layout.TraefikDynamic, layout.TraefikGenerated} {
-		if strings.TrimSpace(path) == "" {
-			return errors.New("Traefik installation directories are incomplete")
-		}
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			return fmt.Errorf("create Traefik directory %q: %w", path, err)
-		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return fmt.Errorf("inspect Traefik directory %q: %w", path, err)
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("Traefik path %q is not a normal directory", path)
-		}
-		if err := os.Chmod(path, 0o755); err != nil {
-			return fmt.Errorf("protect Traefik directory %q: %w", path, err)
+		if err := ensureTraefikDirectory(root, path); err != nil {
+			return err
 		}
 	}
-	if strings.TrimSpace(layout.TraefikReloadMarker) == "" {
-		return errors.New("Traefik reload marker path is incomplete")
+	if ownershipSetter == nil {
+		return errors.New("Traefik ownership setter is required")
 	}
+	hostUID, hostGID := os.Geteuid(), os.Getegid()
 	markerInfo, err := os.Lstat(layout.TraefikReloadMarker)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := WriteAtomic(layout.TraefikReloadMarker, []byte("# Top-level file-provider reload sentinel.\n"), 0o644); err != nil {
 			return fmt.Errorf("create Traefik reload marker: %w", err)
 		}
-		return nil
+		markerInfo, err = os.Lstat(layout.TraefikReloadMarker)
 	}
 	if err != nil {
 		return fmt.Errorf("inspect Traefik reload marker: %w", err)
@@ -143,10 +168,87 @@ func ensureTraefikDirectories(layout Layout) error {
 	if !markerInfo.Mode().IsRegular() || markerInfo.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("Traefik reload marker %q is not a normal file", layout.TraefikReloadMarker)
 	}
+
+	// The worker atomically replaces the top-level reload marker, so its parent
+	// directory must be writable by the fixed worker identity. The core file is
+	// overlaid read-only in the worker container and release-managed files remain
+	// owned by the installer on the host.
+	if err := ownershipSetter(layout.TraefikDir, hostUID, hostGID); err != nil {
+		return fmt.Errorf("set release-managed Traefik directory owner for %q: %w", layout.TraefikDir, err)
+	}
+	if err := os.Chmod(layout.TraefikDir, 0o755); err != nil {
+		return fmt.Errorf("protect Traefik directory %q: %w", layout.TraefikDir, err)
+	}
+	if err := ownershipSetter(layout.TraefikDynamic, StealthRuntimeUID, StealthRuntimeGID); err != nil {
+		return fmt.Errorf("set Traefik reload directory owner: %w", err)
+	}
+	if err := os.Chmod(layout.TraefikDynamic, 0o755); err != nil {
+		return fmt.Errorf("protect Traefik reload directory: %w", err)
+	}
+	if err := ownershipSetter(layout.TraefikGenerated, StealthRuntimeUID, StealthRuntimeGID); err != nil {
+		return fmt.Errorf("set generated Traefik state owner: %w", err)
+	}
+	if err := os.Chmod(layout.TraefikGenerated, 0o755); err != nil {
+		return fmt.Errorf("protect generated Traefik state directory: %w", err)
+	}
+	if err := ownershipSetter(layout.TraefikReloadMarker, StealthRuntimeUID, StealthRuntimeGID); err != nil {
+		return fmt.Errorf("set Traefik reload marker owner: %w", err)
+	}
 	if err := os.Chmod(layout.TraefikReloadMarker, 0o644); err != nil {
 		return fmt.Errorf("protect Traefik reload marker: %w", err)
 	}
+	for _, path := range []string{layout.TraefikStatic, layout.TraefikCore} {
+		info, statErr := os.Lstat(path)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			return fmt.Errorf("inspect release-managed Traefik file %q: %w", path, statErr)
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("release-managed Traefik file %q is not a normal file", path)
+		}
+		if err := ownershipSetter(path, hostUID, hostGID); err != nil {
+			return fmt.Errorf("set release-managed Traefik file owner for %q: %w", path, err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			return fmt.Errorf("protect release-managed Traefik file %q: %w", path, err)
+		}
+	}
 	return nil
+}
+
+func ensureTraefikDirectory(root, target string) error {
+	if !pathWithinInstallRoot(root, target) {
+		return fmt.Errorf("Traefik directory %q escapes the installation root", target)
+	}
+	info, err := os.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(target, 0o755); err != nil {
+			return fmt.Errorf("create Traefik directory %q: %w", target, err)
+		}
+		info, err = os.Lstat(target)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Traefik directory %q: %w", target, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Traefik path %q is not a normal directory", target)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		return fmt.Errorf("protect Traefik directory %q: %w", target, err)
+	}
+	return nil
+}
+
+func pathWithinInstallRoot(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return target != root
 }
 
 func validateTraefikStaticAsset(contents []byte) error {

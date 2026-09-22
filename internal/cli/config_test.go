@@ -198,6 +198,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
 	app.runner = &setupRunner{}
+	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)

@@ -55,8 +55,8 @@ The installed layout is:
 ```text
 <STEALTH_INSTALL_ROOT>/traefik/traefik.yaml                  release-managed static config
 <STEALTH_INSTALL_ROOT>/traefik/dynamic/core.yaml             release-managed core routes
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml          host-managed reload sentinel
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            worker-owned generated route files
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml           worker-owned reload sentinel
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            worker-owned route files
 ```
 
 Traefik mounts the static file and dynamic tree read-only. These files are
@@ -73,13 +73,20 @@ derived configuration, never the business source of truth:
 - Traefik only consumes the resulting files and never mutates desired state.
 
 The generated directory is separate from release-managed files so update and
-repair do not overwrite platform routes. Compose gives the worker the dynamic
-directory needed to atomically replace the top-level reload sentinel, while a
-read-only overlay protects the release-managed `core.yaml`; the static
-Traefik file and installation root are not mounted. The reconciler writes only
-the generated snapshot and sentinel, and Traefik sees the complete dynamic
-tree read-only. The generated snapshot is derived state, not a route registry
-or database.
+repair do not overwrite platform routes. The host installer creates both the
+dynamic state directory and its generated child as normal directories owned by
+the fixed worker identity `10001:10001` with mode `0755`; generated files use
+normal non-executable modes. The worker receives the dynamic directory as a
+read-write bind mount because atomic replacement of the top-level reload
+sentinel requires write access to its parent. `core.yaml` is overlaid at the
+same container path as a read-only bind mount, while `traefik.yaml` and the
+installation root are not mounted into the worker. The runtime smoke verifies
+that the worker can replace generated state and the reload sentinel but cannot
+write or replace `core.yaml`. Traefik mounts the complete dynamic tree
+read-only. Upgrade and repair verify the writable directories with `Lstat`,
+reject symlinks or non-directories, repair only the narrow directory/file
+ownership contract, and preserve generated content. The generated snapshot is
+derived state, not a route registry or database.
 
 ## Platform Site routes
 
@@ -98,9 +105,9 @@ state before opening the active immutable artifact. A stale generated router
 therefore cannot make a disabled/deleted Site public or expose `/v1/*`,
 `/healthz`, `/readyz`, `/version`, or `/metrics` from the control plane.
 
-If `platform-sites.yaml` is deleted, restart or allow the worker's bounded
-reconcile loop to reconstruct it. Operators must not edit generated YAML by
-hand.
+If `platform-sites.yaml` or the top-level `.reload.yaml` is deleted, restart or
+allow the worker's bounded reconcile loop to reconstruct the generated state.
+Operators must not edit generated YAML by hand.
 
 ## Core routing parity
 

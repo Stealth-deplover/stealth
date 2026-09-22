@@ -364,10 +364,10 @@ services:
       - stealth_storage:/var/lib/stealth/storage
       - function_runner_staging:/var/lib/stealth/runner-staging
       # The parent directory is required for atomic replacement of the
-      # top-level reload sentinel; an individual bind-mounted file cannot be
-      # replaced with rename(2). The release-managed core file is overlaid
-      # read-only, and the static Traefik file/install root are not mounted.
-      - ./traefik/dynamic:/var/lib/stealth/traefik
+      # top-level reload sentinel. The release-managed core file is overlaid
+      # read-only at the same path, so the worker cannot modify or replace it;
+      # the static Traefik file and installation root are not mounted.
+      - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:

@@ -62,6 +62,11 @@ if [ -z "$worker_block" ]; then
 	exit 1
 fi
 
+if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
+	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2
+	exit 1
+fi
+
 for forbidden in \
 	'/var/run/docker.sock' \
 	'privileged: true' \
@@ -115,24 +120,29 @@ fi
 
 # The existing worker owns other bounded capabilities, including the Docker
 # socket for Site/Function builds. Atomic replacement of the top-level reload
-# sentinel requires the worker to see the dynamic directory as a directory
-# mount; the release-managed core file is overlaid read-only. The static
-# Traefik file and the installation root are never mounted into the worker.
+# sentinel requires the dynamic parent directory. core.yaml is overlaid at the
+# same path as a read-only bind mount, while the static Traefik file and
+# installation root are never mounted into the worker. The runtime smoke also
+# proves that the nested read-only core mount rejects writes and replacement.
 for required in \
 	'source: .*/traefik/dynamic$' \
-	'target: /var/lib/stealth/traefik$' \
+	'target: /var/lib/stealth/traefik' \
 	'source: .*/traefik/dynamic/core\.yaml' \
 	'target: /var/lib/stealth/traefik/core\.yaml'; do
 	if ! printf '%s\n' "$worker_block" | grep -Eq -- "$required"; then
-		printf 'worker is missing the protected route-writer mount: %s\n' "$required" >&2
+		printf 'worker is missing the required Traefik state mount: %s\n' "$required" >&2
 		exit 1
 	fi
 done
-if ! printf '%s\n' "$worker_block" | grep -Fq 'read_only: true'; then
-	printf '%s\n' 'worker core.yaml overlay is not read-only' >&2
+if ! printf '%s\n' "$worker_block" | awk '
+/source: .*[\\/]traefik[\\/]dynamic[\\/]core\.yaml/ { core_source=1 }
+/target: \/var\/lib\/stealth\/traefik\/core\.yaml/ { core_target=1 }
+/read_only: true/ && core_source && core_target { core_read_only=1 }
+END { exit(core_read_only ? 0 : 1) }'; then
+	printf '%s\n' 'worker core.yaml mount is not explicitly read-only' >&2
 	exit 1
 fi
-if printf '%s\n' "$worker_block" | grep -Eq 'source: .*/traefik/traefik\.yaml|source: .*/traefik$|target: /etc/traefik|target: /var/lib/stealth/traefik/traefik\.yaml'; then
+if printf '%s\n' "$worker_block" | grep -Eq 'source: .*/traefik/traefik\.yaml|target: /etc/traefik|target: /var/lib/stealth/traefik/traefik\.yaml'; then
 	printf '%s\n' 'worker has a static or installation-root Traefik mount' >&2
 	exit 1
 fi

@@ -19,7 +19,11 @@ FROM alpine:3.24 AS runtime-base
 ARG VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIME=unknown
-RUN apk add --no-cache ca-certificates wget && addgroup -S stealth && adduser -S -G stealth stealth
+# Keep the application identity stable because the host installer prepares
+# bind-mounted generated state for this numeric owner. Do not make these build
+# arguments: changing them would silently invalidate the host ownership
+# contract.
+RUN apk add --no-cache ca-certificates wget && addgroup -S -g 10001 stealth && adduser -S -D -u 10001 -G stealth stealth
 RUN mkdir -p /var/lib/stealth/storage /var/lib/stealth/runner-staging && chown -R stealth:stealth /var/lib/stealth
 VOLUME ["/var/lib/stealth/storage", "/var/lib/stealth/runner-staging"]
 WORKDIR /app

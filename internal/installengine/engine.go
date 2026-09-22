@@ -183,17 +183,24 @@ type Options struct {
 	// not set it; it exists so recovery is exercised after each durable
 	// transaction boundary instead of relying on timing-sensitive SIGKILL tests.
 	MigrationHook func(MigrationEvent) error
+
+	// TraefikOwnershipSetter is supplied by the host CLI because preparing a
+	// bind-mounted worker directory requires host ownership privileges. Keeping
+	// it explicit preserves the installer dependency-injection boundary while
+	// allowing unit tests to use an in-memory ownership seam.
+	TraefikOwnershipSetter func(string, int, int) error
 }
 
 type Engine struct {
-	runner        CommandRunner
-	httpClient    *http.Client
-	assetBaseURL  string
-	output        io.Writer
-	pollAttempts  int
-	pollInterval  time.Duration
-	managedAssets []ManagedAsset
-	migrationHook func(MigrationEvent) error
+	runner                 CommandRunner
+	httpClient             *http.Client
+	assetBaseURL           string
+	output                 io.Writer
+	pollAttempts           int
+	pollInterval           time.Duration
+	managedAssets          []ManagedAsset
+	migrationHook          func(MigrationEvent) error
+	traefikOwnershipSetter func(string, int, int) error
 }
 
 func New(options Options) *Engine {
@@ -225,10 +232,14 @@ func New(options Options) *Engine {
 	if managedAssets == nil {
 		managedAssets = DefaultManagedAssets()
 	}
+	ownershipSetter := options.TraefikOwnershipSetter
+	if ownershipSetter == nil {
+		ownershipSetter = func(string, int, int) error { return nil }
+	}
 	return &Engine{
 		runner: runner, httpClient: httpClient, assetBaseURL: assetBaseURL, output: output,
 		pollAttempts: attempts, pollInterval: interval, managedAssets: append([]ManagedAsset(nil), managedAssets...),
-		migrationHook: options.MigrationHook,
+		migrationHook: options.MigrationHook, traefikOwnershipSetter: ownershipSetter,
 	}
 }
 
@@ -503,6 +514,9 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	if err := ValidateReleaseVersion(strings.TrimSpace(plan.Version)); err != nil {
 		return nil, err
 	}
+	if err := validateInstallRootBeforeCreation(plan.Layout.Root); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(plan.Layout.Root, 0o700); err != nil {
 		return nil, fmt.Errorf("create installation directory: %w", err)
 	}
@@ -622,11 +636,29 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 	}
 	prepared.assets = assets
 	if !plan.Setup {
-		if err := ensureTraefikDirectories(plan.Layout); err != nil {
+		if err := ensureTraefikDirectories(plan.Layout, e.traefikOwnershipSetter); err != nil {
 			return nil, err
 		}
 	}
 	return prepared, nil
+}
+
+func validateInstallRootBeforeCreation(root string) error {
+	clean := filepath.Clean(strings.TrimSpace(root))
+	if clean == "" || clean == string(filepath.Separator) {
+		return errors.New("refusing filesystem root as installation directory")
+	}
+	info, err := os.Lstat(clean)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect installation directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("installation directory %q is not a normal directory", clean)
+	}
+	return nil
 }
 
 func (p *preparedInstallation) commit(plan Plan) error {

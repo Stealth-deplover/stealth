@@ -50,21 +50,22 @@ type cliTestOverrides struct {
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
 type App struct {
-	in                  io.Reader
-	out                 io.Writer
-	errOut              io.Writer
-	runner              CommandRunner
-	httpClient          *http.Client
-	homeDir             string
-	assetBase           string
-	releaseAPIBase      string
-	releaseDownloadBase string
-	executablePath      func() (string, error)
-	renameFile          func(string, string) error
-	currentVersion      func() string
-	runTargetMigration  func(context.Context, string, string) error
-	cloudflareFactory   cloudflareClientFactory
-	verbose             bool
+	in                     io.Reader
+	out                    io.Writer
+	errOut                 io.Writer
+	runner                 CommandRunner
+	httpClient             *http.Client
+	homeDir                string
+	assetBase              string
+	releaseAPIBase         string
+	releaseDownloadBase    string
+	executablePath         func() (string, error)
+	renameFile             func(string, string) error
+	currentVersion         func() string
+	runTargetMigration     func(context.Context, string, string) error
+	cloudflareFactory      cloudflareClientFactory
+	traefikOwnershipSetter func(string, int, int) error
+	verbose                bool
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.
@@ -95,20 +96,21 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 		}
 	}
 	return &App{
-		in:                  in,
-		out:                 out,
-		errOut:              errOut,
-		runner:              runner,
-		httpClient:          &http.Client{Timeout: 20 * time.Second},
-		homeDir:             homeDir,
-		assetBase:           assetBase,
-		releaseAPIBase:      defaultGitHubAPIBaseURL,
-		releaseDownloadBase: defaultGitHubReleaseBaseURL,
-		executablePath:      os.Executable,
-		renameFile:          os.Rename,
-		currentVersion:      func() string { return buildinfo.Version },
-		pollAttempts:        pollAttempts,
-		pollInterval:        pollInterval,
+		in:                     in,
+		out:                    out,
+		errOut:                 errOut,
+		runner:                 runner,
+		httpClient:             &http.Client{Timeout: 20 * time.Second},
+		homeDir:                homeDir,
+		assetBase:              assetBase,
+		releaseAPIBase:         defaultGitHubAPIBaseURL,
+		releaseDownloadBase:    defaultGitHubReleaseBaseURL,
+		executablePath:         os.Executable,
+		renameFile:             os.Rename,
+		currentVersion:         func() string { return buildinfo.Version },
+		traefikOwnershipSetter: os.Chown,
+		pollAttempts:           pollAttempts,
+		pollInterval:           pollInterval,
 	}
 }
 

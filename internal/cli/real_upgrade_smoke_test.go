@@ -245,6 +245,7 @@ func runRealV025BridgeReconciliation(t *testing.T, fixtureRoot, assetBase, bridg
 	t.Setenv("STEALTH_INSTALL_DIR", reconciliationRoot)
 	var output, errorsOutput bytes.Buffer
 	app := NewApp(strings.NewReader(""), &output, &errorsOutput)
+	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	app.assetBase = assetBase
 	releaseClient := releaseServer.server.Client()
 	app.httpClient = &http.Client{

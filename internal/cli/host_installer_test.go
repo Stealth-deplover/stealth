@@ -99,6 +99,7 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		t.Fatal(err)
 	}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	app.runner = &setupRunner{}
 	app.httpClient = server.Client()
 	app.assetBase = server.URL
@@ -373,6 +374,7 @@ func TestHostInstallerRestartResumesInstallingRun(t *testing.T) {
 	}
 
 	resumed := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	resumed.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	resumed.runner = &setupRunner{}
 	resumed.httpClient = fixture.server.Client()
 	resumed.assetBase = fixture.server.URL
