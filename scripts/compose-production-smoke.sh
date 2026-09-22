@@ -70,6 +70,27 @@ prepare_traefik_state_for_smoke() {
 	printf 'Traefik state starts owned by host uid %s; the Compose init service will prepare worker access\n' "$(id -u)"
 }
 
+verify_traefik_state_init() {
+	local host_uid dynamic_state generated_state reload_state
+	host_uid="$(id -u)"
+	dynamic_state="$(stat -c '%u:%g:%a' "$dynamic_state_dir")"
+	generated_state="$(stat -c '%u:%g:%a' "$generated_state_dir")"
+	reload_state="$(stat -c '%u:%g:%a' "$dynamic_state_dir/.reload.yaml")"
+	if [ "$dynamic_state" != "${host_uid}:10001:775" ]; then
+		printf 'init dynamic-state uid/gid/mode = %s, want %s:10001:775\n' "$dynamic_state" "$host_uid" >&2
+		return 1
+	fi
+	if [ "$generated_state" != "${host_uid}:10001:775" ]; then
+		printf 'init generated-state uid/gid/mode = %s, want %s:10001:775\n' "$generated_state" "$host_uid" >&2
+		return 1
+	fi
+	if [ "$reload_state" != "${host_uid}:10001:664" ]; then
+		printf 'init reload-state uid/gid/mode = %s, want %s:10001:664\n' "$reload_state" "$host_uid" >&2
+		return 1
+	fi
+	printf 'Traefik state init prepared dynamic=%s generated=%s reload=%s\n' "$dynamic_state" "$generated_state" "$reload_state"
+}
+
 restore_traefik_state_after_smoke() {
 	if [ "$traefik_state_prepared" != "true" ]; then
 		return 0
@@ -215,6 +236,7 @@ prepare_traefik_state_for_smoke
 "${compose[@]}" run --rm --no-deps \
 	-e "STEALTH_TRAEFIK_HOST_UID=$(id -u)" \
 	traefik-state-init
+verify_traefik_state_init
 
 wait_for_healthy() {
 	local service="$1"
@@ -510,8 +532,8 @@ verify_worker_platform_state_boundary() {
 	fi
 	reload_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik/.reload.yaml')"
 	core_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik/core.yaml')"
-	if [ "$reload_state" != "${host_uid}:10001:664" ]; then
-		printf 'worker reload-state uid/gid/mode = %s, want %s:10001:664\n' "$reload_state" "$host_uid" >&2
+	if [ "$reload_state" != '10001:10001:644' ]; then
+		printf 'worker reload-state uid/gid/mode = %s, want 10001:10001:644 after atomic replacement\n' "$reload_state" >&2
 		return 1
 	fi
 	printf 'worker runtime identity=%s dynamic=%s generated=%s reload=%s core=%s\n' "$worker_user" "$dynamic_state" "$generated_state" "$reload_state" "$core_state"
