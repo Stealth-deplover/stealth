@@ -11,6 +11,7 @@ import (
 
 	"github.com/Stealth-deplover/stealth/internal/apikey"
 	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/platformhostname"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -96,7 +97,8 @@ type SiteStoragePaths struct {
 	SourcePath   string
 }
 
-const siteProjection = `id,project_id,name,framework,enabled,status,artifact_quota_bytes,artifact_used_bytes,artifact_reserved_bytes,active_deployment_id,created_at,updated_at`
+const siteProjection = `id,project_id,name,framework,enabled,status,artifact_quota_bytes,artifact_used_bytes,artifact_reserved_bytes,active_deployment_id,created_at,updated_at,platform_label,(SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE)`
+const siteMutationProjection = `id,project_id,name,framework,enabled,status,artifact_quota_bytes,artifact_used_bytes,artifact_reserved_bytes,active_deployment_id,created_at,updated_at,platform_label,NULL::text`
 const siteDeploymentProjection = `id,site_id,project_id,version,source,source_name,size_bytes,archive_size_bytes,checksum_sha256,status,build_runtime,build_command,output_directory,reserved_bytes,build_status,activate_requested,error_message,created_by_account_id,queued_at,build_started_at,built_at,activated_at,finished_at,created_at,updated_at,git_repository,git_ref`
 const siteBuildLogProjection = `id,deployment_id,site_id,project_id,sequence,level,message,created_at`
 
@@ -105,10 +107,19 @@ type siteScanner interface{ Scan(...any) error }
 func scanSite(row siteScanner) (domain.Site, error) {
 	var item domain.Site
 	var active *uuid.UUID
-	err := row.Scan(&item.ID, &item.ProjectID, &item.Name, &item.Framework, &item.Enabled, &item.Status, &item.ArtifactQuotaBytes, &item.ArtifactUsedBytes, &item.ArtifactReservedBytes, &active, &item.CreatedAt, &item.UpdatedAt)
+	var platformLabel string
+	var workloadBaseDomain *string
+	err := row.Scan(&item.ID, &item.ProjectID, &item.Name, &item.Framework, &item.Enabled, &item.Status, &item.ArtifactQuotaBytes, &item.ArtifactUsedBytes, &item.ArtifactReservedBytes, &active, &item.CreatedAt, &item.UpdatedAt, &platformLabel, &workloadBaseDomain)
 	if err == nil && active != nil {
 		value := active.String()
 		item.ActiveDeploymentID = &value
+	}
+	if err == nil && workloadBaseDomain != nil {
+		hostname, hostnameErr := platformhostname.Hostname(platformLabel, *workloadBaseDomain)
+		if hostnameErr != nil {
+			return domain.Site{}, hostnameErr
+		}
+		item.PlatformHostname = &hostname
 	}
 	return item, err
 }
@@ -270,9 +281,25 @@ func (r *Repository) CreateSite(ctx context.Context, id, projectID uuid.UUID, ac
 	if input.ArtifactQuotaBytes <= 0 || input.Framework != "static" || (input.Status == "active") != input.Enabled {
 		return domain.Site{}, ErrInvalidSiteSettings
 	}
-	item, err := scanSite(tx.QueryRow(ctx, `INSERT INTO project_sites (id,project_id,name,framework,enabled,status,artifact_quota_bytes) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+siteProjection, id, projectID, input.Name, input.Framework, input.Enabled, input.Status, input.ArtifactQuotaBytes))
+	var item domain.Site
+	allocated := false
+	for _, platformLabel := range platformhostname.Candidates(input.Name, id) {
+		item, err = scanSite(tx.QueryRow(ctx, `INSERT INTO project_sites (id,project_id,name,platform_label,framework,enabled,status,artifact_quota_bytes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (platform_label) DO NOTHING RETURNING `+siteMutationProjection, id, projectID, input.Name, platformLabel, input.Framework, input.Enabled, input.Status, input.ArtifactQuotaBytes))
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return domain.Site{}, mapError(err)
+		}
+		allocated = true
+		break
+	}
+	if !allocated {
+		return domain.Site{}, ErrConflict
+	}
+	item, err = r.siteByID(ctx, tx, projectID, id, false)
 	if err != nil {
-		return domain.Site{}, mapError(err)
+		return domain.Site{}, err
 	}
 	if err := r.auditSite(ctx, tx, projectID, actor, "site.create", "site", id, map[string]any{"name": input.Name, "framework": input.Framework}); err != nil {
 		return domain.Site{}, err
@@ -325,12 +352,16 @@ func (r *Repository) UpdateSite(ctx context.Context, projectID, siteID uuid.UUID
 	if framework != "static" || (status != "active" && status != "disabled") || (status == "active") != enabled || quota <= 0 || quota < existing.ArtifactUsedBytes+existing.ArtifactReservedBytes {
 		return domain.Site{}, ErrInvalidSiteSettings
 	}
-	item, err := scanSite(tx.QueryRow(ctx, `UPDATE project_sites SET name=$3,framework=$4,enabled=$5,status=$6,artifact_quota_bytes=$7,updated_at=now() WHERE project_id=$1 AND id=$2 RETURNING `+siteProjection, projectID, siteID, name, framework, enabled, status, quota))
+	item, err := scanSite(tx.QueryRow(ctx, `UPDATE project_sites SET name=$3,framework=$4,enabled=$5,status=$6,artifact_quota_bytes=$7,updated_at=now() WHERE project_id=$1 AND id=$2 RETURNING `+siteMutationProjection, projectID, siteID, name, framework, enabled, status, quota))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Site{}, ErrNotFound
 	}
 	if err != nil {
 		return domain.Site{}, mapError(err)
+	}
+	item, err = r.siteByID(ctx, tx, projectID, siteID, false)
+	if err != nil {
+		return domain.Site{}, err
 	}
 	if err := r.auditSite(ctx, tx, projectID, actor, "site.update", "site", siteID, map[string]any{"changed_fields": siteChangedFields(patch)}); err != nil {
 		return domain.Site{}, err

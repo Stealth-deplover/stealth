@@ -5149,6 +5149,8 @@ export interface components {
             /** Format: uuid */
             project_id: string;
             name: string;
+            /** @description Canonical ASCII/punycode platform hostname derived from the stable Site identity and current workload_base_domain; null when the instance workload domain is unset. */
+            platform_hostname: string | null;
             /** @enum {string} */
             framework: SiteFramework;
             enabled: boolean;
@@ -7521,6 +7523,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
             500: components["responses"]["InternalError"];

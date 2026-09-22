@@ -18,7 +18,16 @@ compose=(docker compose --env-file "$env_file" -f "$compose_file")
 cookie_file="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-cookie.XXXXXX")"
 register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.XXXXXX")"
 auth_cookie_header=""
+api_url=""
 filelog_smoke_pid=""
+platform_archive=""
+platform_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-platform.XXXXXX")"
+platform_project_id=""
+platform_site_id=""
+platform_host=""
+platform_base_domain=""
+platform_previous_base_domain=""
+platform_domain_changed="false"
 core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
 core_backup=""
 core_modified="false"
@@ -48,6 +57,22 @@ cleanup() {
 		wait "$filelog_smoke_pid" 2>/dev/null || true
 		filelog_smoke_pid=""
 	fi
+	# Best-effort cleanup keeps a persistent smoke database from retaining the
+	# temporary Site, project, workload domain, or elevated role if a later
+	# assertion fails. The database remains authoritative throughout the probe.
+	if [ -n "$platform_site_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
+		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/sites/${platform_site_id}" >/dev/null 2>&1 || true
+	fi
+	if [ -n "$platform_project_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
+		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --header 'Content-Type: application/json' --request DELETE --data '{"confirm_name":"platform-route-smoke"}' "${api_url%/}/v1/projects/${platform_project_id}" >/dev/null 2>&1 || true
+	fi
+	if [ "$platform_domain_changed" = "true" ]; then
+		if [ -n "$platform_previous_base_domain" ]; then
+			"${compose[@]}" exec -T postgres sh -ec 'previous_domain="$1"; case "$previous_domain" in *[!A-Za-z0-9.-]*) exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "UPDATE instance_domain_settings SET workload_base_domain = '\''$previous_domain'\'', updated_at = now() WHERE id = TRUE"' sh "$platform_previous_base_domain" >/dev/null 2>&1 || true
+		else
+			"${compose[@]}" exec -T postgres sh -ec 'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "UPDATE instance_domain_settings SET workload_base_domain = NULL, updated_at = now() WHERE id = TRUE"' >/dev/null 2>&1 || true
+		fi
+	fi
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
@@ -64,7 +89,7 @@ cleanup() {
 	if [ "$static_modified" = "true" ] && [ -n "$static_backup" ]; then
 		cp -- "$static_backup" "$static_file" || true
 	fi
-	rm -f "$cookie_file" "$register_response"
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
@@ -719,6 +744,172 @@ verify_traefik_routing() {
 	printf 'Traefik core API, Console fallback, fail-closed, SSE, and Nginx parity checks passed; upload limits remain API-owned\n'
 }
 
+platform_request() {
+	local method="$1" path="$2" body="$3" output="$4"
+	if [ -n "$body" ]; then
+		curl --silent --show-error --max-time 10 \
+			--header "Cookie: $auth_cookie_header" \
+			--header 'Content-Type: application/json' \
+			--request "$method" --data-raw "$body" \
+			--output "$output" --write-out '%{http_code}' \
+			"${api_url%/}${path}"
+		return
+	fi
+	curl --silent --show-error --max-time 10 \
+		--header "Cookie: $auth_cookie_header" \
+		--request "$method" \
+		--output "$output" --write-out '%{http_code}' \
+		"${api_url%/}${path}"
+}
+
+platform_json_field() {
+	local file="$1" path="$2"
+	python3 - "$file" "$path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+for part in sys.argv[2].split('.'):
+    if not isinstance(value, dict):
+        value = None
+        break
+    value = value.get(part)
+if value is None:
+    print("")
+else:
+    print(value)
+PY
+}
+
+prepare_platform_route_smoke() {
+	local account_id organization_id project_status site_status site_status_after_upload
+	local upload_body
+	account_id="$(platform_json_field "$register_response" account.id)"
+	organization_id="$(platform_json_field "$register_response" organization.id)"
+	if [ -z "$account_id" ] || [ -z "$organization_id" ]; then
+		printf '%s\n' 'registration response did not contain account and organization IDs for platform smoke' >&2
+		return 1
+	fi
+	project_status="$(platform_request POST "/v1/organizations/${organization_id}/projects" '{"name":"platform-route-smoke"}' "$platform_response")"
+	if [ "$project_status" != '201' ]; then
+		printf 'platform smoke project creation returned HTTP %s\n' "$project_status" >&2
+		sed -n '1,80p' "$platform_response" >&2
+		return 1
+	fi
+	platform_project_id="$(platform_json_field "$platform_response" project.id)"
+	if [ -z "$platform_project_id" ]; then
+		printf '%s\n' 'platform smoke project response did not contain an ID' >&2
+		return 1
+	fi
+
+	site_status="$(platform_request POST "/v1/projects/${platform_project_id}/sites" '{"name":"platform-route-smoke"}' "$platform_response")"
+	if [ "$site_status" != '201' ]; then
+		printf 'platform smoke Site creation returned HTTP %s\n' "$site_status" >&2
+		sed -n '1,80p' "$platform_response" >&2
+		return 1
+	fi
+	platform_site_id="$(platform_json_field "$platform_response" site.id)"
+	if [ -z "$platform_site_id" ]; then
+		printf '%s\n' 'platform smoke Site response did not contain an ID' >&2
+		return 1
+	fi
+
+	platform_base_domain="apps-${smoke_marker}.example.com"
+	# Seed this disposable desired state directly so the smoke does not alter the
+	# installation owner role. The API authorization and audit path are covered
+	# by the required PostgreSQL integration test.
+	platform_previous_base_domain="$("${compose[@]}" exec -T postgres sh -ec \
+		'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT workload_base_domain FROM instance_domain_settings WHERE id = TRUE"' | tr -d '\r\n')"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'domain="$1"; case "$domain" in *[!A-Za-z0-9.-]*) exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "UPDATE instance_domain_settings SET workload_base_domain = '\''$domain'\'', updated_at = now() WHERE id = TRUE"' \
+		sh "$platform_base_domain"
+	platform_domain_changed="true"
+
+	platform_archive="$(mktemp "${TMPDIR:-/tmp}/stealth-platform-route-smoke.XXXXXX.zip")"
+	python3 - "$platform_archive" "$smoke_marker" <<'PY'
+import sys
+import zipfile
+
+archive, marker = sys.argv[1:]
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    output.writestr("index.html", "<!doctype html><title>platform smoke</title>" + marker)
+PY
+	upload_body="$platform_response"
+	site_status_after_upload="$(curl --silent --show-error --max-time 20 \
+		--header "Cookie: $auth_cookie_header" \
+		--form "source=@${platform_archive};type=application/zip" \
+		--form 'source_name=platform-route-smoke.zip' \
+		--form 'activate=true' \
+		--output "$upload_body" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/sites/${platform_site_id}/deployments")"
+	if [ "$site_status_after_upload" != '201' ]; then
+		printf 'platform smoke deployment upload returned HTTP %s\n' "$site_status_after_upload" >&2
+		sed -n '1,80p' "$upload_body" >&2
+		return 1
+	fi
+
+	site_status="$(platform_request GET "/v1/projects/${platform_project_id}/sites/${platform_site_id}" '' "$platform_response")"
+	if [ "$site_status" != '200' ]; then
+		printf 'platform smoke Site read returned HTTP %s\n' "$site_status" >&2
+		return 1
+	fi
+	platform_host="$(platform_json_field "$platform_response" site.platform_hostname)"
+	if [ -z "$platform_host" ]; then
+		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
+		return 1
+	fi
+	printf 'platform smoke state prepared: host=%s\n' "$platform_host"
+}
+
+verify_platform_route_smoke() {
+	local status body
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(traefik_http_status / "$platform_host")"
+		if [ "$status" = '200' ]; then
+			body="$("${compose[@]}" exec -T api sh -ec \
+				'wget -qO- --timeout=8 --header "Host: $1" http://traefik:8080/' sh "$platform_host" || true)"
+			if printf '%s' "$body" | grep -Fq -- "$smoke_marker"; then
+				break
+			fi
+		fi
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'platform hostname route did not serve the expected Site after reconciliation: host=%s status=%s\n' "$platform_host" "$status" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	for path in /v1/account /healthz /readyz /version /metrics; do
+		status="$(traefik_http_status "$path" "$platform_host")"
+		if [ "$status" != '404' ]; then
+			printf 'platform hostname exposed control-plane path=%s status=%s\n' "$path" "$status" >&2
+			return 1
+		fi
+	done
+	status="$(traefik_http_status / "unknown.${platform_base_domain}")"
+	if [ "$status" != '404' ]; then
+		printf 'unknown platform hostname status=%s, want 404\n' "$status" >&2
+		return 1
+	fi
+	printf 'platform hostname Traefik route served the Site and isolated control-plane paths\n'
+}
+
+clear_platform_route_smoke() {
+	local route_status
+	"${compose[@]}" exec -T postgres sh -ec \
+		'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "UPDATE instance_domain_settings SET workload_base_domain = NULL, updated_at = now() WHERE id = TRUE"'
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		route_status="$(traefik_http_status / "$platform_host")"
+		if [ "$route_status" = '404' ]; then
+			printf 'platform route removal after workload-domain clear passed\n'
+			return 0
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	printf 'platform route remained after workload-domain clear: status=%s\n' "$route_status" >&2
+	return 1
+}
+
 verify_telemetry_runtime_boundaries() {
 	local service container mounts caps networks
 	local collector_networks="" host_networks="" docker_logs_networks="" docker_metrics_networks="" docker_proxy_networks=""
@@ -1048,6 +1239,9 @@ if [ "$role_count" != '1' ]; then
 fi
 
 verify_traefik_routing
+prepare_platform_route_smoke
+verify_platform_route_smoke
+clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"
 start_docker_filelog_smoke "compose filelog smoke ${filelog_marker}"

@@ -230,6 +230,25 @@ workload base domain at `/v1/admin/domain-settings`. `GET` follows existing
 instance-admin visibility, while `PATCH` is Instance Owner-only. Sending JSON
 `null` explicitly clears the workload setting; an omitted field is rejected.
 
-This capability does not provision DNS, change Cloudflare Tunnel origins,
-generate workload hostnames, or reconcile Traefik routes. Those effects belong
-to later platform-hostname and routing capabilities.
+Sites now receive a stable globally unique `platform_label` in PostgreSQL.
+When `workload_base_domain` is configured, the Site API derives a canonical
+`platform_hostname` such as `portfolio.apps.example.com`; when it is unset the
+field is `null`. A Site rename never changes the persisted label or public
+hostname. The small reserved namespace (`api`, `admin`, `console`, `status`,
+and `www`) is allocated a deterministic UUID-suffixed label instead.
+
+The existing worker owns a PostgreSQL-backed platform-route reconciler. It
+renders the complete desired platform Site snapshot to
+`traefik/dynamic/generated/platform-sites.yaml` and updates the existing
+reload sentinel with crash-safe temporary-file/fsync/atomic-rename
+publication. PostgreSQL is authoritative; generated YAML is derived state and
+is rebuilt on worker startup, with stale routes removed from the next
+successful snapshot. A PostgreSQL advisory lock provides single-writer
+coordination across workers.
+
+Platform hostnames target a separate private API listener containing only the
+current, enabled Site static-serving surface. It independently resolves the
+Host against PostgreSQL, so a stale Traefik file cannot serve a deleted or
+disabled Site and cannot expose Console API, health, metrics, or version
+routes. Nginx remains the public edge and Cloudflare provisioning is unchanged;
+wildcard DNS and Cloudflare-to-Traefik cutover are deferred.

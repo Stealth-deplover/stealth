@@ -56,6 +56,11 @@ if [ -z "$traefik_block" ]; then
 	printf '%s\n' 'Traefik service is missing from rendered production Compose' >&2
 	exit 1
 fi
+worker_block="$(service_block worker)"
+if [ -z "$worker_block" ]; then
+	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
+	exit 1
+fi
 
 for forbidden in \
 	'/var/run/docker.sock' \
@@ -99,8 +104,36 @@ if ! printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/dynamic([[:sp
 	printf '%s\n' 'Traefik dynamic directory mount is incorrect' >&2
 	exit 1
 fi
+if printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/dynamic/(generated|\.reload\.yaml)|target: /var/lib/stealth/traefik/(generated|\.reload\.yaml)'; then
+	printf '%s\n' 'Traefik must not receive a writable reconciler path mount' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$traefik_block" | grep -Fq 'read_only: true'; then
 	printf '%s\n' 'Traefik mounts/root filesystem are not read-only in rendered Compose' >&2
+	exit 1
+fi
+
+# The existing worker owns other bounded capabilities, including the Docker
+# socket for Site/Function builds. Atomic replacement of the top-level reload
+# sentinel requires the worker to see the dynamic directory as a directory
+# mount; the release-managed core file is overlaid read-only. The static
+# Traefik file and the installation root are never mounted into the worker.
+for required in \
+	'source: .*/traefik/dynamic$' \
+	'target: /var/lib/stealth/traefik$' \
+	'source: .*/traefik/dynamic/core\.yaml' \
+	'target: /var/lib/stealth/traefik/core\.yaml'; do
+	if ! printf '%s\n' "$worker_block" | grep -Eq -- "$required"; then
+		printf 'worker is missing the protected route-writer mount: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$worker_block" | grep -Fq 'read_only: true'; then
+	printf '%s\n' 'worker core.yaml overlay is not read-only' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_block" | grep -Eq 'source: .*/traefik/traefik\.yaml|source: .*/traefik$|target: /etc/traefik|target: /var/lib/stealth/traefik/traefik\.yaml'; then
+	printf '%s\n' 'worker has a static or installation-root Traefik mount' >&2
 	exit 1
 fi
 
@@ -280,4 +313,4 @@ if grep -Fq 'Strict-Transport-Security:' "$core_file"; then
 	exit 1
 fi
 
-printf '%s\n' 'Traefik security regression passed: file provider only, private configurable ingress, reserved peers, read-only config, no socket, no dashboard'
+printf '%s\n' 'Traefik security regression passed: file provider only, private configurable ingress, reserved peers, protected worker route writer, no socket, no dashboard'

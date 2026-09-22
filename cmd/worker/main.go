@@ -23,6 +23,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
+	"github.com/Stealth-deplover/stealth/internal/ingress"
 	"github.com/Stealth-deplover/stealth/internal/mailer"
 	"github.com/Stealth-deplover/stealth/internal/messagingrunner"
 	"github.com/Stealth-deplover/stealth/internal/monitoring"
@@ -104,6 +105,11 @@ func main() {
 		os.Exit(1)
 	}
 	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher, AdminCipher: cipher})
+	platformRouteReconciler, err := ingress.New(repo, cfg.TraefikGeneratedDir, cfg.TraefikReloadFile, cfg.PlatformRouteReconcileInterval, logger)
+	if err != nil {
+		logger.Error("platform route reconciler configuration error", "error", err)
+		os.Exit(1)
+	}
 	telemetryStore, telemetryErr := telemetry.New(telemetry.Config{
 		Address:          cfg.TelemetryClickHouseAddr,
 		Database:         cfg.TelemetryClickHouseDatabase,
@@ -215,6 +221,7 @@ func main() {
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		registrations := []workersupervisor.Registration{
+			{Name: "platform route reconciler", Runner: platformRouteReconciler},
 			{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
@@ -271,6 +278,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	registrations := []workersupervisor.Registration{
+		{Name: "platform route reconciler", Runner: platformRouteReconciler},
 		{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 		{Name: "function worker", Runner: worker},
 		{Name: "site worker", Runner: siteWorker},

@@ -21,7 +21,11 @@ type Config struct {
 	DatabaseMaxConnIdleTime time.Duration
 	RedisURL                string
 	HTTPAddress             string
-	MetricsToken            string
+	// PlatformSiteAddress is a private listener containing only the public
+	// static Site-serving surface. Traefik platform routers never target the
+	// control-plane HTTP listener.
+	PlatformSiteAddress string
+	MetricsToken        string
 	// TrustedProxyCIDRs is empty by default. Forwarded client-IP headers are
 	// only accepted when the direct peer belongs to one of these networks.
 	TrustedProxyCIDRs []*net.IPNet
@@ -98,11 +102,14 @@ type Config struct {
 	// Sites accept pre-built static archives. The compressed upload limit is
 	// separate from the expanded publication limit because quota accounting is
 	// based on bytes that are actually served from the immutable directory.
-	SitesMaxArtifactSize     int64
-	SitesDefaultQuotaBytes   int64
-	SitesMaxExpandedBytes    int64
-	SitesMaxFiles            int
-	SitesGitFetchConcurrency int
+	SitesMaxArtifactSize           int64
+	SitesDefaultQuotaBytes         int64
+	SitesMaxExpandedBytes          int64
+	SitesMaxFiles                  int
+	SitesGitFetchConcurrency       int
+	TraefikGeneratedDir            string
+	TraefikReloadFile              string
+	PlatformRouteReconcileInterval time.Duration
 	// OpenTelemetry tracing is disabled when the OTLP endpoint is empty. The
 	// API and worker still create no-op spans in that mode, so instrumentation
 	// does not need feature flags or test-only branches.
@@ -157,6 +164,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ingressSettings, err := loadIngressSettings()
+	if err != nil {
+		return Config{}, err
+	}
 	executionSettings, err := loadExecutionSettings()
 	if err != nil {
 		return Config{}, err
@@ -193,6 +204,7 @@ func Load() (Config, error) {
 	databaseSettings.apply(&config)
 	authSettings.apply(&config)
 	siteSettings.apply(&config)
+	ingressSettings.apply(&config)
 	executionSettings.apply(&config)
 	telemetrySettings.apply(&config)
 	telemetryStoreSettings.apply(&config)

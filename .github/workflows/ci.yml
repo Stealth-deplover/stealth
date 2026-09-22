@@ -127,6 +127,35 @@ jobs:
             TestAdminRealtimeSSEIntegration \
             TestAdminRealtimeSSEAuthorizationLifecycleIntegration
 
+      - name: Platform hostname and ingress PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable
+        run: |
+          set -Eeuo pipefail
+          run_and_require_tests() {
+            local package="$1"
+            local pattern="$2"
+            shift 2
+            local log_file="$RUNNER_TEMP/platform-hostnames-${package//\//-}.log"
+            go test "$package" -run "$pattern" -count=1 -v 2>&1 | tee "$log_file"
+            for test_name in "$@"; do
+              if ! grep -Fq -- "--- PASS: ${test_name}" "$log_file" || grep -Fq -- "--- SKIP: ${test_name}" "$log_file"; then
+                echo "required platform hostname integration did not pass: ${test_name}" >&2
+                return 1
+              fi
+            done
+          }
+          run_and_require_tests ./internal/migrate \
+            '^TestPlatformSiteHostnameMigrationBackfillsStableGlobalLabelsIntegration$' \
+            TestPlatformSiteHostnameMigrationBackfillsStableGlobalLabelsIntegration
+          run_and_require_tests ./internal/repository \
+            '^TestPlatformSiteAllocationAndRouteSnapshotIntegration$' \
+            TestPlatformSiteAllocationAndRouteSnapshotIntegration
+          run_and_require_tests ./internal/httpapi \
+            '^(TestInstanceDomainSettingsIntegration|TestPlatformSiteAPIAndNarrowListenerIntegration)$' \
+            TestInstanceDomainSettingsIntegration \
+            TestPlatformSiteAPIAndNarrowListenerIntegration
+
       - name: Real Collector and telemetry integration suites
         env:
           TEST_DATABASE_URL: postgres://stealth:ci-postgres-password@127.0.0.1:5432/stealth?sslmode=disable

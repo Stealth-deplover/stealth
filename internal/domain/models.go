@@ -901,9 +901,14 @@ type FunctionExecutionLog struct {
 // Site is project-scoped static hosting metadata. Files are kept in a
 // private immutable directory and are intentionally absent from this DTO.
 type Site struct {
-	ID                    string    `json:"id"`
-	ProjectID             string    `json:"project_id"`
-	Name                  string    `json:"name"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+	// PlatformHostname is derived from the stable database platform label and
+	// the current optional instance workload domain. It is null until an
+	// operator configures that domain; the label itself is intentionally not a
+	// public API field.
+	PlatformHostname      *string   `json:"platform_hostname"`
 	Framework             string    `json:"framework"`
 	Enabled               bool      `json:"enabled"`
 	Status                string    `json:"status"`
@@ -913,6 +918,14 @@ type Site struct {
 	ActiveDeploymentID    *string   `json:"active_deployment_id,omitempty"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// PlatformRoute is the PostgreSQL-derived desired state consumed by the
+// Traefik file-provider reconciler. It contains no filesystem or router
+// implementation details.
+type PlatformRoute struct {
+	SiteID   string
+	Hostname string
 }
 
 // SiteDomain binds a verified DNS hostname to a Site. The verification token

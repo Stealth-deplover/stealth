@@ -8,6 +8,7 @@ import (
 func TestLoadTransportSettings(t *testing.T) {
 	t.Setenv("REDIS_URL", "redis://redis.example.test:6379/2")
 	t.Setenv("HTTP_ADDR", "127.0.0.1:9090")
+	t.Setenv("PLATFORM_SITE_ADDR", "127.0.0.1:9091")
 	t.Setenv("METRICS_TOKEN", "scrape-token")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 192.0.2.10")
 
@@ -17,8 +18,8 @@ func TestLoadTransportSettings(t *testing.T) {
 	}
 	var config Config
 	settings.apply(&config)
-	if config.RedisURL != "redis://redis.example.test:6379/2" || config.HTTPAddress != "127.0.0.1:9090" || config.MetricsToken != "scrape-token" {
-		t.Fatalf("unexpected transport settings: redis=%q http=%q metrics=%q", config.RedisURL, config.HTTPAddress, config.MetricsToken)
+	if config.RedisURL != "redis://redis.example.test:6379/2" || config.HTTPAddress != "127.0.0.1:9090" || config.PlatformSiteAddress != "127.0.0.1:9091" || config.MetricsToken != "scrape-token" {
+		t.Fatalf("unexpected transport settings: redis=%q http=%q platform=%q metrics=%q", config.RedisURL, config.HTTPAddress, config.PlatformSiteAddress, config.MetricsToken)
 	}
 	if len(config.TrustedProxyCIDRs) != 2 || !config.TrustedProxyCIDRs[0].Contains(net.ParseIP("10.1.2.3")) || !config.TrustedProxyCIDRs[1].Contains(net.ParseIP("192.0.2.10")) {
 		t.Fatalf("unexpected trusted proxy networks: %+v", config.TrustedProxyCIDRs)
@@ -33,5 +34,13 @@ func TestLoadTransportSettingsRejectsInvalidMetricsToken(t *testing.T) {
 	t.Setenv("METRICS_TOKEN", "bad token")
 	if _, err := loadTransportSettings(); err == nil {
 		t.Fatal("invalid metrics token was accepted")
+	}
+}
+
+func TestLoadTransportSettingsRejectsListenerPortCollision(t *testing.T) {
+	t.Setenv("HTTP_ADDR", ":8082")
+	t.Setenv("PLATFORM_SITE_ADDR", ":8082")
+	if _, err := loadTransportSettings(); err == nil {
+		t.Fatal("control-plane and platform Site listeners shared a port")
 	}
 }

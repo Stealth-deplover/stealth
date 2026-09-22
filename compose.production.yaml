@@ -14,6 +14,9 @@ x-backend-environment: &backend-environment
   REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0}"
   FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
   PUBLIC_APP_URL: "${PUBLIC_APP_URL:?set PUBLIC_APP_URL}"
+  # Traefik platform routers target this narrow listener, never the
+  # control-plane HTTP listener on 8080.
+  PLATFORM_SITE_ADDR: "${PLATFORM_SITE_ADDR:-0.0.0.0:8082}"
   CONSOLE_CORS_ORIGINS: "${CONSOLE_CORS_ORIGINS:-}"
   COOKIE_SECURE: "${COOKIE_SECURE:-true}"
   SETUP_MODE: "${SETUP_MODE:-false}"
@@ -57,6 +60,13 @@ x-backend-environment: &backend-environment
   SITES_MAX_EXPANDED_BYTES: "${SITES_MAX_EXPANDED_BYTES:-256MiB}"
   SITES_MAX_FILES: "${SITES_MAX_FILES:-4096}"
   SITES_GIT_FETCH_CONCURRENCY: "${SITES_GIT_FETCH_CONCURRENCY:-4}"
+  PLATFORM_ROUTE_RECONCILE_INTERVAL: "${PLATFORM_ROUTE_RECONCILE_INTERVAL:-5s}"
+  # Keep these targets fixed so the worker's writable Compose mounts remain a
+  # narrow, auditable boundary. Standalone deployments may override the
+  # config defaults, but production Compose must not turn them into arbitrary
+  # installation-root writes.
+  TRAEFIK_GENERATED_DIR: /var/lib/stealth/traefik/generated
+  TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml
   OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}"
   OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-0.1}"
   CLICKHOUSE_ADDR: "${CLICKHOUSE_ADDR:-clickhouse:9000}"
@@ -327,6 +337,7 @@ services:
       - stealth_storage:/var/lib/stealth/storage
     ports:
       - "127.0.0.1:${API_HOST_PORT:-18080}:8080"
+    expose: ["8082"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -352,6 +363,12 @@ services:
     volumes:
       - stealth_storage:/var/lib/stealth/storage
       - function_runner_staging:/var/lib/stealth/runner-staging
+      # The parent directory is required for atomic replacement of the
+      # top-level reload sentinel; an individual bind-mounted file cannot be
+      # replaced with rename(2). The release-managed core file is overlaid
+      # read-only, and the static Traefik file/install root are not mounted.
+      - ./traefik/dynamic:/var/lib/stealth/traefik
+      - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"

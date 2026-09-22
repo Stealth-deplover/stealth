@@ -23,10 +23,28 @@ The current API is intentionally narrow:
   `instance_owner` role. The request must contain `workload_base_domain`; send
   a JSON `null` to clear it. An omitted field is not interpreted as a clear.
 
-The API only records desired instance configuration. It does not provision DNS,
-rewrite Site custom domains, create workload hostnames, mutate Cloudflare
-records or Tunnel origins, or generate Traefik files.
+The API records the desired instance configuration. Site creation allocates a
+stable globally unique `platform_label`; Site responses expose the derived
+canonical `platform_hostname` when the workload base is configured. Renaming a
+Site does not change that label. The reserved platform labels are `api`,
+`admin`, `console`, `status`, and `www`; a reserved or colliding name receives
+a deterministic UUID-suffixed alternative.
 
-Deferred follow-up work includes platform hostname allocation, a PostgreSQL
-backed Traefik route reconciler, Cloudflare wildcard DNS and tunnel ingress,
-and the Cloudflare-to-Traefik origin cutover.
+The existing worker reconciles enabled active Sites from PostgreSQL into the
+single generated file `traefik/dynamic/generated/platform-sites.yaml`. A
+complete snapshot is rendered deterministically, validated, published with
+fsync and atomic rename, and followed by an atomic reload-sentinel update.
+Deleting the generated file and restarting/reconciling the worker reconstructs
+it from PostgreSQL. Generated YAML is never authoritative, and stale routes
+disappear from the next successful snapshot.
+
+Platform routes target a private Site-serving listener that contains no
+Console/API, health, metrics, or version routes. The listener checks current
+Site state and active artifacts in PostgreSQL before serving content. Nginx
+remains the active public edge, and this capability does not provision DNS,
+change Cloudflare records or Tunnel origins, or perform a Cloudflare-to-Traefik
+cutover.
+
+Deferred follow-up work includes additional platform hostname policy,
+custom-domain Traefik lifecycle, Cloudflare wildcard DNS and Tunnel ingress,
+Cloudflare-to-Traefik cutover, and workload runtime/networking.

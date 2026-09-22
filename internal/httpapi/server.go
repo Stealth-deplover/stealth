@@ -110,6 +110,15 @@ func New(cfg config.Config, repo *repository.Repository, logger *slog.Logger) ht
 // logged and the affected capability reports not-ready through /readyz
 // instead of aborting startup.
 func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger *slog.Logger, deps Dependencies) http.Handler {
+	handler, _ := NewWithDependenciesAndPlatformSiteHandler(cfg, repo, logger, deps)
+	return handler
+}
+
+// NewWithDependenciesAndPlatformSiteHandler builds the control-plane handler
+// and a separate narrow Site-serving handler. The latter contains no /v1,
+// health, metrics, setup, or Console routes and is the only backend used by
+// generated platform-hostname Traefik routers.
+func NewWithDependenciesAndPlatformSiteHandler(cfg config.Config, repo *repository.Repository, logger *slog.Logger, deps Dependencies) (http.Handler, http.Handler) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -222,7 +231,7 @@ func NewWithDependencies(cfg config.Config, repo *repository.Repository, logger 
 		authRecheckInterval = adminRealtimeAuthRecheckInterval
 	}
 	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), adminRealtimeAuthRecheckInterval: authRecheckInterval, realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
-	return s.routes()
+	return s.routes(), s.platformSiteRoutes()
 }
 
 type CloudflareOAuthClient interface {

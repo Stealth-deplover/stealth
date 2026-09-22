@@ -12,7 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var ErrInvalidInstanceDomain = errors.New("invalid instance domain configuration")
+var (
+	ErrInvalidInstanceDomain  = errors.New("invalid instance domain configuration")
+	ErrInstanceDomainConflict = errors.New("instance workload domain conflicts with an existing Site custom domain")
+)
 
 func (r *Repository) GetInstanceDomainSettings(ctx context.Context, instanceHostname string) (domain.InstanceDomainSettings, error) {
 	if r == nil || r.pool == nil {
@@ -66,6 +69,13 @@ func (r *Repository) UpdateInstanceDomainSettings(ctx context.Context, accountID
 		return domain.InstanceDomainSettings{}, ErrNotFound
 	} else if err != nil {
 		return domain.InstanceDomainSettings{}, err
+	}
+	conflicts, err := workloadDomainConflictsWithSiteDomainsTx(ctx, tx, canonicalWorkloadDomain)
+	if err != nil {
+		return domain.InstanceDomainSettings{}, err
+	}
+	if conflicts {
+		return domain.InstanceDomainSettings{}, ErrInstanceDomainConflict
 	}
 	result, err := tx.Exec(ctx, `
 		UPDATE instance_domain_settings
