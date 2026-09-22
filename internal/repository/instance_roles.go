@@ -36,6 +36,20 @@ func (r *Repository) IsInstanceAdmin(ctx context.Context, accountID uuid.UUID) (
 	return allowed, nil
 }
 
+// IsInstanceOwner reads the current database role. It deliberately does not
+// treat instance_admin, organization membership, or session claims as owner
+// authorization.
+func (r *Repository) IsInstanceOwner(ctx context.Context, accountID uuid.UUID) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, ErrNotFound
+	}
+	var allowed bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM instance_roles WHERE account_id=$1 AND role='instance_owner')`, accountID).Scan(&allowed); err != nil {
+		return false, err
+	}
+	return allowed, nil
+}
+
 // IsInstanceAdminSession verifies both the session lifecycle and the current
 // instance-level role. It is used by long-lived admin streams, whose opening
 // request cannot be the only authorization check.
@@ -57,4 +71,18 @@ func (r *Repository) IsInstanceAdminSession(ctx context.Context, accountID, sess
 		return false, err
 	}
 	return allowed, nil
+}
+
+func requireInstanceOwnerTx(ctx context.Context, tx pgx.Tx, accountID uuid.UUID) error {
+	if accountID == uuid.Nil {
+		return ErrForbidden
+	}
+	var allowed bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM instance_roles WHERE account_id=$1 AND role='instance_owner')`, accountID).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
+	return nil
 }
