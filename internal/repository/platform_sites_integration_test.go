@@ -216,22 +216,6 @@ func TestPlatformSiteAllocationAndRouteSnapshotIntegration(t *testing.T) {
 	if _, err := repo.UpdateSite(ctx, projectTwoID, mustPlatformUUID(second.ID), SiteActor{Kind: SiteConsoleActor, AccountID: accountID}, SitePatch{Enabled: boolPtr(true)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", nil); err != nil {
-		t.Fatal(err)
-	}
-	first, err = repo.GetSite(ctx, projectOneID, mustPlatformUUID(first.ID), SiteActor{Kind: SiteConsoleActor, AccountID: accountID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.PlatformHostname != nil {
-		t.Fatalf("cleared workload domain still exposed %q", *first.PlatformHostname)
-	}
-
-	// The unique index is authoritative even if a caller bypasses the
-	// allocator, while the application allocator remains deterministic.
-	if _, err := pool.Exec(ctx, `UPDATE project_sites SET platform_label=$2 WHERE id=$1`, reserved.ID, labels[0]); err == nil {
-		t.Fatal("database accepted a duplicate global platform label")
-	}
 	if _, err := repo.DeleteSite(ctx, projectTwoID, mustPlatformUUID(second.ID), SiteActor{Kind: SiteConsoleActor, AccountID: accountID}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +226,29 @@ func TestPlatformSiteAllocationAndRouteSnapshotIntegration(t *testing.T) {
 	if len(routes) != 4 {
 		t.Fatalf("deleted Site route count = %d, want 4", len(routes))
 	}
+	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", nil); err != nil {
+		t.Fatal(err)
+	}
+	first, err = repo.GetSite(ctx, projectOneID, mustPlatformUUID(first.ID), SiteActor{Kind: SiteConsoleActor, AccountID: accountID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PlatformHostname != nil {
+		t.Fatalf("cleared workload domain still exposed %q", *first.PlatformHostname)
+	}
+	routes, err = repo.ListPlatformRoutes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("cleared workload domain left %d desired routes", len(routes))
+	}
 
+	// The unique index is authoritative even if a caller bypasses the
+	// allocator, while the application allocator remains deterministic.
+	if _, err := pool.Exec(ctx, `UPDATE project_sites SET platform_label=$2 WHERE id=$1`, reserved.ID, labels[0]); err == nil {
+		t.Fatal("database accepted a duplicate global platform label")
+	}
 	var concurrent sync.WaitGroup
 	concurrent.Add(2)
 	results := make(chan error, 2)
