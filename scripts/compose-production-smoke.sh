@@ -141,7 +141,7 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init traefik-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -515,7 +515,11 @@ verify_worker_platform_state_boundary() {
 		*) printf 'worker core.yaml is not overlaid read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
 	case "$mounts" in
-		*'/etc/traefik='*|*'/var/lib/stealth/traefik/traefik.yaml='*|*'/var/lib/stealth/traefik/static='*)
+		*'/var/lib/stealth/setup-state/setup-state.enc=false '*|*'/var/lib/stealth/setup-state/setup-state.enc=false') ;;
+		*) printf 'worker setup-state snapshot is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
+	esac
+	case "$mounts" in
+		*'/etc/traefik='*|*'/var/lib/stealth/traefik/traefik.yaml='*|*'/var/lib/stealth/traefik/static='*|*'/run/secrets/cloudflare-tunnel-token='*|*'=/state='*)
 			printf 'worker has an unexpected release-managed Traefik mount: %s\n' "$mounts" >&2
 			return 1
 			;;

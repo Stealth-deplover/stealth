@@ -12,8 +12,8 @@ The optional `workload_base_domain` value is stored in the singleton
 form, including IDNA/punycode conversion, before persistence. The value must
 have an operator-owned registrable domain according to the public suffix list,
 so a public suffix such as `co.uk` cannot be stored by itself. A configured
-base that is the Console hostname, or a parent of it, is rejected because a
-future wildcard workload route would overlap the Console route.
+base that is the Console hostname, or a parent of it, is rejected because its
+wildcard workload route would overlap the Console route.
 
 The current API is intentionally narrow:
 
@@ -40,11 +40,12 @@ disappear from the next successful snapshot.
 
 Platform routes target a private Site-serving listener that contains no
 Console/API, health, metrics, or version routes. The listener checks current
-Site state and active artifacts in PostgreSQL before serving content. Nginx
-remains the active public edge, and this capability does not provision DNS,
-change Cloudflare records or Tunnel origins, or perform a Cloudflare-to-Traefik
-cutover.
+Site state and active artifacts in PostgreSQL before serving content. For
+Cloudflare Tunnel installations, the worker asynchronously reconciles one
+wildcard DNS record and one wildcard ingress rule on the existing named tunnel
+to private Traefik. The Console origin remains Nginx.
 
-Deferred follow-up work includes additional platform hostname policy,
-custom-domain Traefik lifecycle, Cloudflare wildcard DNS and Tunnel ingress,
-Cloudflare-to-Traefik cutover, and workload runtime/networking.
+See [Cloudflare workload routing](cloudflare-workload-routing.md) for provider
+state and reconciliation semantics. Custom-domain Traefik lifecycle,
+Console/API Cloudflare origin cutover, and workload runtime/networking remain
+deferred.

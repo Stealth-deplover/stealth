@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+var (
+	ErrUnauthorized     = errors.New("Cloudflare API token is unauthorized")
+	ErrResourceNotFound = errors.New("Cloudflare resource was not found")
+	ErrRoutingConflict  = errors.New("Cloudflare workload routing conflicts with provider state")
+)
+
 const defaultAPIBaseURL = "https://api.cloudflare.com/client/v4"
 
 const maxListPages = 1000
@@ -51,9 +57,9 @@ type DNSRecord struct {
 }
 
 type IngressRule struct {
-	Hostname string `json:"hostname,omitempty"`
-	Service  string `json:"service"`
-	Origin   string `json:"originRequest,omitempty"`
+	Hostname string          `json:"hostname,omitempty"`
+	Service  string          `json:"service"`
+	Origin   json.RawMessage `json:"originRequest,omitempty"`
 }
 
 type TunnelStatus struct {
@@ -99,9 +105,12 @@ type Client interface {
 	ListTunnels(context.Context, string, string) ([]Tunnel, error)
 	CreateTunnel(context.Context, string, string) (Tunnel, error)
 	ConfigureTunnel(context.Context, string, string, []IngressRule) error
+	TunnelConfiguration(context.Context, string, string) ([]IngressRule, error)
 	ListDNSRecords(context.Context, string, string) ([]DNSRecord, error)
+	GetDNSRecord(context.Context, string, string) (DNSRecord, error)
 	CreateDNSRecord(context.Context, string, DNSRecord) (DNSRecord, error)
 	UpdateDNSRecord(context.Context, string, string, DNSRecord) (DNSRecord, error)
+	DeleteDNSRecord(context.Context, string, string) error
 	TunnelStatus(context.Context, string, string) (TunnelStatus, error)
 	TunnelToken(context.Context, string, string) (string, error)
 }
@@ -272,6 +281,36 @@ func (c *APIClient) ConfigureTunnel(ctx context.Context, accountID, tunnelID str
 	return c.do(ctx, http.MethodPut, "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", body, &struct{}{})
 }
 
+func (c *APIClient) TunnelConfiguration(ctx context.Context, accountID, tunnelID string) ([]IngressRule, error) {
+	accountID, err := safeID(accountID, "account")
+	if err != nil {
+		return nil, err
+	}
+	tunnelID, err = safeID(tunnelID, "tunnel")
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Result struct {
+			Config struct {
+				Ingress []IngressRule `json:"ingress"`
+			} `json:"config"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/accounts/"+accountID+"/cfd_tunnel/"+tunnelID+"/configurations", nil, &result); err != nil {
+		return nil, err
+	}
+	if len(result.Result.Config.Ingress) == 0 || len(result.Result.Config.Ingress) > 64 {
+		return nil, errors.New("Cloudflare returned an invalid tunnel configuration")
+	}
+	for _, rule := range result.Result.Config.Ingress {
+		if strings.TrimSpace(rule.Service) == "" || len(rule.Service) > 2048 || strings.ContainsAny(rule.Service, "\x00\r\n") {
+			return nil, errors.New("Cloudflare returned an invalid tunnel configuration")
+		}
+	}
+	return result.Result.Config.Ingress, nil
+}
+
 func (c *APIClient) CreateDNSRecord(ctx context.Context, zoneID string, record DNSRecord) (DNSRecord, error) {
 	zoneID, err := safeID(zoneID, "zone")
 	if err != nil {
@@ -323,6 +362,27 @@ func (c *APIClient) ListDNSRecords(ctx context.Context, zoneID, name string) ([]
 	return nil, errors.New("Cloudflare returned too many DNS record pages")
 }
 
+func (c *APIClient) GetDNSRecord(ctx context.Context, zoneID, recordID string) (DNSRecord, error) {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	recordID, err = safeID(recordID, "DNS record")
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	var result struct {
+		Result DNSRecord `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records/"+recordID, nil, &result); err != nil {
+		return DNSRecord{}, err
+	}
+	if strings.TrimSpace(result.Result.ID) == "" {
+		return DNSRecord{}, errors.New("Cloudflare returned an invalid DNS record")
+	}
+	return result.Result, nil
+}
+
 func (c *APIClient) UpdateDNSRecord(ctx context.Context, zoneID, recordID string, record DNSRecord) (DNSRecord, error) {
 	zoneID, err := safeID(zoneID, "zone")
 	if err != nil {
@@ -346,6 +406,18 @@ func (c *APIClient) UpdateDNSRecord(ctx context.Context, zoneID, recordID string
 		result.Result.ID = recordID
 	}
 	return result.Result, nil
+}
+
+func (c *APIClient) DeleteDNSRecord(ctx context.Context, zoneID, recordID string) error {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return err
+	}
+	recordID, err = safeID(recordID, "DNS record")
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodDelete, "/zones/"+zoneID+"/dns_records/"+recordID, nil, nil)
 }
 
 func normalizeDNSRecord(record DNSRecord) (DNSRecord, error) {
@@ -449,7 +521,15 @@ func (c *APIClient) do(ctx context.Context, method, path string, body any, resul
 		if c.apiToken != "" {
 			message = strings.ReplaceAll(message, c.apiToken, "[redacted]")
 		}
-		return fmt.Errorf("Cloudflare request was rejected (HTTP %d): %s", response.StatusCode, message)
+		providerErr := fmt.Errorf("Cloudflare request was rejected (HTTP %d): %s", response.StatusCode, message)
+		switch response.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return fmt.Errorf("%w: %v", ErrUnauthorized, providerErr)
+		case http.StatusNotFound:
+			return fmt.Errorf("%w: %v", ErrResourceNotFound, providerErr)
+		default:
+			return providerErr
+		}
 	}
 	if result == nil {
 		return nil

@@ -45,6 +45,10 @@ func (*provisioningClient) ConfigureTunnel(context.Context, string, string, []In
 	return nil
 }
 
+func (*provisioningClient) TunnelConfiguration(context.Context, string, string) ([]IngressRule, error) {
+	return []IngressRule{{Hostname: "app.example.test", Service: "http://proxy:80"}, {Service: "http_status:404"}}, nil
+}
+
 func (c *provisioningClient) ListDNSRecords(_ context.Context, _, name string) ([]DNSRecord, error) {
 	result := make([]DNSRecord, 0)
 	for _, record := range c.records {
@@ -53,6 +57,15 @@ func (c *provisioningClient) ListDNSRecords(_ context.Context, _, name string) (
 		}
 	}
 	return result, nil
+}
+
+func (c *provisioningClient) GetDNSRecord(_ context.Context, _, recordID string) (DNSRecord, error) {
+	for _, record := range c.records {
+		if record.ID == recordID {
+			return record, nil
+		}
+	}
+	return DNSRecord{}, ErrResourceNotFound
 }
 
 func (c *provisioningClient) CreateDNSRecord(_ context.Context, _ string, record DNSRecord) (DNSRecord, error) {
@@ -72,6 +85,8 @@ func (c *provisioningClient) UpdateDNSRecord(_ context.Context, _, recordID stri
 	}
 	return DNSRecord{}, errors.New("record not found")
 }
+
+func (*provisioningClient) DeleteDNSRecord(context.Context, string, string) error { return nil }
 
 func (*provisioningClient) TunnelStatus(context.Context, string, string) (TunnelStatus, error) {
 	return TunnelStatus{Status: "healthy"}, nil

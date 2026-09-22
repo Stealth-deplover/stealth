@@ -96,24 +96,39 @@ Cloudflare setup is token-first. The Console shows an API Token field and a
 `Verify Token` action. The setup API validates the token by discovering the
 accessible Cloudflare accounts, then the browser selects an account and
 domain. `Continue` performs the provider-side provisioning on the server: it
-creates or resumes the named tunnel, configures ingress to the Stealth proxy
-with a catch-all 404 rule, creates the proxied CNAME, and writes the private
-cloudflared token file. The host CLI then starts the production Compose
-profile, checks the named tunnel health, verifies the production hostname,
-and removes the temporary Quick Tunnel only after those production checks
-pass.
+creates or resumes the named tunnel, configures the Console ingress to
+`http://proxy:80` with a catch-all 404 rule, creates the proxied Console CNAME,
+and writes the private cloudflared token file. The host CLI then starts the
+production Compose profile, checks the named tunnel health, verifies the
+production hostname, and removes the temporary Quick Tunnel only after those
+production checks pass. Once production PostgreSQL is available, the worker
+imports the API token and tunnel binding from the encrypted setup snapshot
+into its durable Cloudflare connection row.
 
-Create a custom Cloudflare API token scoped to the account and domain used by
+After an Instance Owner configures a workload base domain, the worker
+asynchronously adds one proxied wildcard CNAME and a wildcard rule on that
+same named tunnel. For example, `*.apps.example.com` routes to
+`http://traefik:8080`; the existing Console route remains on `http://proxy:80`
+and Nginx. The workload domain in PostgreSQL is desired state. Admin status
+reports whether provider reconciliation is pending, ready, or in error. See
+[Cloudflare workload routing](cloudflare-workload-routing.md) for connection
+and upgrade behavior.
+
+Create a custom Cloudflare API token scoped to the account and zones used by
 the installation. The minimum permissions are:
 
 - Account: `Cloudflare Tunnel` `Edit`.
 - Account: `Account Settings` `Read`, required for account discovery.
-- Zone: `Zone` `Read`, required for domain discovery.
-- Zone: `DNS` `Edit`, required for the proxied CNAME.
+- Zone: `Zone` `Read`, required for Console and workload zone discovery.
+- Zone: `DNS` `Edit`, required for the Console and workload CNAME records.
+
+If the Console hostname and workload base domain use different Cloudflare
+zones, include both zones in the token's Zone Read and DNS Edit scope.
 
 Stealth does not accept a Global API Key. The token is submitted to the setup
-API, stored only in encrypted setup state, and never returned in public setup
-state, browser query data, SSE events, or logs. Cloudflare OAuth support is
+API, stored in encrypted setup state during onboarding and then encrypted at
+rest in PostgreSQL, and never returned in public setup state, browser query
+data, SSE events, or logs. Cloudflare OAuth support is
 experimental and inactive in this release. It is not shown as a connection
 option and the inactive endpoint never redirects to Cloudflare or exchanges a
 callback code. A random `*.trycloudflare.com` setup hostname is never used as

@@ -49,4 +49,6 @@ func (s *Server) registerAdminRoutes(r chi.Router) {
 	r.With(s.requireInstanceAdmin).Put("/admin/status-page", s.updateAdminStatusPage)
 	r.With(s.requireInstanceAdmin).Get("/admin/domain-settings", s.getInstanceDomainSettings)
 	r.With(s.requireInstanceOwner).Patch("/admin/domain-settings", s.updateInstanceDomainSettings)
+	r.With(s.requireInstanceAdmin).Get("/admin/cloudflare", s.getAdminCloudflare)
+	r.With(s.requireInstanceOwner).Put("/admin/cloudflare", s.updateAdminCloudflare)
 }

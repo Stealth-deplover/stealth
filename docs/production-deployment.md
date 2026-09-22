@@ -25,10 +25,10 @@ The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
 
-Traefik runs in parallel as the future file-provider ingress. See the
+Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
+route while Console traffic remains on Nginx. See the
 [Traefik ingress foundation](traefik-ingress.md) for its network boundary,
-ownership model, and the later Cloudflare origin cutover. Nginx remains the
-active external entrypoint in this release.
+ownership model, and the deferred Console/API origin cutover.
 
 ## Fresh install
 
@@ -252,14 +252,22 @@ access tokens are used only for the server-side `/user` lookup and are
 discarded, never returned to the browser or persisted.
 
 Cloudflare setup uses a scoped API token, not a Global API Key. The Console
-verifies the token, discovers accounts and domains, and sends the selected
-account, domain, and dashboard hostname to the setup API. The API creates and
-configures the named tunnel and proxied DNS record, and writes the private
-cloudflared token file. The host CLI starts the production tunnel, verifies
-tunnel health and the production hostname, and removes the Quick Tunnel only
-after those checks pass. The minimum custom-token permissions are Account:
-Cloudflare Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS
-Edit, scoped to the resources used by the installation.
+verifies the token, discovers accounts and zones, and sends the selected
+account, zone, and Console hostname to the setup API. The API creates and
+configures the named tunnel with the Console route to `http://proxy:80`, the
+catch-all 404, and its proxied DNS record. The host CLI starts the production
+tunnel, verifies tunnel health and the production hostname, and removes the
+Quick Tunnel only after those checks pass. The production worker imports the
+encrypted setup token and tunnel identity into PostgreSQL on first start. It
+then reconciles one wildcard DNS record and `*.workload_base_domain` tunnel
+ingress to `http://traefik:8080` asynchronously from PostgreSQL desired state.
+
+The minimum custom-token permissions are Account: Cloudflare Tunnel Edit,
+Account Settings Read, and Zone: Zone Read plus DNS Edit. Scope Zone Read and
+DNS Edit to both the Console and workload zones if they differ. A wildcard
+does not create per-Site records, and the existing named tunnel is reused.
+See [Cloudflare workload routing](cloudflare-workload-routing.md) for setup
+import, reconnection, and safe cleanup behavior.
 
 Cloudflare OAuth remains experimental and inactive. The setup Console does
 not offer it, the inactive endpoint never builds an authorization redirect,

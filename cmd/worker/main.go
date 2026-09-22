@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
@@ -32,6 +34,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/realtimepublisher"
 	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/runtime"
+	"github.com/Stealth-deplover/stealth/internal/setupstate"
 	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/Stealth-deplover/stealth/internal/telemetry"
@@ -104,7 +107,15 @@ func main() {
 		logger.Error("function secret configuration error", "error", err)
 		os.Exit(1)
 	}
-	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher, AdminCipher: cipher})
+	repo := repository.NewWithDependencies(pool, repository.Dependencies{WebhookCipher: cipher, AdminCipher: cipher, CloudflareCipher: cipher})
+	importLegacyCloudflareConnection(ctx, cfg.SetupStateFile, cipher, repo, logger)
+	cloudflareReconciler, err := cloudflare.NewReconciler(repo, func(token string) (cloudflare.Client, error) {
+		return cloudflare.NewClient(token, cfg.CloudflareAPIBaseURL, http.DefaultClient)
+	}, cfg.CloudflareReconcileInterval, logger)
+	if err != nil {
+		logger.Error("Cloudflare routing reconciler configuration error", "error", err)
+		os.Exit(1)
+	}
 	platformRouteReconciler, err := ingress.New(repo, cfg.TraefikGeneratedDir, cfg.TraefikReloadFile, cfg.PlatformRouteReconcileInterval, logger)
 	if err != nil {
 		logger.Error("platform route reconciler configuration error", "error", err)
@@ -221,6 +232,7 @@ func main() {
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		registrations := []workersupervisor.Registration{
+			{Name: "Cloudflare routing reconciler", Runner: cloudflareReconciler},
 			{Name: "platform route reconciler", Runner: platformRouteReconciler},
 			{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 			{Name: "realtime publisher", Runner: realtimePublisher},
@@ -278,6 +290,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 	registrations := []workersupervisor.Registration{
+		{Name: "Cloudflare routing reconciler", Runner: cloudflareReconciler},
 		{Name: "platform route reconciler", Runner: platformRouteReconciler},
 		{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 		{Name: "function worker", Runner: worker},
@@ -297,6 +310,55 @@ func main() {
 	if err := workersupervisor.Run(workerContext, registrations...); err != nil {
 		logger.Error("worker stopped with error", "error", err)
 		os.Exit(1)
+	}
+}
+
+func importLegacyCloudflareConnection(ctx context.Context, stateFile string, cipher *functionsecret.Cipher, repo *repository.Repository, logger *slog.Logger) {
+	if repo == nil || cipher == nil || strings.TrimSpace(stateFile) == "" {
+		return
+	}
+	status, err := repo.CloudflareRoutingStatus(ctx)
+	if err != nil {
+		logger.Warn("Cloudflare setup-state import status could not be read", "error", err)
+		return
+	}
+	if status.Configured {
+		return
+	}
+	state, err := setupstate.LoadEncryptedSnapshot(ctx, stateFile, cipher)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		logger.Warn("encrypted Cloudflare setup state could not be imported", "error", err)
+		return
+	}
+	binding := state.EffectiveCloudflareBinding().Normalized()
+	if state.Cloudflare.Mode == "" && !state.Cloudflare.Connected && !binding.HasIntent() {
+		return
+	}
+	if err := binding.Validate(); err != nil || binding.AccountID == "" || binding.ZoneID == "" || binding.Hostname == "" || binding.TunnelID == "" || binding.TunnelName == "" || binding.RecordID == "" {
+		if markErr := repo.MarkCloudflareConnectionUnavailable(ctx, "Encrypted setup state does not contain a complete existing Cloudflare tunnel binding; reconnect as an Instance Owner using the existing account and tunnel ID."); markErr != nil {
+			logger.Warn("Cloudflare connection remains unavailable", "error", markErr)
+		}
+		logger.Warn("Cloudflare setup-state import needs owner reconnection", "reason", "existing tunnel binding is incomplete")
+		return
+	}
+	input := repository.CloudflareConnectionInput{
+		AccountID: binding.AccountID, ConsoleZoneID: binding.ZoneID, ConsoleHostname: binding.Hostname,
+		TunnelID: binding.TunnelID, TunnelName: binding.TunnelName, ConsoleRecordID: binding.RecordID,
+		APIToken: strings.TrimSpace(state.Secret("cloudflare_access_token")),
+	}
+	reason := "Encrypted setup state did not contain a recoverable Cloudflare API token; reconnect as an Instance Owner."
+	imported, err := repo.ImportCloudflareConnectionOnce(ctx, input, reason)
+	if err != nil {
+		logger.Warn("Cloudflare setup-state import failed", "error", err)
+		return
+	}
+	if imported && input.APIToken != "" {
+		logger.Info("Cloudflare connection imported from encrypted setup state", "tunnel_id", binding.TunnelID)
+	} else if imported {
+		logger.Warn("Cloudflare setup state had no recoverable API token; owner reconnection is required")
 	}
 }
 

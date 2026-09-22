@@ -53,6 +53,8 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 				t.Errorf("configuration body = %#v", body)
 			}
 			_, _ = io.WriteString(w, `{"success":true,"result":{}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/accounts/account-1/cfd_tunnel/tunnel-1/configurations":
+			_, _ = io.WriteString(w, `{"success":true,"result":{"config":{"ingress":[{"hostname":"app.example.test","service":"http://proxy:80"},{"service":"http_status:404"}]}}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/zones/zone-1/dns_records":
 			var body DNSRecord
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -67,6 +69,8 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 				t.Errorf("DNS lookup query = %v", r.URL.Query())
 			}
 			_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"record-1","type":"CNAME","name":"app.example.test","content":"tunnel-1.cfargotunnel.com","proxied":false,"ttl":300}]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/zones/zone-1/dns_records/record-1":
+			_, _ = io.WriteString(w, `{"success":true,"result":{"id":"record-1","type":"CNAME","name":"app.example.test","content":"tunnel-1.cfargotunnel.com","proxied":true,"ttl":1}}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/zones/zone-1/dns_records/record-1":
 			var body DNSRecord
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -76,6 +80,8 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 				t.Errorf("DNS update body = %#v", body)
 			}
 			_, _ = io.WriteString(w, `{"success":true,"result":{"id":"record-1","type":"CNAME","name":"app.example.test","content":"tunnel-1.cfargotunnel.com","proxied":true,"ttl":1}}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/zones/zone-1/dns_records/record-1":
+			_, _ = io.WriteString(w, `{"success":true,"result":{"id":"record-1"}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/accounts/account-1/cfd_tunnel/tunnel-1":
 			_, _ = io.WriteString(w, `{"success":true,"result":{"id":"tunnel-1","status":"healthy","connections":[{"id":"connection-1"},{"id":"connection-2"}]}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/accounts/account-1/cfd_tunnel/tunnel-1/token":
@@ -109,6 +115,10 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 	if err := client.ConfigureTunnel(ctx, "account-1", "tunnel-1", []IngressRule{{Hostname: "app.example.test", Service: "http://proxy:80"}, {Service: "http_status:404"}}); err != nil {
 		t.Fatal(err)
 	}
+	ingress, err := client.TunnelConfiguration(ctx, "account-1", "tunnel-1")
+	if err != nil || len(ingress) != 2 || ingress[0].Service != "http://proxy:80" || ingress[1].Service != "http_status:404" {
+		t.Fatalf("TunnelConfiguration() = %#v, %v", ingress, err)
+	}
 	record, err := client.CreateDNSRecord(ctx, "zone-1", DNSRecord{Type: "cname", Name: "app.example.test", Content: "tunnel-1.cfargotunnel.com", Proxied: true})
 	if err != nil || record.ID != "record-1" {
 		t.Fatalf("CreateDNSRecord() = %#v, %v", record, err)
@@ -117,9 +127,16 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 	if err != nil || len(records) != 1 || records[0].ID != "record-1" {
 		t.Fatalf("ListDNSRecords() = %#v, %v", records, err)
 	}
+	fetched, err := client.GetDNSRecord(ctx, "zone-1", "record-1")
+	if err != nil || fetched.ID != "record-1" {
+		t.Fatalf("GetDNSRecord() = %#v, %v", fetched, err)
+	}
 	updated, err := client.UpdateDNSRecord(ctx, "zone-1", "record-1", DNSRecord{Type: "CNAME", Name: "app.example.test", Content: "tunnel-1.cfargotunnel.com", Proxied: true, TTL: 1})
 	if err != nil || updated.ID != "record-1" || !updated.Proxied || updated.TTL != 1 {
 		t.Fatalf("UpdateDNSRecord() = %#v, %v", updated, err)
+	}
+	if err := client.DeleteDNSRecord(ctx, "zone-1", "record-1"); err != nil {
+		t.Fatalf("DeleteDNSRecord() error = %v", err)
 	}
 	status, err := client.TunnelStatus(ctx, "account-1", "tunnel-1")
 	if err != nil || status.Connections != 2 || !StatusIsHealthy(status) {
@@ -176,6 +193,18 @@ func TestAPIClientPaginatesAccountsAndZones(t *testing.T) {
 			default:
 				t.Errorf("unexpected zones page %q", page)
 			}
+		case "/zones/zone-1/dns_records":
+			if r.URL.Query().Get("name") != "*.apps.example.test" {
+				t.Errorf("DNS name query = %q", r.URL.Query().Get("name"))
+			}
+			switch page {
+			case "1":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"record-1","type":"CNAME","name":"*.apps.example.test","content":"one.cfargotunnel.com","proxied":true,"ttl":1}],"result_info":{"total_pages":2}}`)
+			case "2":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"record-2","type":"CNAME","name":"*.apps.example.test","content":"two.cfargotunnel.com","proxied":true,"ttl":1}],"result_info":{"total_pages":2}}`)
+			default:
+				t.Errorf("unexpected DNS records page %q", page)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -192,6 +221,10 @@ func TestAPIClientPaginatesAccountsAndZones(t *testing.T) {
 	zones, err := client.ListZones(context.Background(), "account-1")
 	if err != nil || len(zones) != 2 || zones[1].ID != "zone-2" {
 		t.Fatalf("ListZones() = %#v, %v", zones, err)
+	}
+	records, err := client.ListDNSRecords(context.Background(), "zone-1", "*.apps.example.test")
+	if err != nil || len(records) != 2 || records[1].ID != "record-2" {
+		t.Fatalf("ListDNSRecords() = %#v, %v", records, err)
 	}
 }
 

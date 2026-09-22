@@ -593,6 +593,24 @@ export interface paths {
         patch: operations["updateInstanceDomainSettings"];
         trace?: never;
     };
+    "/v1/admin/cloudflare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return safe Cloudflare connection and workload routing status. Requires Instance Owner or Instance Admin. The API token and ciphertext are never returned. */
+        get: operations["getAdminCloudflareRouting"];
+        /** @description Validate a candidate scoped Cloudflare API token against the saved or explicitly supplied existing account and named tunnel, then encrypt and persist it. Only the Instance Owner may update it. When validation fails, the previous credential remains in place. Stealth never creates a new tunnel here. The token is write-only. */
+        put: operations["updateAdminCloudflareConnection"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bootstrap/status": {
         parameters: {
             query?: never;
@@ -3643,6 +3661,29 @@ export interface components {
             /** @description Canonical ASCII/punycode hostname returned by the API and used later as the suffix for generated workload hostnames */
             workload_base_domain: string | null;
         };
+        AdminCloudflareRoutingStatus: {
+            /** @description Whether an encrypted Cloudflare API token and complete existing tunnel identity are stored. */
+            configured: boolean;
+            /** @enum {string} */
+            status: AdminCloudflareRoutingStatusStatus;
+            console_hostname?: string;
+            /** @description Desired wildcard derived from workload_base_domain */
+            workload_hostname: string | null;
+            /** @description Cloudflare zone selected by longest valid DNS suffix match when observed. */
+            zone?: string;
+            /** Format: date-time */
+            last_reconciled_at?: string | null;
+            /** @description Sanitized provider status with credentials removed. */
+            last_error?: string;
+        };
+        /** @description The owner-only credential is write-only. For a legacy connection with no recoverable identity */
+        UpdateAdminCloudflareConnectionRequest: {
+            api_token: string;
+            /** @description Required only when no recoverable connection identity is stored. */
+            account_id?: string;
+            /** @description Required only when no recoverable connection identity is stored; this must identify the existing named tunnel. */
+            tunnel_id?: string;
+        };
         UpdateInstanceDomainSettingsRequest: {
             /** @description Unicode IDNs are accepted and normalized server-side. The stored and returned representation is canonical ASCII/punycode. Send null to clear the setting. */
             workload_base_domain: string | null;
@@ -3879,7 +3920,7 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
         };
-        /** @description Use a custom token scoped to the selected account and domain with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit. Global API keys are not accepted. */
+        /** @description Use a custom token scoped to the selected account with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit for both Console and workload zones when separate. Global API keys are not accepted. */
         SetupCloudflareTokenRequest: {
             api_token: string;
         };
@@ -7527,6 +7568,62 @@ export interface operations {
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    getAdminCloudflareRouting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cloudflare connection and routing status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCloudflareRoutingStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateAdminCloudflareConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAdminCloudflareConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Connection saved and routing queued for asynchronous reconciliation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCloudflareRoutingStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["BadGateway"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getBootstrapStatus: {
@@ -14253,6 +14350,12 @@ export enum AdminStatusPageComponentStatus {
     partial_outage = "partial_outage",
     major_outage = "major_outage",
     maintenance = "maintenance"
+}
+export enum AdminCloudflareRoutingStatusStatus {
+    unconfigured = "unconfigured",
+    pending = "pending",
+    ready = "ready",
+    error = "error"
 }
 export enum AdminPublicIncidentSeverity {
     info = "info",

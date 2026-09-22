@@ -7,6 +7,7 @@ import (
 
 func TestLoadIngressSettings(t *testing.T) {
 	t.Setenv("PLATFORM_ROUTE_RECONCILE_INTERVAL", "15s")
+	t.Setenv("CLOUDFLARE_RECONCILE_INTERVAL", "45s")
 	t.Setenv("TRAEFIK_GENERATED_DIR", "/var/lib/stealth/traefik/generated")
 	t.Setenv("TRAEFIK_RELOAD_FILE", "/var/lib/stealth/traefik/.reload.yaml")
 
@@ -16,8 +17,19 @@ func TestLoadIngressSettings(t *testing.T) {
 	}
 	var config Config
 	settings.apply(&config)
-	if config.PlatformRouteReconcileInterval != 15*time.Second || config.TraefikGeneratedDir != "/var/lib/stealth/traefik/generated" || config.TraefikReloadFile != "/var/lib/stealth/traefik/.reload.yaml" {
+	if config.PlatformRouteReconcileInterval != 15*time.Second || config.CloudflareReconcileInterval != 45*time.Second || config.TraefikGeneratedDir != "/var/lib/stealth/traefik/generated" || config.TraefikReloadFile != "/var/lib/stealth/traefik/.reload.yaml" {
 		t.Fatalf("unexpected ingress settings: %+v", config)
+	}
+}
+
+func TestLoadIngressSettingsRequiresBoundedCloudflareCadence(t *testing.T) {
+	for _, interval := range []string{"1s", "14s", "6m", "invalid"} {
+		t.Run(interval, func(t *testing.T) {
+			t.Setenv("CLOUDFLARE_RECONCILE_INTERVAL", interval)
+			if _, err := loadIngressSettings(); err == nil {
+				t.Fatalf("Cloudflare reconcile interval %q was accepted", interval)
+			}
+		})
 	}
 }
 

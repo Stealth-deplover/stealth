@@ -267,5 +267,19 @@ Platform hostnames target a separate private API listener containing only the
 current, enabled Site static-serving surface. It independently resolves the
 Host against PostgreSQL, so a stale Traefik file cannot serve a deleted or
 disabled Site and cannot expose Console API, health, metrics, or version
-routes. Nginx remains the public edge and Cloudflare provisioning is unchanged;
-wildcard DNS and Cloudflare-to-Traefik cutover are deferred.
+routes. Nginx remains the Console public edge; workload wildcard routing uses
+the same named tunnel to reach Traefik. The Instance Owner's PostgreSQL
+workload domain is desired state for one wildcard
+record and one wildcard tunnel ingress rule. The worker discovers the matching
+Cloudflare zone and reconciles it. Console traffic continues through the same
+tunnel to `proxy:80` and Nginx; Console/API origin cutover remains deferred.
+Wildcard routing covers platform Site hostnames only; custom-domain DNS
+remains user-managed.
+
+The instance-global Cloudflare API token is encrypted with the shared
+`functionsecret` cipher in PostgreSQL. Admin status responses expose only
+connection and reconciliation state. On upgrade, the worker imports a
+complete legacy binding and token from encrypted setup state once, when the
+production connection is absent. Provider reconciliation is asynchronous,
+single-writer under a PostgreSQL advisory lock, and retries from PostgreSQL
+desired state after restart.

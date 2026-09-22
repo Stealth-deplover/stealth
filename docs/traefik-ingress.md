@@ -6,7 +6,7 @@ architecture, not a disposable canary topology.
 
 ## Current, migration, and target paths
 
-The checked-in production topology currently serves external traffic through:
+The production topology serves Console traffic externally through:
 
 ```text
 Cloudflare Named Tunnel (optional profile)
@@ -17,17 +17,20 @@ Nginx proxy:80 on the private `stealth` network
         `-- / and Console fallback -> stealth-web:3000
 ```
 
-During this release the paths coexist:
+With Cloudflare workload routing enabled, the public paths are:
 
 ```text
-Cloudflare -> Nginx -> API/Console                    (active external path)
-                         ^
-                         |
-             Traefik -> API/Console                    (core internal path)
-                    -> private Site listener          (platform routes)
+cloud.example.com -> Named Tunnel -> proxy/Nginx -> API/Console
+*.apps.example.com -> same Named Tunnel -> Traefik -> API Site listener :8082
+                                                (platform Site routes)
 ```
 
-The eventual architecture is:
+Traefik also retains its internal core routes. The workload wildcard path is
+reconciled from PostgreSQL desired state and does not change the Console
+origin. The Console and wildcard names may use separate Cloudflare DNS zones
+when the scoped API token can access both.
+
+The later Console/API origin cutover architecture is:
 
 ```text
 PostgreSQL desired Site routes -> worker reconciler -> atomic file-provider files
@@ -35,14 +38,12 @@ PostgreSQL desired Site routes -> worker reconciler -> atomic file-provider file
 Cloudflare -> Traefik -> API/Console/workloads ------------+
 ```
 
-The eventual cutover changes only the Cloudflare Tunnel origin from the Nginx
-service to the internal `traefik:8080` service. It does not change the core
-route contract or require a DNS change. Before that cutover, rollback is simply
-to stop/remove Traefik; Nginx and its application attachments remain usable.
-After cutover, rollback is the explicit Cloudflare origin change back to Nginx.
-The platform route snapshot is now implemented, but this PR does not change
-Cloudflare routing or public DNS. Platform hostnames are therefore internal
-Traefik readiness paths until the later wildcard ingress work.
+That cutover is deferred. In this PR, the Console hostname continues through
+the existing `http://proxy:80` tunnel origin and Nginx. Nginx and its health
+checks remain available as the production Console origin and rollback anchor.
+Platform Site hostnames use a separate wildcard ingress rule on the same
+tunnel, targeting `http://traefik:8080`. No Site-specific DNS records are
+created. Custom-domain DNS and public routing remain user-managed and deferred.
 
 The setup Compose project remains separate. Its temporary browser setup UI/API
 continues to use its own Nginx service and has no Docker socket, Docker CLI,

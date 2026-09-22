@@ -138,8 +138,16 @@ func (*gatedSetupCloudflareClient) ConfigureTunnel(context.Context, string, stri
 	return nil
 }
 
+func (*gatedSetupCloudflareClient) TunnelConfiguration(context.Context, string, string) ([]cloudflare.IngressRule, error) {
+	return []cloudflare.IngressRule{{Hostname: "app.example.test", Service: "http://proxy:80"}, {Service: "http_status:404"}}, nil
+}
+
 func (*gatedSetupCloudflareClient) ListDNSRecords(context.Context, string, string) ([]cloudflare.DNSRecord, error) {
 	return nil, nil
+}
+
+func (*gatedSetupCloudflareClient) GetDNSRecord(context.Context, string, string) (cloudflare.DNSRecord, error) {
+	return cloudflare.DNSRecord{}, cloudflare.ErrResourceNotFound
 }
 
 func (*gatedSetupCloudflareClient) CreateDNSRecord(_ context.Context, _ string, record cloudflare.DNSRecord) (cloudflare.DNSRecord, error) {
@@ -151,6 +159,8 @@ func (*gatedSetupCloudflareClient) UpdateDNSRecord(_ context.Context, _, recordI
 	record.ID = recordID
 	return record, nil
 }
+
+func (*gatedSetupCloudflareClient) DeleteDNSRecord(context.Context, string, string) error { return nil }
 
 func (*gatedSetupCloudflareClient) TunnelStatus(context.Context, string, string) (cloudflare.TunnelStatus, error) {
 	return cloudflare.TunnelStatus{Status: "healthy"}, nil
