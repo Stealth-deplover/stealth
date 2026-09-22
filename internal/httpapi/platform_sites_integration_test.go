@@ -45,6 +45,9 @@ func TestPlatformSiteAPIAndNarrowListenerIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE`).Scan(&previousWorkloadDomain); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE instance_domain_settings SET workload_base_domain=NULL,updated_at=now() WHERE id=TRUE`); err != nil {
+		t.Fatal(err)
+	}
 	controlHandler, platformHandler := httpapi.NewWithDependenciesAndPlatformSiteHandler(config.Config{
 		StorageRoot:              root,
 		StorageMaxFileSize:       1 << 20,
