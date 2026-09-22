@@ -230,6 +230,42 @@ workload base domain at `/v1/admin/domain-settings`. `GET` follows existing
 instance-admin visibility, while `PATCH` is Instance Owner-only. Sending JSON
 `null` explicitly clears the workload setting; an omitted field is rejected.
 
-This capability does not provision DNS, change Cloudflare Tunnel origins,
-generate workload hostnames, or reconcile Traefik routes. Those effects belong
-to later platform-hostname and routing capabilities.
+Sites now receive a stable globally unique `platform_label` in PostgreSQL.
+When `workload_base_domain` is configured, the Site API derives a canonical
+`platform_hostname` such as `portfolio.apps.example.com`; when it is unset the
+field is `null`. A Site rename never changes the persisted label or public
+hostname. The small reserved namespace (`api`, `admin`, `console`, `status`,
+and `www`) is allocated a deterministic UUID-suffixed label instead.
+
+The existing worker owns a PostgreSQL-backed platform-route reconciler. It
+renders the complete desired platform Site snapshot to
+`traefik/dynamic/generated/platform-sites.yaml` and updates the top-level
+`traefik/dynamic/.reload.yaml` sentinel with crash-safe
+temporary-file/fsync/atomic-rename publication. PostgreSQL is authoritative;
+generated YAML is derived state and is rebuilt on worker startup, with stale
+routes removed from the next successful snapshot. A PostgreSQL advisory lock
+provides single-writer coordination across workers.
+
+The host installer creates and validates the Traefik paths but does not require
+host `chown` or root execution. A one-shot production Compose service named
+`traefik-state-init` runs as `0:0` with `network_mode: none` and only the
+dynamic directory mounted at `/state`. Docker preserves the invoking host user
+as owner, assigns worker group `10001`, and prepares `dynamic/` and
+`dynamic/generated/` as `0775` plus `.reload.yaml` as `0664`. The fixed worker
+identity is `10001:10001`. The worker receives the dynamic directory read-write
+because replacing the top-level reload sentinel requires write access to its
+parent. The release-managed `core.yaml` is overlaid read-only at the same
+worker path; `traefik.yaml` and the installation root are not mounted into the
+worker. The runtime smoke proves that the worker can update generated state and
+the reload sentinel but cannot write or replace `core.yaml` or access
+`traefik.yaml`. Traefik receives the whole dynamic tree read-only. Upgrade and
+repair run the initializer before dependent services, re-validate the narrow
+path boundary, reject symlinks, and preserve generated content. Operators
+should not manually chown the installation.
+
+Platform hostnames target a separate private API listener containing only the
+current, enabled Site static-serving surface. It independently resolves the
+Host against PostgreSQL, so a stale Traefik file cannot serve a deleted or
+disabled Site and cannot expose Console API, health, metrics, or version
+routes. Nginx remains the public edge and Cloudflare provisioning is unchanged;
+wildcard DNS and Cloudflare-to-Traefik cutover are deferred.

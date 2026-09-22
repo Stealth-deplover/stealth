@@ -11,9 +11,10 @@ import (
 )
 
 // This file is compiled only into the CI upgrade-smoke target binary. It
-// keeps the production binary's asset base and command runner unchanged while
-// allowing the subprocess test to use a local target-asset server and avoid
-// starting a second Docker stack before the shell smoke.
+// keeps the production binary's asset base and command runner injectable so
+// the subprocess test can use a local target-asset server without starting a
+// second Docker stack before the shell smoke. The real Compose smoke remains
+// authoritative for the fixed UID/GID runtime boundary.
 type realUpgradeCommandRunner struct{}
 
 func (realUpgradeCommandRunner) Run(context.Context, string, io.Writer, io.Writer, string, ...string) error {

@@ -75,8 +75,11 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	composeText := string(compose)
 	for _, required := range []string{
 		"  traefik:",
+		"  traefik-state-init:",
 		"./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro",
 		"./traefik/dynamic:/etc/traefik/dynamic:ro",
+		"./traefik/dynamic:/state:rw",
+		"network_mode: none",
 		"cap_drop: [ALL]",
 		"no-new-privileges:true",
 		"stealth_ingress:",
@@ -84,6 +87,20 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	} {
 		if !strings.Contains(composeText, required) {
 			t.Fatalf("production Compose is missing Traefik boundary marker %q", required)
+		}
+	}
+	stateInitStart := strings.Index(composeText, "\n  traefik-state-init:")
+	if stateInitStart < 0 {
+		t.Fatal("Traefik state initializer is missing")
+	}
+	stateInitEnd := strings.Index(composeText[stateInitStart+1:], "\n  telemetry-docker-logs-state-init:")
+	if stateInitEnd < 0 {
+		t.Fatal("could not delimit Traefik state initializer")
+	}
+	stateInitBlock := composeText[stateInitStart : stateInitStart+1+stateInitEnd]
+	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE"} {
+		if strings.Contains(stateInitBlock, forbidden) {
+			t.Fatalf("Traefik state initializer contains forbidden %q", forbidden)
 		}
 	}
 	traefikStart := strings.Index(composeText, "\n  traefik:")
@@ -340,18 +357,129 @@ func assertInstalledTraefikAssets(t *testing.T, layout Layout, host string) {
 	if _, err := os.Stat(filepath.Join(layout.TraefikGenerated, ".gitkeep")); err != nil {
 		t.Fatalf("generated route directory asset is missing: %v", err)
 	}
-	if _, err := os.Stat(layout.TraefikReloadMarker); err != nil {
-		t.Fatalf("file-provider reload marker is missing: %v", err)
-	}
 	for _, path := range []string{layout.TraefikDir, layout.TraefikDynamic, layout.TraefikGenerated} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !info.IsDir() || info.Mode().Perm() != 0o755 {
-			t.Fatalf("Traefik directory %s mode = %o", path, info.Mode().Perm())
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("Traefik path %s is not a normal directory", path)
 		}
 	}
+}
+
+func TestEnsureTraefikDirectoriesValidatesRuntimePathsWithoutChangingOwnership(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "stealth")
+	layout, err := NewLayout(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.TraefikDynamic, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout.TraefikDynamic, ".reload.yaml"), []byte("legacy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.TraefikStatic, []byte("static\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.TraefikCore, []byte("core\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.TraefikGenerated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("generated state must survive repair\n")
+	if err := os.WriteFile(filepath.Join(layout.TraefikGenerated, "platform-sites.yaml"), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dynamicBefore, err := os.Stat(layout.TraefikDynamic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedBefore, err := os.Stat(layout.TraefikGenerated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTraefikDirectories(layout); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(layout.TraefikReloadMarker)
+	if err != nil {
+		t.Fatalf("top-level reload marker missing: %v", err)
+	}
+	if string(marker) != "legacy\n" {
+		t.Fatalf("existing reload marker was changed: %q", marker)
+	}
+	got, err := os.ReadFile(filepath.Join(layout.TraefikGenerated, "platform-sites.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("generated state changed during repair: %q", got)
+	}
+	dynamicAfter, err := os.Stat(layout.TraefikDynamic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedAfter, err := os.Stat(layout.TraefikGenerated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dynamicAfter.Sys() == nil || generatedAfter.Sys() == nil {
+		t.Fatal("runtime path ownership metadata is unavailable")
+	}
+	if dynamicBefore.Mode() != dynamicAfter.Mode() || generatedBefore.Mode() != generatedAfter.Mode() {
+		t.Fatalf("runtime path modes changed: dynamic %o -> %o, generated %o -> %o", dynamicBefore.Mode().Perm(), dynamicAfter.Mode().Perm(), generatedBefore.Mode().Perm(), generatedAfter.Mode().Perm())
+	}
+	markerInfo, err := os.Lstat(layout.TraefikReloadMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if markerInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("reload marker mode = %o, want 644", markerInfo.Mode().Perm())
+	}
+}
+
+func TestEnsureTraefikDirectoriesRejectsSymlinkAndNonDirectory(t *testing.T) {
+	t.Run("symlink", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "stealth")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.MkdirAll(outside, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "traefik")); err != nil {
+			t.Skipf("symlink test unavailable: %v", err)
+		}
+		layout, err := NewLayout(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureTraefikDirectories(layout); err == nil {
+			t.Fatal("Traefik directory symlink was accepted")
+		}
+	})
+
+	t.Run("non-directory", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "stealth")
+		layout, err := NewLayout(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(layout.TraefikDynamic, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(layout.TraefikGenerated, []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureTraefikDirectories(layout); err == nil {
+			t.Fatal("Traefik generated file was accepted as a directory")
+		}
+	})
 }
 
 func repoRootForTraefikTest(t *testing.T) string {

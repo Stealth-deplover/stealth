@@ -159,7 +159,7 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
+			_, _ = writer.Write([]byte("services:\n  traefik:\n  traefik-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
 			return
 		}
 		if strings.HasSuffix(request.URL.Path, "traefik/traefik.yaml") {

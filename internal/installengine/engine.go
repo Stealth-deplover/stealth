@@ -287,6 +287,20 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if err != nil {
 			return err
 		}
+		// Existing installations from the previous release may still have the
+		// dynamic directory owned by the fixed worker UID. Run the target
+		// release's narrow init service against the staged Compose file before
+		// managed assets are activated, so an unprivileged host user can still
+		// complete an upgrade without changing ownership itself.
+		if !plan.Setup && plan.Existing {
+			composePath, ok := prepared.assets.stagedAssetPath("compose.production.yaml")
+			if !ok {
+				return prepared.failCommit(errors.New("staged production Compose asset is missing"))
+			}
+			if err := e.runTraefikStateInit(ctx, plan, composePath, plan.Layout.Root); err != nil {
+				return prepared.failCommit(err)
+			}
+		}
 		if err := prepared.commit(plan); err != nil {
 			return err
 		}
@@ -309,13 +323,15 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 	case StepDependencies:
 		if !plan.Setup {
 			// StepServices may use --no-deps for external PostgreSQL/Redis.
-			// Run both ownership init services explicitly so that path never
-			// bypasses either non-root Collector's persistent file_storage
-			// preparation.
+			// Run all narrow ownership init services explicitly so that path
+			// never bypasses persistent state preparation.
 			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "otelcol-state-init"); err != nil {
 				return err
 			}
 			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"); err != nil {
+				return err
+			}
+			if err := e.runTraefikStateInit(ctx, plan, plan.Layout.ComposeFile, ""); err != nil {
 				return err
 			}
 		}
@@ -472,6 +488,18 @@ type managedAssetMigration struct {
 	journalWritten bool
 }
 
+func (m *managedAssetMigration) stagedAssetPath(relativePath string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	for _, asset := range m.assets {
+		if asset.spec.Path == relativePath {
+			return asset.stagePath, true
+		}
+	}
+	return "", false
+}
+
 type preparedInstallation struct {
 	layout              Layout
 	assets              *managedAssetMigration
@@ -501,6 +529,9 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		return nil, errors.New("installation layout is incomplete")
 	}
 	if err := ValidateReleaseVersion(strings.TrimSpace(plan.Version)); err != nil {
+		return nil, err
+	}
+	if err := validateInstallRootBeforeCreation(plan.Layout.Root); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(plan.Layout.Root, 0o700); err != nil {
@@ -627,6 +658,24 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		}
 	}
 	return prepared, nil
+}
+
+func validateInstallRootBeforeCreation(root string) error {
+	clean := filepath.Clean(strings.TrimSpace(root))
+	if clean == "" || clean == string(filepath.Separator) {
+		return errors.New("refusing filesystem root as installation directory")
+	}
+	info, err := os.Lstat(clean)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect installation directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("installation directory %q is not a normal directory", clean)
+	}
+	return nil
 }
 
 func (p *preparedInstallation) commit(plan Plan) error {
@@ -1066,6 +1115,7 @@ func syncDirectory(path string) error {
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
 		"  traefik:",
+		"  traefik-state-init:",
 		"  otel-collector:",
 		"  telemetry-host:",
 		"  telemetry-docker-logs:",
@@ -1326,13 +1376,29 @@ func (e *Engine) Wait(ctx context.Context, plan Plan) error {
 }
 
 func (e *Engine) runCompose(ctx context.Context, plan Plan, args ...string) error {
+	composeFile := plan.Layout.ComposeFile
+	if plan.Setup && plan.Layout.SetupComposeFile != "" {
+		composeFile = plan.Layout.SetupComposeFile
+	}
+	return e.runComposeFile(ctx, plan, composeFile, "", args...)
+}
+
+func (e *Engine) runTraefikStateInit(ctx context.Context, plan Plan, composeFile, projectDirectory string) error {
+	args := []string{
+		"run", "--rm", "--no-deps",
+		"-e", fmt.Sprintf("STEALTH_TRAEFIK_HOST_UID=%d", os.Geteuid()),
+		"traefik-state-init",
+	}
+	return e.runComposeFile(ctx, plan, composeFile, projectDirectory, args...)
+}
+
+func (e *Engine) runComposeFile(ctx context.Context, plan Plan, composeFile, projectDirectory string, args ...string) error {
 	composeArgs := []string{"compose"}
 	if plan.Cloudflare {
 		composeArgs = append(composeArgs, "--profile", "cloudflare")
 	}
-	composeFile := plan.Layout.ComposeFile
-	if plan.Setup && plan.Layout.SetupComposeFile != "" {
-		composeFile = plan.Layout.SetupComposeFile
+	if projectDirectory != "" {
+		composeArgs = append(composeArgs, "--project-directory", projectDirectory)
 	}
 	if strings.TrimSpace(composeFile) == "" {
 		return errors.New("Compose file is required")

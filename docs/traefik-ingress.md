@@ -20,18 +20,19 @@ Nginx proxy:80 on the private `stealth` network
 During this release the paths coexist:
 
 ```text
-Cloudflare -> Nginx -> API/Console       (active external path)
+Cloudflare -> Nginx -> API/Console                    (active external path)
                          ^
                          |
-             Traefik -> API/Console      (internal production-parity path)
+             Traefik -> API/Console                    (core internal path)
+                    -> private Site listener          (platform routes)
 ```
 
 The eventual architecture is:
 
 ```text
-PostgreSQL desired routes -> Stealth reconciler -> atomic file-provider files
-                                                        |
-Cloudflare -> Traefik -> API/Console/workloads ----------+
+PostgreSQL desired Site routes -> worker reconciler -> atomic file-provider files
+                                                          |
+Cloudflare -> Traefik -> API/Console/workloads ------------+
 ```
 
 The eventual cutover changes only the Cloudflare Tunnel origin from the Nginx
@@ -39,7 +40,9 @@ service to the internal `traefik:8080` service. It does not change the core
 route contract or require a DNS change. Before that cutover, rollback is simply
 to stop/remove Traefik; Nginx and its application attachments remain usable.
 After cutover, rollback is the explicit Cloudflare origin change back to Nginx.
-This PR does not change Cloudflare routing or public DNS.
+The platform route snapshot is now implemented, but this PR does not change
+Cloudflare routing or public DNS. Platform hostnames are therefore internal
+Traefik readiness paths until the later wildcard ingress work.
 
 The setup Compose project remains separate. Its temporary browser setup UI/API
 continues to use its own Nginx service and has no Docker socket, Docker CLI,
@@ -52,8 +55,8 @@ The installed layout is:
 ```text
 <STEALTH_INSTALL_ROOT>/traefik/traefik.yaml                  release-managed static config
 <STEALTH_INSTALL_ROOT>/traefik/dynamic/core.yaml             release-managed core routes
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml          host-managed reload sentinel
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            future generated route files
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml           worker-writable reload sentinel
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            worker-writable route files
 ```
 
 Traefik mounts the static file and dynamic tree read-only. These files are
@@ -61,17 +64,54 @@ derived configuration, never the business source of truth:
 
 - release assets are authoritative for static runtime settings and core
   API/Console routes;
-- PostgreSQL Stealth state will be authoritative for future workload and
-  verified-domain ownership;
-- a future route reconciler will render generated files into `generated/`;
+- PostgreSQL Stealth state is authoritative for platform Site ownership;
+- the existing worker renders the complete platform Site snapshot into
+  `generated/platform-sites.yaml` from PostgreSQL;
 - the writer contract is render -> validate -> write a temporary file ->
   fsync/close -> atomic rename -> file-provider reload. A live YAML file must
   never be partially rewritten in place;
 - Traefik only consumes the resulting files and never mutates desired state.
 
 The generated directory is separate from release-managed files so update and
-repair do not overwrite workload/domain routes. The current release adds no
-persistent Traefik data volume and no workload/custom-domain route database.
+repair do not overwrite platform routes. The host installer only validates and
+creates this layout; it never needs to chown it to the worker UID. A one-shot
+`traefik-state-init` Compose service performs the narrow Docker-side handoff
+with `user: 0:0`, `network_mode: none`, and only the dynamic directory mounted
+at `/state`. It preserves the invoking host user as owner, assigns the fixed
+worker group `10001`, and prepares `dynamic/` and `generated/` as `0775` plus
+the reload sentinel as `0664`. It does not recursively change ownership and
+never mounts or changes `core.yaml` or `traefik.yaml`. The worker receives the
+dynamic directory as a read-write bind mount because atomic replacement of the
+top-level reload sentinel requires write access to its parent. `core.yaml` is
+overlaid at the same container path as a read-only bind mount, while
+`traefik.yaml` and the installation root are not mounted into the worker. The
+runtime smoke verifies that the worker can replace generated state and the
+reload sentinel but cannot write or replace `core.yaml`. Traefik mounts the
+complete dynamic tree read-only. Upgrade and repair run the initializer before
+dependent services, validate paths with `Lstat`, reject symlinks or
+non-directories, and preserve generated content. The generated snapshot is
+derived state, not a route registry or database.
+
+## Platform Site routes
+
+For every enabled active Site with a persisted `platform_label` and configured
+`workload_base_domain`, the worker generates an exact `Host()` router. Router
+and service identifiers are derived from immutable UUIDs, while the Host rule
+uses the canonical hostname. Routes are sorted before YAML rendering, so the
+same PostgreSQL snapshot produces byte-stable output. Clearing or changing the
+instance workload domain, disabling/deleting a Site, or removing its
+eligibility removes the old router from the next complete snapshot.
+
+The generated service points to the API container's private Site listener on
+`:8082`, not the control-plane listener on `:8080`. That listener has only the
+static Site-serving graph and resolves the Host against current PostgreSQL
+state before opening the active immutable artifact. A stale generated router
+therefore cannot make a disabled/deleted Site public or expose `/v1/*`,
+`/healthz`, `/readyz`, `/version`, or `/metrics` from the control plane.
+
+If `platform-sites.yaml` or the top-level `.reload.yaml` is deleted, restart or
+allow the worker's bounded reconcile loop to reconstruct the generated state.
+Operators must not edit generated YAML by hand.
 
 ## Core routing parity
 
@@ -237,11 +277,11 @@ operator files. No persistent Traefik state is added to purge handling.
 
 ## Deferred work
 
-This PR intentionally does not implement the full PostgreSQL route reconciler,
-workload/custom-domain route lifecycle, Docker discovery, custom certificates,
-or the Cloudflare origin cutover. The planned custom-domain lifecycle is
+This capability intentionally does not implement custom-domain Traefik route
+lifecycle, Docker discovery, custom certificates, or the Cloudflare origin
+cutover. The planned custom-domain lifecycle is
 `requested -> ownership verification -> DNS verified -> route generated ->
 proxy health verified -> active`; deletion disables the route, waits for
-reconciliation, then finalizes metadata. The next ingress PR can add this
-control-plane reconciliation while retaining the file-provider, network, and
+reconciliation, then finalizes metadata. A later focused PR can add this
+custom-domain lifecycle while retaining the file-provider, network, and
 security contracts established here.

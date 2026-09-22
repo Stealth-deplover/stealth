@@ -12,10 +12,11 @@ import (
 // credential, and trusted proxy boundary. Keeping these values together makes
 // the network-facing configuration contract explicit at the composition root.
 type transportSettings struct {
-	redisURL          string
-	httpAddress       string
-	metricsToken      string
-	trustedProxyCIDRs []*net.IPNet
+	redisURL            string
+	httpAddress         string
+	platformSiteAddress string
+	metricsToken        string
+	trustedProxyCIDRs   []*net.IPNet
 }
 
 func loadTransportSettings() (transportSettings, error) {
@@ -27,17 +28,30 @@ func loadTransportSettings() (transportSettings, error) {
 	if len(metricsToken) > 256 || strings.IndexFunc(metricsToken, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 		return transportSettings{}, fmt.Errorf("METRICS_TOKEN must be at most 256 characters and contain no whitespace or control characters")
 	}
+	httpAddress := value("HTTP_ADDR", ":8080")
+	platformSiteAddress := value("PLATFORM_SITE_ADDR", ":8082")
+	if !isListenAddress(httpAddress) {
+		return transportSettings{}, fmt.Errorf("HTTP_ADDR must be a TCP host:port with a port between 1 and 65535")
+	}
+	if !isListenAddress(platformSiteAddress) {
+		return transportSettings{}, fmt.Errorf("PLATFORM_SITE_ADDR must be a TCP host:port with a port between 1 and 65535")
+	}
+	if sameListenPort(httpAddress, platformSiteAddress) {
+		return transportSettings{}, fmt.Errorf("PLATFORM_SITE_ADDR must use a different listener port from HTTP_ADDR")
+	}
 	return transportSettings{
-		redisURL:          value("REDIS_URL", "redis://127.0.0.1:6379/0"),
-		httpAddress:       value("HTTP_ADDR", ":8080"),
-		metricsToken:      metricsToken,
-		trustedProxyCIDRs: trustedProxyCIDRs,
+		redisURL:            value("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		httpAddress:         httpAddress,
+		platformSiteAddress: platformSiteAddress,
+		metricsToken:        metricsToken,
+		trustedProxyCIDRs:   trustedProxyCIDRs,
 	}, nil
 }
 
 func (s transportSettings) apply(c *Config) {
 	c.RedisURL = s.redisURL
 	c.HTTPAddress = s.httpAddress
+	c.PlatformSiteAddress = s.platformSiteAddress
 	c.MetricsToken = s.metricsToken
 	c.TrustedProxyCIDRs = cloneIPNetworks(s.trustedProxyCIDRs)
 }

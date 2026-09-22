@@ -114,16 +114,17 @@ func main() {
 			logger.Warn("telemetry schema registry unavailable", "error", err)
 		}
 	}
-	handler := httpapi.NewWithDependencies(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient), RealtimeBroker: realtime.NewBroker(redisClient), TelemetryStore: telemetryStore, Redis: redisClient})
+	handler, platformSiteHandler := httpapi.NewWithDependenciesAndPlatformSiteHandler(cfg, repo, logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewRedisLimiter(redisClient), RealtimeBroker: realtime.NewBroker(redisClient), TelemetryStore: telemetryStore, Redis: redisClient})
 	server := &http.Server{Addr: cfg.HTTPAddress, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
-	servers := []*http.Server{server}
+	platformSiteServer := &http.Server{Addr: cfg.PlatformSiteAddress, Handler: platformSiteHandler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, WriteTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	servers := []*http.Server{server, platformSiteServer}
 	var tlsServer, challengeServer *http.Server
 	var tlsListener, challengeListener net.Listener
 	type serverResult struct {
 		name string
 		err  error
 	}
-	errCh := make(chan serverResult, 3)
+	errCh := make(chan serverResult, 4)
 	if cfg.ACMEEnabled {
 		certificateManager, managerErr := tlsmanager.New(tlsmanager.Options{
 			CacheDir:     filepath.Clean(cfg.ACMECertCacheDir),
@@ -157,6 +158,10 @@ func main() {
 	go func() {
 		logger.Info("api listening", "address", cfg.HTTPAddress)
 		errCh <- serverResult{name: "api", err: server.ListenAndServe()}
+	}()
+	go func() {
+		logger.Info("platform Site listener", "address", cfg.PlatformSiteAddress)
+		errCh <- serverResult{name: "platform-site", err: platformSiteServer.ListenAndServe()}
 	}()
 	if cfg.ACMEEnabled {
 		go func() {

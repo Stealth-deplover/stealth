@@ -56,6 +56,59 @@ if [ -z "$traefik_block" ]; then
 	printf '%s\n' 'Traefik service is missing from rendered production Compose' >&2
 	exit 1
 fi
+worker_block="$(service_block worker)"
+if [ -z "$worker_block" ]; then
+	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
+	exit 1
+fi
+state_init_block="$(service_block traefik-state-init)"
+if [ -z "$state_init_block" ]; then
+	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
+	exit 1
+fi
+
+for required in \
+	'network_mode: none' \
+	'read_only: true' \
+	'target: /state'; do
+	if ! printf '%s\n' "$state_init_block" | grep -Fq -- "$required"; then
+		printf 'Traefik state initializer is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'user: "?0:0"?'; then
+	printf '%s\n' 'Traefik state initializer must run as container root' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'restart: "?no"?'; then
+	printf '%s\n' 'Traefik state initializer must be one-shot' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'source: .*/traefik/dynamic([[:space:]]|$)'; then
+	printf '%s\n' 'Traefik state initializer must mount only the dynamic state directory' >&2
+	exit 1
+fi
+for forbidden in \
+	'/var/run/docker.sock' \
+	'privileged:' \
+	'network_mode: host' \
+	'cap_add:' \
+	'secrets:' \
+	'/traefik/traefik.yaml' \
+	'/traefik/dynamic/core.yaml' \
+	'DATABASE_URL' \
+	'REDIS_URL' \
+	'CLOUDFLARE'; do
+	if printf '%s\n' "$state_init_block" | grep -Fqi -- "$forbidden"; then
+		printf 'Traefik state initializer contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+
+if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
+	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2
+	exit 1
+fi
 
 for forbidden in \
 	'/var/run/docker.sock' \
@@ -99,8 +152,41 @@ if ! printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/dynamic([[:sp
 	printf '%s\n' 'Traefik dynamic directory mount is incorrect' >&2
 	exit 1
 fi
+if printf '%s\n' "$traefik_block" | grep -Eq 'source: .*/traefik/dynamic/(generated|\.reload\.yaml)|target: /var/lib/stealth/traefik/(generated|\.reload\.yaml)'; then
+	printf '%s\n' 'Traefik must not receive a writable reconciler path mount' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$traefik_block" | grep -Fq 'read_only: true'; then
 	printf '%s\n' 'Traefik mounts/root filesystem are not read-only in rendered Compose' >&2
+	exit 1
+fi
+
+# The existing worker owns other bounded capabilities, including the Docker
+# socket for Site/Function builds. Atomic replacement of the top-level reload
+# sentinel requires the dynamic parent directory. core.yaml is overlaid at the
+# same path as a read-only bind mount, while the static Traefik file and
+# installation root are never mounted into the worker. The runtime smoke also
+# proves that the nested read-only core mount rejects writes and replacement.
+for required in \
+	'source: .*/traefik/dynamic$' \
+	'target: /var/lib/stealth/traefik' \
+	'source: .*/traefik/dynamic/core\.yaml' \
+	'target: /var/lib/stealth/traefik/core\.yaml'; do
+	if ! printf '%s\n' "$worker_block" | grep -Eq -- "$required"; then
+		printf 'worker is missing the required Traefik state mount: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$worker_block" | awk '
+/source: .*[\\/]traefik[\\/]dynamic[\\/]core\.yaml/ { core_source=1 }
+/target: \/var\/lib\/stealth\/traefik\/core\.yaml/ { core_target=1 }
+/read_only: true/ && core_source && core_target { core_read_only=1 }
+END { exit(core_read_only ? 0 : 1) }'; then
+	printf '%s\n' 'worker core.yaml mount is not explicitly read-only' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_block" | grep -Eq 'source: .*/traefik/traefik\.yaml|target: /etc/traefik|target: /var/lib/stealth/traefik/traefik\.yaml'; then
+	printf '%s\n' 'worker has a static or installation-root Traefik mount' >&2
 	exit 1
 fi
 
@@ -280,4 +366,4 @@ if grep -Fq 'Strict-Transport-Security:' "$core_file"; then
 	exit 1
 fi
 
-printf '%s\n' 'Traefik security regression passed: file provider only, private configurable ingress, reserved peers, read-only config, no socket, no dashboard'
+printf '%s\n' 'Traefik security regression passed: file provider only, private configurable ingress, reserved peers, protected worker route writer, no socket, no dashboard'

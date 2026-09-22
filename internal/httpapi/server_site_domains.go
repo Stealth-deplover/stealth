@@ -183,6 +183,9 @@ func siteDomainResourceError(w http.ResponseWriter, err error) bool {
 	case errors.Is(err, repository.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", "the hostname is already bound to a Site")
 		return true
+	case errors.Is(err, repository.ErrSiteDomainPlatformConflict):
+		writeError(w, http.StatusConflict, "platform_namespace_conflict", "the hostname belongs to the configured platform workload namespace")
+		return true
 	case errors.Is(err, repository.ErrInvalidSiteDomain):
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "hostname is not a valid DNS hostname")
 		return true

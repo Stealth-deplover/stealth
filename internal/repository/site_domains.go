@@ -18,6 +18,7 @@ import (
 var (
 	ErrInvalidSiteDomain            = errors.New("invalid site domain")
 	ErrSiteDomainVerificationFailed = errors.New("site domain verification failed")
+	ErrSiteDomainPlatformConflict   = errors.New("site domain is reserved by the platform hostname namespace")
 )
 
 // SiteTXTResolver is kept injectable so DNS verification can be tested with a
@@ -159,6 +160,15 @@ func (r *Repository) CreateSiteDomain(ctx context.Context, id, projectID, siteID
 	defer tx.Rollback(ctx)
 	if err := r.requireSiteWriteTx(ctx, tx, projectID, actor); err != nil {
 		return domain.SiteDomain{}, err
+	}
+	workloadBaseDomain, err := workloadDomainTx(ctx, tx)
+	if err != nil {
+		return domain.SiteDomain{}, err
+	}
+	if workloadBaseDomain != nil {
+		if hostname == *workloadBaseDomain || strings.HasSuffix(hostname, "."+*workloadBaseDomain) {
+			return domain.SiteDomain{}, ErrSiteDomainPlatformConflict
+		}
 	}
 	if _, err := r.siteByID(ctx, tx, projectID, siteID, true); err != nil {
 		return domain.SiteDomain{}, err
