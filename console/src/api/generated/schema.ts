@@ -3640,11 +3640,11 @@ export interface components {
         InstanceDomainSettings: {
             /** @description Canonical hostname derived from PUBLIC_APP_URL; local IP hosts remain supported for local installations. */
             instance_hostname: string;
-            /** @description Canonical ASCII hostname used later as the suffix for generated workload hostnames. A public suffix alone is not accepted. */
+            /** @description Canonical ASCII/punycode hostname returned by the API and used later as the suffix for generated workload hostnames */
             workload_base_domain: string | null;
         };
         UpdateInstanceDomainSettingsRequest: {
-            /** @description Send null to clear the setting. Unicode IDNs are accepted and stored in canonical ASCII form. */
+            /** @description Unicode IDNs are accepted and normalized server-side. The stored and returned representation is canonical ASCII/punycode. Send null to clear the setting. */
             workload_base_domain: string | null;
         };
         UpdateAdminStatusPageRequest: {

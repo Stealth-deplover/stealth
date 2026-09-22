@@ -57,20 +57,37 @@ func (r *Repository) UpdateInstanceDomainSettings(ctx context.Context, accountID
 	if err := requireInstanceOwnerTx(ctx, tx, accountID); err != nil {
 		return domain.InstanceDomainSettings{}, err
 	}
-	var storedWorkloadDomain *string
+	var previousWorkloadDomain *string
 	if err := tx.QueryRow(ctx, `
-		UPDATE instance_domain_settings
-		SET workload_base_domain=$1,updated_at=now()
+		SELECT workload_base_domain
+		FROM instance_domain_settings
 		WHERE id=TRUE
-		RETURNING workload_base_domain`, nullableDomainValue(canonicalWorkloadDomain)).Scan(&storedWorkloadDomain); errors.Is(err, pgx.ErrNoRows) {
+		FOR UPDATE`).Scan(&previousWorkloadDomain); errors.Is(err, pgx.ErrNoRows) {
 		return domain.InstanceDomainSettings{}, ErrNotFound
 	} else if err != nil {
+		return domain.InstanceDomainSettings{}, err
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE instance_domain_settings
+		SET workload_base_domain=$1,updated_at=now()
+		WHERE id=TRUE`, nullableDomainValue(canonicalWorkloadDomain))
+	if err != nil {
+		return domain.InstanceDomainSettings{}, err
+	}
+	if result.RowsAffected() != 1 {
+		return domain.InstanceDomainSettings{}, ErrNotFound
+	}
+	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.domain_settings.update", "instance_domain_settings", uuid.Nil, map[string]any{
+		"previous_workload_base_domain": previousWorkloadDomain,
+		"workload_base_domain":          canonicalWorkloadDomain,
+		"cleared":                       canonicalWorkloadDomain == nil,
+	}); err != nil {
 		return domain.InstanceDomainSettings{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.InstanceDomainSettings{}, err
 	}
-	return domain.InstanceDomainSettings{InstanceHostname: canonicalHostname, WorkloadBaseDomain: storedWorkloadDomain}, nil
+	return domain.InstanceDomainSettings{InstanceHostname: canonicalHostname, WorkloadBaseDomain: canonicalWorkloadDomain}, nil
 }
 
 func normalizeInstanceHostname(value string) (string, error) {
