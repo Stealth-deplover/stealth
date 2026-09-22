@@ -61,6 +61,46 @@ if [ -z "$worker_block" ]; then
 	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
 	exit 1
 fi
+state_init_block="$(service_block traefik-state-init)"
+if [ -z "$state_init_block" ]; then
+	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
+	exit 1
+fi
+
+for required in \
+	'user: 0:0' \
+	'network_mode: none' \
+	'read_only: true' \
+	'target: /state'; do
+	if ! printf '%s\n' "$state_init_block" | grep -Fq -- "$required"; then
+		printf 'Traefik state initializer is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'restart: "?no"?'; then
+	printf '%s\n' 'Traefik state initializer must be one-shot' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'source: .*/traefik/dynamic([[:space:]]|$)'; then
+	printf '%s\n' 'Traefik state initializer must mount only the dynamic state directory' >&2
+	exit 1
+fi
+for forbidden in \
+	'/var/run/docker.sock' \
+	'privileged:' \
+	'network_mode: host' \
+	'cap_add:' \
+	'secrets:' \
+	'/traefik/traefik.yaml' \
+	'/traefik/dynamic/core.yaml' \
+	'DATABASE_URL' \
+	'REDIS_URL' \
+	'CLOUDFLARE'; do
+	if printf '%s\n' "$state_init_block" | grep -Fqi -- "$forbidden"; then
+		printf 'Traefik state initializer contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
 
 if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
 	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2

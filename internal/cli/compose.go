@@ -219,12 +219,11 @@ func (a *App) installEngine() *installengine.Engine {
 		output = a.errOut
 	}
 	return installengine.New(installengine.Options{
-		Runner:                 a.runner,
-		HTTPClient:             a.httpClient,
-		AssetBaseURL:           a.assetBase,
-		Output:                 output,
-		PollAttempts:           a.pollAttempts,
-		PollInterval:           a.pollInterval,
-		TraefikOwnershipSetter: a.traefikOwnershipSetter,
+		Runner:       a.runner,
+		HTTPClient:   a.httpClient,
+		AssetBaseURL: a.assetBase,
+		Output:       output,
+		PollAttempts: a.pollAttempts,
+		PollInterval: a.pollInterval,
 	})
 }

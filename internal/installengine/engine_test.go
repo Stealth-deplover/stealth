@@ -93,7 +93,7 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
+	return "services:\n  traefik:\n  traefik-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
 }
 
 func testMainCollectorAsset() string {
@@ -169,6 +169,29 @@ func TestRunStepSetupUsesSetupComposeAndOnlySetupServices(t *testing.T) {
 	}
 	if got := calls[4].args; !equalArgs(got[len(got)-3:], []string{"setup", "setup-console", "setup-proxy"}) {
 		t.Fatalf("setup services = %#v", got)
+	}
+}
+
+func TestExistingConfigurationInitializesTraefikStateBeforeAssetActivation(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner, AssetBaseURL: assetServer.URL})
+	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}
+
+	if err := engine.RunStep(context.Background(), plan, StepConfiguration); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	if len(calls) != 3 {
+		t.Fatalf("recorded calls = %#v, want network probe, staged state init, and Compose validation", calls)
+	}
+	if !contains(calls[1].args, "traefik-state-init") || !contains(calls[1].args, "--project-directory") {
+		t.Fatalf("pre-activation state init command = %#v", calls[1])
+	}
+	if !equalArgs(calls[2].args[len(calls[2].args)-2:], []string{"config", "--quiet"}) {
+		t.Fatalf("configuration validation command = %#v", calls[2])
 	}
 }
 
@@ -253,8 +276,8 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 5 {
-		t.Fatalf("recorded calls = %#v, want both state inits, telemetry dependency, migration, and services", calls)
+	if len(calls) != 6 {
+		t.Fatalf("recorded calls = %#v, want three state inits, telemetry dependency, migration, and services", calls)
 	}
 	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
 		t.Fatalf("Collector state init command = %#v", calls[0])
@@ -262,14 +285,17 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 	if !equalArgs(calls[1].args[len(calls[1].args)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", calls[1])
 	}
-	if !equalArgs(calls[2].args[len(calls[2].args)-3:], []string{"up", "-d", "clickhouse"}) {
-		t.Fatalf("telemetry dependency command = %#v", calls[2])
+	if len(calls[2].args) < 2 || !strings.HasPrefix(calls[2].args[len(calls[2].args)-2], "STEALTH_TRAEFIK_HOST_UID=") || calls[2].args[len(calls[2].args)-1] != "traefik-state-init" {
+		t.Fatalf("Traefik state init command = %#v", calls[2])
 	}
-	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[3])
+	if !equalArgs(calls[3].args[len(calls[3].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[3])
 	}
-	if !contains(calls[4].args, "--no-deps") || contains(calls[4].args, "postgres") || contains(calls[4].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[4])
+	if !equalArgs(calls[4].args[len(calls[4].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[4])
+	}
+	if !contains(calls[5].args, "--no-deps") || contains(calls[5].args, "postgres") || contains(calls[5].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[5])
 	}
 }
 

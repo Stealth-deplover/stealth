@@ -36,31 +36,14 @@ static_backup=""
 static_modified="false"
 dynamic_state_dir="$(dirname -- "$compose_file")/traefik/dynamic"
 generated_state_dir="$dynamic_state_dir/generated"
-dynamic_state_original_owner=""
-dynamic_state_original_mode=""
-generated_state_original_owner=""
-generated_state_original_mode=""
-reload_original_owner=""
-reload_original_mode=""
 traefik_state_prepared="false"
 generated_route_existed="false"
 reload_existed="false"
 forwarded_echo_container_id=""
 forwarded_echo_dir=""
 forwarded_echo_route_file=""
+forwarded_echo_route_name=""
 forwarded_echo_host="stealth-forwarded-header-echo.test"
-
-run_privileged() {
-	if [ "$(id -u)" -eq 0 ]; then
-		"$@"
-		return
-	fi
-	if ! command -v sudo >/dev/null 2>&1; then
-		printf '%s\n' 'this smoke needs sudo to prepare the fixed worker-owned Traefik state directories' >&2
-		return 1
-	fi
-	sudo -n -- "$@"
-}
 
 prepare_traefik_state_for_smoke() {
 	for directory in "$dynamic_state_dir" "$generated_state_dir"; do
@@ -69,10 +52,10 @@ prepare_traefik_state_for_smoke() {
 			return 1
 		fi
 	done
-	dynamic_state_original_owner="$(stat -c '%u:%g' "$dynamic_state_dir")"
-	dynamic_state_original_mode="$(stat -c '%a' "$dynamic_state_dir")"
-	generated_state_original_owner="$(stat -c '%u:%g' "$generated_state_dir")"
-	generated_state_original_mode="$(stat -c '%a' "$generated_state_dir")"
+	if [ "$(stat -c '%u' "$dynamic_state_dir")" != "$(id -u)" ]; then
+		printf 'Traefik dynamic state must initially be owned by the invoking host user: %s\n' "$dynamic_state_dir" >&2
+		return 1
+	fi
 	if [ -e "$generated_state_dir/platform-sites.yaml" ]; then
 		generated_route_existed="true"
 	fi
@@ -82,22 +65,9 @@ prepare_traefik_state_for_smoke() {
 	fi
 	if [ -e "$dynamic_state_dir/.reload.yaml" ]; then
 		reload_existed="true"
-		reload_original_owner="$(stat -c '%u:%g' "$dynamic_state_dir/.reload.yaml")"
-		reload_original_mode="$(stat -c '%a' "$dynamic_state_dir/.reload.yaml")"
 	fi
 	traefik_state_prepared="true"
-	# The checked-out repository bypasses the host installer. Prepare only the
-	# two narrow worker-owned paths using the same fixed ownership contract as
-	# installengine. core.yaml is deliberately not changed.
-	run_privileged chown 10001:10001 "$dynamic_state_dir"
-	run_privileged chmod 0755 "$dynamic_state_dir"
-	run_privileged chown 10001:10001 "$generated_state_dir"
-	run_privileged chmod 0755 "$generated_state_dir"
-	if [ "$reload_existed" = "true" ]; then
-		run_privileged chown 10001:10001 "$dynamic_state_dir/.reload.yaml"
-		run_privileged chmod 0644 "$dynamic_state_dir/.reload.yaml"
-	fi
-	printf 'prepared Traefik worker state for uid/gid 10001:10001 mode 0755 (dynamic and generated)\n'
+	printf 'Traefik state starts owned by host uid %s; the Compose init service will prepare worker access\n' "$(id -u)"
 }
 
 restore_traefik_state_after_smoke() {
@@ -105,18 +75,11 @@ restore_traefik_state_after_smoke() {
 		return 0
 	fi
 	if [ "$generated_route_existed" != "true" ]; then
-		run_privileged rm -f -- "$generated_state_dir/platform-sites.yaml" || true
+		rm -f -- "$generated_state_dir/platform-sites.yaml" || true
 	fi
 	if [ "$reload_existed" != "true" ]; then
-		run_privileged rm -f -- "$dynamic_state_dir/.reload.yaml" || true
-	else
-		run_privileged chown "$reload_original_owner" "$dynamic_state_dir/.reload.yaml" || true
-		run_privileged chmod "$reload_original_mode" "$dynamic_state_dir/.reload.yaml" || true
+		rm -f -- "$dynamic_state_dir/.reload.yaml" || true
 	fi
-	run_privileged chown "$generated_state_original_owner" "$generated_state_dir" || true
-	run_privileged chmod "$generated_state_original_mode" "$generated_state_dir" || true
-	run_privileged chown "$dynamic_state_original_owner" "$dynamic_state_dir" || true
-	run_privileged chmod "$dynamic_state_original_mode" "$dynamic_state_dir" || true
 }
 
 cleanup() {
@@ -126,7 +89,7 @@ cleanup() {
 		forwarded_echo_container_id=""
 	fi
 	if [ -n "$forwarded_echo_route_file" ]; then
-		run_privileged rm -f -- "$forwarded_echo_route_file" || true
+		rm -f -- "$forwarded_echo_route_file" || true
 		forwarded_echo_route_file=""
 	fi
 	if [ -n "$forwarded_echo_dir" ]; then
@@ -157,7 +120,7 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init traefik-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -245,10 +208,13 @@ PY
 	static_modified="true"
 fi
 
-# Prepare this after host-side placeholder rendering. Once the dynamic
-# directory is worker-owned, ordinary host-user writes there would correctly
-# fail; subsequent smoke route files use the privileged helper explicitly.
+# Validate this after host-side placeholder rendering. The actual ownership
+# handoff is performed by the same narrow root init service used by the
+# production installer; the smoke never pre-chowns the checkout from the host.
 prepare_traefik_state_for_smoke
+"${compose[@]}" run --rm --no-deps \
+	-e "STEALTH_TRAEFIK_HOST_UID=$(id -u)" \
+	traefik-state-init
 
 wait_for_healthy() {
 	local service="$1"
@@ -505,7 +471,8 @@ verify_traefik_runtime_boundaries() {
 }
 
 verify_worker_platform_state_boundary() {
-	local worker worker_user mounts dynamic_state generated_state reload_state core_state
+	local worker worker_user mounts dynamic_state generated_state reload_state core_state host_uid
+	host_uid="$(id -u)"
 	worker="$("${compose[@]}" ps -q worker)"
 	if [ -z "$worker" ]; then
 		printf '%s\n' 'missing worker container' >&2
@@ -532,17 +499,21 @@ verify_worker_platform_state_boundary() {
 			;;
 	esac
 	dynamic_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik')"
-	if [ "$dynamic_state" != '10001:10001:755' ]; then
-		printf 'worker dynamic-state uid/gid/mode = %s, want 10001:10001:755\n' "$dynamic_state" >&2
+	if [ "$dynamic_state" != "${host_uid}:10001:775" ]; then
+		printf 'worker dynamic-state uid/gid/mode = %s, want %s:10001:775\n' "$dynamic_state" "$host_uid" >&2
 		return 1
 	fi
 	generated_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik/generated')"
-	if [ "$generated_state" != '10001:10001:755' ]; then
-		printf 'worker generated-state uid/gid/mode = %s, want 10001:10001:755\n' "$generated_state" >&2
+	if [ "$generated_state" != "${host_uid}:10001:775" ]; then
+		printf 'worker generated-state uid/gid/mode = %s, want %s:10001:775\n' "$generated_state" "$host_uid" >&2
 		return 1
 	fi
 	reload_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik/.reload.yaml')"
 	core_state="$(docker exec "$worker" sh -ec 'stat -c "%u:%g:%a" /var/lib/stealth/traefik/core.yaml')"
+	if [ "$reload_state" != "${host_uid}:10001:664" ]; then
+		printf 'worker reload-state uid/gid/mode = %s, want %s:10001:664\n' "$reload_state" "$host_uid" >&2
+		return 1
+	fi
 	printf 'worker runtime identity=%s dynamic=%s generated=%s reload=%s core=%s\n' "$worker_user" "$dynamic_state" "$generated_state" "$reload_state" "$core_state"
 	"${compose[@]}" exec -T worker sh -ec '
 set -eu
@@ -633,21 +604,28 @@ start_forwarded_header_echo() {
 	ingress_network="$(traefik_ingress_network_name)"
 	dynamic_dir="$(dirname -- "$core_file")"
 	forwarded_echo_route_file="$dynamic_dir/smoke-forwarded-headers-$$.yaml"
+	forwarded_echo_route_name="$(basename -- "$forwarded_echo_route_file")"
 	if [ -e "$forwarded_echo_route_file" ]; then
 		printf 'refusing to overwrite existing smoke route file: %s\n' "$forwarded_echo_route_file" >&2
 		return 1
 	fi
-	run_privileged python3 - "$forwarded_echo_route_file" "$forwarded_echo_host" <<'PY'
-import os
-import sys
-
-path, host = sys.argv[1:]
-contents = f'''http:
+	# The worker owns the generated-state write path. Create this temporary
+	# smoke route through the same non-root boundary as the reconciler instead
+	# of giving the host script a second ownership mechanism.
+	"${compose[@]}" exec -T worker sh -ec '
+set -eu
+name="$1"
+host="$2"
+state=/var/lib/stealth/traefik
+path="$state/$name"
+temporary="$path.tmp"
+cat >"$temporary" <<EOF
+http:
   routers:
     smoke-forwarded-header-echo:
       entryPoints:
         - web
-      rule: "Host(`{host}`) && Path(`/cgi-bin/headers`)"
+      rule: "Host(\`$host\`) && Path(\`/cgi-bin/headers\`)"
       priority: 300
       middlewares:
         - stealth-security-headers
@@ -658,14 +636,10 @@ contents = f'''http:
         passHostHeader: true
         servers:
           - url: http://forwarded-header-echo:8080
-'''
-temporary = path + '.tmp'
-with open(temporary, 'w', encoding='utf-8') as target:
-    target.write(contents)
-    target.flush()
-    os.fsync(target.fileno())
-os.replace(temporary, path)
-PY
+EOF
+sync "$temporary" 2>/dev/null || true
+mv "$temporary" "$path"
+' sh "$forwarded_echo_route_name" "$forwarded_echo_host"
 	forwarded_echo_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-forwarded-header-echo.XXXXXX")"
 	chmod 0755 "$forwarded_echo_dir"
 	python3 - "$forwarded_echo_dir/nginx.conf" <<'PY'

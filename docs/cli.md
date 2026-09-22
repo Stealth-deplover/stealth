@@ -190,7 +190,10 @@ For an existing installation, `stealth update` also pulls/recreates the
 versioned production stack, runs the normal migrations and health checks, and
 updates the telemetry topology. It is the supported coordinated platform
 upgrade path; it does not promise zero-downtime upgrades or automatic database
-rollback.
+rollback. Traefik runtime-state ownership is prepared by the narrow,
+one-shot `traefik-state-init` Compose service running inside Docker; a normal
+user with a writable installation directory does not need `sudo` or a manual
+`chown`.
 
 ## First-run Instance Owner setup
 

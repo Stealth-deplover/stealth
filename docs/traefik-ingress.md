@@ -55,8 +55,8 @@ The installed layout is:
 ```text
 <STEALTH_INSTALL_ROOT>/traefik/traefik.yaml                  release-managed static config
 <STEALTH_INSTALL_ROOT>/traefik/dynamic/core.yaml             release-managed core routes
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml           worker-owned reload sentinel
-<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            worker-owned route files
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/.reload.yaml           worker-writable reload sentinel
+<STEALTH_INSTALL_ROOT>/traefik/dynamic/generated/            worker-writable route files
 ```
 
 Traefik mounts the static file and dynamic tree read-only. These files are
@@ -73,19 +73,23 @@ derived configuration, never the business source of truth:
 - Traefik only consumes the resulting files and never mutates desired state.
 
 The generated directory is separate from release-managed files so update and
-repair do not overwrite platform routes. The host installer creates both the
-dynamic state directory and its generated child as normal directories owned by
-the fixed worker identity `10001:10001` with mode `0755`; generated files use
-normal non-executable modes. The worker receives the dynamic directory as a
-read-write bind mount because atomic replacement of the top-level reload
-sentinel requires write access to its parent. `core.yaml` is overlaid at the
-same container path as a read-only bind mount, while `traefik.yaml` and the
-installation root are not mounted into the worker. The runtime smoke verifies
-that the worker can replace generated state and the reload sentinel but cannot
-write or replace `core.yaml`. Traefik mounts the complete dynamic tree
-read-only. Upgrade and repair verify the writable directories with `Lstat`,
-reject symlinks or non-directories, repair only the narrow directory/file
-ownership contract, and preserve generated content. The generated snapshot is
+repair do not overwrite platform routes. The host installer only validates and
+creates this layout; it never needs to chown it to the worker UID. A one-shot
+`traefik-state-init` Compose service performs the narrow Docker-side handoff
+with `user: 0:0`, `network_mode: none`, and only the dynamic directory mounted
+at `/state`. It preserves the invoking host user as owner, assigns the fixed
+worker group `10001`, and prepares `dynamic/` and `generated/` as `0775` plus
+the reload sentinel as `0664`. It does not recursively change ownership and
+never mounts or changes `core.yaml` or `traefik.yaml`. The worker receives the
+dynamic directory as a read-write bind mount because atomic replacement of the
+top-level reload sentinel requires write access to its parent. `core.yaml` is
+overlaid at the same container path as a read-only bind mount, while
+`traefik.yaml` and the installation root are not mounted into the worker. The
+runtime smoke verifies that the worker can replace generated state and the
+reload sentinel but cannot write or replace `core.yaml`. Traefik mounts the
+complete dynamic tree read-only. Upgrade and repair run the initializer before
+dependent services, validate paths with `Lstat`, reject symlinks or
+non-directories, and preserve generated content. The generated snapshot is
 derived state, not a route registry or database.
 
 ## Platform Site routes

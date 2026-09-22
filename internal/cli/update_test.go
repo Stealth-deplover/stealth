@@ -116,7 +116,6 @@ func newUpdateTestApp(t *testing.T, state *updateTestServer, current, target str
 	var output bytes.Buffer
 	var errorsOutput bytes.Buffer
 	app := NewApp(strings.NewReader(""), &output, &errorsOutput)
-	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	app.httpClient = state.server.Client()
 	app.releaseAPIBase = state.server.URL
 	app.releaseDownloadBase = state.server.URL
@@ -243,7 +242,6 @@ func TestMigrateInstalledReleaseMigratesExistingTopology(t *testing.T) {
 
 	t.Setenv("STEALTH_INSTALL_DIR", layout.Root)
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
-	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	app.assetBase = portServer.URL
 	app.httpClient = portServer.Client()
 	runner := &setupRunner{}
@@ -357,7 +355,6 @@ func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) 
 	t.Setenv("STEALTH_INSTALL_DIR", layout.Root)
 	var bridgeOutput, bridgeErrors bytes.Buffer
 	bridge := NewApp(strings.NewReader(""), &bridgeOutput, &bridgeErrors)
-	bridge.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	bridge.assetBase = assetServer.URL
 	bridge.httpClient = releaseServer.Client()
 	bridge.runner = &setupRunner{}

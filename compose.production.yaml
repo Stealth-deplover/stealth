@@ -243,6 +243,72 @@ services:
     volumes:
       - otelcol_state:/var/lib/otelcol
 
+  traefik-state-init:
+    # Docker performs this narrow bind-mount ownership handoff. The host CLI
+    # remains usable by a normal installation user and never needs to chown
+    # arbitrary files to the worker UID itself.
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      STEALTH_TRAEFIK_HOST_UID: "${STEALTH_TRAEFIK_HOST_UID:-}"
+    volumes:
+      - ./traefik/dynamic:/state:rw
+    command:
+      - sh
+      - -ec
+      - |
+        set -eu
+        state=/state
+        generated="$${state}/generated"
+        reload="$${state}/.reload.yaml"
+        if [ -L "$${state}" ] || [ ! -d "$${state}" ]; then
+          printf '%s\n' 'Traefik state mount is not a normal directory' >&2
+          exit 1
+        fi
+        if [ -e "$${generated}" ] || [ -L "$${generated}" ]; then
+          if [ -L "$${generated}" ] || [ ! -d "$${generated}" ]; then
+            printf '%s\n' 'Traefik generated state is not a normal directory' >&2
+            exit 1
+          fi
+        else
+          mkdir "$${generated}"
+        fi
+        if [ -e "$${state}/core.yaml" ] || [ -L "$${state}/core.yaml" ]; then
+          if [ -L "$${state}/core.yaml" ] || [ ! -f "$${state}/core.yaml" ]; then
+            printf '%s\n' 'Traefik core.yaml is not a normal file' >&2
+            exit 1
+          fi
+        fi
+        if [ -L "$${reload}" ] || { [ -e "$${reload}" ] && [ ! -f "$${reload}" ]; }; then
+          printf '%s\n' 'Traefik reload state is not a normal file' >&2
+          exit 1
+        fi
+        if [ ! -e "$${reload}" ]; then
+          printf '%s\n' '# Top-level file-provider reload sentinel.' >"$${reload}"
+        fi
+        state_uid="$${STEALTH_TRAEFIK_HOST_UID:-}"
+        if [ -z "$${state_uid}" ]; then
+          state_uid="$$(stat -c '%u' "$${state}")"
+        fi
+        case "$${state_uid}" in
+          ''|*[!0-9]*)
+            printf '%s\n' 'Traefik host UID is invalid' >&2
+            exit 1
+            ;;
+        esac
+        # Keep the invoking host user as owner so later normal-user upgrades
+        # can still replace release-managed assets. The fixed worker group is
+        # the only additional write principal; no recursive ownership change
+        # reaches core.yaml or any other installation file.
+        chown "$${state_uid}:10001" "$${state}" "$${generated}" "$${reload}"
+        chmod 0775 "$${state}" "$${generated}"
+        chmod 0664 "$${reload}"
+
   telemetry-docker-logs-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
     restart: "no"
@@ -377,6 +443,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      traefik-state-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1"]
       interval: 10s
@@ -445,6 +513,9 @@ services:
       - no-new-privileges:true
     mem_limit: "${TRAEFIK_MEMORY_LIMIT:-128m}"
     expose: ["8080", "8081"]
+    depends_on:
+      traefik-state-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s

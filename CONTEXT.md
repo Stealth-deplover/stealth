@@ -246,17 +246,22 @@ generated YAML is derived state and is rebuilt on worker startup, with stale
 routes removed from the next successful snapshot. A PostgreSQL advisory lock
 provides single-writer coordination across workers.
 
-The host installer creates `traefik/dynamic/` and
-`traefik/dynamic/generated/` with mode `0755` and fixed owner/group
-`10001:10001`, matching the non-root production worker identity. The worker
-receives the dynamic directory read-write because replacing the top-level
-reload sentinel requires write access to its parent. The release-managed
-`core.yaml` is overlaid read-only at the same worker path; `traefik.yaml` and
-the installation root are not mounted into the worker. The runtime smoke proves
-the worker can update generated state and the reload sentinel but cannot write
-or replace `core.yaml` or access `traefik.yaml`. Traefik receives the whole
-dynamic tree read-only. Upgrade and repair re-validate this narrow boundary,
-reject symlinks, and preserve generated content.
+The host installer creates and validates the Traefik paths but does not require
+host `chown` or root execution. A one-shot production Compose service named
+`traefik-state-init` runs as `0:0` with `network_mode: none` and only the
+dynamic directory mounted at `/state`. Docker preserves the invoking host user
+as owner, assigns worker group `10001`, and prepares `dynamic/` and
+`dynamic/generated/` as `0775` plus `.reload.yaml` as `0664`. The fixed worker
+identity is `10001:10001`. The worker receives the dynamic directory read-write
+because replacing the top-level reload sentinel requires write access to its
+parent. The release-managed `core.yaml` is overlaid read-only at the same
+worker path; `traefik.yaml` and the installation root are not mounted into the
+worker. The runtime smoke proves that the worker can update generated state and
+the reload sentinel but cannot write or replace `core.yaml` or access
+`traefik.yaml`. Traefik receives the whole dynamic tree read-only. Upgrade and
+repair run the initializer before dependent services, re-validate the narrow
+path boundary, reject symlinks, and preserve generated content. Operators
+should not manually chown the installation.
 
 Platform hostnames target a separate private API listener containing only the
 current, enabled Site static-serving surface. It independently resolves the

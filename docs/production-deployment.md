@@ -54,6 +54,7 @@ docker compose --env-file .env.production -f compose.production.yaml config
 docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
 docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```

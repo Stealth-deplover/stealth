@@ -99,7 +99,6 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		t.Fatal(err)
 	}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
-	app.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	app.runner = &setupRunner{}
 	app.httpClient = server.Client()
 	app.assetBase = server.URL
@@ -110,7 +109,7 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":            "services:\n  traefik:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
+		"compose.production.yaml":            "services:\n  traefik:\n  traefik-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
 		"compose.setup.yaml":                 "services:\n  setup:\n",
 		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
@@ -144,10 +143,10 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 9 {
-		t.Fatalf("host Docker calls = %#v, want both Collector state inits, production steps, and setup cleanup", runner.calls)
+	if len(runner.calls) != 11 {
+		t.Fatalf("host Docker calls = %#v, want preflight, three state inits, production steps, and setup cleanup", runner.calls)
 	}
-	if got := runner.command(4).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
+	if got := runner.command(5).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", got)
 	}
 	if got := runner.command(len(runner.calls) - 1).args; !equalStrings(got, []string{"compose", "--env-file", fixture.layout.EnvFile, "-f", fixture.layout.SetupComposeFile, "rm", "-sf", "setup", "setup-console", "setup-proxy"}) {
@@ -374,7 +373,6 @@ func TestHostInstallerRestartResumesInstallingRun(t *testing.T) {
 	}
 
 	resumed := NewApp(strings.NewReader(""), io.Discard, io.Discard)
-	resumed.traefikOwnershipSetter = func(string, int, int) error { return nil }
 	resumed.runner = &setupRunner{}
 	resumed.httpClient = fixture.server.Client()
 	resumed.assetBase = fixture.server.URL
