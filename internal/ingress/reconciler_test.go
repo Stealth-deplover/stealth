@@ -64,6 +64,19 @@ func TestRenderIsDeterministicAndUsesNarrowBackend(t *testing.T) {
 	}
 }
 
+func TestRenderEmptyProducesNoopTraefikConfiguration(t *testing.T) {
+	contents, err := Render(nil, DefaultPlatformSiteBackend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "# Stealth platform route snapshot: no eligible Sites\n" {
+		t.Fatalf("empty render = %q", contents)
+	}
+	if strings.Contains(string(contents), "routers:") || strings.Contains(string(contents), "services:") {
+		t.Fatalf("empty render contains standalone Traefik sections: %s", contents)
+	}
+}
+
 func TestReconcilePublishesIdempotentlyAndRemovesStaleRoutes(t *testing.T) {
 	directory := t.TempDir()
 	generated := filepath.Join(directory, "generated")

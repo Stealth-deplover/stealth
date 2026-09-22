@@ -207,6 +207,17 @@ func Render(routes []domain.PlatformRoute, backendURL string) ([]byte, error) {
 		}
 		return ordered[i].SiteID < ordered[j].SiteID
 	})
+	// Traefik's file provider rejects empty map sections such as
+	// "routers: {}" as standalone elements. A comment-only document is a
+	// valid no-op configuration and keeps the provider healthy while no Site
+	// has an eligible platform hostname.
+	if len(ordered) == 0 {
+		contents := []byte("# Stealth platform route snapshot: no eligible Sites\n")
+		if err := validateRendered(contents, 0, backendURL); err != nil {
+			return nil, err
+		}
+		return contents, nil
+	}
 	config := dynamicConfig{HTTP: dynamicHTTP{
 		Routers:  make(map[string]dynamicRouter, len(ordered)),
 		Services: make(map[string]dynamicService),
