@@ -68,7 +68,6 @@ if [ -z "$state_init_block" ]; then
 fi
 
 for required in \
-	'user: 0:0' \
 	'network_mode: none' \
 	'read_only: true' \
 	'target: /state'; do
@@ -77,6 +76,10 @@ for required in \
 		exit 1
 	fi
 done
+if ! printf '%s\n' "$state_init_block" | grep -Eq 'user: "?0:0"?'; then
+	printf '%s\n' 'Traefik state initializer must run as container root' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$state_init_block" | grep -Eq 'restart: "?no"?'; then
 	printf '%s\n' 'Traefik state initializer must be one-shot' >&2
 	exit 1
