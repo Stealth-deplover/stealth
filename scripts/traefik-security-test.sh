@@ -236,9 +236,19 @@ buildkit_state_volume="$(env_value APPS_BUILDKIT_STATE_VOLUME)"
 if [ -z "$buildkit_state_volume" ]; then
 	buildkit_state_volume='stealth_app_buildkit_state'
 fi
-if ! printf '%s\n' "$buildkit_block" | grep -Fq "source: $buildkit_state_volume" ||
+if ! printf '%s\n' "$buildkit_block" | grep -Fq 'source: buildkit_state' ||
 	! printf '%s\n' "$buildkit_block" | grep -Fq 'target: /home/user/.local/share/buildkit'; then
 	printf '%s\n' 'App BuildKit must mount only its dedicated persistent cache volume' >&2
+	exit 1
+fi
+buildkit_volume_block="$(awk '
+/^volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^  buildkit_state:[[:space:]]*$/ { found=1; print; next }
+found && /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+found { print }
+' "$rendered")"
+if [ -z "$buildkit_volume_block" ] || ! printf '%s\n' "$buildkit_volume_block" | grep -Fq "name: $buildkit_state_volume"; then
+	printf '%s\n' 'App BuildKit cache must use its configured persistent volume name' >&2
 	exit 1
 fi
 if ! printf '%s\n' "$buildkit_block" | awk '
