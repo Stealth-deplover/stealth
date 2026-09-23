@@ -86,13 +86,17 @@ func (r *Repository) readCloudflareConnection(ctx context.Context, decrypt bool)
 	err := r.pool.QueryRow(ctx, `
 		SELECT COALESCE(c.account_id,''),COALESCE(c.console_zone_id,''),COALESCE(c.console_hostname,''),COALESCE(c.tunnel_id,''),COALESCE(c.tunnel_name,''),COALESCE(c.console_record_id,''),
 		       c.api_token_ciphertext,COALESCE(c.workload_zone_id,''),COALESCE(c.workload_zone_name,''),COALESCE(c.wildcard_hostname,''),COALESCE(c.wildcard_record_id,''),
-		       c.status,c.edge_tls_status,COALESCE(c.edge_tls_error,''),c.last_reconciled_at,COALESCE(c.last_error,''),c.configured_at,c.updated_at,d.workload_base_domain
+		       c.status,c.edge_tls_status,COALESCE(c.edge_tls_error,''),c.console_origin_desired,c.console_origin_observed,c.console_origin_status,
+		       COALESCE(c.console_origin_last_error,''),c.console_origin_updated_at,c.console_public_verified_at,COALESCE(c.console_public_verified_origin,''),
+		       c.last_reconciled_at,COALESCE(c.last_error,''),c.configured_at,c.updated_at,d.workload_base_domain
 		FROM cloudflare_connections c
 	LEFT JOIN instance_domain_settings d ON d.id=TRUE
 	WHERE c.id=TRUE`).Scan(
 		&connection.AccountID, &connection.ConsoleZoneID, &connection.ConsoleHostname, &connection.TunnelID, &connection.TunnelName, &connection.ConsoleRecordID,
 		&ciphertext, &connection.WorkloadZoneID, &connection.WorkloadZoneName, &connection.WildcardHostname, &connection.WildcardRecordID,
-		&connection.Status, &connection.EdgeTLSStatus, &connection.EdgeTLSError, &connection.LastReconciledAt, &connection.LastError, &connection.ConfiguredAt, &connection.UpdatedAt, &connection.WorkloadBaseDomain)
+		&connection.Status, &connection.EdgeTLSStatus, &connection.EdgeTLSError, &connection.ConsoleOriginDesired, &connection.ConsoleOriginObserved, &connection.ConsoleOriginStatus,
+		&connection.ConsoleOriginLastError, &connection.ConsoleOriginUpdatedAt, &connection.ConsolePublicVerifiedAt, &connection.ConsolePublicVerifiedOrigin,
+		&connection.LastReconciledAt, &connection.LastError, &connection.ConfiguredAt, &connection.UpdatedAt, &connection.WorkloadBaseDomain)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.CloudflareConnection{}, ErrNotFound
 	}
@@ -135,15 +139,22 @@ func (r *Repository) CloudflareRoutingStatus(ctx context.Context) (domain.Cloudf
 		hostname = &value
 	}
 	return domain.CloudflareRoutingStatus{
-		Configured:       configured,
-		Status:           status,
-		ConsoleHostname:  connection.ConsoleHostname,
-		WorkloadHostname: hostname,
-		Zone:             connection.WorkloadZoneName,
-		EdgeTLSStatus:    edgeTLSStatus,
-		EdgeTLSError:     connection.EdgeTLSError,
-		LastReconciledAt: connection.LastReconciledAt,
-		LastError:        connection.LastError,
+		Configured:                  configured,
+		Status:                      status,
+		ConsoleHostname:             connection.ConsoleHostname,
+		WorkloadHostname:            hostname,
+		Zone:                        connection.WorkloadZoneName,
+		EdgeTLSStatus:               edgeTLSStatus,
+		EdgeTLSError:                connection.EdgeTLSError,
+		ConsoleOriginDesired:        connection.ConsoleOriginDesired,
+		ConsoleOriginObserved:       connection.ConsoleOriginObserved,
+		ConsoleOriginStatus:         connection.ConsoleOriginStatus,
+		ConsoleOriginLastError:      connection.ConsoleOriginLastError,
+		ConsoleOriginUpdatedAt:      connection.ConsoleOriginUpdatedAt,
+		ConsolePublicVerifiedAt:     connection.ConsolePublicVerifiedAt,
+		ConsolePublicVerifiedOrigin: connection.ConsolePublicVerifiedOrigin,
+		LastReconciledAt:            connection.LastReconciledAt,
+		LastError:                   connection.LastError,
 	}, nil
 }
 
@@ -270,7 +281,8 @@ func (r *Repository) saveCloudflareConnection(ctx context.Context, actor uuid.UU
 		}
 		if _, err := tx.Exec(ctx, `UPDATE cloudflare_connections SET api_token_ciphertext=$1,console_record_id=$2,status='pending',last_error=NULL,
 			edge_tls_status=CASE WHEN (SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE) IS NULL THEN 'not_applicable' ELSE 'pending' END,
-			edge_tls_error=NULL,updated_at=now() WHERE id=TRUE`, ciphertext, input.ConsoleRecordID); err != nil {
+			edge_tls_error=NULL,console_origin_status='pending',console_origin_last_error=NULL,console_origin_updated_at=now(),
+			console_public_verified_at=NULL,console_public_verified_origin=NULL,updated_at=now() WHERE id=TRUE`, ciphertext, input.ConsoleRecordID); err != nil {
 			return err
 		}
 		if err := writeInstanceAuditTx(ctx, tx, actor, "admin.cloudflare.connection.update", "cloudflare_connection", uuid.Nil, map[string]any{"credential_replaced": true}); err != nil {
@@ -286,7 +298,8 @@ func (r *Repository) saveCloudflareConnection(ctx context.Context, actor uuid.UU
 		SET account_id=$1,console_zone_id=$2,console_hostname=$3,tunnel_id=$4,tunnel_name=$5,console_record_id=$6,
 		    api_token_ciphertext=$7,status='pending',last_error=NULL,configured_at=COALESCE(configured_at,now()),
 		    edge_tls_status=CASE WHEN (SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE) IS NULL THEN 'not_applicable' ELSE 'pending' END,
-		    edge_tls_error=NULL,updated_at=now()
+		    edge_tls_error=NULL,console_origin_status='pending',console_origin_last_error=NULL,console_origin_updated_at=now(),
+		    console_public_verified_at=NULL,console_public_verified_origin=NULL,updated_at=now()
 		WHERE id=TRUE`, input.AccountID, input.ConsoleZoneID, input.ConsoleHostname, input.TunnelID, input.TunnelName, input.ConsoleRecordID, ciphertext)
 	if err != nil {
 		return err
@@ -324,11 +337,17 @@ func (r *Repository) CompleteCloudflareReconcile(ctx context.Context, update dom
 	if err := tx.QueryRow(ctx, `SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE`).Scan(&currentDomain); err != nil {
 		return false, err
 	}
-	var accountID, tunnelID, oldZoneID, oldHostname, oldRecordID string
-	if err := tx.QueryRow(ctx, `SELECT account_id,tunnel_id,workload_zone_id,wildcard_hostname,wildcard_record_id FROM cloudflare_connections WHERE id=TRUE AND api_token_ciphertext IS NOT NULL FOR UPDATE`).Scan(&accountID, &tunnelID, &oldZoneID, &oldHostname, &oldRecordID); errors.Is(err, pgx.ErrNoRows) {
+	var accountID, tunnelID, oldZoneID, oldHostname, oldRecordID, currentConsoleOrigin string
+	if err := tx.QueryRow(ctx, `SELECT account_id,tunnel_id,workload_zone_id,wildcard_hostname,wildcard_record_id,console_origin_desired FROM cloudflare_connections WHERE id=TRUE AND api_token_ciphertext IS NOT NULL FOR UPDATE`).Scan(&accountID, &tunnelID, &oldZoneID, &oldHostname, &oldRecordID, &currentConsoleOrigin); errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrCloudflareIdentityRequired
 	} else if err != nil {
 		return false, err
+	}
+	if currentConsoleOrigin != update.ConsoleOriginDesired {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
 	}
 	if !sameOptionalString(currentDomain, update.ExpectedWorkloadBaseDomain) {
 		if update.WildcardRecordID != "" && update.WildcardRecordID != oldRecordID {
@@ -338,7 +357,8 @@ func (r *Repository) CompleteCloudflareReconcile(ctx context.Context, update dom
 		}
 		if _, err := tx.Exec(ctx, `UPDATE cloudflare_connections SET status='pending',last_error=NULL,
 			edge_tls_status=CASE WHEN $1::text IS NULL THEN 'not_applicable' ELSE 'pending' END,
-			edge_tls_error=NULL,updated_at=now() WHERE id=TRUE`, nullableDomainValue(currentDomain)); err != nil {
+			edge_tls_error=NULL,console_origin_observed=$2,console_origin_status='ready',console_origin_last_error=NULL,
+			console_origin_updated_at=now(),updated_at=now() WHERE id=TRUE`, nullableDomainValue(currentDomain), update.ConsoleOriginObserved); err != nil {
 			return false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -369,8 +389,9 @@ func (r *Repository) CompleteCloudflareReconcile(ctx context.Context, update dom
 	_, err = tx.Exec(ctx, `
 		UPDATE cloudflare_connections
 		SET workload_zone_id=NULLIF($1,''),workload_zone_name=NULLIF($2,''),wildcard_hostname=NULLIF($3,''),wildcard_record_id=NULLIF($4,''),
-		    status=$5,edge_tls_status=$6,edge_tls_error=NULLIF($7,''),last_error=NULL,last_reconciled_at=now(),updated_at=now()
-		WHERE id=TRUE`, update.WorkloadZoneID, update.WorkloadZoneName, update.WildcardHostname, update.WildcardRecordID, overallStatus, update.EdgeTLSStatus, update.EdgeTLSError)
+		    status=$5,edge_tls_status=$6,edge_tls_error=NULLIF($7,''),last_error=NULL,last_reconciled_at=now(),
+		    console_origin_observed=$8,console_origin_status='ready',console_origin_last_error=NULL,console_origin_updated_at=now(),updated_at=now()
+		WHERE id=TRUE`, update.WorkloadZoneID, update.WorkloadZoneName, update.WildcardHostname, update.WildcardRecordID, overallStatus, update.EdgeTLSStatus, update.EdgeTLSError, update.ConsoleOriginObserved)
 	if err != nil {
 		return false, err
 	}
@@ -412,8 +433,80 @@ func (r *Repository) RecordCloudflareReconcileFailure(ctx context.Context, messa
 	if r == nil || r.pool == nil {
 		return ErrNotFound
 	}
-	_, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections SET status='error',last_error=$1,updated_at=now() WHERE id=TRUE`, normalizeCloudflareError(message))
+	_, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections SET status='error',last_error=$1,
+		console_origin_status='error',console_origin_last_error=$1,updated_at=now() WHERE id=TRUE`, normalizeCloudflareError(message))
 	return err
+}
+
+// SetCloudflareConsoleOriginDesired records a host-authorized durable request.
+// The regular worker remains responsible for provider side effects.
+func (r *Repository) SetCloudflareConsoleOriginDesired(ctx context.Context, origin, action string) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, ErrNotFound
+	}
+	if origin != "proxy" && origin != "traefik" {
+		return false, errors.New("Console origin must be proxy or traefik")
+	}
+	if action != "cutover" && action != "rollback" {
+		return false, errors.New("Console origin action is invalid")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var current string
+	var configured bool
+	if err := tx.QueryRow(ctx, `SELECT console_origin_desired,api_token_ciphertext IS NOT NULL AND octet_length(api_token_ciphertext)>0 AND account_id IS NOT NULL AND tunnel_id IS NOT NULL FROM cloudflare_connections WHERE id=TRUE FOR UPDATE`).Scan(&current, &configured); err != nil {
+		return false, err
+	}
+	if !configured {
+		return false, ErrCloudflareConnectionUnavailable
+	}
+	if current == origin {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE cloudflare_connections SET console_origin_desired=$1,console_origin_status='pending',console_origin_last_error=NULL,
+		console_origin_updated_at=now(),console_public_verified_at=NULL,console_public_verified_origin=NULL,updated_at=now() WHERE id=TRUE`, origin); err != nil {
+		return false, err
+	}
+	auditAction := "admin.cloudflare.console_origin.cutover"
+	if action == "rollback" {
+		auditAction = "admin.cloudflare.console_origin.rollback"
+	}
+	if err := writeSystemCloudflareAuditTx(ctx, tx, auditAction, map[string]any{
+		"previous_origin": current,
+		"desired_origin":  origin,
+		"source":          "host_cli",
+	}); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RecordCloudflareConsoleOriginVerification persists public HTTPS evidence
+// only while desired and provider-observed origins still match the verified
+// origin. It never stores response bodies or secrets.
+func (r *Repository) RecordCloudflareConsoleOriginVerification(ctx context.Context, origin string) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, ErrNotFound
+	}
+	if origin != "proxy" && origin != "traefik" {
+		return false, errors.New("Console origin is invalid")
+	}
+	tag, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections
+		SET console_public_verified_at=now(),console_public_verified_origin=$1,console_origin_last_error=NULL
+		WHERE id=TRUE AND console_origin_desired=$1 AND console_origin_observed=$1 AND console_origin_status='ready'`, origin)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 func (r *Repository) MarkCloudflareRoutingPending(ctx context.Context) error {
@@ -448,6 +541,9 @@ func validateCloudflareConnectionInput(input CloudflareConnectionInput, requireT
 }
 
 func validateCloudflareObserved(update domain.CloudflareRoutingUpdate) error {
+	if (update.ConsoleOriginDesired != "proxy" && update.ConsoleOriginDesired != "traefik") || update.ConsoleOriginObserved != update.ConsoleOriginDesired {
+		return errors.New("Cloudflare Console origin observation is invalid")
+	}
 	if update.ExpectedWorkloadBaseDomain != nil {
 		domain, err := domainname.NormalizeDomain(*update.ExpectedWorkloadBaseDomain)
 		if err != nil || domain != *update.ExpectedWorkloadBaseDomain {

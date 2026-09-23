@@ -112,6 +112,10 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 	if err != nil || imported {
 		t.Fatalf("repeated setup-state import = %v, %v; want no overwrite", imported, err)
 	}
+	connection, err := repo.CloudflareConnectionDetails(ctx)
+	if err != nil || connection.ConsoleOriginDesired != cloudflare.ConsoleOriginProxy || connection.ConsoleOriginObserved != "unknown" || connection.ConsoleOriginStatus != "pending" {
+		t.Fatalf("new origin state defaults = %#v, %v", connection, err)
+	}
 
 	var ciphertext []byte
 	if err := pool.QueryRow(ctx, `SELECT api_token_ciphertext FROM cloudflare_connections WHERE id=TRUE`).Scan(&ciphertext); err != nil {
@@ -160,16 +164,27 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", &firstDomain); err != nil {
 		t.Fatal(err)
 	}
+	if changed, err := repo.SetCloudflareConsoleOriginDesired(ctx, cloudflare.ConsoleOriginTraefik, "cutover"); err != nil || !changed {
+		t.Fatalf("set Console origin desired to Traefik = changed:%v error:%v", changed, err)
+	}
 	if completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{
 		ExpectedWorkloadBaseDomain: &firstDomain, WorkloadZoneID: "workload-zone", WorkloadZoneName: "example.net",
 		WildcardHostname: "*.apps.example.net", WildcardRecordID: "wildcard-1",
-		EdgeTLSStatus: cloudflare.EdgeTLSReady,
+		EdgeTLSStatus:        cloudflare.EdgeTLSReady,
+		ConsoleOriginDesired: cloudflare.ConsoleOriginTraefik, ConsoleOriginObserved: cloudflare.ConsoleOriginTraefik,
 	}); err != nil || !completed {
 		t.Fatalf("first reconcile completion = %v, %v", completed, err)
 	}
 	status, err = repo.CloudflareRoutingStatus(ctx)
-	if err != nil || status.Status != "ready" || status.EdgeTLSStatus != cloudflare.EdgeTLSReady || status.WorkloadHostname == nil || *status.WorkloadHostname != "*.apps.example.net" {
+	if err != nil || status.Status != "ready" || status.EdgeTLSStatus != cloudflare.EdgeTLSReady || status.WorkloadHostname == nil || *status.WorkloadHostname != "*.apps.example.net" || status.ConsoleOriginDesired != cloudflare.ConsoleOriginTraefik || status.ConsoleOriginObserved != cloudflare.ConsoleOriginTraefik || status.ConsoleOriginStatus != "ready" {
 		t.Fatalf("ready Cloudflare status = %#v, %v", status, err)
+	}
+	if verified, err := repo.RecordCloudflareConsoleOriginVerification(ctx, cloudflare.ConsoleOriginTraefik); err != nil || !verified {
+		t.Fatalf("persist public Console verification = %v, %v", verified, err)
+	}
+	status, err = repo.CloudflareRoutingStatus(ctx)
+	if err != nil || status.ConsolePublicVerifiedAt == nil || status.ConsolePublicVerifiedOrigin != cloudflare.ConsoleOriginTraefik {
+		t.Fatalf("public Console verification status = %#v, %v", status, err)
 	}
 
 	newDomain := "deploy.example.co.uk"
@@ -185,6 +200,7 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 		ExpectedWorkloadBaseDomain: &secondDomain, WorkloadZoneID: "workload-zone-2", WorkloadZoneName: "example.co.uk",
 		WildcardHostname: "*.deploy.example.co.uk", WildcardRecordID: "wildcard-2",
 		EdgeTLSStatus: cloudflare.EdgeTLSActionRequired, EdgeTLSError: "No active certificate covers *.deploy.example.co.uk.",
+		ConsoleOriginDesired: cloudflare.ConsoleOriginTraefik, ConsoleOriginObserved: cloudflare.ConsoleOriginTraefik,
 	}); err != nil || !completed {
 		t.Fatalf("action-required TLS observation = %v, %v", completed, err)
 	}
@@ -207,7 +223,8 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", nil); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{EdgeTLSStatus: cloudflare.EdgeTLSNotApplicable})
+	completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{EdgeTLSStatus: cloudflare.EdgeTLSNotApplicable,
+		ConsoleOriginDesired: cloudflare.ConsoleOriginTraefik, ConsoleOriginObserved: cloudflare.ConsoleOriginTraefik})
 	if err != nil || !completed {
 		t.Fatalf("clear reconcile completion = %v, %v", completed, err)
 	}

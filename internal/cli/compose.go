@@ -156,6 +156,10 @@ func displayServiceName(service string) string {
 		return "Docker Metrics"
 	case "proxy":
 		return "Proxy"
+	case "traefik":
+		return "Traefik"
+	case "cloudflared":
+		return "Cloudflared"
 	case "setup":
 		return "Setup API"
 	case "setup-console":

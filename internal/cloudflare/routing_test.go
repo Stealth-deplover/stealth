@@ -49,6 +49,8 @@ func (s *routingFakeStore) CompleteCloudflareReconcile(_ context.Context, update
 	s.connection.WildcardRecordID = update.WildcardRecordID
 	s.connection.EdgeTLSStatus = update.EdgeTLSStatus
 	s.connection.EdgeTLSError = update.EdgeTLSError
+	s.connection.ConsoleOriginObserved = update.ConsoleOriginObserved
+	s.connection.ConsoleOriginStatus = "ready"
 	s.connection.Status = cloudflareRoutingStatus(update.EdgeTLSStatus)
 	s.connection.LastError = ""
 	now := time.Now().UTC()
@@ -74,6 +76,8 @@ func (s *routingFakeStore) CompleteCloudflareWildcardRetirement(_ context.Contex
 func (s *routingFakeStore) RecordCloudflareReconcileFailure(_ context.Context, message string) error {
 	s.connection.Status = "error"
 	s.connection.LastError = message
+	s.connection.ConsoleOriginStatus = "error"
+	s.connection.ConsoleOriginLastError = message
 	s.lastError = message
 	return nil
 }
@@ -92,6 +96,7 @@ type routingFakeClient struct {
 	records             map[string]map[string]DNSRecord
 	listAccountsErr     error
 	configureErr        error
+	ignoreConfigure     bool
 	createErr           error
 	updateErr           error
 	deleteErr           error
@@ -161,7 +166,9 @@ func (c *routingFakeClient) ConfigureTunnel(_ context.Context, _, _ string, rule
 	if c.configureErr != nil {
 		return c.configureErr
 	}
-	c.ingress = append([]IngressRule(nil), rules...)
+	if !c.ignoreConfigure {
+		c.ingress = append([]IngressRule(nil), rules...)
+	}
 	return nil
 }
 func (c *routingFakeClient) TunnelConfiguration(context.Context, string, string) ([]IngressRule, error) {
@@ -253,7 +260,8 @@ func newRoutingTestStore(workloadDomain *string) *routingFakeStore {
 	return &routingFakeStore{connection: domain.CloudflareConnection{
 		AccountID: "account-a", ConsoleZoneID: "console-zone", ConsoleHostname: "cloud.example.com",
 		TunnelID: "tunnel-a", TunnelName: "stealth-prod", ConsoleRecordID: "console-record",
-		APIToken: "cf-secret-token", Status: "pending", WorkloadBaseDomain: workloadDomain,
+		APIToken: "cf-secret-token", Status: "pending", ConsoleOriginObserved: "unknown", ConsoleOriginStatus: "pending", WorkloadBaseDomain: workloadDomain,
+		ConsoleOriginDesired: ConsoleOriginProxy,
 	}}
 }
 
@@ -479,6 +487,69 @@ func TestRoutingReconcilerRetriesIdempotently(t *testing.T) {
 	}
 	if result.Changed || client.createCount != creates || client.configureCount != configures {
 		t.Fatalf("retry was not a no-op: result=%#v creates=%d configures=%d", result, client.createCount, client.configureCount)
+	}
+}
+
+func TestRoutingReconcilerSwitchesOnlyConsoleOriginAndPreservesWorkloadRoute(t *testing.T) {
+	workload := "apps.example.com"
+	for _, test := range []struct {
+		name         string
+		startOrigin  string
+		wantedOrigin string
+	}{
+		{name: "cutover", startOrigin: ConsoleOriginProxy, wantedOrigin: ConsoleOriginTraefik},
+		{name: "rollback", startOrigin: ConsoleOriginTraefik, wantedOrigin: ConsoleOriginProxy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
+			store.connection.ConsoleOriginDesired = test.wantedOrigin
+			client.ingress = desiredTunnelIngress("cloud.example.com", "*.apps.example.com", test.startOrigin)
+			reconciler := newRoutingTestReconciler(t, store, client)
+			result, err := reconciler.Reconcile(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []IngressRule{
+				{Hostname: "cloud.example.com", Service: consoleOriginService(test.wantedOrigin)},
+				{Hostname: "*.apps.example.com", Service: "http://traefik:8080"},
+				{Service: "http_status:404"},
+			}
+			if !sameIngress(client.ingress, want) || client.configureCount != 1 || client.createCount != 1 {
+				t.Fatalf("origin transition ingress=%#v configure=%d dns_create=%d", client.ingress, client.configureCount, client.createCount)
+			}
+			if result.ConsoleOriginDesired != test.wantedOrigin || result.ConsoleOriginObserved != test.wantedOrigin || store.connection.ConsoleOriginObserved != test.wantedOrigin {
+				t.Fatalf("origin observation result=%#v state=%#v", result, store.connection)
+			}
+			if client.ingress[1].Hostname != "*.apps.example.com" || client.ingress[1].Service != "http://traefik:8080" || client.ingress[2].Service != "http_status:404" {
+				t.Fatalf("Console origin change disturbed workload route/catch-all: %#v", client.ingress)
+			}
+		})
+	}
+}
+
+func TestRoutingReconcilerRejectsTunnelConfigurationThatDoesNotVerify(t *testing.T) {
+	store, client := newRoutingTestStore(nil), newRoutingFakeClient()
+	store.connection.ConsoleOriginDesired = ConsoleOriginTraefik
+	client.ignoreConfigure = true
+	reconciler := newRoutingTestReconciler(t, store, client)
+	if _, err := reconciler.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "did not match") {
+		t.Fatalf("unverified provider write error = %v", err)
+	}
+	if client.configureCount != 1 || client.ingress[0].Service != "http://proxy:80" || store.connection.ConsoleOriginObserved != "unknown" {
+		t.Fatalf("unverified provider write mutated observed state: ingress=%#v state=%#v", client.ingress, store.connection)
+	}
+}
+
+func TestVerifyProviderIsReadOnlyAndDetectsTunnelDrift(t *testing.T) {
+	store, client := newRoutingTestStore(nil), newRoutingFakeClient()
+	reconciler := newRoutingTestReconciler(t, store, client)
+	origin, err := reconciler.VerifyProvider(context.Background())
+	if err != nil || origin != ConsoleOriginProxy || client.configureCount != 0 {
+		t.Fatalf("read-only provider verification = %q, %v configure=%d", origin, err, client.configureCount)
+	}
+	client.ingress[0].Service = "http://traefik:8080"
+	if _, err := reconciler.VerifyProvider(context.Background()); err == nil || client.configureCount != 0 {
+		t.Fatalf("provider drift was not rejected read-only: err=%v configure=%d", err, client.configureCount)
 	}
 }
 

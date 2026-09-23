@@ -43,9 +43,11 @@ Console/API, health, metrics, or version routes. The listener checks current
 Site state and active artifacts in PostgreSQL before serving content. For
 Cloudflare Tunnel installations, the worker asynchronously reconciles one
 wildcard DNS record and one wildcard ingress rule on the existing named tunnel
-to private Traefik. The Console origin remains Nginx.
+to private Traefik. The Console origin defaults to Nginx; an operator can
+explicitly switch it to Traefik with the host-side ingress command while
+keeping Nginx running for rollback.
 
 See [Cloudflare workload routing](cloudflare-workload-routing.md) for provider
-state and reconciliation semantics. Custom-domain Traefik lifecycle,
-Console/API Cloudflare origin cutover, and workload runtime/networking remain
-deferred.
+state and reconciliation semantics. Custom-domain Traefik lifecycle remains
+deferred; it does not change platform Site wildcard routing or the reversible
+Console-origin cutover.

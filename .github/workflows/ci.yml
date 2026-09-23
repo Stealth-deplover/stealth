@@ -155,6 +155,15 @@ jobs:
             '^(TestInstanceDomainSettingsIntegration|TestPlatformSiteAPIAndNarrowListenerIntegration)$' \
             TestInstanceDomainSettingsIntegration \
             TestPlatformSiteAPIAndNarrowListenerIntegration
+          run_and_require_tests ./internal/migrate \
+            '^TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegration$' \
+            TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegration
+          run_and_require_tests ./internal/repository \
+            '^TestCloudflareConnectionPersistenceAndReconciliationIntegration$' \
+            TestCloudflareConnectionPersistenceAndReconciliationIntegration
+          run_and_require_tests ./internal/httpapi \
+            '^TestAdminCloudflareConnectionOwnerBoundaryAndSecretProjectionIntegration$' \
+            TestAdminCloudflareConnectionOwnerBoundaryAndSecretProjectionIntegration
 
       - name: Real Collector and telemetry integration suites
         env:
@@ -206,6 +215,9 @@ jobs:
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
+
+      - name: Ingress control image build
+        run: docker build --target ingress-control -t stealth-ingress-control:ci .
 
       - name: Stealth Collector image build
         run: docker build --target telemetry-collector -t stealth-otel-collector:ci .

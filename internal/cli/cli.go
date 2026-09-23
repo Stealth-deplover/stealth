@@ -145,6 +145,8 @@ func (a *App) run(args []string) int {
 		return a.runDoctor(args[1:])
 	case "logs":
 		return a.runLogs(args[1:])
+	case "ingress":
+		return a.runIngress(args[1:])
 	default:
 		fmt.Fprintf(a.errOut, "unknown command %q\n\n", args[0])
 		a.printUsage(a.errOut)
@@ -163,6 +165,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  stealth status")
 	fmt.Fprintln(w, "  stealth doctor")
 	fmt.Fprintln(w, "  stealth logs [api|worker|console|proxy|postgres|redis|clickhouse|otel-collector|telemetry-host|telemetry-docker-logs|telemetry-docker-proxy|telemetry-docker]")
+	fmt.Fprintln(w, "  stealth ingress status|verify [--site-hostname HOST --site-sha256 DIGEST]|cutover|rollback")
 	fmt.Fprintln(w, "  stealth version [--json]")
 }
 
@@ -315,7 +318,7 @@ func (a *App) runStatus(args []string) int {
 	}
 	fmt.Fprintf(a.out, "Stealth %s\n\n", valueOr(config["VERSION"], readVersion(layout)))
 	fmt.Fprintln(a.out, "SERVICE          STATUS")
-	services := []string{"api", "worker", "console", "postgres", "redis", "clickhouse", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "proxy"}
+	services := []string{"api", "worker", "console", "postgres", "redis", "clickhouse", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "proxy", "traefik", "cloudflared"}
 	if setupMode {
 		services = []string{"setup", "setup-console", "postgres", "redis", "setup-proxy"}
 	}

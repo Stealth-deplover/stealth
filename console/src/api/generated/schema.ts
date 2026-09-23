@@ -3681,6 +3681,32 @@ export interface components {
             edge_tls_status: AdminCloudflareRoutingStatusEdge_tls_status;
             /** @description Sanitized certificate readiness reason */
             edge_tls_error?: string;
+            /**
+             * @description Durable requested Console origin; existing installations default to proxy.
+             * @enum {string}
+             */
+            console_origin_desired: AdminCloudflareRoutingStatusConsole_origin_desired;
+            /**
+             * @description Last origin verified by reading the existing named Tunnel configuration.
+             * @enum {string}
+             */
+            console_origin_observed: AdminCloudflareRoutingStatusConsole_origin_observed;
+            /**
+             * @description Provider convergence for the Console origin
+             * @enum {string}
+             */
+            console_origin_status: AdminCloudflareRoutingStatusConsole_origin_status;
+            /** @description Sanitized Console-origin provider error. */
+            console_origin_last_error?: string;
+            /** Format: date-time */
+            console_origin_updated_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Last successful external HTTPS verification for the observed Console origin.
+             */
+            console_public_verified_at?: string | null;
+            /** @enum {string} */
+            console_public_verified_origin?: AdminCloudflareRoutingStatusConsole_public_verified_origin;
             /** Format: date-time */
             last_reconciled_at?: string | null;
             /** @description Sanitized provider status with credentials removed. */
@@ -14373,6 +14399,24 @@ export enum AdminCloudflareRoutingStatusEdge_tls_status {
     ready = "ready",
     action_required = "action_required",
     error = "error"
+}
+export enum AdminCloudflareRoutingStatusConsole_origin_desired {
+    proxy = "proxy",
+    traefik = "traefik"
+}
+export enum AdminCloudflareRoutingStatusConsole_origin_observed {
+    proxy = "proxy",
+    traefik = "traefik",
+    unknown = "unknown"
+}
+export enum AdminCloudflareRoutingStatusConsole_origin_status {
+    pending = "pending",
+    ready = "ready",
+    error = "error"
+}
+export enum AdminCloudflareRoutingStatusConsole_public_verified_origin {
+    proxy = "proxy",
+    traefik = "traefik"
 }
 export enum AdminPublicIncidentSeverity {
     info = "info",

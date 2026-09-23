@@ -23,10 +23,11 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   go test ./...
   go build -o /tmp/stealth-api ./cmd/api
   go build -o /tmp/stealth-worker ./cmd/worker
+  go build -o /tmp/stealth-ingress-control ./cmd/ingress-control
   go build -o /tmp/stealth ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/stealth-linux-amd64 ./cmd/stealth
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/stealth-linux-arm64 ./cmd/stealth
-  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/collector-log-parser-smoke.sh scripts/traefik-security-test.sh
+  bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/production-smoke.sh scripts/compose-production-smoke.sh scripts/public-hosting-acceptance.sh scripts/collector-log-parser-smoke.sh scripts/traefik-security-test.sh
   ./scripts/bootstrap_test.sh
   docker compose --env-file .env.production.example -f compose.production.yaml config --quiet
   ```
@@ -57,7 +58,7 @@ Automatic bootstrap resolution and `stealth update` remain stable-only.
   `stealth_Linux_arm64.tar.gz`, and `checksums.txt`.
 - [ ] Verify `checksums.txt` contains a valid SHA-256 entry for both CLI
   archives and that the archive contents contain an executable `stealth` file.
-- [ ] Verify GHCR contains versioned API, worker, migration, Console,
+- [ ] Verify GHCR contains versioned API, worker, ingress-control, migration, Console,
       `stealth-otel-collector`, `stealth-otel-docker-logs`, and
       `stealth-telemetry-docker-proxy` images for the release. The host,
       Docker-log, and Docker-metrics services use the two Collector images
@@ -111,7 +112,50 @@ claim a full browser/provider installation or run a full production stack.
   database schema remains compatible; otherwise restore verified PostgreSQL
   and object-storage backups before restarting the older release.
 - [ ] Repeat the clean-host flow on Linux arm64 when suitable infrastructure is
-  available, and record when arm64 was not tested.
+      available, and record when arm64 was not tested.
+
+## Public hosting cutover acceptance
+
+The normal CI suite validates fake Cloudflare behavior, Traefik/Nginx parity,
+Compose topology, and the restricted maintenance service. It does not use
+production Cloudflare credentials or claim public edge verification. Before
+recommending Console-origin cutover on a release, run the host and external
+checks against a real installation and retain the command output/status as
+release evidence.
+
+- [ ] Confirm `stealth ingress status` shows the configured existing Named
+      Tunnel and `proxy` as desired/observed Console origin. Confirm Nginx,
+      Traefik, API, Console, and Cloudflared are running/healthy.
+- [ ] Run `stealth ingress verify` while the Console uses Nginx.
+- [ ] Switch to Traefik and verify from the installation host:
+
+  ```bash
+  stealth ingress cutover
+  stealth ingress verify --site-hostname portfolio.apps.example.com
+  ```
+
+- [ ] From a separate Internet-connected machine, verify real public DNS,
+      TLS, Console/API routing, response security headers, HSTS, and a platform
+      Site. Do not provide credentials or authenticated cookies:
+
+  ```bash
+  STEALTH_CONSOLE_URL=https://cloud.example.com \
+  STEALTH_SITE_URL=https://portfolio.apps.example.com \
+  STEALTH_WORKLOAD_BASE_DOMAIN=apps.example.com \
+  ./scripts/public-hosting-acceptance.sh
+  ```
+
+- [ ] Exercise both rollback directions: run `stealth ingress rollback`, then
+      the external acceptance script and host `stealth ingress verify` again.
+      If the release's intended final state is Traefik, run cutover and both
+      verifications once more. Nginx must remain healthy throughout.
+- [ ] Confirm public HTTPS keeps `max-age >= 31536000; includeSubDomains`,
+      the current browser security headers, the `/v1/account` API response,
+      and a working platform Site. The commands do not change Cloudflare HSTS
+      or other zone-wide settings.
+- [ ] Record any DNS/TLS, HSTS, security-header, API-routing, Site-readiness,
+      or rollback failure as a release blocker. Do not treat local Compose
+      smoke as public acceptance.
 
 ## Known limitations
 

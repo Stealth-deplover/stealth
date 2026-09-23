@@ -97,7 +97,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 10s
-    networks: [stealth]
+    networks: [stealth, ingress_control_db]
 
   redis:
     image: redis:8-alpine
@@ -477,6 +477,23 @@ services:
       stealth:
       telemetry_store:
 
+  ingress-control:
+    image: "${STEALTH_INGRESS_CONTROL_IMAGE:?set STEALTH_INGRESS_CONTROL_IMAGE to a versioned image}"
+    profiles: [maintenance]
+    restart: "no"
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgres://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable}"
+      FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+      PUBLIC_APP_URL: "${PUBLIC_APP_URL:?set PUBLIC_APP_URL}"
+      CLOUDFLARE_API_BASE_URL: "${CLOUDFLARE_API_BASE_URL:-}"
+    networks: [ingress_control_db, stealth_ingress]
+
   console:
     image: "${STEALTH_CONSOLE_IMAGE:?set STEALTH_CONSOLE_IMAGE to a versioned image}"
     restart: unless-stopped
@@ -587,6 +604,8 @@ networks:
     ipam:
       config:
         - subnet: "${STEALTH_NETWORK_SUBNET:-172.30.0.0/24}"
+  ingress_control_db:
+    name: "${STEALTH_CONTROL_DB_NETWORK_NAME:-stealth_control_db}"
   telemetry_store:
     name: "${STEALTH_TELEMETRY_STORE_NETWORK_NAME:-stealth_telemetry_store}"
     internal: true

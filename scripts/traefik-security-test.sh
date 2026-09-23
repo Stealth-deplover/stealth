@@ -32,7 +32,7 @@ fi
 # Include the optional tunnel profile so the rendered topology also proves the
 # reserved Cloudflared peer. The profile is part of the ingress address model,
 # even though it is not the active public origin during this migration.
-compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile cloudflare)
+compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile cloudflare --profile maintenance)
 "${compose[@]}" config --quiet
 rendered="$(mktemp "${TMPDIR:-/tmp}/stealth-traefik-compose.XXXXXX")"
 cleanup() {
@@ -74,6 +74,11 @@ fi
 cloudflare_state_init_block="$(service_block cloudflare-state-init)"
 if [ -z "$cloudflare_state_init_block" ]; then
 	printf '%s\n' 'Cloudflare setup-state initializer is missing from rendered production Compose' >&2
+	exit 1
+fi
+ingress_control_block="$(service_block ingress-control)"
+if [ -z "$ingress_control_block" ]; then
+	printf '%s\n' 'one-shot ingress-control service is missing from rendered production Compose' >&2
 	exit 1
 fi
 
@@ -163,6 +168,46 @@ for forbidden in \
 		exit 1
 	fi
 done
+for required in \
+	'restart: "no"' \
+	'read_only: true' \
+	'user: "10001:10001"' \
+	'no-new-privileges:true' \
+	'networks:' \
+	'ingress_control_db:' \
+	'stealth_ingress:'; do
+	if ! printf '%s\n' "$ingress_control_block" | grep -Fq -- "$required"; then
+		printf 'ingress-control is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$ingress_control_block" | grep -Eq 'cap_drop: \[ALL\]|^[[:space:]]*-[[:space:]]+ALL[[:space:]]*$'; then
+	printf '%s\n' 'ingress-control must drop all Linux capabilities' >&2
+	exit 1
+fi
+if printf '%s\n' "$ingress_control_block" | grep -Eq '^    volumes:|/var/run/docker.sock|privileged:|network_mode: host|cap_add:|/var/lib/stealth/(storage|runner-staging|traefik|cloudflare-import)|setup-state\.enc|cloudflare-tunnel-token'; then
+	printf '%s\n' 'ingress-control has an unnecessary mount or elevated capability' >&2
+	exit 1
+fi
+control_environment_keys="$(printf '%s\n' "$ingress_control_block" | awk '
+/^    environment:[[:space:]]*$/ { in_environment=1; next }
+in_environment && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_environment && /^      [A-Z][A-Z0-9_]*:/ { sub(/^[[:space:]]+/, ""); sub(/:.*/, ""); print }
+' | sort -u)"
+expected_control_environment_keys="$(printf '%s\n' CLOUDFLARE_API_BASE_URL DATABASE_URL FUNCTIONS_SECRET_KEY PUBLIC_APP_URL | sort -u)"
+if [ "$control_environment_keys" != "$expected_control_environment_keys" ]; then
+	printf 'ingress-control environment is broader than required; keys=%s\n' "$(printf '%s' "$control_environment_keys" | paste -sd, -)" >&2
+	exit 1
+fi
+control_networks="$(printf '%s\n' "$ingress_control_block" | awk '
+/^    networks:[[:space:]]*$/ { in_networks=1; next }
+in_networks && $0 ~ /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_networks && $0 ~ /^      [^[:space:]][^:]*:[[:space:]]*$/ { sub(/^[[:space:]]+/, ""); sub(/:[[:space:]]*$/, ""); print }
+')"
+if [ "$(printf '%s\n' "$control_networks" | sed '/^$/d' | sort -u | paste -sd, -)" != 'ingress_control_db,stealth_ingress' ]; then
+	printf 'ingress-control must join only the database and local Traefik networks; rendered networks=%s\n' "$control_networks" >&2
+	exit 1
+fi
 
 if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
 	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2

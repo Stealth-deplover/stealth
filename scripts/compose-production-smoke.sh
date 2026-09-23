@@ -1358,6 +1358,12 @@ wait_for_healthy worker
 wait_for_healthy console
 wait_for_healthy proxy
 wait_for_healthy traefik
+ingress_control_status="$("${compose[@]}" run --rm --no-deps ingress-control status)"
+if ! printf '%s\n' "$ingress_control_status" | grep -Fq 'Cloudflare Tunnel: not configured' || ! printf '%s\n' "$ingress_control_status" | grep -Fq 'Console origin: not applicable'; then
+	printf 'unconfigured Cloudflare ingress-control status is incorrect: %s\n' "$ingress_control_status" >&2
+	exit 1
+fi
+printf '%s\n' 'ingress-control one-shot status passed with an unconfigured Cloudflare provider'
 verify_telemetry_runtime_boundaries
 verify_traefik_runtime_boundaries
 verify_worker_platform_state_boundary

@@ -12,6 +12,7 @@ ENV BUILD_LDFLAGS="-s -w -X github.com/Stealth-deplover/stealth/internal/buildin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-api ./cmd/api
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-worker ./cmd/worker
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-cloudflare-import-init ./cmd/cloudflare-import-init
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-ingress-control ./cmd/ingress-control
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-migrate ./cmd/migrate
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/telemetry-docker-proxy ./cmd/telemetry-docker-proxy
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/telemetry-collector-healthcheck ./cmd/telemetry-collector-healthcheck
@@ -64,6 +65,23 @@ EXPOSE 9091
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/stealth-worker"]
+
+# The host invokes this one-shot image through Compose. It deliberately does
+# not inherit runtime-base's storage/staging volumes or install Docker tools.
+FROM alpine:3.24 AS ingress-control
+ARG VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_TIME=unknown
+RUN apk add --no-cache ca-certificates && addgroup -S -g 10001 stealth && adduser -S -D -u 10001 -G stealth stealth
+WORKDIR /app
+COPY --from=build /out/stealth-ingress-control /usr/local/bin/stealth-ingress-control
+USER stealth
+LABEL org.opencontainers.image.title="Stealth ingress control" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$COMMIT_SHA" \
+      org.opencontainers.image.created="$BUILD_TIME" \
+      org.opencontainers.image.source="https://github.com/Stealth-deplover/stealth"
+ENTRYPOINT ["/usr/local/bin/stealth-ingress-control"]
 
 FROM runtime-base AS migrate
 COPY --from=build /out/stealth-migrate /usr/local/bin/stealth-migrate

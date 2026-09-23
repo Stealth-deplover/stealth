@@ -274,14 +274,18 @@ Platform hostnames target a separate private API listener containing only the
 current, enabled Site static-serving surface. It independently resolves the
 Host against PostgreSQL, so a stale Traefik file cannot serve a deleted or
 disabled Site and cannot expose Console API, health, metrics, or version
-routes. Nginx remains the Console public edge; workload wildcard routing uses
-the same named tunnel to reach Traefik. The Instance Owner's PostgreSQL
+routes. The upgrade-safe Console origin is Nginx; workload wildcard routing
+uses the same named tunnel to reach Traefik. An Instance Owner/operator can
+explicitly cut the Console origin over with `stealth ingress cutover`. The
+Instance Owner's PostgreSQL
 workload domain is desired state for one wildcard
 record and one wildcard tunnel ingress rule. The worker discovers the matching
-Cloudflare zone and reconciles it. Console traffic continues through the same
-tunnel to `proxy:80` and Nginx; Console/API origin cutover remains deferred.
-Wildcard routing covers platform Site hostnames only; custom-domain DNS
-remains user-managed.
+Cloudflare zone and reconciles it. Console origin desired state is stored
+durably and defaults to `proxy` for existing installations; install/update
+does not change it. Cutover reuses the same Named Tunnel, verifies public
+HTTPS security headers and HSTS, and automatically requests a verified Nginx
+rollback after failure. Nginx stays installed and running. Wildcard routing
+covers platform Site hostnames only; custom-domain DNS remains user-managed.
 
 The instance-global Cloudflare API token is encrypted with the shared
 `functionsecret` cipher in PostgreSQL. Admin status responses expose only
