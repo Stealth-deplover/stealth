@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/public-hosting-addresses.sh"
 
 console_url="${STEALTH_CONSOLE_URL:-}"
 site_url="${STEALTH_SITE_URL:-}"
@@ -133,17 +134,14 @@ PY
 
 probe() {
 	local label="$1" url="$2" kind="$3" file_base="$4" address_kind="$5" headers body
-	local result rc status remote_ip location address_label address_host address_ip current_url next_url redirect_path initial_status redirect_count chain visited_urls
+	local result rc status remote_ip location selected_host current_url next_url redirect_path initial_status redirect_count chain visited_urls
 	local -a resolve_args=()
-	address_host=""
-	while IFS=$'\t' read -r address_label address_host address_ip; do
-		if [ "$address_label" = "$address_kind" ]; then
-			if [[ "$address_ip" == *:* ]]; then
-				address_ip="[$address_ip]"
-			fi
-			resolve_args+=(--resolve "$address_host:443:$address_ip")
-		fi
-	done < "$tmp_dir/public-addresses.tsv"
+	if ! select_public_addresses "$address_kind" "$tmp_dir/public-addresses.tsv"; then
+		printf '%s: no consistent previously validated public DNS address is available\n' "$label" >&2
+		return 1
+	fi
+	selected_host="$PUBLIC_SELECTED_HOST"
+	resolve_args=("${PUBLIC_RESOLVE_ARGS[@]}")
 	if [ "${#resolve_args[@]}" -eq 0 ]; then
 		printf '%s: no previously validated public DNS address is available\n' "$label" >&2
 		return 1
@@ -153,7 +151,7 @@ probe() {
 	redirect_count=0
 	chain=""
 	if [ "$kind" != site ]; then
-		if ! current_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$current_url" "$address_host" 443 2>/dev/null)"; then
+		if ! current_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$current_url" "$selected_host" 443 2>/dev/null)"; then
 			printf '%s: configured URL could not be normalized for safe redirect handling\n' "$label" >&2
 			return 1
 		fi
@@ -218,11 +216,11 @@ PY
 					return 1
 				fi
 				location="$(response_header "$headers" Location)"
-				if [ -z "$address_host" ] || [ "$location" = "__MULTIPLE__" ]; then
+				if [ -z "$selected_host" ] || [ "$location" = "__MULTIPLE__" ]; then
 					printf '%s: redirect has an invalid or repeated Location header\n' "$label" >&2
 					return 1
 				fi
-				if ! next_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$location" "$address_host" 443 2>/dev/null)"; then
+				if ! next_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$location" "$selected_host" 443 2>/dev/null)"; then
 					printf '%s: unsafe redirect rejected (HTTPS same-host redirects only)\n' "$label" >&2
 					return 1
 				fi
@@ -231,7 +229,7 @@ PY
 					return 1
 				fi
 				visited_urls+="$next_url"$'\n'
-				redirect_path="${next_url#https://$address_host}"
+				redirect_path="${next_url#https://$selected_host}"
 				redirect_path="${redirect_path%%\?*}"
 				if [ -z "$chain" ]; then chain="${status} $redirect_path"; else chain+=" -> ${status} $redirect_path"; fi
 				current_url="$next_url"
