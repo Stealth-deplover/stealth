@@ -171,7 +171,6 @@ done
 for required in \
 	'restart: "no"' \
 	'read_only: true' \
-	'user: "10001:10001"' \
 	'no-new-privileges:true' \
 	'networks:' \
 	'ingress_control_db:' \
@@ -181,6 +180,10 @@ for required in \
 		exit 1
 	fi
 done
+if ! printf '%s\n' "$ingress_control_block" | grep -Eq 'user: "?10001:10001"?$'; then
+	printf '%s\n' 'ingress-control must run as the dedicated non-root user' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$ingress_control_block" | grep -Eq 'cap_drop: \[ALL\]|^[[:space:]]*-[[:space:]]+ALL[[:space:]]*$'; then
 	printf '%s\n' 'ingress-control must drop all Linux capabilities' >&2
 	exit 1
@@ -202,7 +205,7 @@ fi
 control_networks="$(printf '%s\n' "$ingress_control_block" | awk '
 /^    networks:[[:space:]]*$/ { in_networks=1; next }
 in_networks && $0 ~ /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
-in_networks && $0 ~ /^      [^[:space:]][^:]*:[[:space:]]*$/ { sub(/^[[:space:]]+/, ""); sub(/:[[:space:]]*$/, ""); print }
+in_networks && $0 ~ /^      [^[:space:]][^:]*:/ { sub(/^[[:space:]]+/, ""); sub(/:.*/, ""); print }
 ')"
 if [ "$(printf '%s\n' "$control_networks" | sed '/^$/d' | sort -u | paste -sd, -)" != 'ingress_control_db,stealth_ingress' ]; then
 	printf 'ingress-control must join only the database and local Traefik networks; rendered networks=%s\n' "$control_networks" >&2

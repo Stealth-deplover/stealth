@@ -338,7 +338,7 @@ func (r *Repository) CompleteCloudflareReconcile(ctx context.Context, update dom
 		return false, err
 	}
 	var accountID, tunnelID, oldZoneID, oldHostname, oldRecordID, currentConsoleOrigin string
-	if err := tx.QueryRow(ctx, `SELECT account_id,tunnel_id,workload_zone_id,wildcard_hostname,wildcard_record_id,console_origin_desired FROM cloudflare_connections WHERE id=TRUE AND api_token_ciphertext IS NOT NULL FOR UPDATE`).Scan(&accountID, &tunnelID, &oldZoneID, &oldHostname, &oldRecordID, &currentConsoleOrigin); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(account_id,''),COALESCE(tunnel_id,''),COALESCE(workload_zone_id,''),COALESCE(wildcard_hostname,''),COALESCE(wildcard_record_id,''),console_origin_desired FROM cloudflare_connections WHERE id=TRUE AND api_token_ciphertext IS NOT NULL FOR UPDATE`).Scan(&accountID, &tunnelID, &oldZoneID, &oldHostname, &oldRecordID, &currentConsoleOrigin); errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrCloudflareIdentityRequired
 	} else if err != nil {
 		return false, err
