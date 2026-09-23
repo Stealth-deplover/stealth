@@ -1541,7 +1541,7 @@ export interface paths {
         get: operations["getProject"];
         put?: never;
         post?: never;
-        /** @description Permanently delete a project and all of its tenant-owned resources. Only the organization owner may perform this operation; confirm_name must exactly match the current project name. */
+        /** @description Permanently delete a project and all of its tenant-owned resources. Only the organization owner may perform this operation; confirm_name must exactly match the current project name. Deletion returns a conflict while an App source upload or OCI artifact publication is reserved. */
         delete: operations["deleteProject"];
         options?: never;
         head?: never;
@@ -2683,12 +2683,82 @@ export interface paths {
         get: operations["getApp"];
         put?: never;
         post?: never;
-        /** @description Delete App metadata and its reserved platform hostname claim. No workload runtime exists in this API version. API-key callers require apps.write. */
+        /** @description Delete App metadata and its reserved platform hostname claim, then queue durable cleanup for source and OCI artifacts. Deletion returns a conflict while an App source upload or OCI artifact publication is reserved. No workload runtime exists in this API version. API-key callers require apps.write. */
         delete: operations["deleteApp"];
         options?: never;
         head?: never;
         /** @description Update mutable App desired state. Only enabled and semantically changed WorkloadSpec fields increment desired_generation. Rename preserves platform hostname. Runtime-owned observed state cannot be changed by clients. API-key callers require apps.write. */
         patch: operations["updateApp"];
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List immutable source builds and OCI artifacts for an App. API-key callers require apps.read. */
+        get: operations["listAppDeployments"];
+        put?: never;
+        /** @description Upload one bounded source archive and queue a BuildKit build. A successful build persists a verified OCI image artifact; this operation never starts an App container. select=true requests desired-image selection only after verified build success. API-key callers require apps.write. */
+        post: operations["createAppDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return immutable source, build definition, WorkloadSpec snapshot, and verified output metadata. Private storage locators and worker lease data are excluded. API-key callers require apps.read. */
+        get: operations["getAppDeployment"];
+        put?: never;
+        post?: never;
+        /** @description Delete an unselected deployment that has no active build and queue durable cleanup for its source and OCI artifacts. API-key callers require apps.write. */
+        delete: operations["deleteAppDeployment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Select a ready verified immutable image as desired state. This advances desired_generation only when selection changes; observed_generation and runtime_status remain trusted-runtime-owned. Selecting does not start an App. API-key callers require apps.write. */
+        post: operations["selectAppDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded, normalized build-worker output only. The after cursor is the last returned sequence; no runtime logs are available for Apps in this release. API-key callers require apps.read. */
+        get: operations["listAppBuildLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/projects/{projectID}/sites/{siteID}": {
@@ -5373,6 +5443,11 @@ export interface components {
              */
             observed_generation: number;
             /**
+             * Format: uuid
+             * @description Immutable image selected as future desired state. A selection does not mean a runtime exists or is running.
+             */
+            desired_deployment_id: string | null;
+            /**
              * @description not_deployed means no persistent runtime has been created yet.
              * @enum {string}
              */
@@ -5404,6 +5479,117 @@ export interface components {
             apps: components["schemas"]["App"][];
             pagination: components["schemas"]["Pagination"];
             can_manage: boolean;
+        };
+        AppDeployment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            app_id: string;
+            /** Format: uuid */
+            project_id: string;
+            /**
+             * Format: int64
+             * @description Monotonic version allocated for this App.
+             */
+            version: number;
+            /** @enum {string} */
+            source: AppDeploymentSource;
+            /** @description User-supplied filename metadata only. */
+            source_name: string | null;
+            /** Format: int64 */
+            source_size_bytes: number;
+            /** @description SHA-256 of the immutable uploaded source archive bytes. */
+            source_checksum_sha256: string;
+            dockerfile_path: string;
+            context_directory: string;
+            target: string | null;
+            /** @enum {string} */
+            platform: AppDeploymentPlatform;
+            workload_snapshot: components["schemas"]["WorkloadSpec"];
+            /** @description Canonical WorkloadSpec snapshot digest captured at creation. */
+            workload_spec_sha256: string;
+            /** @enum {string} */
+            status: AppDeploymentStatus;
+            /** @enum {string} */
+            build_status: AppDeploymentBuild_status;
+            error_message: string | null;
+            /** @description Immutable OCI manifest/image digest reported by BuildKit metadata and verified in the exported OCI layout. */
+            image_digest: string | null;
+            /** @description SHA-256 checksum of Stealth's persisted OCI archive bytes; distinct from image_digest. */
+            image_archive_sha256: string | null;
+            /** Format: int64 */
+            image_size_bytes: number | null;
+            /** @description Desired image selection only. It does not imply an App container is running. */
+            selected: boolean;
+            /** Format: uuid */
+            created_by_account_id: string | null;
+            /** Format: date-time */
+            queued_at: string;
+            /** Format: date-time */
+            build_started_at: string | null;
+            /** Format: date-time */
+            built_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AppDeploymentResponse: {
+            deployment: components["schemas"]["AppDeployment"];
+        };
+        AppDeploymentsPage: {
+            deployments: components["schemas"]["AppDeployment"][];
+            pagination: components["schemas"]["Pagination"];
+            can_manage: boolean;
+        };
+        AppDeploymentUploadRequest: {
+            /**
+             * Format: binary
+             * @description Required bounded .zip
+             */
+            source: string;
+            /**
+             * @description Canonical path relative to the extracted source root.
+             * @default Dockerfile
+             */
+            dockerfile_path: string;
+            /**
+             * @description Canonical build context path relative to the extracted source root.
+             * @default .
+             */
+            context_directory: string;
+            /** @description Optional validated Dockerfile stage identifier. */
+            target?: string;
+            /**
+             * @description When true
+             * @default false
+             * @enum {string}
+             */
+            select: AppDeploymentUploadRequestSelect;
+        };
+        AppBuildLog: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            deployment_id: string;
+            /** Format: uuid */
+            app_id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @enum {string} */
+            level: AppBuildLogLevel;
+            /** @description Bounded and control-character-normalized. Older records beyond the retention window are truncated. */
+            message: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AppBuildLogsPage: {
+            logs: components["schemas"]["AppBuildLog"][];
+            pagination: components["schemas"]["Pagination"];
         };
         SiteDomain: {
             /** Format: uuid */
@@ -9650,7 +9836,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Project and all child resources deleted */
+            /** @description Project and all child resources deleted; App source and OCI artifacts are queued for durable cleanup */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -9661,6 +9847,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             413: components["responses"]["PayloadTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
@@ -13261,7 +13448,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description App metadata and claim deleted */
+            /** @description App metadata deleted and private artifacts queued for cleanup */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -13272,6 +13459,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -13309,6 +13497,188 @@ export interface operations {
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    listAppDeployments: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App deployments page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDeploymentsPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createAppDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["AppDeploymentUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Source archive durably stored and build queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDeploymentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getAppDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                deploymentID: components["parameters"]["DeploymentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App deployment metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDeploymentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteAppDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                deploymentID: components["parameters"]["DeploymentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deployment metadata deleted and private artifacts queued for cleanup */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    selectAppDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                deploymentID: components["parameters"]["DeploymentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Desired image selection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDeploymentResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listAppBuildLogs: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                after?: number;
+            };
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                deploymentID: components["parameters"]["DeploymentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App build logs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppBuildLogsPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getSite: {
@@ -15094,6 +15464,35 @@ export enum AppRuntime_status {
     degraded = "degraded",
     stopped = "stopped",
     failed = "failed"
+}
+export enum AppDeploymentSource {
+    upload = "upload"
+}
+export enum AppDeploymentPlatform {
+    linux_amd64 = "linux/amd64",
+    linux_arm64 = "linux/arm64"
+}
+export enum AppDeploymentStatus {
+    queued = "queued",
+    building = "building",
+    ready = "ready",
+    failed = "failed"
+}
+export enum AppDeploymentBuild_status {
+    queued = "queued",
+    running = "running",
+    deferred = "deferred",
+    succeeded = "succeeded",
+    failed = "failed"
+}
+export enum AppDeploymentUploadRequestSelect {
+    true = "true",
+    false = "false"
+}
+export enum AppBuildLogLevel {
+    info = "info",
+    warn = "warn",
+    error = "error"
 }
 export enum SiteDomainStatus {
     pending = "pending",

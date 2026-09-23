@@ -400,6 +400,7 @@ type ManagedAsset struct {
 func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
+		{Path: "buildkit/buildkitd.toml", RemotePath: "buildkit/buildkitd.toml", Marker: "rootless = true", productionOnly: true, validate: validateBuildKitConfigAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
 		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, render: renderTraefikStaticAsset, validate: validateTraefikStaticAsset},
 		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
@@ -1118,6 +1119,7 @@ func syncDirectory(path string) error {
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
 		"  traefik:",
+		"  buildkit:",
 		"  traefik-state-init:",
 		"  cloudflare-state-init:",
 		"  otel-collector:",
@@ -1126,9 +1128,38 @@ func validateProductionComposeAsset(contents []byte) error {
 		"  telemetry-docker:",
 		"  telemetry-docker-proxy:",
 		"  telemetry_ingest:",
+		"  app_build:",
 	} {
 		if !bytes.Contains(contents, []byte(marker)) {
 			return fmt.Errorf("missing current production Compose marker %q", marker)
+		}
+	}
+	text := string(contents)
+	serviceStart := strings.Index(text, "\n  buildkit:")
+	if serviceStart < 0 {
+		return errors.New("missing dedicated App BuildKit service")
+	}
+	serviceEnd := strings.Index(text[serviceStart+1:], "\n  ingress-control:")
+	if serviceEnd < 0 {
+		return errors.New("could not delimit App BuildKit service")
+	}
+	service := text[serviceStart : serviceStart+1+serviceEnd]
+	for _, required := range []string{
+		"image: " + defaultBuildKitImage,
+		"user: \"1000:1000\"", "read_only: true", "seccomp=unconfined",
+		"apparmor=unconfined", "systempaths=unconfined", "buildkit_state:/home/user/.local/share/buildkit",
+		"networks: [app_build]", "buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro",
+	} {
+		if !strings.Contains(service, required) {
+			return fmt.Errorf("App BuildKit service is missing required setting %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"privileged:", "network_mode: host", "pid: host", "ipc: host", "/var/run/docker.sock",
+		"ports:", "stealth:", "telemetry_store:", "ingress_control_db:", "stealth_storage:", "app_build_staging:",
+	} {
+		if strings.Contains(service, forbidden) {
+			return fmt.Errorf("App BuildKit service contains forbidden setting %q", forbidden)
 		}
 	}
 	return nil

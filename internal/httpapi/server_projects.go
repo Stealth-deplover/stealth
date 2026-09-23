@@ -141,6 +141,8 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "forbidden", "only the project owner can delete this project")
 		case errors.Is(err, repository.ErrConfirmationRequired):
 			writeError(w, http.StatusUnprocessableEntity, "validation_error", "confirm_name must be the exact project name")
+		case errors.Is(err, repository.ErrAppArtifactPublishInProgress):
+			writeError(w, http.StatusConflict, "conflict", "wait for in-flight App artifact uploads or builds to finish before deleting this project")
 		default:
 			internalError(s, w, err)
 		}

@@ -45,6 +45,10 @@ export const queryKeys = {
     ["site", projectId, siteId] as const,
   apps: (projectId: string) => ["apps", projectId] as const,
   app: (projectId: string, appId: string) => ["app", projectId, appId] as const,
+  appDeployments: (projectId: string, appId: string) =>
+    ["app-deployments", projectId, appId] as const,
+  appDeployment: (projectId: string, appId: string, deploymentId: string) =>
+    ["app-deployment", projectId, appId, deploymentId] as const,
   siteDeployments: (projectId: string, siteId: string) =>
     ["site-deployments", projectId, siteId] as const,
   siteDeployment: (projectId: string, siteId: string, deploymentId: string) =>

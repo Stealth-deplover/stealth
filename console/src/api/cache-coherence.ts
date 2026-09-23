@@ -51,6 +51,12 @@ export type CacheChange =
   | { kind: "site"; projectId: string; siteId?: string }
   | { kind: "app"; projectId: string; appId?: string }
   | {
+      kind: "app-deployment";
+      projectId: string;
+      appId: string;
+      deploymentId?: string;
+    }
+  | {
       kind: "site-deployment";
       projectId: string;
       siteId: string;
@@ -234,6 +240,22 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
       addKey(keys, queryKeys.apps(change.projectId));
       if (change.appId) {
         addKey(keys, queryKeys.app(change.projectId, change.appId));
+      }
+      return keys;
+
+    case "app-deployment":
+      addKey(keys, queryKeys.apps(change.projectId));
+      addKey(keys, queryKeys.app(change.projectId, change.appId));
+      addKey(keys, queryKeys.appDeployments(change.projectId, change.appId));
+      if (change.deploymentId) {
+        addKey(
+          keys,
+          queryKeys.appDeployment(
+            change.projectId,
+            change.appId,
+            change.deploymentId,
+          ),
+        );
       }
       return keys;
 

@@ -1000,19 +1000,67 @@ type Site struct {
 // Runtime status and observed generation remain owned by a trusted runtime
 // reconciler; creating or updating metadata never claims that work ran.
 type App struct {
-	ID                 string            `json:"id"`
-	ProjectID          string            `json:"project_id"`
-	Name               string            `json:"name"`
-	Enabled            bool              `json:"enabled"`
-	PlatformHostname   *string           `json:"platform_hostname"`
-	Workload           workloadspec.Spec `json:"workload"`
-	WorkloadSpecSHA256 string            `json:"workload_spec_sha256"`
-	DesiredGeneration  int64             `json:"desired_generation"`
-	ObservedGeneration int64             `json:"observed_generation"`
-	RuntimeStatus      string            `json:"runtime_status"`
-	RuntimeError       *string           `json:"runtime_error"`
-	CreatedAt          time.Time         `json:"created_at"`
-	UpdatedAt          time.Time         `json:"updated_at"`
+	ID                  string            `json:"id"`
+	ProjectID           string            `json:"project_id"`
+	Name                string            `json:"name"`
+	Enabled             bool              `json:"enabled"`
+	PlatformHostname    *string           `json:"platform_hostname"`
+	Workload            workloadspec.Spec `json:"workload"`
+	WorkloadSpecSHA256  string            `json:"workload_spec_sha256"`
+	DesiredGeneration   int64             `json:"desired_generation"`
+	ObservedGeneration  int64             `json:"observed_generation"`
+	DesiredDeploymentID *string           `json:"desired_deployment_id"`
+	RuntimeStatus       string            `json:"runtime_status"`
+	RuntimeError        *string           `json:"runtime_error"`
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
+}
+
+// AppDeployment is the immutable build identity and verified output for one
+// App release. Private source and image storage locators and worker lease IDs
+// are intentionally absent from this public projection.
+type AppDeployment struct {
+	ID                   string            `json:"id"`
+	AppID                string            `json:"app_id"`
+	ProjectID            string            `json:"project_id"`
+	Version              int64             `json:"version"`
+	Source               string            `json:"source"`
+	SourceName           *string           `json:"source_name,omitempty"`
+	SourceSizeBytes      int64             `json:"source_size_bytes"`
+	SourceChecksumSHA256 string            `json:"source_checksum_sha256"`
+	DockerfilePath       string            `json:"dockerfile_path"`
+	ContextDirectory     string            `json:"context_directory"`
+	Target               *string           `json:"target"`
+	Platform             string            `json:"platform"`
+	WorkloadSnapshot     workloadspec.Spec `json:"workload_snapshot"`
+	WorkloadSpecSHA256   string            `json:"workload_spec_sha256"`
+	Status               string            `json:"status"`
+	BuildStatus          string            `json:"build_status"`
+	ErrorMessage         *string           `json:"error_message"`
+	ImageDigest          *string           `json:"image_digest"`
+	ImageArchiveSHA256   *string           `json:"image_archive_sha256"`
+	ImageSizeBytes       *int64            `json:"image_size_bytes"`
+	Selected             bool              `json:"selected"`
+	CreatedByAccountID   *string           `json:"created_by_account_id"`
+	QueuedAt             time.Time         `json:"queued_at"`
+	BuildStartedAt       *time.Time        `json:"build_started_at"`
+	BuiltAt              *time.Time        `json:"built_at"`
+	FinishedAt           *time.Time        `json:"finished_at"`
+	CreatedAt            time.Time         `json:"created_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
+}
+
+// AppBuildLog is a bounded tenant-scoped lifecycle event from the trusted
+// App build worker. It contains no command line, worker environment, or path.
+type AppBuildLog struct {
+	ID           string    `json:"id"`
+	DeploymentID string    `json:"deployment_id"`
+	AppID        string    `json:"app_id"`
+	ProjectID    string    `json:"project_id"`
+	Sequence     int64     `json:"sequence"`
+	Level        string    `json:"level"`
+	Message      string    `json:"message"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // PlatformRoute is the PostgreSQL-derived desired state consumed by the

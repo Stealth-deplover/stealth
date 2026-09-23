@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
@@ -48,6 +49,8 @@ type Server struct {
 	siteGitFetcher    gitarchive.SourceFetcher
 	siteGitSlots      chan struct{}
 	sitesReady        bool
+	apps              *appstore.Store
+	appsReady         bool
 	metrics           *observability.APIMetrics
 	realtimeSlots     chan struct{}
 	realtimeBroker    *realtime.Broker
@@ -181,12 +184,17 @@ func NewWithDependenciesAndPlatformSiteHandler(cfg config.Config, repo *reposito
 	if siteArchiveErr != nil {
 		logger.Error("site upload staging storage configuration error", "error", siteArchiveErr)
 	}
+	appArtifactStore, appArtifactErr := appstore.New(cfg.StorageRoot, cfg.AppsMaxSourceArchiveBytes, cfg.AppsMaxImageArchiveBytes)
+	if appArtifactErr != nil {
+		logger.Error("App artifact storage configuration error", "error", appArtifactErr)
+	}
 	functionCipher, functionCipherErr := functionsecret.New(cfg.FunctionsSecretKey)
 	if functionCipherErr != nil {
 		logger.Error("function secret configuration error", "error", functionCipherErr)
 	}
 	functionsReady := functionStoreErr == nil && functionCipherErr == nil && cfg.FunctionsMaxArtifactSize > 0 && cfg.FunctionsDefaultQuotaBytes >= cfg.FunctionsMaxArtifactSize
 	sitesReady := siteStoreErr == nil && siteArchiveErr == nil && cfg.SitesMaxArtifactSize > 0 && cfg.SitesMaxExpandedBytes > 0 && cfg.SitesMaxFiles > 0
+	appsReady := appArtifactErr == nil && cfg.AppsMaxSourceArchiveBytes > 0 && cfg.AppsMaxExpandedSourceBytes > 0 && cfg.AppsMaxSourceFiles > 0 && cfg.AppsMaxImageArchiveBytes > 0
 	setupStateStore := deps.SetupState
 	if setupStateStore == nil && cfg.SetupMode && functionCipher != nil && cfg.SetupStateFile != "" {
 		var setupErr error
@@ -230,7 +238,7 @@ func NewWithDependenciesAndPlatformSiteHandler(cfg config.Config, repo *reposito
 	if authRecheckInterval <= 0 {
 		authRecheckInterval = adminRealtimeAuthRecheckInterval
 	}
-	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), adminRealtimeAuthRecheckInterval: authRecheckInterval, realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
+	s := &Server{config: cfg, repo: repo, bootstrap: bootstrapStore, logger: logger, limiter: deps.AuthLimiter, storage: storageStore, storageReady: storageReady, functions: functionStore, functionCipher: functionCipher, functionsReady: functionsReady, sites: siteStore, siteArchives: siteArchiveStore, siteGitFetcher: deps.SiteGitFetcher, siteGitSlots: make(chan struct{}, cfg.SitesGitFetchConcurrency), sitesReady: sitesReady, apps: appArtifactStore, appsReady: appsReady, metrics: observability.NewAPIMetrics(), realtimeSlots: make(chan struct{}, 256), adminRealtimeAuthRecheckInterval: authRecheckInterval, realtimeBroker: deps.RealtimeBroker, authEmailSender: authEmailSender, githubClient: deps.GitHubClient, githubOAuth: githubOAuth, setupState: setupStateStore, setupHandoff: setupHandoffStore, githubManifest: githubManifest, cloudflareOAuth: cloudflareOAuth, cloudflareFactory: cloudflareFactory, telemetry: deps.TelemetryStore, redis: deps.Redis}
 	return s.routes(), s.platformSiteRoutes()
 }
 

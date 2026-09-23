@@ -392,7 +392,7 @@ func (a *App) runDoctor(args []string) int {
 	if statusErr != nil {
 		check("Docker services", false, "could not query Compose")
 	} else {
-		services := []string{"postgres", "redis", "api", "worker", "console", "proxy"}
+		services := []string{"postgres", "redis", "api", "worker", "console", "proxy", "buildkit"}
 		if setupMode {
 			services = []string{"postgres", "redis", "setup", "setup-console", "setup-proxy"}
 		}

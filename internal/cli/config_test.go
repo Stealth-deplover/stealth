@@ -16,6 +16,49 @@ import (
 
 const testGitHubAppClientID = "Iv1.test-client-id"
 
+func testProductionComposeAsset() string {
+	return `services:
+  buildkit:
+    image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    volumes:
+      - buildkit_state:/home/user/.local/share/buildkit
+      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+    networks: [app_build]
+  ingress-control:
+  traefik:
+  traefik-state-init:
+  cloudflare-state-init:
+  otel-collector:
+  telemetry-host:
+  telemetry-docker-logs:
+  telemetry-docker:
+  telemetry-docker-proxy:
+networks:
+  telemetry_ingest:
+  app_build:
+`
+}
+
+func testBuildKitConfigAsset() string {
+	return `[worker.oci]
+enabled = true
+rootless = true
+noProcessSandbox = false
+gc = true
+maxUsedSpace = "10GB"
+max-parallelism = 2
+
+[frontend."dockerfile.v0"]
+enabled = true
+`
+}
+
 func testManagedTraefikStaticAsset() string {
 	return `entryPoints:
   web:
@@ -159,7 +202,11 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
+			_, _ = io.WriteString(writer, testProductionComposeAsset())
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "buildkit/buildkitd.toml") {
+			_, _ = io.WriteString(writer, testBuildKitConfigAsset())
 			return
 		}
 		if strings.HasSuffix(request.URL.Path, "traefik/traefik.yaml") {

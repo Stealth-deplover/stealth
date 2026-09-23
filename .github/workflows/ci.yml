@@ -184,12 +184,17 @@ jobs:
             done
           }
           run_and_require_tests ./internal/migrate \
-            '^TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration$' \
-            TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration
+            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration)$' \
+            TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration \
+            TestAppDeploymentMigrationPreservesExistingAppsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration)$' \
+            '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration|TestAppDeploymentSnapshotSelectionAndQuotaIntegration|TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration|TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration|TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration)$' \
             TestAppsPersistenceGenerationAndPlanLimitIntegration \
-            TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration
+            TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration \
+            TestAppDeploymentSnapshotSelectionAndQuotaIntegration \
+            TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration \
+            TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
+            TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration

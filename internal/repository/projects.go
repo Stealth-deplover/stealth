@@ -170,6 +170,29 @@ func (r *Repository) DeleteProject(ctx context.Context, projectID, accountID uui
 	if confirmationName != name {
 		return ErrConfirmationRequired
 	}
+	appRows, err := tx.Query(ctx, `SELECT artifact_reserved_bytes FROM project_apps WHERE project_id=$1 ORDER BY id FOR UPDATE`, projectID)
+	if err != nil {
+		return err
+	}
+	appArtifactPublishInProgress := false
+	for appRows.Next() {
+		var reserved int64
+		if err := appRows.Scan(&reserved); err != nil {
+			appRows.Close()
+			return err
+		}
+		if reserved > 0 {
+			appArtifactPublishInProgress = true
+		}
+	}
+	if err := appRows.Err(); err != nil {
+		appRows.Close()
+		return err
+	}
+	appRows.Close()
+	if appArtifactPublishInProgress {
+		return ErrAppArtifactPublishInProgress
+	}
 	if err := writeAuditMetadata(ctx, tx, orgID, accountID, "project.delete", "project", projectID, map[string]any{
 		"project_id": projectID.String(),
 		"name":       name,
@@ -181,6 +204,8 @@ func (r *Repository) DeleteProject(ctx context.Context, projectID, accountID uui
 		ArtifactCleanupFunctions,
 		ArtifactCleanupSiteArchives,
 		ArtifactCleanupSites,
+		ArtifactCleanupAppSources,
+		ArtifactCleanupAppImages,
 	} {
 		if err := queueArtifactCleanupTx(ctx, tx, ArtifactCleanupInput{
 			ProjectID: projectID, StoreKind: storeKind,

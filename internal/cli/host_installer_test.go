@@ -109,7 +109,8 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":            "services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
+		"compose.production.yaml":            testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
 		"compose.setup.yaml":                 "services:\n  setup:\n",
 		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",

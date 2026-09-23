@@ -1,4 +1,7 @@
 ARG OTEL_COLLECTOR_BASE_IMAGE=otel/opentelemetry-collector-contrib:0.161.0
+ARG BUILDKIT_BASE_IMAGE=moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+
+FROM ${BUILDKIT_BASE_IMAGE} AS buildkit-client
 
 FROM golang:1.27-alpine AS build
 WORKDIR /src
@@ -26,7 +29,7 @@ ARG BUILD_TIME=unknown
 # arguments: changing them would silently invalidate the host ownership
 # contract.
 RUN apk add --no-cache ca-certificates wget && addgroup -S -g 10001 stealth && adduser -S -D -u 10001 -G stealth stealth
-RUN mkdir -p /var/lib/stealth/storage /var/lib/stealth/runner-staging && chown -R stealth:stealth /var/lib/stealth
+RUN mkdir -p /var/lib/stealth/storage /var/lib/stealth/runner-staging /var/lib/stealth/app-build-staging && chown -R stealth:stealth /var/lib/stealth
 VOLUME ["/var/lib/stealth/storage", "/var/lib/stealth/runner-staging"]
 WORKDIR /app
 LABEL org.opencontainers.image.title="Stealth" \
@@ -60,6 +63,7 @@ FROM runtime-base AS worker
 RUN apk add --no-cache docker-cli
 COPY --from=build /out/stealth-worker /usr/local/bin/stealth-worker
 COPY --from=build /out/stealth-cloudflare-import-init /usr/local/bin/stealth-cloudflare-import-init
+COPY --from=buildkit-client /usr/bin/buildctl /usr/local/bin/buildctl
 USER stealth
 EXPOSE 9091
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1

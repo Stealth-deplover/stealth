@@ -94,6 +94,18 @@ type Config struct {
 	FunctionsRunnerNodeImage      string
 	FunctionsRunnerPythonImage    string
 	FunctionsRunnerGoImage        string
+	AppsMaxSourceArchiveBytes     int64
+	AppsMaxExpandedSourceBytes    int64
+	AppsMaxSourceFiles            int
+	AppsMaxImageArchiveBytes      int64
+	AppsDefaultArtifactQuotaBytes int64
+	AppsBuildkitAddress           string
+	AppsBuildTimeout              time.Duration
+	AppsBuildLeaseAge             time.Duration
+	AppsBuildPollInterval         time.Duration
+	AppsBuildStagingRoot          string
+	AppsBuildStagingVolume        string
+	AppsBuildkitStateVolume       string
 	// Agent runner settings control the trusted queue lifecycle. Provider
 	// adapters remain a separate capability and an empty registry never claims
 	// queued runs.
@@ -174,6 +186,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	appBuildSettings, err := loadAppBuildSettings()
+	if err != nil {
+		return Config{}, err
+	}
 	telemetrySettings, err := loadTelemetrySettings()
 	if err != nil {
 		return Config{}, err
@@ -208,6 +224,7 @@ func Load() (Config, error) {
 	siteSettings.apply(&config)
 	ingressSettings.apply(&config)
 	executionSettings.apply(&config)
+	appBuildSettings.apply(&config)
 	telemetrySettings.apply(&config)
 	telemetryStoreSettings.apply(&config)
 	agentSettings.apply(&config)
@@ -219,6 +236,10 @@ func Load() (Config, error) {
 	config.FunctionsRunnerStagingRoot, err = filepath.Abs(config.FunctionsRunnerStagingRoot)
 	if err != nil || strings.TrimSpace(config.FunctionsRunnerStagingRoot) == "" {
 		return Config{}, fmt.Errorf("FUNCTIONS_RUNNER_STAGING_ROOT must be a valid filesystem path")
+	}
+	config.AppsBuildStagingRoot, err = filepath.Abs(config.AppsBuildStagingRoot)
+	if err != nil || strings.TrimSpace(config.AppsBuildStagingRoot) == "" {
+		return Config{}, fmt.Errorf("APPS_BUILD_STAGING_ROOT must be a valid filesystem path")
 	}
 	return config, nil
 }
@@ -316,6 +337,29 @@ func (c Config) ValidateSites() error {
 		if strings.TrimSpace(c.ACMECertCacheDir) == "" || !filepath.IsAbs(c.ACMECertCacheDir) || filepath.Clean(c.ACMECertCacheDir) == string(filepath.Separator) {
 			return fmt.Errorf("ACME_CERT_CACHE_DIR must be a valid non-root filesystem path")
 		}
+	}
+	return nil
+}
+
+func (c Config) ValidateApps() error {
+	if c.AppsMaxSourceArchiveBytes <= 0 || c.AppsMaxSourceArchiveBytes > 2<<30 ||
+		c.AppsMaxExpandedSourceBytes <= 0 || c.AppsMaxExpandedSourceBytes > 16<<30 ||
+		c.AppsMaxSourceFiles < 1 || c.AppsMaxSourceFiles > 1000000 ||
+		c.AppsMaxImageArchiveBytes <= 0 || c.AppsMaxImageArchiveBytes > 16<<30 ||
+		c.AppsDefaultArtifactQuotaBytes < c.AppsMaxSourceArchiveBytes || c.AppsDefaultArtifactQuotaBytes > 1<<40 {
+		return fmt.Errorf("App source, image, file-count, and artifact quota settings are invalid")
+	}
+	if !validBuildkitAddress(c.AppsBuildkitAddress) {
+		return fmt.Errorf("APPS_BUILDKIT_ADDRESS must be a private TCP host:port address")
+	}
+	if c.AppsBuildTimeout < time.Minute || c.AppsBuildTimeout > 24*time.Hour || c.AppsBuildLeaseAge < c.AppsBuildTimeout || c.AppsBuildLeaseAge > 48*time.Hour || c.AppsBuildPollInterval < 100*time.Millisecond || c.AppsBuildPollInterval > time.Minute {
+		return fmt.Errorf("App build timeout, lease, or polling settings are invalid")
+	}
+	if strings.TrimSpace(c.AppsBuildStagingRoot) == "" || !filepath.IsAbs(c.AppsBuildStagingRoot) || filepath.Clean(c.AppsBuildStagingRoot) == string(filepath.Separator) {
+		return fmt.Errorf("APPS_BUILD_STAGING_ROOT must be an absolute non-root path")
+	}
+	if !isDockerName(c.AppsBuildStagingVolume) || !isDockerName(c.AppsBuildkitStateVolume) {
+		return fmt.Errorf("App build volume names are invalid")
 	}
 	return nil
 }

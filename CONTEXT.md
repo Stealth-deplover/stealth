@@ -173,6 +173,27 @@ grants no host access, host mounts, host networking, host PID/IPC, Linux
 capabilities, privileged mode, or Docker API access. Secret values have a
 separate future encrypted lifecycle and never belong in WorkloadSpec.
 
+An `AppDeployment` is an immutable build input snapshot and durable result.
+Uploaded source bytes, the Dockerfile build definition, and the current
+WorkloadSpec snapshot are recorded before queueing. A dedicated rootless
+BuildKit service builds that source into an OCI archive; BuildKit cache is
+disposable and never defines application identity. The durable image identity
+is the verified BuildKit `image_digest` together with Stealth's persisted OCI
+archive and its separate archive checksum. Deployment selection changes the
+App's desired image and desired generation only. The App remains
+`not_deployed`; no App container, runtime health state, or App route exists yet.
+Future runtime reconciliation consumes `App.enabled`,
+`App.desired_deployment_id`, the current WorkloadSpec, and
+`App.desired_generation`; only a worker that proves convergence may advance
+`observed_generation`.
+
+The App build worker transfers untrusted source to a dedicated rootless
+BuildKit daemon on an isolated build network. Build execution receives no
+Docker socket, backend network, platform credentials, SSH forwarding, build
+secrets, build arguments, or tenant-selected frontend/entitlements. The OCI
+artifact is the only durable output of the build boundary; BuildKit cache loss
+may slow a future build but cannot remove a completed deployment artifact.
+
 ## Backend authentication email delivery
 
 The mailer transport keeps a generic `Message`/`Sender` seam for explicit

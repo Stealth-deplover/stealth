@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Validate the production Traefik boundary against the rendered Compose model
-# and the release-managed static/dynamic files. This is intentionally separate
-# from the running smoke: a topology violation must fail before containers
-# start, while the smoke proves the read-only runtime boundary in Docker.
+# Validate the production Traefik and App BuildKit boundaries against the
+# rendered Compose model and release-managed files. Topology violations fail
+# before containers start; the running smoke exercises the read-only boundary.
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${COMPOSE_FILE:-$repo_root/compose.production.yaml}"
 env_file="${ENV_FILE:-$repo_root/.env.production.example}"
@@ -64,6 +63,11 @@ fi
 worker_block="$(service_block worker)"
 if [ -z "$worker_block" ]; then
 	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
+	exit 1
+fi
+buildkit_block="$(service_block buildkit)"
+if [ -z "$buildkit_block" ]; then
+	printf '%s\n' 'dedicated App BuildKit service is missing from rendered production Compose' >&2
 	exit 1
 fi
 state_init_block="$(service_block traefik-state-init)"
@@ -211,6 +215,79 @@ if [ "$(printf '%s\n' "$control_networks" | sed '/^$/d' | sort -u | paste -sd, -
 	printf 'ingress-control must join only the database and local Traefik networks; rendered networks=%s\n' "$control_networks" >&2
 	exit 1
 fi
+
+
+for required in \
+	'image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef' \
+	'user: "1000:1000"' \
+	'read_only: true' \
+	'seccomp=unconfined' \
+	'apparmor=unconfined' \
+	'systempaths=unconfined' \
+	'buildkit_state:/home/user/.local/share/buildkit' \
+	'buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro'; do
+	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
+		printf 'App BuildKit service is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
+	if printf '%s\n' "$buildkit_block" | grep -Fqi -- "$forbidden"; then
+		printf 'App BuildKit service contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+if printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*privileged:[[:space:]]*true|^[[:space:]]*ports:'; then
+	printf '%s\n' 'App BuildKit must not be privileged or publish a host port' >&2
+	exit 1
+fi
+
+service_networks() {
+	local block="$1"
+	printf '%s\n' "$block" | awk '
+/^    networks:[[:space:]]*$/ { in_networks=1; next }
+in_networks && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_networks && /^      [^[:space:]][^:]*:/ { sub(/^[[:space:]]+/, ""); sub(/:.*/, ""); print }
+'
+}
+buildkit_networks="$(service_networks "$buildkit_block" | sort -u | paste -sd, -)"
+worker_networks="$(service_networks "$worker_block" | sort -u | paste -sd, -)"
+if [ "$buildkit_networks" != 'app_build' ]; then
+	printf 'App BuildKit must join only app_build; rendered networks=%s\n' "$buildkit_networks" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$worker_networks" | tr ',' '\n' | grep -Fxq app_build; then
+	printf 'worker must join app_build for private BuildKit access; rendered networks=%s\n' "$worker_networks" >&2
+	exit 1
+fi
+while IFS= read -r service; do
+	case "$service" in
+		worker|buildkit) continue ;;
+	esac
+	block="$(service_block "$service")"
+	if printf '%s\n' "$(service_networks "$block")" | grep -Fxq app_build; then
+		printf 'App build network must not include service %s\n' "$service" >&2
+		exit 1
+	fi
+done < <("${compose[@]}" config --services)
+
+buildkit_config="$(dirname -- "$compose_file")/buildkit/buildkitd.toml"
+if [ ! -f "$buildkit_config" ]; then
+	printf 'BuildKit daemon configuration is missing: %s\n' "$buildkit_config" >&2
+	exit 1
+fi
+for required in 'rootless = true' 'noProcessSandbox = false' 'gc = true' 'maxUsedSpace = "10GB"' 'max-parallelism = 2' '[frontend."dockerfile.v0"]'; do
+	if ! grep -Fq -- "$required" "$buildkit_config"; then
+		printf 'BuildKit daemon configuration is missing setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for forbidden in 'insecure-entitlements' 'security.insecure' 'network.host' 'gateway.v0'; do
+	if grep -Fq -- "$forbidden" "$buildkit_config"; then
+		printf 'BuildKit daemon config contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
 
 if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
 	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2

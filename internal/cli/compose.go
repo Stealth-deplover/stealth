@@ -136,6 +136,8 @@ func displayServiceName(service string) string {
 		return "API"
 	case "worker":
 		return "Worker"
+	case "buildkit":
+		return "App BuildKit"
 	case "console":
 		return "Console"
 	case "postgres":

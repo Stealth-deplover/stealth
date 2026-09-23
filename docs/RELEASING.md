@@ -102,6 +102,14 @@ claim a full browser/provider installation or run a full production stack.
   persistent volumes on failure.
 - [ ] Verify API `/healthz` and `/readyz`, Console availability, proxy routing,
   and the reported version metadata.
+- [ ] Confirm the production Compose BuildKit image is pinned by version and
+      digest, runs rootless without `privileged`, a Docker socket, host network,
+      backend network membership, or a host port, and has bounded cache GC.
+- [ ] Run the production Compose smoke's `FROM scratch` App build. Confirm
+      BuildKit readiness, a verified OCI digest/archive, and that the App stays
+      `not_deployed` with no App route in the Site route snapshot.
+- [ ] Verify BuildKit cache can be removed without affecting completed App
+      deployment metadata or persisted OCI archives.
 - [ ] Restart the API, worker, Console, and proxy containers, then rerun
   `stealth status` and `stealth doctor`.
 - [ ] Exercise `stealth install --repair` on a test installation and confirm

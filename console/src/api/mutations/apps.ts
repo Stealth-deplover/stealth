@@ -1,6 +1,6 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "@/api/client";
+import { api, unwrap, uploadMultipart } from "@/api/client";
 import { applyCacheChanges } from "@/api/cache-coherence";
 import type { components } from "@/api/generated/schema";
 
@@ -42,5 +42,71 @@ export function useDeleteApp(projectId: string, appId: string) {
         }),
       ),
     onSuccess: () => applyCacheChanges(queryClient, [{ kind: "app", projectId, appId }]),
+  });
+}
+
+export function useCreateAppDeployment(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (form: FormData) =>
+      uploadMultipart(
+        (body, signal) =>
+          api.POST(
+            "/v1/projects/{projectID}/apps/{appID}/deployments",
+            {
+              params: { path: { projectID: projectId, appID: appId } },
+              // The browser sends multipart file parts; generated OpenAPI
+              // models binary parts as string for the schema-only client.
+              body: body as unknown as components["schemas"]["AppDeploymentUploadRequest"],
+              signal,
+            },
+          ),
+        form,
+      ),
+    onSuccess: (result) =>
+      applyCacheChanges(queryClient, [
+        {
+          kind: "app-deployment",
+          projectId,
+          appId,
+          deploymentId: result?.deployment.id,
+        },
+      ]),
+  });
+}
+
+export function useSelectAppDeployment(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (deploymentId: string) =>
+      unwrap(
+        await api.POST(
+          "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/select",
+          {
+            params: { path: { projectID: projectId, appID: appId, deploymentID: deploymentId } },
+          },
+        ),
+      ),
+    onSuccess: (_result, deploymentId) =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-deployment", projectId, appId, deploymentId },
+      ]),
+  });
+}
+
+export function useDeleteAppDeployment(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (deploymentId: string) =>
+      unwrap(
+        await api.DELETE(
+          "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}",
+          { params: { path: { projectID: projectId, appID: appId, deploymentID: deploymentId } } },
+        ),
+      ),
+    onSuccess: (_result, deploymentId) =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-deployment", projectId, appId, deploymentId },
+      ]),
   });
 }

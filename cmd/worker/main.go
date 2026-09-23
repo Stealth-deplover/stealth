@@ -18,6 +18,8 @@ import (
 
 	"github.com/Stealth-deplover/stealth/internal/adminnotification"
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
+	"github.com/Stealth-deplover/stealth/internal/appbuilder"
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
@@ -56,6 +58,10 @@ func main() {
 	}
 	if err := cfg.ValidateSites(); err != nil {
 		logger.Error("sites configuration error", "error", err)
+		os.Exit(1)
+	}
+	if err := cfg.ValidateApps(); err != nil {
+		logger.Error("Apps configuration error", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("starting worker", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
@@ -101,6 +107,11 @@ func main() {
 	sitePublicStore, err := sitestore.New(filepath.Join(cfg.StorageRoot, "sites"))
 	if err != nil {
 		logger.Error("site artifact storage error", "error", err)
+		os.Exit(1)
+	}
+	appArtifactStore, err := appstore.New(cfg.StorageRoot, cfg.AppsMaxSourceArchiveBytes, cfg.AppsMaxImageArchiveBytes)
+	if err != nil {
+		logger.Error("App artifact storage error", "error", err)
 		os.Exit(1)
 	}
 	cipher, err := functionsecret.New(cfg.FunctionsSecretKey)
@@ -163,6 +174,8 @@ func main() {
 		Functions:    store,
 		SiteArchives: siteSourceStore,
 		Sites:        sitePublicStore,
+		AppSources:   appArtifactStore.Sources,
+		AppImages:    appArtifactStore.Images,
 	}, cfg.FunctionsWorkerID, logger)
 	if err != nil {
 		logger.Error("artifact cleanup worker configuration error", "error", err)
@@ -213,6 +226,18 @@ func main() {
 	}
 	messagingWorker.PollInterval = cfg.FunctionsRunnerPoll
 	messagingWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
+	appBuildWorker, err := appbuilder.New(repo, appArtifactStore, &appbuilder.BuildKitClient{Address: cfg.AppsBuildkitAddress}, cfg.FunctionsWorkerID, cfg.AppsBuildStagingRoot, logger)
+	if err != nil {
+		logger.Error("App build worker configuration error", "error", err)
+		os.Exit(1)
+	}
+	appBuildWorker.PollInterval = cfg.AppsBuildPollInterval
+	appBuildWorker.LeaseAge = cfg.AppsBuildLeaseAge
+	appBuildWorker.BuildTimeout = cfg.AppsBuildTimeout
+	appBuildWorker.ArchiveLimit.MaxBytes = cfg.AppsMaxExpandedSourceBytes
+	appBuildWorker.ArchiveLimit.MaxEntry = cfg.AppsMaxExpandedSourceBytes
+	appBuildWorker.ArchiveLimit.MaxFiles = cfg.AppsMaxSourceFiles
+	appBuildWorker.ArchiveLimit.MaxCompressed = cfg.AppsMaxSourceArchiveBytes
 	var agentWorker *agentrunner.Worker
 	if cfg.AgentRunnerEnabled {
 		// Provider adapters are deliberately opt-in and process-local. This
@@ -229,18 +254,30 @@ func main() {
 		logger.Warn("Agent runner enabled without provider adapters; queued Agent runs will remain queued")
 	}
 	if !cfg.FunctionsRunnerEnabled {
-		logger.Info("functions runner is disabled; webhook and messaging runners remain active")
+		logger.Info("functions runner is disabled; independent App build, webhook, and messaging workers remain active")
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		appBuildWorker.Metrics = observability.NewWorkerMetrics()
+		realtimePublisher.Metrics = appBuildWorker.Metrics
+		metricsServer := &http.Server{
+			Addr:              cfg.FunctionsRunnerMetricsAddress,
+			Handler:           workerMetricsHandler(appBuildWorker.Metrics.Handler(), cfg.MetricsToken),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
 		registrations := []workersupervisor.Registration{
 			{Name: "Cloudflare routing reconciler", Runner: cloudflareReconciler},
 			{Name: "platform route reconciler", Runner: platformRouteReconciler},
 			{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
+			{Name: "App build worker", Runner: appBuildWorker},
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
 			{Name: "admin monitoring worker", Runner: monitorWorker},
 			{Name: "admin notification worker", Runner: notificationWorker},
+			{Name: "worker metrics", Runner: workersupervisor.RunnerFunc(func(ctx context.Context) error {
+				return serveWorkerMetrics(ctx, metricsServer, logger)
+			})},
 		}
 		if agentWorker != nil {
 			registrations = append(registrations, workersupervisor.Registration{Name: "Agent worker", Runner: agentWorker})
@@ -265,6 +302,7 @@ func main() {
 	worker.LeaseAge = cfg.FunctionsRunnerLeaseAge
 	worker.BuildTimeout = cfg.FunctionsRunnerBuildTimeout
 	worker.ArchiveLimit.MaxCompressed = cfg.FunctionsMaxArtifactSize
+	appBuildWorker.Metrics = worker.Metrics
 	siteWorker, err := functionrunner.NewSiteWorker(repo, siteSourceStore, sitePublicStore, executor, cfg.FunctionsWorkerID, cfg.FunctionsRunnerStagingRoot, logger)
 	if err != nil {
 		logger.Error("site worker configuration error", "error", err)
@@ -296,6 +334,7 @@ func main() {
 		{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 		{Name: "function worker", Runner: worker},
 		{Name: "site worker", Runner: siteWorker},
+		{Name: "App build worker", Runner: appBuildWorker},
 		{Name: "realtime publisher", Runner: realtimePublisher},
 		{Name: "webhook worker", Runner: webhookWorker},
 		{Name: "messaging worker", Runner: messagingWorker},

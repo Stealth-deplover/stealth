@@ -81,6 +81,7 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 		}
 	}
 	for path, contents := range map[string]string{
+		filepath.Join(layout.Root, "buildkit", "buildkitd.toml"): testBuildKitConfigAsset(),
 		layout.TraefikStatic: testTraefikStaticAsset(),
 		layout.TraefikCore:   strings.ReplaceAll(testTraefikCoreAsset(), "__STEALTH_PUBLIC_HOST__", "127.0.0.1"),
 		filepath.Join(layout.TraefikGenerated, ".gitkeep"): "# Stealth route reconciler\n",
@@ -93,7 +94,11 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
+	return "services:\n  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=unconfined\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\n"
+}
+
+func testBuildKitConfigAsset() string {
+	return "[worker.oci]\nrootless = true\nnoProcessSandbox = false\ngc = true\nreservedSpace = \"1GB\"\nmaxUsedSpace = \"10GB\"\nminFreeSpace = \"5GB\"\nmax-parallelism = 2\n\n[frontend.\"dockerfile.v0\"]\nenabled = true\n"
 }
 
 func testMainCollectorAsset() string {
@@ -118,6 +123,7 @@ func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	assets := map[string]string{
 		"compose.production.yaml":            testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
 		"compose.setup.yaml":                 "services:\n  setup:\n",
 		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
@@ -387,6 +393,8 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1.2.3/compose.production.yaml":
 			_, _ = io.WriteString(w, testProductionComposeAsset())
+		case "/v1.2.3/buildkit/buildkitd.toml":
+			_, _ = io.WriteString(w, testBuildKitConfigAsset())
 		case "/v1.2.3/compose.setup.yaml":
 			_, _ = io.WriteString(w, "services:\n  setup:\n    image: example\n")
 		case "/v1.2.3/telemetry/otel-collector.yaml":
@@ -475,6 +483,7 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 	const targetVersion = "v0.2.3"
 	targetAssets := map[string]string{
 		"compose.production.yaml":            testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
 		"compose.setup.yaml":                 "services:\n  setup:\n",
 		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
@@ -881,6 +890,7 @@ func TestTargetReleaseManifestCanAddFutureManagedAsset(t *testing.T) {
 	layout := writeEngineFixture(t, false)
 	assets := map[string]string{
 		"compose.production.yaml":            testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
 		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
 		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",

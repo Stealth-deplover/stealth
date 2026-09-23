@@ -7,8 +7,9 @@ plane, Redis backs distributed rate limits, and the worker is a separate Go
 process.
 
 The control plane models persistent Apps and their normalized runtime intent.
-OCI image builds and App execution remain subsequent runtime capabilities;
-an App record does not create a container or a public route.
+Uploaded App source can be built by a dedicated rootless BuildKit service into
+a durable OCI archive. App execution remains a subsequent runtime capability:
+building or selecting an image does not create a container or a public route.
 
 ```text
 TLS terminator / Nginx
@@ -22,8 +23,17 @@ TLS terminator / Nginx
                                       │   └── telemetry-docker → otel-collector
                                       ├── telemetry-host → otel-collector
                                       └── telemetry-docker-logs → otel-collector
+worker → app_build network → dedicated rootless BuildKit → OCI archive in Stealth storage
 OTLP / Prometheus → otel-collector → ClickHouse
 ```
+
+The BuildKit service joins only the private `app_build` network with the
+worker. It has no PostgreSQL/Redis/control-plane network, Docker socket, host
+port, Stealth artifact storage mount, or platform credentials. The worker
+transfers a private source context through BuildKit's client protocol. Cache
+state is a separate bounded disposable volume; completed OCI archives in
+Stealth storage are authoritative and survive cache loss or a BuildKit
+container replacement.
 
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
@@ -61,7 +71,7 @@ docker compose --env-file .env.production -f compose.production.yaml up -d postg
 docker compose --env-file .env.production -f compose.production.yaml up migrate
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-state-init
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker buildkit console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
 
@@ -77,7 +87,44 @@ required storage implementation, function/site stores, and Redis. API `/healthz`
 is liveness only. The worker exposes `/healthz` on its private metrics
 listener; a failed worker loop exits so the container supervisor can restart
 it. Build metadata is available at API `/version` and in structured startup
-logs.
+logs. `stealth doctor` reports App BuildKit readiness separately; a BuildKit
+outage leaves queued App builds available for later retry and does not couple
+the Function, Site, webhook, or messaging workers to that service.
+
+## App builds
+
+An AppDeployment captures immutable uploaded source bytes, Dockerfile build
+options, and the App's normalized WorkloadSpec snapshot before it enters the
+PostgreSQL build queue. The trusted worker verifies the source checksum,
+extracts it in a private bounded workspace, and invokes the pinned `buildctl`
+client against the dedicated rootless BuildKit daemon. Only an OCI archive is
+exported; the worker verifies BuildKit's metadata digest and the OCI layout
+before publishing the archive through the durable artifact cleanup-reservation
+flow. The metadata image digest and the checksum of the persisted tar archive
+are separate identities.
+
+The `buildkit_state` volume holds bounded disposable cache only. Removing it
+may make a later build slower, but it does not remove completed AppDeployment
+artifacts. App source and successful OCI archives use separate private
+`app-sources/` and `app-images/` namespaces in Stealth artifact storage. The
+default source archive limit is 128 MiB, expanded source is limited to 1 GiB
+and 8,192 files, OCI archives are limited to 2 GiB, and each App has a default
+5 GiB source-plus-image artifact quota. Operators can adjust the corresponding
+`APPS_*` settings within validated bounds.
+
+BuildKit receives no tenant-selected frontend, insecure entitlement, SSH
+forwarding, build secret, build argument, or platform credential. The Dockerfile
+frontend is the enabled `dockerfile.v0` frontend from the pinned daemon. The
+worker process invokes `buildctl` with an explicit minimal environment and no
+shell. Build logs are bounded and sanitized. This boundary executes untrusted
+Dockerfile build instructions inside rootless BuildKit; it is not an App
+runtime.
+
+When a build succeeds, its immutable digest and OCI archive are persisted.
+Selecting that deployment records the desired image and advances the App's
+desired generation. It does not advance observed generation or mark the App
+running. Apps remain `not_deployed`, no App container is created or loaded into
+Moby, and App hostnames are still absent from the platform Site routes.
 
 ## Configuration
 

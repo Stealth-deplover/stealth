@@ -21,10 +21,14 @@ auth_cookie_header=""
 api_url=""
 filelog_smoke_pid=""
 platform_archive=""
+app_archive=""
 platform_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-platform.XXXXXX")"
 platform_project_id=""
 platform_site_id=""
+platform_app_id=""
+platform_app_deployment_id=""
 platform_host=""
+platform_app_host=""
 platform_base_domain=""
 platform_previous_base_domain=""
 platform_domain_changed="false"
@@ -135,6 +139,9 @@ cleanup() {
 	if [ -n "$platform_site_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/sites/${platform_site_id}" >/dev/null 2>&1 || true
 	fi
+	if [ -n "$platform_app_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
+		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "$platform_project_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --header 'Content-Type: application/json' --request DELETE --data '{"confirm_name":"platform-route-smoke"}' "${api_url%/}/v1/projects/${platform_project_id}" >/dev/null 2>&1 || true
 	fi
@@ -148,7 +155,7 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse buildkit otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -162,7 +169,7 @@ cleanup() {
 		cp -- "$static_backup" "$static_file" || true
 	fi
 	restore_traefik_state_after_smoke
-	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive"
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
@@ -992,7 +999,7 @@ PY
 }
 
 prepare_platform_route_smoke() {
-	local account_id organization_id project_status site_status site_status_after_upload
+	local account_id organization_id project_status site_status site_status_after_upload app_status
 	local upload_body
 	account_id="$(platform_json_field "$register_response" account.id)"
 	organization_id="$(platform_json_field "$register_response" organization.id)"
@@ -1068,6 +1075,47 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
+		sed -n '1,80p' "$platform_response" >&2
+		return 1
+	fi
+	platform_app_id="$(platform_json_field "$platform_response" app.id)"
+	platform_app_host="$(platform_json_field "$platform_response" app.platform_hostname)"
+	if [ -z "$platform_app_id" ] || [ -z "$platform_app_host" ]; then
+		printf '%s\n' 'platform smoke App response did not contain its id and reserved hostname' >&2
+		return 1
+	fi
+
+	app_archive="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke.XXXXXX.zip")"
+	python3 - "$app_archive" "$smoke_marker" <<'PY'
+import sys
+import zipfile
+
+archive, marker = sys.argv[1:]
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\n")
+    output.writestr("payload.txt", marker + "\n")
+PY
+	local deployment_response="$platform_response"
+	local deployment_status
+	deployment_status="$(curl --silent --show-error --max-time 30 \
+		--header "Cookie: $auth_cookie_header" \
+		--form "source=@${app_archive};type=application/zip" \
+		--form 'select=true' \
+		--output "$deployment_response" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments")"
+	if [ "$deployment_status" != '202' ]; then
+		printf 'platform smoke App source upload returned HTTP %s\n' "$deployment_status" >&2
+		sed -n '1,80p' "$deployment_response" >&2
+		return 1
+	fi
+	platform_app_deployment_id="$(platform_json_field "$deployment_response" deployment.id)"
+	if [ -z "$platform_app_deployment_id" ]; then
+		printf '%s\n' 'platform smoke App deployment response did not contain an id' >&2
+		return 1
+	fi
 	printf 'platform smoke state prepared: host=%s\n' "$platform_host"
 }
 
@@ -1101,6 +1149,87 @@ verify_platform_route_smoke() {
 		return 1
 	fi
 	printf 'platform hostname Traefik route served the Site and isolated control-plane paths\n'
+}
+
+verify_app_build_smoke() {
+	local deployment_url status image_row image_path image_archive_sha256 image_digest image_size actual_sha
+	local app_runtime app_desired_generation app_observed_generation app_desired_deployment build_status selected
+	deployment_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_deployment_id}"
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "$deployment_url")"
+		if [ "$status" != '200' ]; then
+			printf 'App deployment smoke read returned HTTP %s\n' "$status" >&2
+			return 1
+		fi
+		build_status="$(platform_json_field "$platform_response" deployment.build_status)"
+		case "$build_status" in
+			succeeded) break ;;
+			failed)
+				printf 'real BuildKit smoke deployment failed: %s\n' "$(platform_json_field "$platform_response" deployment.error_message)" >&2
+				return 1
+			;;
+			queued|running|deferred) ;;
+			*) printf 'unexpected App build status: %s\n' "$build_status" >&2; return 1 ;;
+		esac
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'real BuildKit App deployment did not finish: %s\n' "$build_status" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	selected="$(platform_json_field "$platform_response" deployment.selected)"
+	if [ "$(platform_json_field "$platform_response" deployment.status)" != 'ready' ] || [ "$selected" != 'True' ]; then
+		printf '%s\n' 'successful App build was not ready and selected as requested' >&2
+		return 1
+	fi
+	image_digest="$(platform_json_field "$platform_response" deployment.image_digest)"
+	image_archive_sha256="$(platform_json_field "$platform_response" deployment.image_archive_sha256)"
+	if ! [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$image_archive_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+		printf 'BuildKit returned malformed durable image identities: digest=%s archive_sha256=%s\n' "$image_digest" "$image_archive_sha256" >&2
+		return 1
+	fi
+	image_row="$("${compose[@]}" exec -T postgres sh -ec \
+		'id="$1"; case "$id" in *[!0-9a-f-]*) exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT image_path,image_archive_sha256,image_digest,image_size_bytes FROM app_deployments WHERE id = '\''$id'\''"' \
+		sh "$platform_app_deployment_id" | tr -d '\r')"
+	IFS='|' read -r image_path stored_archive_sha256 stored_digest image_size <<<"$image_row"
+	if [ -z "$image_path" ] || [ "$stored_archive_sha256" != "$image_archive_sha256" ] || [ "$stored_digest" != "$image_digest" ] || ! [[ "$image_size" =~ ^[1-9][0-9]*$ ]]; then
+		printf 'persisted App OCI metadata is incomplete or disagrees with the API: %s\n' "$image_row" >&2
+		return 1
+	fi
+	if ! [[ "$image_path" =~ ^[0-9a-f-]+/[0-9a-f-]+/[0-9a-f-]+$ ]]; then
+		printf 'persisted App image locator is not UUID-derived: %s\n' "$image_path" >&2
+		return 1
+	fi
+	actual_sha="$("${compose[@]}" exec -T worker sh -ec \
+		'path="$1"; expected="$2"; file="/var/lib/stealth/storage/app-images/$path"; test -s "$file"; actual="$(sha256sum "$file" | cut -d " " -f 1)"; test "$actual" = "$expected"; printf "%s" "$actual"' \
+		sh "$image_path" "$image_archive_sha256")"
+	if [ "$actual_sha" != "$image_archive_sha256" ]; then
+		printf '%s\n' 'persisted OCI archive checksum does not match its bytes' >&2
+		return 1
+	fi
+	status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}")"
+	if [ "$status" != '200' ]; then
+		printf 'App runtime truth smoke read returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	app_runtime="$(platform_json_field "$platform_response" app.runtime_status)"
+	app_desired_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	app_observed_generation="$(platform_json_field "$platform_response" app.observed_generation)"
+	app_desired_deployment="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	if [ "$app_runtime" != 'not_deployed' ] || [ "$app_desired_generation" != '2' ] || [ "$app_observed_generation" != '0' ] || [ "$app_desired_deployment" != "$platform_app_deployment_id" ]; then
+		printf 'App runtime truth changed after build: status=%s desired=%s observed=%s deployment=%s\n' "$app_runtime" "$app_desired_generation" "$app_observed_generation" "$app_desired_deployment" >&2
+		return 1
+	fi
+	if [ ! -f "$generated_state_dir/platform-sites.yaml" ] || ! grep -Fq -- "$platform_host" "$generated_state_dir/platform-sites.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
+		printf '%s\n' 'App hostname appeared in the current Site-only Traefik route snapshot' >&2
+		return 1
+	fi
+	status="$(traefik_http_status / "$platform_app_host")"
+	if [ "$status" != '404' ]; then
+		printf 'built App hostname returned HTTP %s, want fail-closed 404\n' "$status" >&2
+		return 1
+	fi
+	printf 'real BuildKit App build passed: digest=%s archive_sha256=%s runtime=%s route=absent\n' "$image_digest" "$image_archive_sha256" "$app_runtime"
 }
 
 clear_platform_route_smoke() {
@@ -1368,6 +1497,8 @@ wait_for_healthy telemetry-host
 wait_for_healthy telemetry-docker-logs
 wait_for_healthy telemetry-docker-proxy
 wait_for_healthy telemetry-docker
+"${compose[@]}" up -d buildkit
+wait_for_healthy buildkit
 "${compose[@]}" up -d api worker console proxy traefik
 wait_for_healthy api
 wait_for_healthy worker
@@ -1457,6 +1588,7 @@ fi
 verify_traefik_routing
 prepare_platform_route_smoke
 verify_platform_route_smoke
+verify_app_build_smoke
 clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"
