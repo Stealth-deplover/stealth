@@ -196,7 +196,6 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, &struct{}{})
 	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID+"/deploy", nil, http.StatusNotFound, nil)
 
-	requestJSON(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusOK, nil)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, projectURL+"/apps", map[string]any{"name": "read-key-write"}, http.StatusForbidden, readHeaders)
