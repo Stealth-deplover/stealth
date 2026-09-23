@@ -35,9 +35,9 @@ type planDefinition struct {
 }
 
 var planDefinitions = []planDefinition{
-	{Key: "free", Limits: domain.OrganizationPlanLimits{Projects: 3, Members: 5, Databases: 5, StorageBuckets: 10, Functions: 10, Sites: 10}},
-	{Key: "pro", Limits: domain.OrganizationPlanLimits{Projects: 25, Members: 25, Databases: 50, StorageBuckets: 100, Functions: 100, Sites: 100}},
-	{Key: "enterprise", Limits: domain.OrganizationPlanLimits{Projects: -1, Members: -1, Databases: -1, StorageBuckets: -1, Functions: -1, Sites: -1}},
+	{Key: "free", Limits: domain.OrganizationPlanLimits{Projects: 3, Members: 5, Databases: 5, StorageBuckets: 10, Functions: 10, Sites: 10, Apps: 3}},
+	{Key: "pro", Limits: domain.OrganizationPlanLimits{Projects: 25, Members: 25, Databases: 50, StorageBuckets: 100, Functions: 100, Sites: 100, Apps: 25}},
+	{Key: "enterprise", Limits: domain.OrganizationPlanLimits{Projects: -1, Members: -1, Databases: -1, StorageBuckets: -1, Functions: -1, Sites: -1, Apps: -1}},
 }
 
 func planDefinitionForKey(key string) planDefinition {
@@ -111,13 +111,15 @@ func scanOrganizationPlanUsage(ctx context.Context, tx pgx.Tx, item *domain.Orga
 			(SELECT count(*) FROM project_databases d JOIN projects p ON p.id=d.project_id WHERE p.organization_id=$1),
 			(SELECT count(*) FROM storage_buckets b JOIN projects p ON p.id=b.project_id WHERE p.organization_id=$1),
 			(SELECT count(*) FROM project_functions f JOIN projects p ON p.id=f.project_id WHERE p.organization_id=$1),
-			(SELECT count(*) FROM project_sites s JOIN projects p ON p.id=s.project_id WHERE p.organization_id=$1)`, organizationID).Scan(
+			(SELECT count(*) FROM project_sites s JOIN projects p ON p.id=s.project_id WHERE p.organization_id=$1),
+			(SELECT count(*) FROM project_apps a JOIN projects p ON p.id=a.project_id WHERE p.organization_id=$1)`, organizationID).Scan(
 		&item.Usage.Projects,
 		&item.Usage.Members,
 		&item.Usage.Databases,
 		&item.Usage.StorageBuckets,
 		&item.Usage.Functions,
 		&item.Usage.Sites,
+		&item.Usage.Apps,
 	)
 }
 
@@ -157,6 +159,11 @@ func (r *Repository) enforceOrganizationLimitTx(ctx context.Context, tx pgx.Tx, 
 	case "sites":
 		limit = plan.Limits.Sites
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM project_sites s JOIN projects p ON p.id=s.project_id WHERE p.organization_id=$1`, organizationID).Scan(&current); err != nil {
+			return err
+		}
+	case "apps":
+		limit = plan.Limits.Apps
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM project_apps a JOIN projects p ON p.id=a.project_id WHERE p.organization_id=$1`, organizationID).Scan(&current); err != nil {
 			return err
 		}
 	default:

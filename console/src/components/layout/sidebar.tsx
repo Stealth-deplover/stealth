@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   Activity,
+  AppWindow,
   Bot,
   Boxes,
   Cable,
@@ -207,6 +208,15 @@ export function Sidebar({
             "sites",
           ),
           icon: Globe2,
+        },
+        {
+          label: "Apps",
+          href: projectPath(
+            projectContext.organizationId,
+            projectContext.projectId,
+            "apps",
+          ),
+          icon: AppWindow,
         },
         {
           label: "Agents",

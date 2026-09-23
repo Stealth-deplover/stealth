@@ -38,6 +38,8 @@ var supportedProjectScopes = map[string]struct{}{
 	"functions.write": {},
 	"sites.read":      {},
 	"sites.write":     {},
+	"apps.read":       {},
+	"apps.write":      {},
 	"webhooks.read":   {},
 	"webhooks.write":  {},
 	"realtime.read":   {},

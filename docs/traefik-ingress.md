@@ -119,6 +119,11 @@ derived state, not a route registry or database.
 
 ## Platform Site routes
 
+Only eligible Sites appear in `platform-sites.yaml` and reach the private
+static Site listener on `:8082`. Apps reserve labels in the same platform
+hostname namespace, but App hostnames are metadata only: no App route or
+runtime listener is generated, and App requests are not sent to the Site API.
+
 For every enabled active Site with a persisted `platform_label` and configured
 `workload_base_domain`, the worker generates an exact `Host()` router. Router
 and service identifiers are derived from immutable UUIDs, while the Host rule

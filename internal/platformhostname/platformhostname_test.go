@@ -1,6 +1,7 @@
 package platformhostname
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -19,6 +20,34 @@ func TestCandidatesPreferNameAndUseStableUUIDSuffix(t *testing.T) {
 	}
 	if candidates[1] != Candidates("portfolio", siteID)[1] {
 		t.Fatal("collision candidate is not deterministic")
+	}
+	suffix := strings.ReplaceAll(siteID.String(), "-", "")
+	want := []string{
+		"portfolio",
+		"portfolio-" + suffix,
+		"site-" + suffix,
+		suffix,
+	}
+	if !reflect.DeepEqual(candidates, want) {
+		t.Fatalf("Site allocation sequence = %#v, want compatibility sequence %#v", candidates, want)
+	}
+}
+
+func TestAppCandidatesUseAppSpecificDeterministicFallbacks(t *testing.T) {
+	appID := uuid.MustParse("018f0d5e-7c19-7abc-8d1e-1234567890ab")
+	want := []string{
+		"backend",
+		"backend-018f0d5e7c197abc8d1e1234567890ab",
+		"app-018f0d5e7c197abc8d1e1234567890ab",
+		"018f0d5e7c197abc8d1e1234567890ab",
+	}
+	got := AppCandidates("backend", appID)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppCandidates() = %#v, want %#v", got, want)
+	}
+	reserved := AppCandidates("api", appID)
+	if len(reserved) != 3 || reserved[0] != "api-018f0d5e7c197abc8d1e1234567890ab" || reserved[1] != want[2] || reserved[2] != want[3] {
+		t.Fatalf("reserved App candidates = %#v", reserved)
 	}
 }
 

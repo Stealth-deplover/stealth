@@ -35,6 +35,19 @@ describe("realtime query invalidation", () => {
     ]);
   });
 
+  it("invalidates App queries from resource events without using event payload as state", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "app.update",
+        resource_id: "app-1",
+        payload: { runtime_status: "running", workload: { port: 9000 } },
+      }),
+    ).toEqual([
+      ["apps", "project-1"],
+      ["app", "project-1", "app-1"],
+    ]);
+  });
+
   it("maps database row and storage file notifications to scoped caches", () => {
     expect(
       realtimeInvalidationKeys("project-1", {
@@ -202,6 +215,9 @@ describe("realtime query invalidation", () => {
         "site_domain.create",
         "site_domain.delete",
         "site_domain.verify",
+        "app.create",
+        "app.update",
+        "app.delete",
       ]),
     );
   });

@@ -150,6 +150,29 @@ All three remain methods on the repository so existing callers keep one
 transactional persistence boundary; the file/module split keeps each lifecycle
 invariant near the SQL that enforces it.
 
+## Backend persistent App model
+
+Apps are long-running project workloads with durable desired configuration.
+Their versioned `WorkloadSpec` is normalized before persistence and identified
+by the SHA-256 digest of its canonical JSON representation. Desired and
+observed generations remain separate: writes advance desired state only, and
+runtime status, errors, and observed generation belong to trusted future
+workers. A newly created App is `not_deployed`.
+
+Apps and Sites reserve labels in one database-enforced platform hostname
+namespace. An App hostname is reserved metadata; Apps do not enter the static
+Site route snapshot and are not executed yet. WorkloadSpec contains runtime
+intent only: build and image identity are outside the contract. A future
+immutable AppDeployment will own source identity, build definition, OCI digest,
+and a WorkloadSpec snapshot/hash. Future workers may advance
+`observed_generation` only after the actual workload reflects the desired
+generation; PostgreSQL accepting a write is not observation. The intended
+future pipeline is BuildKit → OCI → Moby → gVisor. Runtime implementations must
+translate the Stealth-owned contract into constrained settings; WorkloadSpec
+grants no host access, host mounts, host networking, host PID/IPC, Linux
+capabilities, privileged mode, or Docker API access. Secret values have a
+separate future encrypted lifecycle and never belong in WorkloadSpec.
+
 ## Backend authentication email delivery
 
 The mailer transport keeps a generic `Message`/`Sender` seam for explicit

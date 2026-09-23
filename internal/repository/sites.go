@@ -284,8 +284,21 @@ func (r *Repository) CreateSite(ctx context.Context, id, projectID uuid.UUID, ac
 	var item domain.Site
 	allocated := false
 	for _, platformLabel := range platformhostname.Candidates(input.Name, id) {
+		claim, claimErr := tx.Exec(ctx, `
+			INSERT INTO platform_hostname_claims (label,resource_type,resource_id,project_id)
+			VALUES ($1,'site',$2,$3)
+			ON CONFLICT (label) DO NOTHING`, platformLabel, id, projectID)
+		if claimErr != nil {
+			return domain.Site{}, mapError(claimErr)
+		}
+		if claim.RowsAffected() == 0 {
+			continue
+		}
 		item, err = scanSite(tx.QueryRow(ctx, `INSERT INTO project_sites (id,project_id,name,platform_label,framework,enabled,status,artifact_quota_bytes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (platform_label) DO NOTHING RETURNING `+siteMutationProjection, id, projectID, input.Name, platformLabel, input.Framework, input.Enabled, input.Status, input.ArtifactQuotaBytes))
 		if errors.Is(err, pgx.ErrNoRows) {
+			if _, claimErr := tx.Exec(ctx, `DELETE FROM platform_hostname_claims WHERE label=$1 AND resource_type='site' AND resource_id=$2`, platformLabel, id); claimErr != nil {
+				return domain.Site{}, claimErr
+			}
 			continue
 		}
 		if err != nil {
@@ -442,6 +455,9 @@ func (r *Repository) DeleteSite(ctx context.Context, projectID, siteID uuid.UUID
 				return nil, err
 			}
 		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM platform_hostname_claims WHERE resource_type='site' AND resource_id=$1 AND project_id=$2`, siteID, projectID); err != nil {
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_sites WHERE project_id=$1 AND id=$2`, projectID, siteID); err != nil {
 		return nil, err

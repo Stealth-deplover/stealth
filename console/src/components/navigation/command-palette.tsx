@@ -71,6 +71,12 @@ export function CommandPalette() {
               kind: "navigation",
             },
             {
+              label: "Apps",
+              hint: "Configure persistent workloads",
+              href: projectPath(organizationId, projectId, "apps"),
+              kind: "navigation",
+            },
+            {
               label: "Databases",
               hint: "Browse schema and rows",
               href: projectPath(organizationId, projectId, "databases"),

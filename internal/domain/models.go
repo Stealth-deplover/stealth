@@ -3,6 +3,8 @@ package domain
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/workloadspec"
 )
 
 type Account struct {
@@ -57,6 +59,7 @@ type OrganizationPlanLimits struct {
 	StorageBuckets int64 `json:"storage_buckets"`
 	Functions      int64 `json:"functions"`
 	Sites          int64 `json:"sites"`
+	Apps           int64 `json:"apps"`
 }
 
 type OrganizationPlanUsage struct {
@@ -66,6 +69,7 @@ type OrganizationPlanUsage struct {
 	StorageBuckets int64 `json:"storage_buckets"`
 	Functions      int64 `json:"functions"`
 	Sites          int64 `json:"sites"`
+	Apps           int64 `json:"apps"`
 }
 
 type Membership struct {
@@ -444,7 +448,7 @@ type Project struct {
 
 // ProjectServiceLayout stores the durable editor position for one resource in
 // a project's Services canvas. Resource IDs are validated against their
-// project-owned table by the repository because the four resource types are
+// project-owned table by the repository because the resource types are
 // intentionally represented by one polymorphic projection table.
 type ProjectServiceLayout struct {
 	ProjectID    string    `json:"project_id"`
@@ -990,6 +994,25 @@ type Site struct {
 	ActiveDeploymentID    *string   `json:"active_deployment_id,omitempty"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// App is durable desired configuration for a persistent project workload.
+// Runtime status and observed generation remain owned by a trusted runtime
+// reconciler; creating or updating metadata never claims that work ran.
+type App struct {
+	ID                 string            `json:"id"`
+	ProjectID          string            `json:"project_id"`
+	Name               string            `json:"name"`
+	Enabled            bool              `json:"enabled"`
+	PlatformHostname   *string           `json:"platform_hostname"`
+	Workload           workloadspec.Spec `json:"workload"`
+	WorkloadSpecSHA256 string            `json:"workload_spec_sha256"`
+	DesiredGeneration  int64             `json:"desired_generation"`
+	ObservedGeneration int64             `json:"observed_generation"`
+	RuntimeStatus      string            `json:"runtime_status"`
+	RuntimeError       *string           `json:"runtime_error"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
 }
 
 // PlatformRoute is the PostgreSQL-derived desired state consumed by the

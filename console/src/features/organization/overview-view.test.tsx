@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
           storage_buckets: 2,
           functions: 5,
           sites: 2,
+          apps: 3,
         },
         usage: {
           projects: 1,
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
           storage_buckets: 0,
           functions: 1,
           sites: 0,
+          apps: 0,
         },
       },
     },
@@ -94,6 +96,7 @@ describe("organization overview states", () => {
           storage_buckets: 2,
           functions: 5,
           sites: 2,
+          apps: 3,
         },
         usage: {
           projects: 1,
@@ -102,6 +105,7 @@ describe("organization overview states", () => {
           storage_buckets: 0,
           functions: 1,
           sites: 0,
+          apps: 0,
         },
       },
     };

@@ -57,7 +57,7 @@ func (s *Server) replaceProjectServiceLayout(w http.ResponseWriter, r *http.Requ
 	for _, item := range req.Layout {
 		resourceType := strings.ToLower(strings.TrimSpace(item.ResourceType))
 		if !validProjectServiceLayoutType(resourceType) {
-			writeError(w, http.StatusUnprocessableEntity, "validation_error", "resource_type must be function, site, database, or storage")
+			writeError(w, http.StatusUnprocessableEntity, "validation_error", "resource_type must be function, site, app, database, or storage")
 			return
 		}
 		resourceID, err := repository.ParseUUID(strings.TrimSpace(item.ResourceID))
@@ -90,7 +90,7 @@ func (s *Server) replaceProjectServiceLayout(w http.ResponseWriter, r *http.Requ
 
 func validProjectServiceLayoutType(resourceType string) bool {
 	switch resourceType {
-	case "function", "site", "database", "storage":
+	case "function", "site", "app", "database", "storage":
 		return true
 	default:
 		return false

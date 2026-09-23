@@ -87,6 +87,9 @@ const projectRealtimeEventTypes = [
   "site.create",
   "site.update",
   "site.delete",
+  "app.create",
+  "app.update",
+  "app.delete",
   "storage_bucket.create",
   "storage_bucket.update",
   "storage_bucket.delete",
@@ -351,6 +354,9 @@ export function realtimeCacheChanges(
 
   if (type.startsWith("site.")) {
     return [{ kind: "site", projectId, siteId: resourceId(event) }];
+  }
+  if (type.startsWith("app.")) {
+    return [{ kind: "app", projectId, appId: resourceId(event) }];
   }
   return [];
 }

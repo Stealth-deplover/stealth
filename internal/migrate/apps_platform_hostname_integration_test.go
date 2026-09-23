@@ -1,0 +1,203 @@
+package migrate
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/platformhostname"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("set TEST_DATABASE_URL to run PostgreSQL integration tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+
+	schema := fmt.Sprintf("apps_platform_namespace_%d", time.Now().UnixNano())
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE") })
+	if _, err := conn.Exec(ctx, "SET search_path TO "+schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyMigrationsBefore(ctx, conn, files, "000057_apps_workload_spec.up.sql"); err != nil {
+		t.Fatal(err)
+	}
+
+	organizationID := uuid.Must(uuid.NewV7())
+	projectID := uuid.Must(uuid.NewV7())
+	firstSiteID := uuid.Must(uuid.NewV7())
+	secondSiteID := uuid.Must(uuid.NewV7())
+	legacyKeyID := uuid.Must(uuid.NewV7())
+	newKeyID := uuid.Must(uuid.NewV7())
+	if _, err := conn.Exec(ctx, `INSERT INTO organizations (id,name,slug) VALUES ($1,'Apps migration test','apps-migration-test')`, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO projects (id,organization_id,name) VALUES ($1,$2,'apps-migration-project')`, projectID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE instance_domain_settings SET workload_base_domain='apps.example.com' WHERE id=TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range []struct {
+		id    uuid.UUID
+		name  string
+		label string
+	}{
+		{id: firstSiteID, name: "portfolio", label: "portfolio"},
+		{id: secondSiteID, name: "status-page", label: "status-page-018f0d5e7c197abc8d1e123456789001"},
+	} {
+		if _, err := conn.Exec(ctx, `INSERT INTO project_sites (id,project_id,name,platform_label) VALUES ($1,$2,$3,$4)`, site.id, projectID, site.name, site.label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO project_service_layouts (project_id,resource_type,resource_id,x,y) VALUES ($1,'site',$2,64,128)`, projectID, firstSiteID); err != nil {
+		t.Fatal(err)
+	}
+	legacyScopes := []string{"sites.read", "users.read"}
+	legacyHash := bytesOf(42, 32)
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO project_api_keys (id,project_id,name,prefix,secret_hash,scopes)
+		VALUES ($1,$2,'Legacy key','stl_key_12345678',$3,$4)`, legacyKeyID, projectID, legacyHash, legacyScopes); err != nil {
+		t.Fatal(err)
+	}
+
+	labelsBefore := map[uuid.UUID]string{}
+	for id := range map[uuid.UUID]struct{}{firstSiteID: {}, secondSiteID: {}} {
+		var label string
+		if err := conn.QueryRow(ctx, `SELECT platform_label FROM project_sites WHERE id=$1`, id).Scan(&label); err != nil {
+			t.Fatal(err)
+		}
+		labelsBefore[id] = label
+	}
+	upSQL, err := files.ReadFile("migrations/000057_apps_workload_spec.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, string(upSQL)); err != nil {
+		t.Fatal(err)
+	}
+
+	var backfilled int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM platform_hostname_claims WHERE resource_type='site' AND project_id=$1`, projectID).Scan(&backfilled); err != nil {
+		t.Fatal(err)
+	}
+	if backfilled != 2 {
+		t.Fatalf("backfilled Site claims = %d, want 2", backfilled)
+	}
+	for id, want := range labelsBefore {
+		var label string
+		if err := conn.QueryRow(ctx, `SELECT platform_label FROM project_sites WHERE id=$1`, id).Scan(&label); err != nil {
+			t.Fatal(err)
+		}
+		if label != want {
+			t.Fatalf("Site %s label changed from %q to %q", id, want, label)
+		}
+		beforeHostname, err := platformhostname.Hostname(want, "apps.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		afterHostname, err := platformhostname.Hostname(label, "apps.example.com")
+		if err != nil || afterHostname != beforeHostname {
+			t.Fatalf("Site %s hostname changed from %q to %q (error %v)", id, beforeHostname, afterHostname, err)
+		}
+		var claimLabel string
+		if err := conn.QueryRow(ctx, `SELECT label FROM platform_hostname_claims WHERE resource_type='site' AND resource_id=$1`, id).Scan(&claimLabel); err != nil {
+			t.Fatal(err)
+		}
+		if claimLabel != want {
+			t.Fatalf("backfilled Site claim = %q, want %q", claimLabel, want)
+		}
+	}
+	var layoutCount int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM project_service_layouts WHERE project_id=$1 AND resource_type='site' AND resource_id=$2 AND x=64 AND y=128`, projectID, firstSiteID).Scan(&layoutCount); err != nil {
+		t.Fatal(err)
+	}
+	if layoutCount != 1 {
+		t.Fatalf("preexisting Site layout rows = %d, want 1", layoutCount)
+	}
+	var gotLegacyScopes []string
+	if err := conn.QueryRow(ctx, `SELECT scopes FROM project_api_keys WHERE id=$1`, legacyKeyID).Scan(&gotLegacyScopes); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(gotLegacyScopes) != fmt.Sprint(legacyScopes) {
+		t.Fatalf("existing key scopes changed from %v to %v", legacyScopes, gotLegacyScopes)
+	}
+	var gotLegacyHash []byte
+	if err := conn.QueryRow(ctx, `SELECT secret_hash FROM project_api_keys WHERE id=$1`, legacyKeyID).Scan(&gotLegacyHash); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotLegacyHash, legacyHash) {
+		t.Fatal("migration changed an existing API-key secret hash")
+	}
+
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO project_api_keys (id,project_id,name,prefix,secret_hash,scopes)
+		VALUES ($1,$2,'Apps key','stl_key_abcdefgh',$3,$4)`, newKeyID, projectID, bytesOf(1, 32), []string{"apps.read", "apps.write"}); err != nil {
+		t.Fatalf("new Apps API-key scopes were rejected: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO platform_hostname_claims (label,resource_type,resource_id,project_id)
+		VALUES ($1,'app',$2,$3)`, labelsBefore[firstSiteID], uuid.Must(uuid.NewV7()), projectID); err == nil {
+		t.Fatal("shared label primary key accepted an App/Site hostname collision")
+	}
+
+	if _, err := conn.Exec(ctx, `DELETE FROM project_api_keys WHERE id=$1`, newKeyID); err != nil {
+		t.Fatal(err)
+	}
+	downSQL, err := files.ReadFile("migrations/000057_apps_workload_spec.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, string(downSQL)); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range labelsBefore {
+		var label string
+		if err := conn.QueryRow(ctx, `SELECT platform_label FROM project_sites WHERE id=$1`, id).Scan(&label); err != nil {
+			t.Fatal(err)
+		}
+		if label != want {
+			t.Fatalf("down migration changed Site label from %q to %q", want, label)
+		}
+	}
+	if err := conn.QueryRow(ctx, `SELECT scopes FROM project_api_keys WHERE id=$1`, legacyKeyID).Scan(&gotLegacyScopes); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(gotLegacyScopes) != fmt.Sprint(legacyScopes) {
+		t.Fatalf("down migration changed existing API-key scopes from %v to %v", legacyScopes, gotLegacyScopes)
+	}
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM project_service_layouts WHERE project_id=$1 AND resource_type='site' AND resource_id=$2`, projectID, firstSiteID).Scan(&layoutCount); err != nil {
+		t.Fatal(err)
+	}
+	if layoutCount != 1 {
+		t.Fatalf("down migration changed Site layout rows: %d", layoutCount)
+	}
+}
+
+func bytesOf(value byte, count int) []byte {
+	result := make([]byte, count)
+	for index := range result {
+		result[index] = value
+	}
+	return result
+}
