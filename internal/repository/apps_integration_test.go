@@ -266,7 +266,7 @@ func TestAppsPersistenceGenerationAndPlanLimitIntegration(t *testing.T) {
 
 	readKeyID := uuid.Must(uuid.NewV7())
 	writeKeyID := uuid.Must(uuid.NewV7())
-	if _, err := f.pool.Exec(f.ctx, `INSERT INTO project_api_keys (id,project_id,name,prefix,secret_hash,scopes) VALUES ($1,$2,'Apps read','stl_key_readapps',$3,$4),($5,$2,'Apps write','stl_key_writeapp',$3,$6)`, readKeyID, f.projectOneID, bytesOfZeroes(32), []string{"apps.read"}, writeKeyID, []string{"apps.write"}); err != nil {
+	if _, err := f.pool.Exec(f.ctx, `INSERT INTO project_api_keys (id,project_id,name,prefix,secret_hash,scopes) VALUES ($1,$2,'Apps read','stl_key_readapps',$3,$4),($5,$2,'Apps write','stl_key_writeapp',$6,$7)`, readKeyID, f.projectOneID, bytesOfZeroes(32), []string{"apps.read"}, writeKeyID, bytesOfOnes(32), []string{"apps.write"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := f.repo.ListApps(f.ctx, f.projectOneID, AppActor{Kind: AppAPIKeyActor, APIKeyID: readKeyID, APIKeyScopes: []string{"apps.read"}}, 10, nil); err != nil {
@@ -377,7 +377,7 @@ func TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration(
 	if renamed.PlatformHostname == nil || *renamed.PlatformHostname != *app.PlatformHostname {
 		t.Fatalf("App rename changed hostname from %q to %v", *app.PlatformHostname, renamed.PlatformHostname)
 	}
-	if err := f.pool.QueryRow(f.ctx, `SELECT platform_label FROM platform_hostname_claims WHERE resource_type='app' AND resource_id=$1`, appID).Scan(&newName); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT label FROM platform_hostname_claims WHERE resource_type='app' AND resource_id=$1`, appID).Scan(&newName); err != nil {
 		t.Fatal(err)
 	}
 	if newName != appLabel {
@@ -549,6 +549,14 @@ func TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration(
 }
 
 func bytesOfZeroes(length int) []byte { return make([]byte, length) }
+
+func bytesOfOnes(length int) []byte {
+	result := make([]byte, length)
+	for index := range result {
+		result[index] = 1
+	}
+	return result
+}
 
 func jsonMarshal(value any) ([]byte, error) { return json.Marshal(value) }
 
