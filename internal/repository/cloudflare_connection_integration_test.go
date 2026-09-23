@@ -212,8 +212,25 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 		t.Fatal(err)
 	}
 	status, err = repo.CloudflareRoutingStatus(ctx)
-	if err != nil || status.Status != "error" {
+	if err != nil || status.Status != "error" || status.ConsoleOriginStatus != "ready" {
 		t.Fatalf("provider failure status = %#v, %v", status, err)
+	}
+	if err := repo.RecordCloudflareConsoleOriginFailure(ctx, cloudflare.ConsoleOriginTraefik, "Console tunnel read-back failed"); err != nil {
+		t.Fatal(err)
+	}
+	status, err = repo.CloudflareRoutingStatus(ctx)
+	if err != nil || status.Status != "error" || status.ConsoleOriginStatus != "error" || status.ConsoleOriginLastError != "Console tunnel read-back failed" || status.ConsolePublicVerifiedAt != nil {
+		t.Fatalf("independent Console-origin failure status = %#v, %v", status, err)
+	}
+	if completed, err := repo.CompleteCloudflareConsoleOrigin(ctx, cloudflare.ConsoleOriginProxy, cloudflare.ConsoleOriginProxy); err != nil || completed {
+		t.Fatalf("stale Console-origin observation = %v, %v; want conditional no-op", completed, err)
+	}
+	if completed, err := repo.CompleteCloudflareConsoleOrigin(ctx, cloudflare.ConsoleOriginTraefik, cloudflare.ConsoleOriginTraefik); err != nil || !completed {
+		t.Fatalf("restore Console-origin readiness = %v, %v", completed, err)
+	}
+	status, err = repo.CloudflareRoutingStatus(ctx)
+	if err != nil || status.Status != "error" || status.ConsoleOriginStatus != "ready" {
+		t.Fatalf("Console recovery changed workload error state = %#v, %v", status, err)
 	}
 	var observedWildcard string
 	if err := pool.QueryRow(ctx, `SELECT wildcard_record_id FROM cloudflare_connections WHERE id=TRUE`).Scan(&observedWildcard); err != nil || observedWildcard != "wildcard-2" {

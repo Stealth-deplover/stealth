@@ -42,12 +42,24 @@ Cloudflare -> Traefik -> API/Console/workloads ------------+
 ```
 
 `stealth ingress cutover` preflights the local Traefik core route and existing
-public HTTPS behavior, persists `traefik` as the desired origin, asks the
-existing worker reconciler to update and verify the same tunnel, then verifies
-the public HTTPS Console/API routes, browser security headers, and HSTS. If
-public verification fails, it persists `proxy`, reconciles the same tunnel
-back to Nginx, and verifies public recovery. `stealth ingress rollback`
-provides host-side recovery without depending on the public Console or API.
+public HTTPS behavior, persists `traefik` as the desired origin, uses the
+origin-only Cloudflare reconciler under the existing PostgreSQL advisory lock,
+then verifies the provider read-back and public HTTPS Console/API routes,
+browser security headers, and HSTS. The Console root may safely redirect (for
+example, `307 /organizations`); verification follows at most five redirects
+only when they remain on the configured HTTPS hostname and port. Every hop
+must preserve the required security headers and HSTS. If public verification
+fails, it persists `proxy`, uses the same origin-only operation to restore
+Nginx, and verifies public recovery. `stealth ingress rollback` provides
+host-side recovery without depending on the public Console or API.
+
+Emergency Console-origin reconciliation changes only the Console Tunnel rule
+and preserves the current workload wildcard and final 404 catch-all. It does
+not call workload DNS, certificate-pack, or retiring-record APIs, so workload
+DNS conflicts or TLS inspection failures cannot block restoration to Nginx.
+Before manual rollback, the host checks only local rollback dependencies:
+healthy proxy/Nginx, running Cloudflared, and healthy bundled PostgreSQL when
+PostgreSQL is bundled. Public API, Console, and Traefik health are not required.
 An upgrade never changes the stored desired origin; migration defaults
 existing installations to `proxy`.
 
@@ -157,7 +169,8 @@ security headers on representative Console and API responses and an Admin SSE
 connection. It also runs a temporary echo backend through Traefik to verify the
 forwarded-header trust boundary at runtime: an untrusted ingress peer cannot
 preserve spoofed forwarding metadata, while the configured Cloudflared `/32`
-can.
+can. For `/`, it observes the first `307 /organizations` response and the
+successful final document response on both origins.
 
 ## Browser security headers and HSTS
 

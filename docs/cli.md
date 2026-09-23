@@ -153,7 +153,10 @@ reachability, and available disk space. `logs` delegates to
 `stealth ingress status` reports the saved Cloudflare Console origin state.
 `stealth ingress verify` is read-only and checks the provider's current Tunnel
 configuration, local Traefik routes, public Console HTTPS behavior, browser
-security headers, and HSTS. Add `--site-hostname portfolio.apps.example.com`
+security headers, and HSTS. Console routes may use up to five safe HTTPS
+redirects on the configured hostname and port; `/` normally redirects to
+`/organizations`. Every redirect response must retain the required security
+headers and HSTS. Add `--site-hostname portfolio.apps.example.com`
 to verify a platform Site below the configured workload domain;
 `--site-sha256` can require a deterministic body digest.
 
@@ -163,8 +166,11 @@ production service health, local route behavior, and public HTTPS before the
 provider change. If post-cutover verification fails, it requests Nginx again,
 reconciles the existing tunnel, and verifies public recovery. If automatic
 rollback cannot be verified, run `stealth ingress rollback` from the host.
-Manual rollback uses the one-shot maintenance service and does not depend on
-the public Console or API. Neither command removes Nginx or changes Cloudflare
+Manual rollback uses the origin-only one-shot maintenance operation, preserves
+the workload wildcard and catch-all, and does not call workload DNS or
+certificate APIs. It preflights healthy local Nginx, running Cloudflared, and
+healthy bundled PostgreSQL when applicable; it does not require public API,
+Console, or Traefik health. Neither command removes Nginx or changes Cloudflare
 HSTS settings. Existing installations default to Nginx and updates do not
 change their desired origin.
 

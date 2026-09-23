@@ -1,6 +1,6 @@
 // Package ingresscontrol implements the bounded host-initiated public Console
-// origin transition. Provider writes still go through the Cloudflare worker
-// reconciler so there is one authoritative Tunnel desired-state generator.
+// origin transition. Provider writes use the same Cloudflare reconciler core as
+// the worker, keeping Tunnel desired-state handling authoritative.
 package ingresscontrol
 
 import (
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -32,8 +33,9 @@ type Store interface {
 }
 
 type Reconciler interface {
-	Reconcile(context.Context) (cloudflare.ReconcileResult, error)
 	VerifyProvider(context.Context) (string, error)
+	ReconcileConsoleOrigin(context.Context) (string, error)
+	VerifyConsoleOrigin(context.Context) (string, error)
 }
 
 type Probe interface {
@@ -48,9 +50,18 @@ type PublicEvidence struct {
 }
 
 type ResponseEvidence struct {
+	StatusCode      int                `json:"status_code"`
+	RedirectChain   []RedirectEvidence `json:"redirect_chain,omitempty"`
+	FinalStatusCode int                `json:"final_status_code"`
+	FinalPath       string             `json:"final_path"`
+	Headers         map[string]string  `json:"headers"`
+	BodySHA256      string             `json:"body_sha256,omitempty"`
+}
+
+type RedirectEvidence struct {
 	StatusCode int               `json:"status_code"`
+	Path       string            `json:"path"`
 	Headers    map[string]string `json:"headers"`
-	BodySHA256 string            `json:"body_sha256,omitempty"`
 }
 
 type Controller struct {
@@ -284,7 +295,7 @@ func (c *Controller) reconcileCurrentOrigin(ctx context.Context) error {
 func (c *Controller) reconcileRequestedOrigin(ctx context.Context, origin string) error {
 	var reconcileErr error
 	for attempt := 0; attempt < 30; attempt++ {
-		_, reconcileErr = c.reconciler.Reconcile(ctx)
+		_, reconcileErr = c.reconciler.ReconcileConsoleOrigin(ctx)
 		status, connection, statusErr := c.current(ctx)
 		if statusErr != nil {
 			return statusErr
@@ -293,27 +304,25 @@ func (c *Controller) reconcileRequestedOrigin(ctx context.Context, origin string
 			if connection.ConsoleHostname == "" {
 				return errors.New("Cloudflare Console hostname is missing")
 			}
-			// A workload certificate inspection error is separate from Console
-			// origin convergence. Still read the Tunnel after every pass so a
-			// lock-skipped worker cannot make persisted, stale observation look
-			// like provider verification for this host operation.
-			providerOrigin, verifyErr := c.reconciler.VerifyProvider(ctx)
+			// Read back through the origin-only path. Emergency rollback must not
+			// depend on unrelated workload DNS, certificates or cleanup.
+			providerOrigin, verifyErr := c.reconciler.VerifyConsoleOrigin(ctx)
 			if verifyErr == nil && providerOrigin == origin {
 				return nil
 			}
 			if errors.Is(verifyErr, cloudflare.ErrLockNotAcquired) {
 				reconcileErr = verifyErr
 			} else if verifyErr != nil {
-				return fmt.Errorf("Cloudflare Tunnel origin verification failed: %w", verifyErr)
+				return fmt.Errorf("HIGH SEVERITY: Cloudflare Console-origin provider verification failed: %w", verifyErr)
 			} else {
-				return errors.New("Cloudflare Tunnel did not verify the requested Console origin")
+				return errors.New("HIGH SEVERITY: Cloudflare Tunnel did not verify the requested Console origin")
 			}
 		}
 		if !errors.Is(reconcileErr, cloudflare.ErrLockNotAcquired) {
 			if reconcileErr != nil {
-				return reconcileErr
+				return fmt.Errorf("HIGH SEVERITY: Cloudflare Console-origin reconciliation failed: %w", reconcileErr)
 			}
-			return errors.New("Cloudflare Tunnel did not verify the requested Console origin")
+			return errors.New("HIGH SEVERITY: Cloudflare Console-origin reconciliation did not converge")
 		}
 		if attempt == 29 {
 			break
@@ -415,7 +424,10 @@ func parsePublicURL(raw string) (*url.URL, error) {
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
 		return nil, errors.New("PUBLIC_APP_URL must be the HTTPS Console origin without credentials, query, fragment, or path")
 	}
-	if _, err := domainname.NormalizeHostname(parsed.Hostname()); err != nil {
+	if !validHTTPSPort(parsed) {
+		return nil, errors.New("PUBLIC_APP_URL must use a canonical HTTPS port")
+	}
+	if _, err := domainname.NormalizeHostname(parsed.Hostname()); err != nil || net.ParseIP(parsed.Hostname()) != nil {
 		return nil, errors.New("PUBLIC_APP_URL must contain a valid public Console hostname")
 	}
 	return parsed, nil

@@ -263,7 +263,13 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Validate bootstrap and release scripts
-        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh scripts/compose-production-smoke.sh scripts/traefik-security-test.sh
+        run: |
+          for script in scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh scripts/compose-production-smoke.sh scripts/public-hosting-acceptance.sh scripts/traefik-security-test.sh; do
+            bash -n "$script"
+          done
+
+      - name: Test public acceptance redirect policy
+        run: python3 -m unittest discover -s scripts -p 'test_public_hosting_redirect.py'
 
       - name: Verify release smoke revision pinning
         run: ./scripts/release_workflow_test.sh

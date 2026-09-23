@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 console_url="${STEALTH_CONSOLE_URL:-}"
 site_url="${STEALTH_SITE_URL:-}"
 workload_domain="${STEALTH_WORKLOAD_BASE_DOMAIN:-}"
@@ -91,8 +93,19 @@ with open(address_file, "w", encoding="ascii") as target:
     for label, host, addresses in (("console", console_host, console_addresses), ("site", site_host, site_addresses)):
         for address in addresses:
             target.write(f"{label}\t{host}\t{address}\n")
+with open(address_file + ".hosts", "w", encoding="ascii") as target:
+    target.write(console_host + "\n")
+    target.write(site_host + "\n")
 print("Public DNS resolved to globally routable addresses for Console and Site hosts.")
 PY
+
+mapfile -t canonical_hosts < "$tmp_dir/public-addresses.tsv.hosts"
+if [ "${#canonical_hosts[@]}" -ne 2 ]; then
+	printf '%s\n' 'Could not normalize the public Console and Site hostnames' >&2
+	exit 1
+fi
+console_origin="https://${canonical_hosts[0]}"
+site_origin="https://${canonical_hosts[1]}"
 
 response_header() {
 	python3 - "$1" "$2" <<'PY'
@@ -114,14 +127,15 @@ if current:
     blocks.append(current)
 if blocks:
     values = blocks[-1].get(wanted.lower(), [])
-    print(", ".join(values))
+    print(values[0] if len(values) == 1 else "__MULTIPLE__" if len(values) > 1 else "")
 PY
 }
 
 probe() {
 	local label="$1" url="$2" kind="$3" file_base="$4" address_kind="$5" headers body
-	local result rc status remote_ip location address_label address_host address_ip
+	local result rc status remote_ip location address_label address_host address_ip current_url next_url redirect_path initial_status redirect_count chain visited_urls
 	local -a resolve_args=()
+	address_host=""
 	while IFS=$'\t' read -r address_label address_host address_ip; do
 		if [ "$address_label" = "$address_kind" ]; then
 			if [[ "$address_ip" == *:* ]]; then
@@ -134,31 +148,44 @@ probe() {
 		printf '%s: no previously validated public DNS address is available\n' "$label" >&2
 		return 1
 	fi
-	headers="$tmp_dir/$file_base.headers"
-	body="$tmp_dir/$file_base.body"
-	set +e
-	result="$(curl --noproxy '*' --proto '=https' --silent --show-error \
-		--connect-timeout 5 --max-time 15 --max-filesize 65536 \
-		"${resolve_args[@]}" \
-		--dump-header "$headers" --output "$body" \
-		--write-out $'%{http_code}\t%{remote_ip}' "$url" 2>/dev/null)"
-	rc=$?
-	set -e
-	if [ "$rc" -ne 0 ]; then
-		case "$rc" in
-			6) printf '%s: DNS failure\n' "$label" >&2 ;;
-			35|51|58|60|77) printf '%s: TLS certificate/handshake failure\n' "$label" >&2 ;;
-			28) printf '%s: public HTTPS request timed out\n' "$label" >&2 ;;
-			*) printf '%s: public HTTPS transport failure (curl exit %s)\n' "$label" "$rc" >&2 ;;
-		esac
-		return 1
+	current_url="$url"
+	initial_status=""
+	redirect_count=0
+	chain=""
+	if [ "$kind" != site ]; then
+		if ! current_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$current_url" "$address_host" 443 2>/dev/null)"; then
+			printf '%s: configured URL could not be normalized for safe redirect handling\n' "$label" >&2
+			return 1
+		fi
 	fi
-	IFS=$'\t' read -r status remote_ip <<<"$result"
-	if [ -z "$status" ] || [ -z "$remote_ip" ]; then
-		printf '%s: public HTTPS response did not include an HTTP status and remote address\n' "$label" >&2
-		return 1
-	fi
-	if ! python3 - "$remote_ip" <<'PY'
+	visited_urls=$'\n'"$current_url"$'\n'
+	while true; do
+		headers="$tmp_dir/$file_base.$redirect_count.headers"
+		body="$tmp_dir/$file_base.$redirect_count.body"
+		set +e
+		result="$(curl --noproxy '*' --proto '=https' --silent --show-error \
+			--connect-timeout 5 --max-time 15 --max-filesize 65536 \
+			"${resolve_args[@]}" \
+			--dump-header "$headers" --output "$body" \
+			--write-out $'%{http_code}\t%{remote_ip}' "$current_url" 2>/dev/null)"
+		rc=$?
+		set -e
+		if [ "$rc" -ne 0 ]; then
+			case "$rc" in
+				6) printf '%s: DNS failure\n' "$label" >&2 ;;
+				35|51|58|60|77) printf '%s: TLS certificate/handshake failure\n' "$label" >&2 ;;
+				28) printf '%s: public HTTPS request timed out\n' "$label" >&2 ;;
+				*) printf '%s: public HTTPS transport failure (curl exit %s)\n' "$label" "$rc" >&2 ;;
+			esac
+			return 1
+		fi
+		IFS=$'\t' read -r status remote_ip <<<"$result"
+		if [ -z "$status" ] || [ -z "$remote_ip" ]; then
+			printf '%s: public HTTPS response did not include an HTTP status and remote address\n' "$label" >&2
+			return 1
+		fi
+		if [ -z "$initial_status" ]; then initial_status="$status"; fi
+		if ! python3 - "$remote_ip" <<'PY'
 import ipaddress
 import sys
 
@@ -169,21 +196,52 @@ except ValueError:
     raise SystemExit(1)
 PY
 	then
-		printf '%s: connected address was not globally routable\n' "$label" >&2
-		return 1
-	fi
-	case "$status" in
-		3*)
-			location="$(response_header "$headers" Location)"
-			if [[ "${location,,}" == http://* ]]; then
-				printf '%s: redirect downgrade to HTTP was rejected\n' "$label" >&2
-			else
-				printf '%s: unexpected redirect (not followed), HTTP %s\n' "$label" "$status" >&2
-			fi
+			printf '%s: connected address was not globally routable\n' "$label" >&2
 			return 1
+		fi
+		case "$status" in
+			3*)
+				case "$status" in
+					301|302|303|307|308) ;;
+					*) printf '%s: unsupported redirect status %s\n' "$label" "$status" >&2; return 1 ;;
+				esac
+				if [ "$kind" = site ]; then
+					printf '%s: platform Site unexpectedly redirected\n' "$label" >&2
+					return 1
+				fi
+				if [ "$kind" = root ] || [ "$kind" = api ]; then
+					check_browser_headers "$headers" "$label redirect hop $redirect_count"
+					check_hsts "$headers" "$label redirect hop $redirect_count"
+				fi
+				if [ "$redirect_count" -ge 5 ]; then
+					printf '%s: redirect chain exceeded the 5-hop limit\n' "$label" >&2
+					return 1
+				fi
+				location="$(response_header "$headers" Location)"
+				if [ -z "$address_host" ] || [ "$location" = "__MULTIPLE__" ]; then
+					printf '%s: redirect has an invalid or repeated Location header\n' "$label" >&2
+					return 1
+				fi
+				if ! next_url="$(python3 "$SCRIPT_DIR/public_hosting_redirect.py" "$current_url" "$location" "$address_host" 443 2>/dev/null)"; then
+					printf '%s: unsafe redirect rejected (HTTPS same-host redirects only)\n' "$label" >&2
+					return 1
+				fi
+				if printf '%s' "$visited_urls" | grep -Fqx -- "$next_url"; then
+					printf '%s: redirect loop detected\n' "$label" >&2
+					return 1
+				fi
+				visited_urls+="$next_url"$'\n'
+				redirect_path="${next_url#https://$address_host}"
+				redirect_path="${redirect_path%%\?*}"
+				if [ -z "$chain" ]; then chain="${status} $redirect_path"; else chain+=" -> ${status} $redirect_path"; fi
+				current_url="$next_url"
+				redirect_count=$((redirect_count + 1))
+				continue
 			;;
-		5*) printf '%s: public origin returned HTTP %s\n' "$label" "$status" >&2; return 1 ;;
-	esac
+			5*) printf '%s: public origin returned HTTP %s\n' "$label" "$status" >&2; return 1 ;;
+		esac
+		break
+	done
 	case "$kind" in
 		root|site)
 			if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
@@ -204,7 +262,11 @@ PY
 			fi
 			;;
 	esac
-	printf '%s: HTTP %s over verified public HTTPS\n' "$label" "$status"
+	if [ -n "$chain" ]; then
+		printf '%s: initial HTTP %s, %s -> final HTTP %s over verified public HTTPS\n' "$label" "$initial_status" "$chain" "$status"
+	else
+		printf '%s: HTTP %s over verified public HTTPS\n' "$label" "$status"
+	fi
 	if [ "$kind" = root ] || [ "$kind" = api ]; then
 		check_browser_headers "$headers" "$label"
 		check_hsts "$headers" "$label"
@@ -260,8 +322,6 @@ PY
 	fi
 }
 
-console_origin="${console_url%/}"
-site_origin="${site_url%/}"
 probe 'Console root' "$console_origin/" root console-root console
 probe 'Console API route /v1/account' "$console_origin/v1/account" api console-api console
 probe 'Console /healthz routing' "$console_origin/healthz" path console-healthz console

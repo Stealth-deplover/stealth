@@ -153,6 +153,14 @@ release evidence.
       the current browser security headers, the `/v1/account` API response,
       and a working platform Site. The commands do not change Cloudflare HSTS
       or other zone-wide settings.
+- [ ] Confirm Console root verification follows its bounded same-origin HTTPS
+      redirect (normally `307 /organizations`) and rejects downgrade,
+      cross-host, loop, and over-limit redirects.
+- [ ] Confirm manual rollback preflight requires healthy local proxy/Nginx and
+      running Cloudflared, plus healthy PostgreSQL only when bundled. It must
+      still work when the public API/Console and Traefik are unavailable; the
+      Console-only Cloudflare operation must not depend on wildcard DNS or
+      certificate-pack reconciliation.
 - [ ] Record any DNS/TLS, HSTS, security-header, API-routing, Site-readiness,
       or rollback failure as a release blocker. Do not treat local Compose
       smoke as public acceptance.

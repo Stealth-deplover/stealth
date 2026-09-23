@@ -433,8 +433,43 @@ func (r *Repository) RecordCloudflareReconcileFailure(ctx context.Context, messa
 	if r == nil || r.pool == nil {
 		return ErrNotFound
 	}
-	_, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections SET status='error',last_error=$1,
-		console_origin_status='error',console_origin_last_error=$1,updated_at=now() WHERE id=TRUE`, normalizeCloudflareError(message))
+	_, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections SET status='error',last_error=$1,updated_at=now() WHERE id=TRUE`, normalizeCloudflareError(message))
+	return err
+}
+
+// CompleteCloudflareConsoleOrigin persists only the independently observed
+// Tunnel Console origin. The desired-state predicate prevents an older
+// provider operation from overwriting a newer host request.
+func (r *Repository) CompleteCloudflareConsoleOrigin(ctx context.Context, expectedOrigin, observedOrigin string) (bool, error) {
+	if r == nil || r.pool == nil {
+		return false, ErrNotFound
+	}
+	if (expectedOrigin != "proxy" && expectedOrigin != "traefik") || observedOrigin != expectedOrigin {
+		return false, errors.New("Cloudflare Console-origin observation is invalid")
+	}
+	tag, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections
+		SET console_origin_observed=$2,console_origin_status='ready',console_origin_last_error=NULL,
+		    console_public_verified_at=CASE WHEN console_origin_observed IS DISTINCT FROM $2 THEN NULL ELSE console_public_verified_at END,
+		    console_public_verified_origin=CASE WHEN console_origin_observed IS DISTINCT FROM $2 THEN NULL ELSE console_public_verified_origin END,
+		    console_origin_updated_at=now(),updated_at=now()
+		WHERE id=TRUE AND console_origin_desired=$1 AND api_token_ciphertext IS NOT NULL
+		  AND octet_length(api_token_ciphertext)>0 AND account_id IS NOT NULL AND tunnel_id IS NOT NULL`, expectedOrigin, observedOrigin)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// RecordCloudflareConsoleOriginFailure leaves workload DNS/TLS status alone.
+func (r *Repository) RecordCloudflareConsoleOriginFailure(ctx context.Context, expectedOrigin, message string) error {
+	if r == nil || r.pool == nil {
+		return ErrNotFound
+	}
+	_, err := r.pool.Exec(ctx, `UPDATE cloudflare_connections
+		SET console_origin_status='error',console_origin_last_error=$2,
+		    console_origin_updated_at=now(),console_public_verified_at=NULL,
+		    console_public_verified_origin=NULL,updated_at=now()
+		WHERE id=TRUE AND console_origin_desired=$1`, expectedOrigin, normalizeCloudflareError(message))
 	return err
 }
 

@@ -171,9 +171,13 @@ stealth ingress verify --site-hostname portfolio.apps.example.com
 
 The host invokes a restricted one-shot `ingress-control` Compose service. It
 uses configured PostgreSQL and the encrypted Cloudflare connection, takes the
-existing reconciler's PostgreSQL advisory lock, changes the Console ingress
+existing reconciler's PostgreSQL advisory lock, changes only the Console ingress
 inside the existing tunnel, verifies the provider configuration, and probes
-public DNS and HTTPS. The public checks include the Console root, unauthenticated
+public DNS and HTTPS. The Console root may return its normal `307 /organizations`
+redirect; public verification follows at most five same-host HTTPS redirects
+and rejects host/port changes, IP literals, loops, and downgrades. Every hop
+must retain the required browser security headers and HSTS. The public checks
+include the Console root, unauthenticated
 `/v1/account`, `/healthz`, `/readyz`, `/version`, an unknown path, the existing
 browser security headers, and HSTS with `max-age >= 31536000; includeSubDomains`.
 When a Site hostname is supplied it must be exactly one label below the
@@ -183,8 +187,12 @@ If any post-cutover public check fails, Stealth stores `proxy` as the desired
 origin, reconciles the same tunnel back to Nginx, then verifies recovery. A
 successful recovery still reports the cutover as failed. If automatic rollback
 cannot be confirmed, the command reports a high-severity error; run
-`stealth ingress rollback` from the host. Manual rollback does not depend on
-the public Console or API. Neither command enables or changes Cloudflare HSTS
+`stealth ingress rollback` from the host. Emergency rollback uses the narrow
+Console-origin provider operation and preserves workload wildcard/catch-all
+rules; it does not call workload DNS or certificate APIs. The host preflight
+requires healthy proxy/Nginx, running Cloudflared, and healthy bundled
+PostgreSQL when bundled, but does not require the public API, Console, or
+Traefik. Manual rollback does not depend on the public Console or API. Neither command enables or changes Cloudflare HSTS
 or any other zone-wide security setting. Nginx remains installed and running
 after successful cutover so rollback requires no rebuild or service recreation.
 

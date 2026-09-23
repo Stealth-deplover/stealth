@@ -91,7 +91,7 @@ func (a *App) runIngress(args []string) int {
 		}
 		proxyStatus = statuses["proxy"]
 	}
-	if operation == "cutover" || operation == "verify" {
+	if operation == "cutover" || operation == "verify" || operation == "rollback" {
 		preflightCtx, preflightCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer preflightCancel()
 		if err := a.checkIngressServices(preflightCtx, layout, values, operation); err != nil {
@@ -143,7 +143,7 @@ func (a *App) checkIngressServices(ctx context.Context, layout InstallLayout, co
 			if strings.EqualFold(status.State, "running") || strings.HasPrefix(strings.ToLower(status.Status), "up ") {
 				continue
 			}
-			return errors.New("Cloudflare Named Tunnel is not active for this installation; cutover and verification require the configured tunnel profile")
+			return errors.New("Cloudflare Named Tunnel is not active for this installation; ingress operations require the configured tunnel profile")
 		}
 		if !status.Healthy() {
 			return fmt.Errorf("%s is not healthy", service)

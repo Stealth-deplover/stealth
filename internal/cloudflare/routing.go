@@ -2,9 +2,11 @@ package cloudflare
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +21,8 @@ type RoutingStore interface {
 	TryCloudflareReconcileLock(context.Context) (func() error, bool, error)
 	CloudflareReconcileSnapshot(context.Context) (domain.CloudflareConnection, error)
 	CompleteCloudflareReconcile(context.Context, domain.CloudflareRoutingUpdate) (bool, error)
+	CompleteCloudflareConsoleOrigin(context.Context, string, string) (bool, error)
+	RecordCloudflareConsoleOriginFailure(context.Context, string, string) error
 	ListRetiringCloudflareWildcardDNS(context.Context) ([]domain.CloudflareRetiringWildcardDNS, error)
 	CompleteCloudflareWildcardRetirement(context.Context, string) error
 	RecordCloudflareReconcileFailure(context.Context, string) error
@@ -77,6 +81,16 @@ func (r *Reconciler) Run(ctx context.Context) error {
 }
 
 func (r *Reconciler) runPass(ctx context.Context) {
+	origin, originErr := r.ReconcileConsoleOrigin(ctx)
+	if errors.Is(originErr, ErrLockNotAcquired) {
+		r.logger.Debug("cloudflare console-origin reconcile skipped; another worker or host command holds the lock")
+		return
+	}
+	if originErr != nil {
+		r.logger.Error("cloudflare Console-origin reconcile failed", "error", safeReconcileError(originErr, ""))
+	} else if origin != "" {
+		r.logger.Debug("cloudflare Console-origin ready", "origin", origin)
+	}
 	result, err := r.Reconcile(ctx)
 	switch {
 	case errors.Is(err, ErrLockNotAcquired):
@@ -252,6 +266,133 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result ReconcileResult, err
 	return result, nil
 }
 
+// ReconcileConsoleOrigin is the emergency-safe origin transition used by
+// host-initiated cutover and rollback. It shares the distributed Cloudflare
+// lock and only changes the Console rule in the existing Named Tunnel config.
+// Workload DNS, certificates and retiring records are deliberately outside
+// this recovery primitive.
+func (r *Reconciler) ReconcileConsoleOrigin(ctx context.Context) (origin string, err error) {
+	if r == nil || r.store == nil || r.client == nil {
+		return "", errors.New("Cloudflare reconciler is not configured")
+	}
+	release, acquired, err := r.store.TryCloudflareReconcileLock(ctx)
+	if err != nil {
+		return "", fmt.Errorf("acquire Cloudflare reconcile lock: %w", err)
+	}
+	if !acquired {
+		return "", ErrLockNotAcquired
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release Cloudflare reconcile lock: %w", releaseErr))
+		}
+	}()
+
+	connection, err := r.store.CloudflareReconcileSnapshot(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read Cloudflare desired state: %w", err)
+	}
+	if !hasCloudflareConnectionIntent(connection) {
+		return "", nil
+	}
+	desired := connection.ConsoleOriginDesired
+	if desired != ConsoleOriginProxy && desired != ConsoleOriginTraefik {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, errors.New("saved Console origin is invalid; run stealth ingress rollback"))
+	}
+	if !connectionConfigured(connection) {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, errors.New("Cloudflare connection is unavailable; an Instance Owner must reconnect the scoped token for the existing Named Tunnel"))
+	}
+	provider, err := r.client(connection.APIToken)
+	if err != nil {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, errors.New("Cloudflare API client could not be initialized"))
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, r.httpTimeout)
+	defer cancel()
+	if err := validateExistingTunnel(providerCtx, provider, connection.AccountID, connection.TunnelID, connection.TunnelName); err != nil {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, err)
+	}
+	current, err := provider.TunnelConfiguration(providerCtx, connection.AccountID, connection.TunnelID)
+	if err != nil {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, err)
+	}
+	want, observed, err := patchConsoleIngress(current, connection.ConsoleHostname, connection.WildcardHostname, desired)
+	if err != nil {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, err)
+	}
+	if observed != desired {
+		if err := provider.ConfigureTunnel(providerCtx, connection.AccountID, connection.TunnelID, want); err != nil {
+			return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, err)
+		}
+	}
+	verified, err := provider.TunnelConfiguration(providerCtx, connection.AccountID, connection.TunnelID)
+	if err != nil {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, err)
+	}
+	if !sameTunnelRules(verified, want) {
+		return "", r.recordConsoleOriginFailure(ctx, connection.APIToken, desired, errors.New("Cloudflare Tunnel Console-origin read-back did not match the requested change; HIGH SEVERITY: provider rollback is unverified"))
+	}
+	completed, err := r.store.CompleteCloudflareConsoleOrigin(ctx, desired, desired)
+	if err != nil {
+		return "", fmt.Errorf("persist Cloudflare Console-origin observation: %w", err)
+	}
+	if !completed {
+		return "", ErrCloudflareDesiredStateChanged
+	}
+	r.logger.Info("cloudflare console origin reconciled", "desired_origin", desired, "observed_origin", desired, "changed", observed != desired)
+	return desired, nil
+}
+
+// VerifyConsoleOrigin checks only the existing Tunnel's Console route. It is
+// intentionally independent of workload zone and certificate readiness.
+func (r *Reconciler) VerifyConsoleOrigin(ctx context.Context) (origin string, err error) {
+	if r == nil || r.store == nil || r.client == nil {
+		return "", errors.New("Cloudflare reconciler is not configured")
+	}
+	release, acquired, err := r.store.TryCloudflareReconcileLock(ctx)
+	if err != nil {
+		return "", fmt.Errorf("acquire Cloudflare reconcile lock: %w", err)
+	}
+	if !acquired {
+		return "", ErrLockNotAcquired
+	}
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release Cloudflare reconcile lock: %w", releaseErr))
+		}
+	}()
+	connection, err := r.store.CloudflareReconcileSnapshot(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read Cloudflare desired state: %w", err)
+	}
+	if !connectionConfigured(connection) {
+		return "", errors.New("Cloudflare Named Tunnel is not fully configured")
+	}
+	if connection.ConsoleOriginDesired != ConsoleOriginProxy && connection.ConsoleOriginDesired != ConsoleOriginTraefik {
+		return "", errors.New("saved Console origin is invalid")
+	}
+	provider, err := r.client(connection.APIToken)
+	if err != nil {
+		return "", errors.New("Cloudflare API client could not be initialized")
+	}
+	providerCtx, cancel := context.WithTimeout(ctx, r.httpTimeout)
+	defer cancel()
+	if err := validateExistingTunnel(providerCtx, provider, connection.AccountID, connection.TunnelID, connection.TunnelName); err != nil {
+		return "", err
+	}
+	current, err := provider.TunnelConfiguration(providerCtx, connection.AccountID, connection.TunnelID)
+	if err != nil {
+		return "", err
+	}
+	_, observed, err := patchConsoleIngress(current, connection.ConsoleHostname, connection.WildcardHostname, connection.ConsoleOriginDesired)
+	if err != nil {
+		return "", err
+	}
+	if observed != connection.ConsoleOriginDesired {
+		return "", errors.New("Cloudflare Tunnel Console origin differs from durable desired state")
+	}
+	return observed, nil
+}
+
 // VerifyProvider reads the current durable desired state and Cloudflare
 // Tunnel configuration without changing either. It shares the reconciler's
 // PostgreSQL lock so an operator verification cannot observe a mid-write
@@ -421,12 +562,8 @@ func validationProviderError(message string, err error) error {
 }
 
 func validateExistingConnection(ctx context.Context, client Client, accountID, consoleZoneID, consoleHostname, tunnelID, tunnelName string) ([]Zone, error) {
-	accounts, err := client.ListAccounts(ctx)
-	if err != nil {
+	if err := validateExistingTunnel(ctx, client, accountID, tunnelID, tunnelName); err != nil {
 		return nil, err
-	}
-	if !containsAccount(accounts, accountID) {
-		return nil, errors.New("Cloudflare token cannot access the configured account")
 	}
 	zones, err := client.ListZones(ctx, accountID)
 	if err != nil {
@@ -435,17 +572,28 @@ func validateExistingConnection(ctx context.Context, client Client, accountID, c
 	if !zoneContainsHostname(zones, consoleZoneID, consoleHostname) {
 		return nil, errors.New("Cloudflare token cannot read the configured Console zone")
 	}
+	return zones, nil
+}
+
+func validateExistingTunnel(ctx context.Context, client Client, accountID, tunnelID, tunnelName string) error {
+	accounts, err := client.ListAccounts(ctx)
+	if err != nil {
+		return err
+	}
+	if !containsAccount(accounts, accountID) {
+		return errors.New("Cloudflare token cannot access the configured account")
+	}
 	status, err := client.TunnelStatus(ctx, accountID, tunnelID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if status.ID != "" && status.ID != tunnelID {
-		return nil, errors.New("Cloudflare returned a different tunnel identity")
+		return errors.New("Cloudflare returned a different tunnel identity")
 	}
 	if tunnelName != "" && status.Name != "" && status.Name != tunnelName {
-		return nil, errors.New("configured Cloudflare tunnel identity changed")
+		return errors.New("configured Cloudflare tunnel identity changed")
 	}
-	return zones, nil
+	return nil
 }
 
 func connectionConfigured(connection domain.CloudflareConnection) bool {
@@ -504,11 +652,155 @@ func desiredTunnelIngress(consoleHostname, wildcardHostname string, consoleOrigi
 	if len(consoleOrigins) > 0 && consoleOriginService(consoleOrigins[0]) != "" {
 		consoleOrigin = consoleOrigins[0]
 	}
-	result := []IngressRule{{Hostname: consoleHostname, Service: consoleOriginService(consoleOrigin)}}
+	result := []IngressRule{consoleIngressRule(consoleHostname, consoleOrigin)}
 	if wildcardHostname != "" {
 		result = append(result, IngressRule{Hostname: wildcardHostname, Service: "http://traefik:8080"})
 	}
 	return append(result, IngressRule{Service: "http_status:404"})
+}
+
+func consoleIngressRule(hostname, origin string) IngressRule {
+	return IngressRule{Hostname: hostname, Service: consoleOriginService(origin)}
+}
+
+func patchConsoleIngress(rules []IngressRule, consoleHostname, workloadHostname, desiredOrigin string) ([]IngressRule, string, error) {
+	if len(rules) == 0 || len(rules) > 64 || (desiredOrigin != ConsoleOriginProxy && desiredOrigin != ConsoleOriginTraefik) {
+		return nil, "", errors.New("Cloudflare Tunnel ingress is structurally invalid for a Console-origin change")
+	}
+	consoleName, err := domainname.NormalizeHostname(consoleHostname)
+	if err != nil {
+		return nil, "", errors.New("saved Console hostname is invalid")
+	}
+	wildcardName := ""
+	if workloadHostname != "" {
+		wildcardName, err = canonicalWildcardHostname(workloadHostname)
+		if err != nil {
+			return nil, "", errors.New("saved workload wildcard hostname is invalid")
+		}
+	}
+	consoleIndex, catchAllCount := -1, 0
+	seen := make(map[string]struct{}, len(rules))
+	for index, rule := range rules {
+		if strings.TrimSpace(rule.Service) == "" {
+			return nil, "", errors.New("Cloudflare Tunnel ingress contains an empty service")
+		}
+		if rule.Hostname == "" {
+			catchAllCount++
+			if index != len(rules)-1 || rule.Service != "http_status:404" {
+				return nil, "", errors.New("Cloudflare Tunnel catch-all is unsafe; expected a final http_status:404 rule")
+			}
+			continue
+		}
+		name, nameErr := canonicalIngressHostname(rule.Hostname)
+		if nameErr != nil {
+			return nil, "", errors.New("Cloudflare Tunnel ingress contains an invalid hostname")
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, "", errors.New("Cloudflare Tunnel ingress contains duplicate hostname rules; refusing an ambiguous Console-origin change")
+		}
+		seen[name] = struct{}{}
+		if name == consoleName {
+			if consoleIndex >= 0 {
+				return nil, "", errors.New("Cloudflare Tunnel has multiple Console rules; refusing an ambiguous origin change")
+			}
+			consoleIndex = index
+			if rule.Service != "http://proxy:80" && rule.Service != "http://traefik:8080" {
+				return nil, "", errors.New("Cloudflare Console rule points to an unsupported origin; HIGH SEVERITY: refusing to overwrite provider configuration")
+			}
+		}
+		if wildcardName != "" && name == wildcardName && rule.Service != "http://traefik:8080" {
+			return nil, "", errors.New("Cloudflare workload rule points to an unexpected origin; HIGH SEVERITY: refusing a Console-origin change")
+		}
+	}
+	if catchAllCount != 1 || consoleIndex < 0 {
+		return nil, "", errors.New("Cloudflare Tunnel ingress is missing a unique Console rule or final 404 catch-all")
+	}
+	// A missing known workload rule is not ambiguous for this operation. Keep
+	// whatever is present untouched and let the full workload reconciler repair
+	// it after the Console rule has converged.
+	observed := ConsoleOriginProxy
+	if rules[consoleIndex].Service == "http://traefik:8080" {
+		observed = ConsoleOriginTraefik
+	}
+	result := append([]IngressRule(nil), rules...)
+	result[consoleIndex] = cloneIngressRule(result[consoleIndex])
+	result[consoleIndex].Service = consoleIngressRule(consoleHostname, desiredOrigin).Service
+	return result, observed, nil
+}
+
+func cloneIngressRule(rule IngressRule) IngressRule {
+	clone := rule
+	clone.Origin = append(rule.Origin[:0:0], rule.Origin...)
+	if rule.Extra != nil {
+		clone.Extra = make(map[string]json.RawMessage, len(rule.Extra))
+		for key, value := range rule.Extra {
+			clone.Extra[key] = append(json.RawMessage(nil), value...)
+		}
+	}
+	return clone
+}
+
+func sameTunnelRules(left, right []IngressRule) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !sameIngressHostname(left[i].Hostname, right[i].Hostname) || left[i].Service != right[i].Service || !sameJSON(left[i].Origin, right[i].Origin) || !sameExtra(left[i].Extra, right[i].Extra) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameIngressHostname(left, right string) bool {
+	if left == "" || right == "" {
+		return left == right
+	}
+	leftName, leftErr := canonicalIngressHostname(left)
+	rightName, rightErr := canonicalIngressHostname(right)
+	return leftErr == nil && rightErr == nil && leftName == rightName
+}
+
+func sameJSON(left, right []byte) bool {
+	if len(left) == 0 || string(left) == "null" {
+		return len(right) == 0 || string(right) == "null"
+	}
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func sameExtra(left, right map[string]json.RawMessage) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if !sameJSON(value, right[key]) {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalIngressHostname(hostname string) (string, error) {
+	if strings.HasPrefix(hostname, "*.") {
+		wildcard, err := canonicalWildcardHostname(hostname)
+		return wildcard, err
+	}
+	return domainname.NormalizeHostname(hostname)
+}
+
+func canonicalWildcardHostname(hostname string) (string, error) {
+	if !strings.HasPrefix(hostname, "*.") || strings.Count(hostname, "*") != 1 {
+		return "", errors.New("invalid wildcard hostname")
+	}
+	base, err := domainname.NormalizeDomain(strings.TrimPrefix(hostname, "*."))
+	if err != nil {
+		return "", err
+	}
+	return "*." + base, nil
 }
 
 func sameIngress(left, right []IngressRule) bool {
@@ -718,6 +1010,18 @@ func (r *Reconciler) recordFailure(ctx context.Context, token string, err error)
 	return errors.New(message)
 }
 
+func (r *Reconciler) recordConsoleOriginFailure(ctx context.Context, token, expected string, err error) error {
+	message := safeReconcileError(err, token)
+	if persistErr := r.store.RecordCloudflareConsoleOriginFailure(ctx, expected, message); persistErr != nil {
+		return errors.Join(errors.New(message), fmt.Errorf("persist Cloudflare Console-origin error state: %w", persistErr))
+	}
+	r.logger.Error("cloudflare Console-origin reconcile failed", "error", message)
+	if errors.Is(err, ErrUnauthorized) {
+		return fmt.Errorf("%w: %s", ErrUnauthorized, message)
+	}
+	return errors.New(message)
+}
+
 func safeReconcileError(err error, token string) string {
 	if err == nil {
 		return ""
@@ -749,4 +1053,7 @@ func cloneString(value *string) *string {
 	return &cloned
 }
 
-var ErrLockNotAcquired = errors.New("Cloudflare reconcile lock was not acquired")
+var (
+	ErrLockNotAcquired               = errors.New("Cloudflare reconcile lock was not acquired")
+	ErrCloudflareDesiredStateChanged = errors.New("Cloudflare Console-origin desired state changed during provider reconciliation")
+)
