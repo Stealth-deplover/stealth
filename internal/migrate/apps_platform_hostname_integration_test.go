@@ -24,12 +24,12 @@ func TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Release()
+	t.Cleanup(conn.Release)
 
 	schema := fmt.Sprintf("apps_platform_namespace_%d", time.Now().UnixNano())
 	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
