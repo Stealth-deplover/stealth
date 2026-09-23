@@ -105,14 +105,21 @@ written to `config.env`, logged, included in audit metadata, or written to
 Traefik files.
 
 During onboarding, the setup service already holds the token in memory while
-it provisions the Console tunnel and DNS. The production worker imports the
-token and complete tunnel binding from the encrypted `state/setup-state.enc`
-snapshot on first start after migrations have created the production table.
-The Compose initializer copies only that encrypted setup snapshot into a
-dedicated read-only worker mount; the cloudflared tunnel token remains outside
-the worker mount. Import runs only when the production connection has no
-credential or tunnel identity and is idempotent. It does not remove setup
-state or replace a newer production connection.
+it provisions the Console tunnel and DNS. Before worker startup, the isolated,
+network-free `cloudflare-state-init` helper decrypts the legacy
+`state/setup-state.enc` snapshot and atomically writes a versioned,
+Cloudflare-only encrypted import artifact. That artifact contains only the
+existing account, Console zone/hostname, tunnel identity, Console DNS record
+ID, and Cloudflare API token required for migration. It excludes the
+cloudflared tunnel token, GitHub credentials, database and Redis URLs, S3
+credentials, and other setup/bootstrap state. The worker mounts only this
+narrow artifact directory read-only; it never receives the complete setup
+snapshot. The helper removes the exact full-snapshot copy names used by the
+previous initializer and blocks worker startup if unexpected entries remain
+in that directory. Import runs only when the production connection has no
+credential or tunnel identity and is idempotent. The encrypted artifact is
+retained for recovery, does not remove original setup state, and cannot
+replace a newer production connection.
 
 If the setup snapshot is absent, unreadable, or has no recoverable API token,
 the existing tunnel is not recreated or altered. Status remains unconfigured

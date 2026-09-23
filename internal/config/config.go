@@ -140,6 +140,7 @@ type Config struct {
 	SetupMode                   bool
 	InstallRoot                 string
 	SetupStateFile              string
+	CloudflareImportFile        string
 	SetupHandoffFile            string
 	ProductionComposeFile       string
 	SetupComposeFile            string

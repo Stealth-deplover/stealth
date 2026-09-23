@@ -101,9 +101,16 @@ creates or resumes the named tunnel, configures the Console ingress to
 and writes the private cloudflared token file. The host CLI then starts the
 production Compose profile, checks the named tunnel health, verifies the
 production hostname, and removes the temporary Quick Tunnel only after those
-production checks pass. Once production PostgreSQL is available, the worker
-imports the API token and tunnel binding from the encrypted setup snapshot
-into its durable Cloudflare connection row.
+production checks pass. Before worker startup, a network-isolated one-shot
+initializer decrypts the onboarding snapshot and writes a versioned,
+Cloudflare-only encrypted import artifact. It contains the existing Cloudflare
+connection identity and API token. The import mount excludes the complete
+setup snapshot and its unrelated GitHub, Cloudflared tunnel, setup database,
+Redis, and S3 credentials, plus bootstrap and session state; the worker
+receives its separate PostgreSQL and Redis runtime configuration as required
+to operate. It imports the artifact
+into its durable Cloudflare connection row only when that production
+connection is absent.
 
 After an Instance Owner configures a workload base domain, the worker
 asynchronously adds one proxied wildcard CNAME and a wildcard rule on that

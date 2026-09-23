@@ -34,6 +34,7 @@ core_modified="false"
 static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
 cloudflare_state_source="$(dirname -- "$compose_file")/state/setup-state.enc"
 cloudflare_import_dir="$(dirname -- "$compose_file")/state/.cloudflare-import"
+cloudflare_import_artifact="$cloudflare_import_dir/cloudflare-import.enc"
 cloudflare_setup_state_available="false"
 if [ -s "$cloudflare_state_source" ]; then
 	cloudflare_setup_state_available="true"
@@ -244,14 +245,26 @@ prepare_traefik_state_for_smoke
 	traefik-state-init
 verify_traefik_state_init
 "${compose[@]}" run --rm --no-deps cloudflare-state-init
-if [ "$cloudflare_setup_state_available" = "true" ]; then
-	if [ ! -f "$cloudflare_import_dir/setup-state.enc" ] || [ -L "$cloudflare_import_dir/setup-state.enc" ]; then
-		printf '%s\n' 'Cloudflare initializer did not prepare the encrypted setup snapshot' >&2
+if [ "$cloudflare_setup_state_available" = "false" ] && { [ -e "$cloudflare_import_artifact" ] || [ -L "$cloudflare_import_artifact" ]; }; then
+	printf '%s\n' 'Cloudflare initializer fabricated an artifact without source state' >&2
+	exit 1
+fi
+if [ -e "$cloudflare_import_artifact" ] || [ -L "$cloudflare_import_artifact" ]; then
+	if [ ! -f "$cloudflare_import_artifact" ] || [ -L "$cloudflare_import_artifact" ] || [ ! -s "$cloudflare_import_artifact" ]; then
+		printf '%s\n' 'Cloudflare initializer did not publish a regular encrypted narrow artifact' >&2
 		exit 1
 	fi
-else
-	if [ -e "$cloudflare_import_dir/setup-state.enc" ] || [ -L "$cloudflare_import_dir/setup-state.enc" ]; then
-		printf '%s\n' 'Cloudflare initializer fabricated an import snapshot without source state' >&2
+fi
+for legacy_import in "$cloudflare_import_dir/setup-state.enc" "$cloudflare_import_dir/.setup-state.enc.tmp"; do
+	if [ -e "$legacy_import" ] || [ -L "$legacy_import" ]; then
+		printf 'Cloudflare initializer left a full setup snapshot in the worker import directory: %s\n' "$legacy_import" >&2
+		exit 1
+	fi
+done
+if [ -d "$cloudflare_import_dir" ]; then
+	unexpected_import_entry="$(find "$cloudflare_import_dir" -mindepth 1 -maxdepth 1 ! -name cloudflare-import.enc -print -quit)"
+	if [ -n "$unexpected_import_entry" ]; then
+		printf 'Cloudflare worker import directory contains unexpected content: %s\n' "$unexpected_import_entry" >&2
 		exit 1
 	fi
 fi
@@ -533,11 +546,11 @@ verify_worker_platform_state_boundary() {
 		*) printf 'worker core.yaml is not overlaid read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
 	case "$mounts" in
-		*'/var/lib/stealth/setup-state=false '*|*'/var/lib/stealth/setup-state=false') ;;
-		*) printf 'worker setup-state import directory is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
+		*'/var/lib/stealth/cloudflare-import=false '*|*'/var/lib/stealth/cloudflare-import=false') ;;
+		*) printf 'worker Cloudflare import directory is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
 	case "$mounts" in
-		*'/etc/traefik='*|*'/var/lib/stealth/traefik/traefik.yaml='*|*'/var/lib/stealth/traefik/static='*|*'/run/secrets/cloudflare-tunnel-token='*|*'=/state='*)
+		*'/etc/traefik='*|*'/var/lib/stealth/traefik/traefik.yaml='*|*'/var/lib/stealth/traefik/static='*|*'/run/secrets/cloudflare-tunnel-token='*|*'=/state='*|*'/var/lib/stealth/setup-state='*)
 			printf 'worker has an unexpected release-managed Traefik mount: %s\n' "$mounts" >&2
 			return 1
 			;;

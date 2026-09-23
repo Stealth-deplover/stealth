@@ -285,8 +285,12 @@ remains user-managed.
 
 The instance-global Cloudflare API token is encrypted with the shared
 `functionsecret` cipher in PostgreSQL. Admin status responses expose only
-connection and reconciliation state. On upgrade, the worker imports a
-complete legacy binding and token from encrypted setup state once, when the
-production connection is absent. Provider reconciliation is asynchronous,
+connection and reconciliation state. On upgrade, the isolated one-shot
+Cloudflare state initializer decrypts legacy setup state and atomically emits
+a narrow encrypted artifact containing only the Cloudflare connection
+identity and API token. The worker mounts only that derived artifact; the
+Cloudflared tunnel token, GitHub credentials, and database, Redis, and S3
+setup credentials are not included. The worker imports the artifact once when
+the production connection is absent. Provider reconciliation is asynchronous,
 single-writer under a PostgreSQL advisory lock, and retries from PostgreSQL
 desired state after restart.

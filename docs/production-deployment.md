@@ -258,10 +258,20 @@ account, zone, and Console hostname to the setup API. The API creates and
 configures the named tunnel with the Console route to `http://proxy:80`, the
 catch-all 404, and its proxied DNS record. The host CLI starts the production
 tunnel, verifies tunnel health and the production hostname, and removes the
-Quick Tunnel only after those checks pass. The production worker imports the
-encrypted setup token and tunnel identity into PostgreSQL on first start. It
-then reconciles one wildcard DNS record and `*.workload_base_domain` tunnel
-ingress to `http://traefik:8080` asynchronously from PostgreSQL desired state.
+Quick Tunnel only after those checks pass. Before the worker starts, the
+network-isolated `cloudflare-state-init` helper decrypts the legacy setup
+snapshot and atomically creates a versioned, Cloudflare-only encrypted import
+artifact. It contains the existing Cloudflare connection identity and API
+token required for migration. The worker mounts only this narrow artifact;
+the Cloudflared tunnel token, GitHub credentials, setup database and Redis
+URLs, S3 credentials, and bootstrap/session state are excluded from it. The
+worker still receives its separate PostgreSQL and Redis runtime configuration.
+It imports the artifact
+only when the durable connection is absent, then reconciles one wildcard DNS
+record and `*.workload_base_domain` tunnel ingress to `http://traefik:8080`
+asynchronously from PostgreSQL desired state.
+The initializer removes old full-snapshot copies from the worker import
+directory and fails closed if other unexpected entries remain.
 
 The minimum custom-token permissions are:
 
