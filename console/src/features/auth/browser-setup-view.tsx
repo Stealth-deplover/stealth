@@ -65,7 +65,7 @@ function safeError(error: unknown) {
       return "Cloudflare OAuth is experimental and inactive. Use a scoped API token instead.";
     }
     if (error.code === "cloudflare_token_rejected") {
-      return "Cloudflare rejected the token. Check Account Settings Read, Cloudflare Tunnel Edit, Zone Read, and DNS Edit on the selected resources.";
+      return "Cloudflare rejected the token. Check Account: Cloudflare Tunnel Edit and Account Settings Read; Zone: Zone Read and DNS Edit for the Console/workload zones, plus SSL and Certificates Read for workload edge TLS readiness.";
     }
   }
   return errorMessage(error);
@@ -1059,8 +1059,9 @@ export function BrowserSetupView() {
                       <p className="text-xs leading-5 text-slate-500">
                         Create a custom token with Account: Cloudflare Tunnel
                         Edit and Account Settings Read; Zone: Zone Read and DNS
-                        Edit. Scope it to the account and domain you will use.
-                        Global API keys are not accepted.
+                        Edit for Console/workload zones, plus SSL and Certificates
+                        Read for workload edge TLS readiness. Scope it to the
+                        account and zones you use. Global API keys are not accepted.
                       </p>
                     </div>
                   ) : (

@@ -91,7 +91,7 @@ func (s *Server) updateAdminCloudflare(w http.ResponseWriter, r *http.Request) {
 	validated, err := cloudflare.ValidateExistingTunnel(ctx, client, accountID, current.ConsoleZoneID, instanceHostname, tunnelID, current.TunnelName, settings.WorkloadBaseDomain)
 	if err != nil {
 		if errors.Is(err, cloudflare.ErrUnauthorized) {
-			writeError(w, http.StatusUnprocessableEntity, "cloudflare_token_rejected", "Cloudflare rejected the token or it lacks Account Tunnel Edit, Account Settings Read, Zone Read, or DNS Edit access for the required zones")
+			writeError(w, http.StatusUnprocessableEntity, "cloudflare_token_rejected", "Cloudflare rejected the token or it lacks Account Tunnel Edit, Account Settings Read, Zone Read, DNS Edit, or workload-zone SSL and Certificates Read access")
 		} else {
 			writeError(w, http.StatusBadGateway, "cloudflare_validation_failed", "Cloudflare could not verify the existing account, tunnel, Console DNS, and configured workload zone. Check the scoped token and keep the existing tunnel unchanged.")
 		}

@@ -121,9 +121,12 @@ the installation. The minimum permissions are:
 - Account: `Account Settings` `Read`, required for account discovery.
 - Zone: `Zone` `Read`, required for Console and workload zone discovery.
 - Zone: `DNS` `Edit`, required for the Console and workload CNAME records.
+- Zone: `SSL and Certificates` `Read`, required to inspect workload edge TLS
+  readiness.
 
-If the Console hostname and workload base domain use different Cloudflare
-zones, include both zones in the token's Zone Read and DNS Edit scope.
+Scope Zone Read and DNS Edit to both the Console and workload zones when they
+are different. Scope SSL and Certificates Read only to the workload zone. If
+both hostnames use the same zone, one zone scope is sufficient.
 
 Stealth does not accept a Global API Key. The token is submitted to the setup
 API, stored in encrypted setup state during onboarding and then encrypted at

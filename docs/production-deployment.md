@@ -263,9 +263,18 @@ encrypted setup token and tunnel identity into PostgreSQL on first start. It
 then reconciles one wildcard DNS record and `*.workload_base_domain` tunnel
 ingress to `http://traefik:8080` asynchronously from PostgreSQL desired state.
 
-The minimum custom-token permissions are Account: Cloudflare Tunnel Edit,
-Account Settings Read, and Zone: Zone Read plus DNS Edit. Scope Zone Read and
-DNS Edit to both the Console and workload zones if they differ. A wildcard
+The minimum custom-token permissions are:
+
+- Account: Cloudflare Tunnel Edit.
+- Account: Account Settings Read.
+- Zone: Zone Read.
+- Zone: DNS Edit.
+- Zone: SSL and Certificates Read, required for workload edge TLS readiness
+  inspection.
+
+Scope Zone Read and DNS Edit to both the Console and workload zones when they
+are different. Scope SSL and Certificates Read only to the workload zone. If
+both hostnames use the same zone, one zone scope is sufficient. A wildcard
 does not create per-Site records, and the existing named tunnel is reused.
 See [Cloudflare workload routing](cloudflare-workload-routing.md) for setup
 import, reconnection, and safe cleanup behavior.

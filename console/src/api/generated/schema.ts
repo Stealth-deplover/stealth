@@ -602,7 +602,7 @@ export interface paths {
         };
         /** @description Return safe Cloudflare connection and workload routing status. Requires Instance Owner or Instance Admin. The API token and ciphertext are never returned. */
         get: operations["getAdminCloudflareRouting"];
-        /** @description Validate a candidate scoped Cloudflare API token against the saved or explicitly supplied existing account and named tunnel, then encrypt and persist it. Only the Instance Owner may update it. When validation fails, the previous credential remains in place. Stealth never creates a new tunnel here. The token is write-only. */
+        /** @description Validate a candidate scoped Cloudflare API token against the saved or explicitly supplied existing account and named tunnel, then encrypt and persist it. Only the Instance Owner may update it. When validation fails, the previous credential remains in place. Stealth never creates a new tunnel here. The token is write-only. Required permissions are Account: Cloudflare Tunnel Edit and Account Settings Read; Zone: Zone Read and DNS Edit for Console and workload zones when separate, plus SSL and Certificates Read for the workload zone to inspect workload edge TLS readiness. */
         put: operations["updateAdminCloudflareConnection"];
         post?: never;
         delete?: never;
@@ -984,7 +984,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Validate and save the recommended scoped Cloudflare API token. The token is write-only and encrypted in setup state. The token must allow Account Cloudflare Tunnel Edit and Account Settings Read plus Zone Zone Read and DNS Edit for account and domain discovery and named-tunnel DNS setup. */
+        /** @description Validate and save the recommended scoped Cloudflare API token. The token is write-only and encrypted in setup state. It requires Account: Cloudflare Tunnel Edit and Account Settings Read, plus Zone: Zone Read and DNS Edit for Console and workload zones when separate. Zone: SSL and Certificates Read is required on the workload zone for workload edge TLS readiness inspection. */
         post: operations["saveSetupCloudflareToken"];
         delete?: never;
         options?: never;
@@ -3930,7 +3930,7 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
         };
-        /** @description Use a custom token scoped to the selected account with Account: Cloudflare Tunnel Edit, Account Settings Read; Zone: Zone Read and DNS Edit for both Console and workload zones when separate. Global API keys are not accepted. */
+        /** @description Use a custom token scoped to the selected account with Account: Cloudflare Tunnel Edit and Account Settings Read; Zone: Zone Read and DNS Edit for both Console and workload zones when separate, and SSL and Certificates Read for the workload zone. SSL and Certificates Read is required for workload edge TLS readiness inspection. If both hostnames use the same zone, one zone scope is sufficient. Global API keys are not accepted. */
         SetupCloudflareTokenRequest: {
             api_token: string;
         };
