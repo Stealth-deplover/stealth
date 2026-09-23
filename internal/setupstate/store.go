@@ -474,6 +474,46 @@ func NewFileStore(path string, cipher *functionsecret.Cipher) (*FileStore, error
 	return &FileStore{path: clean, cipher: cipher}, nil
 }
 
+// LoadEncryptedSnapshot reads a completed setup-state file without creating a
+// lock file or mutating its parent directory. It is intended only for the
+// post-install one-time PostgreSQL import, where the file is mounted
+// read-only and atomic replacement guarantees readers see a complete version.
+func LoadEncryptedSnapshot(ctx context.Context, path string, cipher *functionsecret.Cipher) (State, error) {
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.Clean(path) == string(filepath.Separator) || cipher == nil {
+		return State{}, ErrUnavailable
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return State{}, err
+	}
+	plaintext, err := cipher.Decrypt(contents)
+	if err != nil {
+		return State{}, errors.New("encrypted setup state could not be recovered")
+	}
+	var state State
+	if err := json.Unmarshal(plaintext, &state); err != nil {
+		return State{}, errors.New("encrypted setup state could not be decoded")
+	}
+	var legacy legacyState
+	if err := json.Unmarshal(plaintext, &legacy); err != nil {
+		return State{}, errors.New("encrypted setup state could not be migrated")
+	}
+	if err := migrateState(&state, legacy); err != nil {
+		return State{}, errors.New("encrypted setup state could not be migrated")
+	}
+	if err := ValidateState(state); err != nil {
+		return State{}, errors.New("encrypted setup state is invalid")
+	}
+	if state.Secrets == nil {
+		state.Secrets = make(map[string]string)
+	}
+	return state, nil
+}
+
 // PrepareShared makes the state directory usable by the host CLI and the root
 // setup container when they run with different UIDs. The host process should
 // call this before starting or resuming the setup Compose project so the

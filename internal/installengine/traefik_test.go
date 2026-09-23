@@ -76,6 +76,7 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	for _, required := range []string{
 		"  traefik:",
 		"  traefik-state-init:",
+		"  cloudflare-state-init:",
 		"./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro",
 		"./traefik/dynamic:/etc/traefik/dynamic:ro",
 		"./traefik/dynamic:/state:rw",
@@ -93,7 +94,7 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	if stateInitStart < 0 {
 		t.Fatal("Traefik state initializer is missing")
 	}
-	stateInitEnd := strings.Index(composeText[stateInitStart+1:], "\n  telemetry-docker-logs-state-init:")
+	stateInitEnd := strings.Index(composeText[stateInitStart+1:], "\n  cloudflare-state-init:")
 	if stateInitEnd < 0 {
 		t.Fatal("could not delimit Traefik state initializer")
 	}
@@ -101,6 +102,45 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE"} {
 		if strings.Contains(stateInitBlock, forbidden) {
 			t.Fatalf("Traefik state initializer contains forbidden %q", forbidden)
+		}
+	}
+	cloudflareInitStart := strings.Index(composeText, "\n  cloudflare-state-init:")
+	if cloudflareInitStart < 0 {
+		t.Fatal("Cloudflare state initializer is missing")
+	}
+	cloudflareInitEnd := strings.Index(composeText[cloudflareInitStart+1:], "\n  telemetry-docker-logs-state-init:")
+	if cloudflareInitEnd < 0 {
+		t.Fatal("could not delimit Cloudflare state initializer")
+	}
+	cloudflareInitBlock := composeText[cloudflareInitStart : cloudflareInitStart+1+cloudflareInitEnd]
+	for _, required := range []string{
+		"network_mode: none", "read_only: true", "user: \"0:0\"", "restart: \"no\"",
+		"image: \"${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}\"",
+		"entrypoint: [\"/usr/local/bin/stealth-cloudflare-import-init\"]",
+		"FUNCTIONS_SECRET_KEY: \"${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}\"",
+		"./state:/state:ro", "./state/.cloudflare-import:/output:rw",
+	} {
+		if !strings.Contains(cloudflareInitBlock, required) {
+			t.Fatalf("Cloudflare setup-state initializer is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "cap_add:", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE_API_TOKEN", "cloudflare_tunnel_token", "setup-state.enc:rw"} {
+		if strings.Contains(cloudflareInitBlock, forbidden) {
+			t.Fatalf("Cloudflare setup-state initializer contains forbidden %q", forbidden)
+		}
+	}
+	if !strings.Contains(composeText, "./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro") {
+		t.Fatal("worker must mount only the Cloudflare-specific encrypted import directory read-only")
+	}
+	workerStart := strings.Index(composeText, "\n  worker:")
+	workerEnd := strings.Index(composeText[workerStart+1:], "\n  console:")
+	if workerStart < 0 || workerEnd < 0 {
+		t.Fatal("could not delimit worker service")
+	}
+	workerBlock := composeText[workerStart : workerStart+1+workerEnd]
+	for _, forbidden := range []string{"./state:/", "setup-state.enc", "cloudflare-tunnel-token", "/var/lib/stealth/setup-state"} {
+		if strings.Contains(workerBlock, forbidden) {
+			t.Fatalf("worker receives broad setup state or tunnel token through %q", forbidden)
 		}
 	}
 	traefikStart := strings.Index(composeText, "\n  traefik:")

@@ -161,6 +161,62 @@ type AuditEvent struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
+// CloudflareConnection is the private, instance-scoped provider identity used
+// by the trusted worker. APIToken is populated only after decryption and must
+// never be serialized or included in API-facing projections.
+type CloudflareConnection struct {
+	AccountID          string     `json:"-"`
+	ConsoleZoneID      string     `json:"-"`
+	ConsoleHostname    string     `json:"-"`
+	TunnelID           string     `json:"-"`
+	TunnelName         string     `json:"-"`
+	ConsoleRecordID    string     `json:"-"`
+	APIToken           string     `json:"-"`
+	WorkloadZoneID     string     `json:"-"`
+	WorkloadZoneName   string     `json:"-"`
+	WildcardHostname   string     `json:"-"`
+	WildcardRecordID   string     `json:"-"`
+	Status             string     `json:"-"`
+	EdgeTLSStatus      string     `json:"-"`
+	EdgeTLSError       string     `json:"-"`
+	LastReconciledAt   *time.Time `json:"-"`
+	LastError          string     `json:"-"`
+	ConfiguredAt       *time.Time `json:"-"`
+	UpdatedAt          time.Time  `json:"-"`
+	WorkloadBaseDomain *string    `json:"-"`
+}
+
+type CloudflareRetiringWildcardDNS struct {
+	RecordID string
+	ZoneID   string
+	Hostname string
+	Target   string
+}
+
+// CloudflareRoutingStatus is the safe admin response. It intentionally has
+// no token, ciphertext, tunnel token, account secret, or raw provider body.
+type CloudflareRoutingStatus struct {
+	Configured       bool       `json:"configured"`
+	Status           string     `json:"status"`
+	ConsoleHostname  string     `json:"console_hostname,omitempty"`
+	WorkloadHostname *string    `json:"workload_hostname"`
+	Zone             string     `json:"zone,omitempty"`
+	EdgeTLSStatus    string     `json:"edge_tls_status"`
+	EdgeTLSError     string     `json:"edge_tls_error,omitempty"`
+	LastReconciledAt *time.Time `json:"last_reconciled_at,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
+}
+
+type CloudflareRoutingUpdate struct {
+	ExpectedWorkloadBaseDomain *string
+	WorkloadZoneID             string
+	WorkloadZoneName           string
+	WildcardHostname           string
+	WildcardRecordID           string
+	EdgeTLSStatus              string
+	EdgeTLSError               string
+}
+
 // AdminOperation is a safe, instance-wide projection of durable work already
 // owned by the control plane. It deliberately joins existing deployment,
 // execution, Agent, cleanup, and backup records instead of introducing a

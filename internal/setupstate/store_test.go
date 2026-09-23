@@ -351,6 +351,67 @@ func TestFileStoreMigratesLegacyCloudflareBinding(t *testing.T) {
 	}
 }
 
+func TestLoadEncryptedSnapshotReadsSetupCredentialWithoutWritingFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "setup-state.enc")
+	cipher := testCipher(t)
+	store, err := NewFileStore(path, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := NewState()
+	state.Phase = PhaseComplete
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.Binding = CloudflareBinding{
+		AccountID: "account-1", ZoneID: "zone-1", Hostname: "cloud.example.com",
+		TunnelID: "tunnel-1", TunnelName: "stealth-prod", RecordID: "console-record",
+	}
+	state.SetSecret("cloudflare_access_token", "setup-cloudflare-token")
+	state.SetSecret("tunnel_token", "cloudflared-tunnel-token")
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadEncryptedSnapshot(context.Background(), path, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Secret("cloudflare_access_token") != "setup-cloudflare-token" || loaded.Secret("tunnel_token") != "cloudflared-tunnel-token" || loaded.EffectiveCloudflareBinding().TunnelID != "tunnel-1" {
+		t.Fatalf("recovered setup state = %#v", loaded.Public())
+	}
+	public, err := json.Marshal(loaded.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"setup-cloudflare-token", "cloudflared-tunnel-token", "cloudflare_access_token", "tunnel_token"} {
+		if bytes.Contains(public, []byte(forbidden)) {
+			t.Fatalf("Console setup-state projection contains %q: %s", forbidden, public)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("read-only legacy import changed encrypted setup state")
+	}
+	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("read-only import created setup lock file: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("not encrypted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEncryptedSnapshot(context.Background(), path, cipher); err == nil || strings.Contains(err.Error(), "not encrypted") {
+		t.Fatalf("invalid encrypted state error = %v; want generic failure", err)
+	}
+}
+
 func TestPublicProjectionOmitsRawCredentialFields(t *testing.T) {
 	state := NewState()
 	state.SetSetupCredentials(SetupCredentials{

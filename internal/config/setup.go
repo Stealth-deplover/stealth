@@ -12,6 +12,7 @@ type setupSettings struct {
 	mode                   bool
 	installRoot            string
 	stateFile              string
+	cloudflareImportFile   string
 	handoffFile            string
 	productionCompose      string
 	setupCompose           string
@@ -48,10 +49,15 @@ func loadSetupSettings() (setupSettings, error) {
 	if setupCompose == "" && root != "" {
 		setupCompose = filepath.Join(root, "compose.setup.yaml")
 	}
+	cloudflareImportFile := value("CLOUDFLARE_IMPORT_FILE", "/var/lib/stealth/cloudflare-import/cloudflare-import.enc")
+	if !filepath.IsAbs(cloudflareImportFile) || filepath.Clean(cloudflareImportFile) == string(filepath.Separator) {
+		return setupSettings{}, fmt.Errorf("CLOUDFLARE_IMPORT_FILE must be a valid non-root absolute path")
+	}
 	return setupSettings{
 		mode:                   mode,
 		installRoot:            root,
 		stateFile:              stateFile,
+		cloudflareImportFile:   cloudflareImportFile,
 		handoffFile:            handoffFile,
 		productionCompose:      productionCompose,
 		setupCompose:           setupCompose,
@@ -65,6 +71,7 @@ func (s setupSettings) apply(c *Config) {
 	c.SetupMode = s.mode
 	c.InstallRoot = s.installRoot
 	c.SetupStateFile = s.stateFile
+	c.CloudflareImportFile = s.cloudflareImportFile
 	c.SetupHandoffFile = s.handoffFile
 	c.ProductionComposeFile = s.productionCompose
 	c.SetupComposeFile = s.setupCompose

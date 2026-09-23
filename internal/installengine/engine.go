@@ -334,6 +334,9 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 			if err := e.runTraefikStateInit(ctx, plan, plan.Layout.ComposeFile, ""); err != nil {
 				return err
 			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "cloudflare-state-init"); err != nil {
+				return err
+			}
 		}
 		services := make([]string, 0, 3)
 		if !plan.ExternalDatabase {
@@ -1116,6 +1119,7 @@ func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
 		"  traefik:",
 		"  traefik-state-init:",
+		"  cloudflare-state-init:",
 		"  otel-collector:",
 		"  telemetry-host:",
 		"  telemetry-docker-logs:",
@@ -1124,7 +1128,7 @@ func validateProductionComposeAsset(contents []byte) error {
 		"  telemetry_ingest:",
 	} {
 		if !bytes.Contains(contents, []byte(marker)) {
-			return fmt.Errorf("missing current telemetry topology marker %q", marker)
+			return fmt.Errorf("missing current production Compose marker %q", marker)
 		}
 	}
 	return nil

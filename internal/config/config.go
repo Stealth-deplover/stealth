@@ -110,6 +110,7 @@ type Config struct {
 	TraefikGeneratedDir            string
 	TraefikReloadFile              string
 	PlatformRouteReconcileInterval time.Duration
+	CloudflareReconcileInterval    time.Duration
 	// OpenTelemetry tracing is disabled when the OTLP endpoint is empty. The
 	// API and worker still create no-op spans in that mode, so instrumentation
 	// does not need feature flags or test-only branches.
@@ -139,6 +140,7 @@ type Config struct {
 	SetupMode                   bool
 	InstallRoot                 string
 	SetupStateFile              string
+	CloudflareImportFile        string
 	SetupHandoffFile            string
 	ProductionComposeFile       string
 	SetupComposeFile            string

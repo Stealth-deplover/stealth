@@ -25,10 +25,10 @@ The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
 
-Traefik runs in parallel as the future file-provider ingress. See the
+Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
+route while Console traffic remains on Nginx. See the
 [Traefik ingress foundation](traefik-ingress.md) for its network boundary,
-ownership model, and the later Cloudflare origin cutover. Nginx remains the
-active external entrypoint in this release.
+ownership model, and the deferred Console/API origin cutover.
 
 ## Fresh install
 
@@ -55,6 +55,7 @@ docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-state-init
 docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
@@ -252,14 +253,41 @@ access tokens are used only for the server-side `/user` lookup and are
 discarded, never returned to the browser or persisted.
 
 Cloudflare setup uses a scoped API token, not a Global API Key. The Console
-verifies the token, discovers accounts and domains, and sends the selected
-account, domain, and dashboard hostname to the setup API. The API creates and
-configures the named tunnel and proxied DNS record, and writes the private
-cloudflared token file. The host CLI starts the production tunnel, verifies
-tunnel health and the production hostname, and removes the Quick Tunnel only
-after those checks pass. The minimum custom-token permissions are Account:
-Cloudflare Tunnel Edit, Account Settings Read, Zone: Zone Read, and Zone: DNS
-Edit, scoped to the resources used by the installation.
+verifies the token, discovers accounts and zones, and sends the selected
+account, zone, and Console hostname to the setup API. The API creates and
+configures the named tunnel with the Console route to `http://proxy:80`, the
+catch-all 404, and its proxied DNS record. The host CLI starts the production
+tunnel, verifies tunnel health and the production hostname, and removes the
+Quick Tunnel only after those checks pass. Before the worker starts, the
+network-isolated `cloudflare-state-init` helper decrypts the legacy setup
+snapshot and atomically creates a versioned, Cloudflare-only encrypted import
+artifact. It contains the existing Cloudflare connection identity and API
+token required for migration. The worker mounts only this narrow artifact;
+the Cloudflared tunnel token, GitHub credentials, setup database and Redis
+URLs, S3 credentials, and bootstrap/session state are excluded from it. The
+worker still receives its separate PostgreSQL and Redis runtime configuration.
+It imports the artifact
+only when the durable connection is absent, then reconciles one wildcard DNS
+record and `*.workload_base_domain` tunnel ingress to `http://traefik:8080`
+asynchronously from PostgreSQL desired state.
+The initializer removes old full-snapshot copies from the worker import
+directory and fails closed if other unexpected entries remain.
+
+The minimum custom-token permissions are:
+
+- Account: Cloudflare Tunnel Edit.
+- Account: Account Settings Read.
+- Zone: Zone Read.
+- Zone: DNS Edit.
+- Zone: SSL and Certificates Read, required for workload edge TLS readiness
+  inspection.
+
+Scope Zone Read and DNS Edit to both the Console and workload zones when they
+are different. Scope SSL and Certificates Read only to the workload zone. If
+both hostnames use the same zone, one zone scope is sufficient. A wildcard
+does not create per-Site records, and the existing named tunnel is reused.
+See [Cloudflare workload routing](cloudflare-workload-routing.md) for setup
+import, reconnection, and safe cleanup behavior.
 
 Cloudflare OAuth remains experimental and inactive. The setup Console does
 not offer it, the inactive endpoint never builds an authorization redirect,

@@ -56,6 +56,11 @@ if [ -z "$traefik_block" ]; then
 	printf '%s\n' 'Traefik service is missing from rendered production Compose' >&2
 	exit 1
 fi
+cloudflared_block="$(service_block cloudflared)"
+if [ -z "$cloudflared_block" ]; then
+	printf '%s\n' 'Cloudflared service is missing from rendered production Compose' >&2
+	exit 1
+fi
 worker_block="$(service_block worker)"
 if [ -z "$worker_block" ]; then
 	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
@@ -64,6 +69,11 @@ fi
 state_init_block="$(service_block traefik-state-init)"
 if [ -z "$state_init_block" ]; then
 	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
+	exit 1
+fi
+cloudflare_state_init_block="$(service_block cloudflare-state-init)"
+if [ -z "$cloudflare_state_init_block" ]; then
+	printf '%s\n' 'Cloudflare setup-state initializer is missing from rendered production Compose' >&2
 	exit 1
 fi
 
@@ -76,6 +86,10 @@ for required in \
 		exit 1
 	fi
 done
+if ! printf '%s\n' "$traefik_block" | grep -Fq 'stealth_ingress:' || ! printf '%s\n' "$cloudflared_block" | grep -Fq 'stealth_ingress:'; then
+	printf '%s\n' 'Cloudflared and Traefik must share the private stealth_ingress network' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$state_init_block" | grep -Eq 'user: "?0:0"?'; then
 	printf '%s\n' 'Traefik state initializer must run as container root' >&2
 	exit 1
@@ -88,6 +102,51 @@ if ! printf '%s\n' "$state_init_block" | grep -Eq 'source: .*/traefik/dynamic([[
 	printf '%s\n' 'Traefik state initializer must mount only the dynamic state directory' >&2
 	exit 1
 fi
+for required in \
+	'network_mode: none' \
+	'read_only: true' \
+	'target: /state' \
+	'source: .*/state([[:space:]]|$)' \
+	'target: /output' \
+	'source: .*/state/\.cloudflare-import([[:space:]]|$)' \
+	'/usr/local/bin/stealth-cloudflare-import-init' \
+	'FUNCTIONS_SECRET_KEY'; do
+	if ! printf '%s\n' "$cloudflare_state_init_block" | grep -Eq -- "$required"; then
+		printf 'Cloudflare setup-state initializer is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$cloudflare_state_init_block" | grep -Eq 'restart: "?no"?'; then
+	printf '%s\n' 'Cloudflare state initializer must be one-shot' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$cloudflare_state_init_block" | awk '
+/source: .*\/state([[:space:]]|$)/ { source=1 }
+/target: \/state$/ { target=1 }
+/read_only: true/ && source && target { readonly=1 }
+END { exit(readonly ? 0 : 1) }'; then
+	printf '%s\n' 'Cloudflare preparation source mount is not read-only' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$cloudflare_state_init_block" | grep -Eq 'user: "?0:0"?'; then
+	printf '%s\n' 'Cloudflare setup-state initializer must run as container root' >&2
+	exit 1
+fi
+for forbidden in \
+	'/var/run/docker.sock' \
+	'privileged:' \
+	'network_mode: host' \
+	'cap_add:' \
+	'hostfs' \
+	'CLOUDFLARE_API_TOKEN' \
+	'DATABASE_URL' \
+	'REDIS_URL' \
+	'cloudflare-tunnel-token'; do
+	if printf '%s\n' "$cloudflare_state_init_block" | grep -Fqi -- "$forbidden"; then
+		printf 'Cloudflare setup-state initializer contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
 for forbidden in \
 	'/var/run/docker.sock' \
 	'privileged:' \
@@ -171,12 +230,30 @@ for required in \
 	'source: .*/traefik/dynamic$' \
 	'target: /var/lib/stealth/traefik' \
 	'source: .*/traefik/dynamic/core\.yaml' \
-	'target: /var/lib/stealth/traefik/core\.yaml'; do
+	'target: /var/lib/stealth/traefik/core\.yaml' \
+	'source: .*/state/\.cloudflare-import$' \
+	'target: /var/lib/stealth/cloudflare-import'; do
 	if ! printf '%s\n' "$worker_block" | grep -Eq -- "$required"; then
 		printf 'worker is missing the required Traefik state mount: %s\n' "$required" >&2
 		exit 1
 	fi
 done
+if ! printf '%s\n' "$worker_block" | awk '
+/source: .*\/state\/\.cloudflare-import$/ { source=1 }
+/target: \/var\/lib\/stealth\/cloudflare-import$/ { target=1 }
+/read_only: true/ && source && target { readonly=1 }
+END { exit(readonly ? 0 : 1) }'; then
+	printf '%s\n' 'worker Cloudflare import directory is not explicitly read-only' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_block" | grep -Eqi '/run/secrets/cloudflare-tunnel-token|source: .*/state([[:space:]]|$)|setup-state\.enc|/var/lib/stealth/setup-state'; then
+	printf '%s\n' 'worker receives the full setup state or Cloudflared tunnel-token mount' >&2
+	exit 1
+fi
+if grep -Fq 'cp "$${source}"' "$compose_file" || grep -Fq 'setup-state.enc:ro' "$compose_file"; then
+	printf '%s\n' 'Cloudflare initializer must derive a narrow artifact rather than copy full setup state' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$worker_block" | awk '
 /source: .*[\\/]traefik[\\/]dynamic[\\/]core\.yaml/ { core_source=1 }
 /target: \/var\/lib\/stealth\/traefik\/core\.yaml/ { core_target=1 }

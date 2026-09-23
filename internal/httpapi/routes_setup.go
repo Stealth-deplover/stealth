@@ -17,6 +17,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/bootstrap"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/githubauth"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/Stealth-deplover/stealth/internal/setupconfig"
 	"github.com/Stealth-deplover/stealth/internal/setuphandoff"
 	"github.com/Stealth-deplover/stealth/internal/setupstate"
@@ -677,6 +678,22 @@ func (s *Server) createCloudflareTunnel(w http.ResponseWriter, r *http.Request) 
 			internalError(s, w, err)
 		}
 		return
+	}
+	if s.repo != nil {
+		binding := state.EffectiveCloudflareBinding().Normalized()
+		persistErr := s.repo.SaveCloudflareConnectionFromSetup(r.Context(), repository.CloudflareConnectionInput{
+			AccountID: binding.AccountID, ConsoleZoneID: binding.ZoneID, ConsoleHostname: binding.Hostname,
+			TunnelID: binding.TunnelID, TunnelName: binding.TunnelName, ConsoleRecordID: binding.RecordID,
+			APIToken: strings.TrimSpace(state.Secret("cloudflare_access_token")),
+		})
+		if persistErr != nil {
+			if errors.Is(persistErr, repository.ErrCloudflareConnectionConflict) {
+				writeError(w, http.StatusConflict, "cloudflare_connection_conflict", "a different production Cloudflare tunnel connection is already saved")
+			} else {
+				writeError(w, http.StatusServiceUnavailable, "cloudflare_connection_unavailable", "Cloudflare was provisioned, but its production connection could not be persisted; retry this setup step")
+			}
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, state.Public())
 }

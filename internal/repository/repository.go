@@ -10,9 +10,10 @@ import (
 type Repository struct {
 	pool *pgxpool.Pool
 	*BootstrapRepository
-	txtResolver   SiteTXTResolver
-	webhookCipher *functionsecret.Cipher
-	adminCipher   *functionsecret.Cipher
+	txtResolver      SiteTXTResolver
+	webhookCipher    *functionsecret.Cipher
+	adminCipher      *functionsecret.Cipher
+	cloudflareCipher *functionsecret.Cipher
 	// Messaging provider credentials and subscriber addresses use the same
 	// process-held AES-GCM key as webhook secrets. Keeping the cipher on the
 	// repository ensures reads can expose only safe metadata while trusted
@@ -29,6 +30,8 @@ type Dependencies struct {
 	// It is explicit so a deployment can rotate control-plane secrets without
 	// accidentally coupling them to a project webhook key in the future.
 	AdminCipher *functionsecret.Cipher
+	// CloudflareCipher protects the instance-scoped Cloudflare API token.
+	CloudflareCipher *functionsecret.Cipher
 }
 
 func New(pool *pgxpool.Pool) *Repository {
@@ -46,6 +49,7 @@ func NewWithDependencies(pool *pgxpool.Pool, deps Dependencies) *Repository {
 		webhookCipher:       deps.WebhookCipher,
 		messagingCipher:     deps.WebhookCipher,
 		adminCipher:         firstCipher(deps.AdminCipher, deps.WebhookCipher),
+		cloudflareCipher:    deps.CloudflareCipher,
 	}
 }
 

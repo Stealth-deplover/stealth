@@ -11,6 +11,7 @@ import (
 
 func TestLoadFunctionsSecretKeyIsDecodedAndValidated(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
+	t.Setenv("CLOUDFLARE_IMPORT_FILE", "")
 	key := []byte(strings.Repeat("k", 32))
 	t.Setenv("FUNCTIONS_SECRET_KEY", base64.StdEncoding.EncodeToString(key))
 	cfg, err := Load()
@@ -20,10 +21,23 @@ func TestLoadFunctionsSecretKeyIsDecodedAndValidated(t *testing.T) {
 	if string(cfg.FunctionsSecretKey) != string(key) {
 		t.Fatalf("decoded FunctionsSecretKey = %x, want %x", cfg.FunctionsSecretKey, key)
 	}
+	if cfg.CloudflareImportFile != "/var/lib/stealth/cloudflare-import/cloudflare-import.enc" {
+		t.Fatalf("default Cloudflare import file = %q", cfg.CloudflareImportFile)
+	}
 	if err := cfg.ValidateFunctions(); err != nil {
 		t.Fatalf("ValidateFunctions() = %v", err)
 	}
+	t.Setenv("CLOUDFLARE_IMPORT_FILE", "/tmp/cloudflare-import.enc")
+	cfg, err = Load()
+	if err != nil || cfg.CloudflareImportFile != "/tmp/cloudflare-import.enc" {
+		t.Fatalf("configured CloudflareImportFile = %q, %v", cfg.CloudflareImportFile, err)
+	}
+	t.Setenv("CLOUDFLARE_IMPORT_FILE", "relative.enc")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CLOUDFLARE_IMPORT_FILE") {
+		t.Fatalf("relative Cloudflare import path returned %v", err)
+	}
 
+	t.Setenv("CLOUDFLARE_IMPORT_FILE", "")
 	t.Setenv("FUNCTIONS_SECRET_KEY", base64.StdEncoding.EncodeToString([]byte("too short")))
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "FUNCTIONS_SECRET_KEY") {
 		t.Fatalf("Load with short function key returned %v", err)

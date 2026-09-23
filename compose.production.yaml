@@ -14,6 +14,8 @@ x-backend-environment: &backend-environment
   REDIS_URL: "${REDIS_URL:-redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0}"
   FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
   PUBLIC_APP_URL: "${PUBLIC_APP_URL:?set PUBLIC_APP_URL}"
+  CLOUDFLARE_API_BASE_URL: "${CLOUDFLARE_API_BASE_URL:-}"
+  CLOUDFLARE_RECONCILE_INTERVAL: "${CLOUDFLARE_RECONCILE_INTERVAL:-1m}"
   # Traefik platform routers target this narrow listener, never the
   # control-plane HTTP listener on 8080.
   PLATFORM_SITE_ADDR: "${PLATFORM_SITE_ADDR:-0.0.0.0:8082}"
@@ -309,6 +311,21 @@ services:
         chmod 0775 "$${state}" "$${generated}"
         chmod 0664 "$${reload}"
 
+  cloudflare-state-init:
+    # Decrypt legacy state only in this isolated one-shot process, then publish
+    # a typed Cloudflare-only encrypted artifact for the production worker.
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    environment:
+      FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+    volumes:
+      - ./state:/state:ro
+      - ./state/.cloudflare-import:/output:rw
+
   telemetry-docker-logs-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
     restart: "no"
@@ -425,7 +442,9 @@ services:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
     restart: unless-stopped
     stop_grace_period: 30s
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      CLOUDFLARE_IMPORT_FILE: /var/lib/stealth/cloudflare-import/cloudflare-import.enc
     volumes:
       - stealth_storage:/var/lib/stealth/storage
       - function_runner_staging:/var/lib/stealth/runner-staging
@@ -435,6 +454,7 @@ services:
       # the static Traefik file and installation root are not mounted.
       - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
+      - ./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
@@ -444,6 +464,8 @@ services:
       redis:
         condition: service_healthy
       traefik-state-init:
+        condition: service_completed_successfully
+      cloudflare-state-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1"]
@@ -495,9 +517,9 @@ services:
     networks: [stealth]
 
   traefik:
-    # Traefik is the future data-plane ingress. Nginx remains the active
-    # external entrypoint in this release; this service is intentionally
-    # internal-only so the migration has no public cutover side effect.
+    # Traefik handles platform Site requests received through the private
+    # Cloudflare ingress network. It has no published host port; Nginx remains
+    # the Console/API origin for the existing named tunnel.
     image: "${TRAEFIK_IMAGE:-traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c}"
     restart: unless-stopped
     command: ["--configFile=/etc/traefik/traefik.yaml"]
@@ -540,8 +562,8 @@ services:
         condition: service_healthy
     networks:
       stealth:
-      # Keep the future origin attachment ready without changing the current
-      # remotely configured Cloudflare Tunnel origin (still proxy/Nginx).
+      # Keep the workload origin attachment available without changing the
+      # Console's remotely configured tunnel origin (still proxy/Nginx).
       stealth_ingress:
         ipv4_address: "${STEALTH_CLOUDFLARED_INGRESS_IP:?set STEALTH_CLOUDFLARED_INGRESS_IP}"
 

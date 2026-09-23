@@ -42,6 +42,13 @@ selected zone, refuses conflicting provider records, and makes retries safe
 after a state write fails. The HTTP adapter only decodes the request and maps
 the module's typed errors to transport responses.
 
+Cloudflare workload readiness also depends on active edge TLS coverage for the
+desired wildcard hostname. The production certificate-pack inventory is read
+from the discovered workload zone; a matching active certificate is required
+before the provider status becomes ready. Total TLS state is informational and
+does not prove coverage for Cloudflare Tunnel hostnames. Missing coverage keeps
+the DNS and tunnel route in place while exposing an actionable TLS status.
+
 The host preflight module owns CPU, memory, free-disk, Docker, Compose, and
 Cloudflare outbound-connectivity checks. CLI and browser setup adapters supply
 the local-substitutable probes and retain their own presentation, so readiness
@@ -267,5 +274,23 @@ Platform hostnames target a separate private API listener containing only the
 current, enabled Site static-serving surface. It independently resolves the
 Host against PostgreSQL, so a stale Traefik file cannot serve a deleted or
 disabled Site and cannot expose Console API, health, metrics, or version
-routes. Nginx remains the public edge and Cloudflare provisioning is unchanged;
-wildcard DNS and Cloudflare-to-Traefik cutover are deferred.
+routes. Nginx remains the Console public edge; workload wildcard routing uses
+the same named tunnel to reach Traefik. The Instance Owner's PostgreSQL
+workload domain is desired state for one wildcard
+record and one wildcard tunnel ingress rule. The worker discovers the matching
+Cloudflare zone and reconciles it. Console traffic continues through the same
+tunnel to `proxy:80` and Nginx; Console/API origin cutover remains deferred.
+Wildcard routing covers platform Site hostnames only; custom-domain DNS
+remains user-managed.
+
+The instance-global Cloudflare API token is encrypted with the shared
+`functionsecret` cipher in PostgreSQL. Admin status responses expose only
+connection and reconciliation state. On upgrade, the isolated one-shot
+Cloudflare state initializer decrypts legacy setup state and atomically emits
+a narrow encrypted artifact containing only the Cloudflare connection
+identity and API token. The worker mounts only that derived artifact; the
+Cloudflared tunnel token, GitHub credentials, and database, Redis, and S3
+setup credentials are not included. The worker imports the artifact once when
+the production connection is absent. Provider reconciliation is asynchronous,
+single-writer under a PostgreSQL advisory lock, and retries from PostgreSQL
+desired state after restart.

@@ -87,6 +87,11 @@ func (r *Repository) UpdateInstanceDomainSettings(ctx context.Context, accountID
 	if result.RowsAffected() != 1 {
 		return domain.InstanceDomainSettings{}, ErrNotFound
 	}
+	if _, err := tx.Exec(ctx, `UPDATE cloudflare_connections SET status='pending',last_error=NULL,
+		edge_tls_status=CASE WHEN $1::text IS NULL THEN 'not_applicable' ELSE 'pending' END,
+		edge_tls_error=NULL,updated_at=now() WHERE id=TRUE AND api_token_ciphertext IS NOT NULL`, nullableDomainValue(canonicalWorkloadDomain)); err != nil {
+		return domain.InstanceDomainSettings{}, err
+	}
 	if err := writeInstanceAuditTx(ctx, tx, accountID, "admin.domain_settings.update", "instance_domain_settings", uuid.Nil, map[string]any{
 		"previous_workload_base_domain": previousWorkloadDomain,
 		"workload_base_domain":          canonicalWorkloadDomain,
