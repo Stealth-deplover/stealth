@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
@@ -78,6 +80,22 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 		t.Fatal(err)
 	}
 	repo := NewWithDependencies(pool, Dependencies{CloudflareCipher: cipher})
+	providerNeutralDomain := "apps.example.net"
+	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", &providerNeutralDomain); err != nil {
+		t.Fatal(err)
+	}
+	providerFactoryCalls := 0
+	providerNeutralReconciler, err := cloudflare.NewReconciler(repo, func(string) (cloudflare.Client, error) {
+		providerFactoryCalls++
+		return nil, errors.New("Cloudflare client must not be created for an unused provider")
+	}, time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	neutralResult, err := providerNeutralReconciler.Reconcile(ctx)
+	if err != nil || neutralResult.Status != "unconfigured" || providerFactoryCalls != 0 {
+		t.Fatalf("provider-neutral workload domain reconcile = %#v, factory_calls=%d, err=%v", neutralResult, providerFactoryCalls, err)
+	}
 	input := CloudflareConnectionInput{
 		AccountID: "account-1", ConsoleZoneID: "console-zone", ConsoleHostname: "cloud.example.com",
 		TunnelID: "tunnel-1", TunnelName: "stealth-prod", ConsoleRecordID: "console-record",
@@ -145,11 +163,12 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 	if completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{
 		ExpectedWorkloadBaseDomain: &firstDomain, WorkloadZoneID: "workload-zone", WorkloadZoneName: "example.net",
 		WildcardHostname: "*.apps.example.net", WildcardRecordID: "wildcard-1",
+		EdgeTLSStatus: cloudflare.EdgeTLSReady,
 	}); err != nil || !completed {
 		t.Fatalf("first reconcile completion = %v, %v", completed, err)
 	}
 	status, err = repo.CloudflareRoutingStatus(ctx)
-	if err != nil || status.Status != "ready" || status.WorkloadHostname == nil || *status.WorkloadHostname != "*.apps.example.net" {
+	if err != nil || status.Status != "ready" || status.EdgeTLSStatus != cloudflare.EdgeTLSReady || status.WorkloadHostname == nil || *status.WorkloadHostname != "*.apps.example.net" {
 		t.Fatalf("ready Cloudflare status = %#v, %v", status, err)
 	}
 
@@ -158,8 +177,20 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 		t.Fatal(err)
 	}
 	status, err = repo.CloudflareRoutingStatus(ctx)
-	if err != nil || status.Status != "pending" {
+	if err != nil || status.Status != "pending" || status.EdgeTLSStatus != cloudflare.EdgeTLSPending {
 		t.Fatalf("domain change status = %#v, %v; want pending", status, err)
+	}
+	secondDomain := "deploy.example.co.uk"
+	if completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{
+		ExpectedWorkloadBaseDomain: &secondDomain, WorkloadZoneID: "workload-zone-2", WorkloadZoneName: "example.co.uk",
+		WildcardHostname: "*.deploy.example.co.uk", WildcardRecordID: "wildcard-2",
+		EdgeTLSStatus: cloudflare.EdgeTLSActionRequired, EdgeTLSError: "No active certificate covers *.deploy.example.co.uk.",
+	}); err != nil || !completed {
+		t.Fatalf("action-required TLS observation = %v, %v", completed, err)
+	}
+	status, err = repo.CloudflareRoutingStatus(ctx)
+	if err != nil || status.Status != "error" || status.EdgeTLSStatus != cloudflare.EdgeTLSActionRequired || !strings.Contains(status.EdgeTLSError, "No active certificate") {
+		t.Fatalf("action-required edge TLS status = %#v, %v", status, err)
 	}
 	if err := repo.RecordCloudflareReconcileFailure(ctx, "Cloudflare request timed out"); err != nil {
 		t.Fatal(err)
@@ -169,19 +200,19 @@ func TestCloudflareConnectionPersistenceAndReconciliationIntegration(t *testing.
 		t.Fatalf("provider failure status = %#v, %v", status, err)
 	}
 	var observedWildcard string
-	if err := pool.QueryRow(ctx, `SELECT wildcard_record_id FROM cloudflare_connections WHERE id=TRUE`).Scan(&observedWildcard); err != nil || observedWildcard != "wildcard-1" {
+	if err := pool.QueryRow(ctx, `SELECT wildcard_record_id FROM cloudflare_connections WHERE id=TRUE`).Scan(&observedWildcard); err != nil || observedWildcard != "wildcard-2" {
 		t.Fatalf("provider failure replaced last-known wildcard ID %q: %v", observedWildcard, err)
 	}
 
 	if _, err := repo.UpdateInstanceDomainSettings(ctx, ownerID, "cloud.example.com", nil); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{})
+	completed, err := repo.CompleteCloudflareReconcile(ctx, domain.CloudflareRoutingUpdate{EdgeTLSStatus: cloudflare.EdgeTLSNotApplicable})
 	if err != nil || !completed {
 		t.Fatalf("clear reconcile completion = %v, %v", completed, err)
 	}
 	retiring, err := repo.ListRetiringCloudflareWildcardDNS(ctx)
-	if err != nil || len(retiring) != 1 || retiring[0].RecordID != "wildcard-1" || retiring[0].Hostname != "*.apps.example.net" {
+	if err != nil || len(retiring) != 2 || retiring[0].RecordID != "wildcard-1" || retiring[0].Hostname != "*.apps.example.net" || retiring[1].RecordID != "wildcard-2" || retiring[1].Hostname != "*.deploy.example.co.uk" {
 		t.Fatalf("queued prior wildcard cleanup = %#v, %v", retiring, err)
 	}
 	var stillEncrypted []byte

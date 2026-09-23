@@ -93,7 +93,7 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  traefik:\n  traefik-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
+	return "services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"
 }
 
 func testMainCollectorAsset() string {
@@ -276,8 +276,8 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 6 {
-		t.Fatalf("recorded calls = %#v, want three state inits, telemetry dependency, migration, and services", calls)
+	if len(calls) != 7 {
+		t.Fatalf("recorded calls = %#v, want four state inits, telemetry dependency, migration, and services", calls)
 	}
 	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
 		t.Fatalf("Collector state init command = %#v", calls[0])
@@ -288,14 +288,64 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 	if len(calls[2].args) < 2 || !strings.HasPrefix(calls[2].args[len(calls[2].args)-2], "STEALTH_TRAEFIK_HOST_UID=") || calls[2].args[len(calls[2].args)-1] != "traefik-state-init" {
 		t.Fatalf("Traefik state init command = %#v", calls[2])
 	}
-	if !equalArgs(calls[3].args[len(calls[3].args)-3:], []string{"up", "-d", "clickhouse"}) {
-		t.Fatalf("telemetry dependency command = %#v", calls[3])
+	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
+		t.Fatalf("Cloudflare state init command = %#v", calls[3])
 	}
-	if !equalArgs(calls[4].args[len(calls[4].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[4])
+	if !equalArgs(calls[4].args[len(calls[4].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[4])
 	}
-	if !contains(calls[5].args, "--no-deps") || contains(calls[5].args, "postgres") || contains(calls[5].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[5])
+	if !equalArgs(calls[5].args[len(calls[5].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[5])
+	}
+	if !contains(calls[6].args, "--no-deps") || contains(calls[6].args, "postgres") || contains(calls[6].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[6])
+	}
+}
+
+func TestProductionLifecyclesPrepareCloudflareImportBeforeWorkers(t *testing.T) {
+	cases := []struct {
+		name          string
+		existing      bool
+		externalDB    bool
+		externalRedis bool
+	}{
+		{name: "fresh install"},
+		{name: "repair", existing: true},
+		{name: "upgrade", existing: true},
+		{name: "external database", existing: true, externalDB: true},
+		{name: "external redis", existing: true, externalRedis: true},
+		{name: "external database and redis", existing: true, externalDB: true, externalRedis: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			layout := writeEngineFixture(t, false)
+			runner := &fakeRunner{}
+			engine := New(Options{Runner: runner})
+			plan := Plan{Layout: layout, Version: "v1.2.3", Existing: testCase.existing, ExternalDatabase: testCase.externalDB, ExternalRedis: testCase.externalRedis}
+			if err := engine.RunStep(context.Background(), plan, StepDependencies); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
+				t.Fatal(err)
+			}
+			calls := runner.snapshot()
+			if len(calls) < 6 {
+				t.Fatalf("recorded calls = %#v, want state preparation and production services", calls)
+			}
+			cloudflareInit := calls[3].args
+			if !equalArgs(cloudflareInit[len(cloudflareInit)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
+				t.Fatalf("Cloudflare state initializer did not run before services: %#v", cloudflareInit)
+			}
+			serviceArgs := calls[len(calls)-1].args
+			if !contains(serviceArgs, "api") || !contains(serviceArgs, "worker") {
+				t.Fatalf("production service startup command = %#v", serviceArgs)
+			}
+			if testCase.externalDB || testCase.externalRedis {
+				if !contains(serviceArgs, "--no-deps") || contains(serviceArgs, "postgres") || contains(serviceArgs, "redis") {
+					t.Fatalf("external dependency startup command = %#v", serviceArgs)
+				}
+			}
+		})
 	}
 }
 

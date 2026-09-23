@@ -250,6 +250,18 @@ func (c cloudflareAdminValidationClient) ListZones(context.Context, string) ([]c
 	}
 	return []cloudflare.Zone{{ID: "console-zone", Name: "example.com"}}, nil
 }
+func (c cloudflareAdminValidationClient) ListCertificatePacks(context.Context, string) ([]cloudflare.CertificatePack, error) {
+	if err := c.reject(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+func (c cloudflareAdminValidationClient) TotalTLSSettings(context.Context, string) (cloudflare.TotalTLSSettings, error) {
+	if err := c.reject(); err != nil {
+		return cloudflare.TotalTLSSettings{}, err
+	}
+	return cloudflare.TotalTLSSettings{}, nil
+}
 func (c cloudflareAdminValidationClient) ListTunnels(context.Context, string, string) ([]cloudflare.Tunnel, error) {
 	return nil, nil
 }

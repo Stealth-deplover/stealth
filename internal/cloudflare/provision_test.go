@@ -24,6 +24,14 @@ func (c *provisioningClient) ListZones(context.Context, string) ([]Zone, error) 
 	return append([]Zone(nil), c.zones...), nil
 }
 
+func (*provisioningClient) ListCertificatePacks(context.Context, string) ([]CertificatePack, error) {
+	return nil, nil
+}
+
+func (*provisioningClient) TotalTLSSettings(context.Context, string) (TotalTLSSettings, error) {
+	return TotalTLSSettings{}, nil
+}
+
 func (c *provisioningClient) ListTunnels(_ context.Context, _, name string) ([]Tunnel, error) {
 	result := make([]Tunnel, 0)
 	for _, tunnel := range c.tunnels {

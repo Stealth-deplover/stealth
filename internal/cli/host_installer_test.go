@@ -109,7 +109,7 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":            "services:\n  traefik:\n  traefik-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
+		"compose.production.yaml":            "services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
 		"compose.setup.yaml":                 "services:\n  setup:\n",
 		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
 		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
@@ -143,8 +143,8 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 11 {
-		t.Fatalf("host Docker calls = %#v, want preflight, three state inits, production steps, and setup cleanup", runner.calls)
+	if len(runner.calls) != 12 {
+		t.Fatalf("host Docker calls = %#v, want preflight, four state inits, production steps, and setup cleanup", runner.calls)
 	}
 	if got := runner.command(5).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", got)

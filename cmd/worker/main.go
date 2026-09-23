@@ -22,6 +22,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
 	"github.com/Stealth-deplover/stealth/internal/cloudflare"
 	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/functionrunner"
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
@@ -313,7 +314,13 @@ func main() {
 	}
 }
 
-func importLegacyCloudflareConnection(ctx context.Context, stateFile string, cipher *functionsecret.Cipher, repo *repository.Repository, logger *slog.Logger) {
+type legacyCloudflareImportRepository interface {
+	CloudflareRoutingStatus(context.Context) (domain.CloudflareRoutingStatus, error)
+	MarkCloudflareConnectionUnavailable(context.Context, string) error
+	ImportCloudflareConnectionOnce(context.Context, repository.CloudflareConnectionInput, string) (bool, error)
+}
+
+func importLegacyCloudflareConnection(ctx context.Context, stateFile string, cipher *functionsecret.Cipher, repo legacyCloudflareImportRepository, logger *slog.Logger) {
 	if repo == nil || cipher == nil || strings.TrimSpace(stateFile) == "" {
 		return
 	}

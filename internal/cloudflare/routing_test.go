@@ -47,7 +47,9 @@ func (s *routingFakeStore) CompleteCloudflareReconcile(_ context.Context, update
 	s.connection.WorkloadZoneName = update.WorkloadZoneName
 	s.connection.WildcardHostname = update.WildcardHostname
 	s.connection.WildcardRecordID = update.WildcardRecordID
-	s.connection.Status = "ready"
+	s.connection.EdgeTLSStatus = update.EdgeTLSStatus
+	s.connection.EdgeTLSError = update.EdgeTLSError
+	s.connection.Status = cloudflareRoutingStatus(update.EdgeTLSStatus)
 	s.connection.LastError = ""
 	now := time.Now().UTC()
 	s.connection.LastReconciledAt = &now
@@ -77,29 +79,37 @@ func (s *routingFakeStore) RecordCloudflareReconcileFailure(_ context.Context, m
 }
 
 type routingFakeClient struct {
-	accounts        []Account
-	zones           []Zone
-	ingress         []IngressRule
-	records         map[string]map[string]DNSRecord
-	listAccountsErr error
-	configureErr    error
-	createErr       error
-	updateErr       error
-	deleteErr       error
-	createCount     int
-	updateCount     int
-	configureCount  int
-	deleteCount     int
-	events          []string
+	accounts            []Account
+	zones               []Zone
+	certificatePacks    []CertificatePack
+	certificatePacksErr error
+	totalTLS            TotalTLSSettings
+	totalTLSErr         error
+	defaultWildcard     string
+	certificateReads    int
+	totalTLSReads       int
+	ingress             []IngressRule
+	records             map[string]map[string]DNSRecord
+	listAccountsErr     error
+	configureErr        error
+	createErr           error
+	updateErr           error
+	deleteErr           error
+	createCount         int
+	updateCount         int
+	configureCount      int
+	deleteCount         int
+	events              []string
 }
 
 func newRoutingFakeClient() *routingFakeClient {
 	return &routingFakeClient{
 		accounts: []Account{{ID: "account-a", Name: "Test"}},
 		zones: []Zone{
-			{ID: "console-zone", Name: "example.com"},
-			{ID: "net-zone", Name: "example.net"},
-			{ID: "nested-zone", Name: "sub.example.net"},
+			{ID: "console-zone", Name: "example.com", Type: "full"},
+			{ID: "apps-zone", Name: "apps.example.com", Type: "full"},
+			{ID: "net-zone", Name: "example.net", Type: "full"},
+			{ID: "nested-zone", Name: "sub.example.net", Type: "full"},
 		},
 		ingress: []IngressRule{{Hostname: "cloud.example.com", Service: "http://proxy:80"}, {Service: "http_status:404"}},
 		records: make(map[string]map[string]DNSRecord),
@@ -114,6 +124,30 @@ func (c *routingFakeClient) ListAccounts(context.Context) ([]Account, error) {
 }
 func (c *routingFakeClient) ListZones(context.Context, string) ([]Zone, error) {
 	return append([]Zone(nil), c.zones...), nil
+}
+func (c *routingFakeClient) ListCertificatePacks(context.Context, string) ([]CertificatePack, error) {
+	c.certificateReads++
+	if c.certificatePacksErr != nil {
+		return nil, c.certificatePacksErr
+	}
+	if c.certificatePacks != nil {
+		return append([]CertificatePack(nil), c.certificatePacks...), nil
+	}
+	if c.defaultWildcard == "" {
+		return nil, nil
+	}
+	return []CertificatePack{{
+		ID: "pack-active", Type: "advanced", Status: "active",
+		Hosts:        []string{"apps.example.com", c.defaultWildcard},
+		Certificates: []Certificate{{ID: "cert-active", Status: "active", Hosts: []string{c.defaultWildcard}}},
+	}}, nil
+}
+func (c *routingFakeClient) TotalTLSSettings(context.Context, string) (TotalTLSSettings, error) {
+	c.totalTLSReads++
+	if c.totalTLSErr != nil {
+		return TotalTLSSettings{}, c.totalTLSErr
+	}
+	return c.totalTLS, nil
 }
 func (*routingFakeClient) ListTunnels(context.Context, string, string) ([]Tunnel, error) {
 	return nil, nil
@@ -203,6 +237,10 @@ func newRoutingTestReconciler(t *testing.T, store *routingFakeStore, client *rou
 		if token != "cf-secret-token" {
 			t.Errorf("client token = %q, want stored credential", token)
 		}
+		client.defaultWildcard = ""
+		if store.connection.WorkloadBaseDomain != nil {
+			client.defaultWildcard = "*." + *store.connection.WorkloadBaseDomain
+		}
 		return client, nil
 	}, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -222,6 +260,7 @@ func newRoutingTestStore(workloadDomain *string) *routingFakeStore {
 func TestRoutingReconcilerCreatesWildcardAndOrdersTunnelIngress(t *testing.T) {
 	workload := "apps.example.com"
 	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
+	client.zones = []Zone{{ID: "console-zone", Name: "example.com", Type: "full"}}
 	reconciler := newRoutingTestReconciler(t, store, client)
 	result, err := reconciler.Reconcile(context.Background())
 	if err != nil {
@@ -240,6 +279,112 @@ func TestRoutingReconcilerCreatesWildcardAndOrdersTunnelIngress(t *testing.T) {
 	}
 	if store.connection.Status != "ready" || store.connection.WorkloadZoneID != "console-zone" || store.connection.WildcardHostname != "*.apps.example.com" || !result.Changed {
 		t.Fatalf("stored routing state = %#v result=%#v", store.connection, result)
+	}
+}
+
+func TestRoutingReconcilerNoOpsWhenCloudflareIsUnconfigured(t *testing.T) {
+	workload := "apps.example.com"
+	for _, workloadDomain := range []*string{&workload, nil} {
+		store := &routingFakeStore{connection: domain.CloudflareConnection{WorkloadBaseDomain: workloadDomain}}
+		clientFactoryCalls := 0
+		reconciler, err := NewReconciler(store, func(string) (Client, error) {
+			clientFactoryCalls++
+			return nil, errors.New("provider client must not be created for an unused provider")
+		}, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := reconciler.Reconcile(context.Background())
+		if err != nil || result.Status != "unconfigured" || result.EdgeTLSStatus != EdgeTLSNotApplicable {
+			t.Fatalf("unconfigured Cloudflare reconcile = %#v, %v", result, err)
+		}
+		if clientFactoryCalls != 0 || store.connection.Status != "" || store.lastError != "" {
+			t.Fatalf("unconfigured provider was acted on: client_calls=%d store=%#v", clientFactoryCalls, store)
+		}
+	}
+}
+
+func TestRoutingReconcilerReportsIdentityWithoutCredentialAsReconnectRequired(t *testing.T) {
+	store := &routingFakeStore{connection: domain.CloudflareConnection{
+		AccountID: "account-a", ConsoleZoneID: "console-zone", ConsoleHostname: "cloud.example.com",
+		TunnelID: "tunnel-a", TunnelName: "stealth-prod", ConsoleRecordID: "console-record",
+	}}
+	clientFactoryCalls := 0
+	reconciler, err := NewReconciler(store, func(string) (Client, error) {
+		clientFactoryCalls++
+		return nil, errors.New("unreachable")
+	}, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reconciler.Reconcile(context.Background())
+	if err == nil || result.Status != "error" || store.connection.Status != "error" || !strings.Contains(store.lastError, "reconnect") {
+		t.Fatalf("incomplete Cloudflare identity = %#v, store=%#v, err=%v", result, store, err)
+	}
+	if clientFactoryCalls != 0 {
+		t.Fatalf("client factory called without credential %d times", clientFactoryCalls)
+	}
+}
+
+func TestTLSInspectionFailureKeepsWildcardAndTunnelResources(t *testing.T) {
+	workload := "apps.example.com"
+	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
+	client.certificatePacksErr = errors.New("provider echoed cf-secret-token")
+	reconciler := newRoutingTestReconciler(t, store, client)
+	result, err := reconciler.Reconcile(context.Background())
+	if err == nil || result.Status != "error" || result.EdgeTLSStatus != EdgeTLSError || store.connection.Status != "error" {
+		t.Fatalf("TLS API failure result=%#v state=%#v error=%v", result, store.connection, err)
+	}
+	if strings.Contains(err.Error(), "cf-secret-token") || strings.Contains(store.connection.EdgeTLSError, "cf-secret-token") {
+		t.Fatalf("TLS inspection leaked token: err=%q tls_error=%q", err, store.connection.EdgeTLSError)
+	}
+	if store.connection.WildcardRecordID == "" || client.records["apps-zone"][store.connection.WildcardRecordID].Name != "*.apps.example.com" {
+		t.Fatalf("TLS failure removed or failed to save wildcard DNS: %#v", store.connection)
+	}
+	if !sameIngress(client.ingress, desiredTunnelIngress("cloud.example.com", "*.apps.example.com")) || client.deleteCount != 0 {
+		t.Fatalf("TLS failure changed working tunnel or cleaned provider state: ingress=%#v deletes=%d", client.ingress, client.deleteCount)
+	}
+}
+
+func TestTLSCertificatePermissionUnauthorizedPreservesRouting(t *testing.T) {
+	workload := "apps.example.com"
+	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
+	client.certificatePacksErr = fmt.Errorf("%w: cf-secret-token echoed", ErrUnauthorized)
+	reconciler := newRoutingTestReconciler(t, store, client)
+	result, err := reconciler.Reconcile(context.Background())
+	if !errors.Is(err, ErrUnauthorized) || result.Status != "error" || result.EdgeTLSStatus != EdgeTLSError {
+		t.Fatalf("unauthorized certificate inspection result=%#v err=%v", result, err)
+	}
+	if strings.Contains(err.Error(), "cf-secret-token") || store.connection.EdgeTLSError == "" {
+		t.Fatalf("certificate permission failure leaked credential or omitted status: err=%q tls_error=%q", err, store.connection.EdgeTLSError)
+	}
+	if store.connection.WildcardRecordID == "" || client.deleteCount != 0 || !sameIngress(client.ingress, desiredTunnelIngress("cloud.example.com", "*.apps.example.com")) {
+		t.Fatalf("unauthorized TLS read destroyed routing: state=%#v ingress=%#v", store.connection, client.ingress)
+	}
+}
+
+func TestRoutingRequiresActiveExactWorkloadWildcardAndPreservesDNSAndTunnel(t *testing.T) {
+	workload := "apps.example.com"
+	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
+	client.zones = []Zone{{ID: "console-zone", Name: "example.com", Type: "full"}}
+	client.certificatePacks = []CertificatePack{{
+		ID: "universal-parent", Type: "universal", Status: "active", Hosts: []string{"example.com", "*.example.com"},
+		Certificates: []Certificate{{ID: "cert-parent", Status: "active", Hosts: []string{"*.example.com"}}},
+	}}
+	reconciler := newRoutingTestReconciler(t, store, client)
+	result, err := reconciler.Reconcile(context.Background())
+	if err != nil || result.Status != "error" || result.EdgeTLSStatus != EdgeTLSActionRequired {
+		t.Fatalf("deeper wildcard TLS result=%#v err=%v", result, err)
+	}
+	if !strings.Contains(result.EdgeTLSReason, "*.apps.example.com") || store.connection.LastError != "" {
+		t.Fatalf("missing wildcard coverage reason/status = %q/%q", result.EdgeTLSReason, store.connection.LastError)
+	}
+	if store.connection.WildcardRecordID == "" || client.records["console-zone"][store.connection.WildcardRecordID].Name != "*.apps.example.com" {
+		t.Fatalf("DNS wildcard was not retained: state=%#v records=%#v", store.connection, client.records)
+	}
+	wantIngress := desiredTunnelIngress("cloud.example.com", "*.apps.example.com")
+	if !sameIngress(client.ingress, wantIngress) || client.deleteCount != 0 {
+		t.Fatalf("TLS readiness failure changed tunnel routes: ingress=%#v deletes=%d", client.ingress, client.deleteCount)
 	}
 }
 
@@ -286,7 +431,7 @@ func TestRoutingReconcilerAdoptsAndRepairsOwnedWildcardFlags(t *testing.T) {
 func TestRoutingReconcilerRefusesIncompatibleDNSWithoutTunnelMutation(t *testing.T) {
 	workload := "apps.example.com"
 	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
-	client.records["console-zone"] = map[string]DNSRecord{
+	client.records["apps-zone"] = map[string]DNSRecord{
 		"operator-a": {ID: "operator-a", Type: "A", Name: "*.apps.example.com", Content: "192.0.2.1"},
 	}
 	reconciler := newRoutingTestReconciler(t, store, client)
@@ -297,7 +442,7 @@ func TestRoutingReconcilerRefusesIncompatibleDNSWithoutTunnelMutation(t *testing
 	if store.connection.Status != "error" || client.configureCount != 0 || client.createCount != 0 {
 		t.Fatalf("conflict mutated routing: state=%#v client=%#v", store.connection, client)
 	}
-	if client.records["console-zone"]["operator-a"].Content != "192.0.2.1" {
+	if client.records["apps-zone"]["operator-a"].Content != "192.0.2.1" {
 		t.Fatal("incompatible operator record was modified")
 	}
 }
@@ -305,7 +450,7 @@ func TestRoutingReconcilerRefusesIncompatibleDNSWithoutTunnelMutation(t *testing
 func TestRoutingReconcilerRefusesWildcardWithAnotherCNAMETarget(t *testing.T) {
 	workload := "apps.example.com"
 	store, client := newRoutingTestStore(&workload), newRoutingFakeClient()
-	client.records["console-zone"] = map[string]DNSRecord{
+	client.records["apps-zone"] = map[string]DNSRecord{
 		"operator-cname": {ID: "operator-cname", Type: "CNAME", Name: "*.apps.example.com", Content: "operator.example.net", Proxied: true, TTL: 1},
 	}
 	reconciler := newRoutingTestReconciler(t, store, client)
@@ -315,7 +460,7 @@ func TestRoutingReconcilerRefusesWildcardWithAnotherCNAMETarget(t *testing.T) {
 	if client.configureCount != 0 || client.createCount != 0 || client.updateCount != 0 || client.deleteCount != 0 {
 		t.Fatalf("CNAME target conflict caused provider mutation: %#v", client)
 	}
-	if client.records["console-zone"]["operator-cname"].Content != "operator.example.net" {
+	if client.records["apps-zone"]["operator-cname"].Content != "operator.example.net" {
 		t.Fatal("operator-owned CNAME was modified")
 	}
 }
@@ -389,7 +534,7 @@ func TestRoutingReconcilerEstablishesNewDomainBeforeRemovingOldWildcard(t *testi
 	if _, exists := client.records["net-zone"]["old-record"]; exists {
 		t.Fatal("previous owned wildcard record remains after safe replacement")
 	}
-	if got := client.records["console-zone"][store.connection.WildcardRecordID]; got.Name != "*.apps.example.com" || !got.Proxied || got.TTL != 1 {
+	if got := client.records["apps-zone"][store.connection.WildcardRecordID]; got.Name != "*.apps.example.com" || !got.Proxied || got.TTL != 1 {
 		t.Fatalf("new wildcard record = %#v", got)
 	}
 }

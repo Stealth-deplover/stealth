@@ -126,6 +126,14 @@ func (c *gatedSetupCloudflareClient) ListZones(ctx context.Context, _ string) ([
 	}
 }
 
+func (*gatedSetupCloudflareClient) ListCertificatePacks(context.Context, string) ([]cloudflare.CertificatePack, error) {
+	return nil, nil
+}
+
+func (*gatedSetupCloudflareClient) TotalTLSSettings(context.Context, string) (cloudflare.TotalTLSSettings, error) {
+	return cloudflare.TotalTLSSettings{}, nil
+}
+
 func (*gatedSetupCloudflareClient) ListTunnels(context.Context, string, string) ([]cloudflare.Tunnel, error) {
 	return nil, nil
 }

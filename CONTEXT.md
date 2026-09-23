@@ -42,6 +42,13 @@ selected zone, refuses conflicting provider records, and makes retries safe
 after a state write fails. The HTTP adapter only decodes the request and maps
 the module's typed errors to transport responses.
 
+Cloudflare workload readiness also depends on active edge TLS coverage for the
+desired wildcard hostname. The production certificate-pack inventory is read
+from the discovered workload zone; a matching active certificate is required
+before the provider status becomes ready. Total TLS state is informational and
+does not prove coverage for Cloudflare Tunnel hostnames. Missing coverage keeps
+the DNS and tunnel route in place while exposing an actionable TLS status.
+
 The host preflight module owns CPU, memory, free-disk, Docker, Compose, and
 Cloudflare outbound-connectivity checks. CLI and browser setup adapters supply
 the local-substitutable probes and retain their own presentation, so readiness

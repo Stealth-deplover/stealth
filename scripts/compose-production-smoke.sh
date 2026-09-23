@@ -32,6 +32,12 @@ core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
 core_backup=""
 core_modified="false"
 static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
+cloudflare_state_source="$(dirname -- "$compose_file")/state/setup-state.enc"
+cloudflare_import_dir="$(dirname -- "$compose_file")/state/.cloudflare-import"
+cloudflare_setup_state_available="false"
+if [ -s "$cloudflare_state_source" ]; then
+	cloudflare_setup_state_available="true"
+fi
 static_backup=""
 static_modified="false"
 dynamic_state_dir="$(dirname -- "$compose_file")/traefik/dynamic"
@@ -237,6 +243,18 @@ prepare_traefik_state_for_smoke
 	-e "STEALTH_TRAEFIK_HOST_UID=$(id -u)" \
 	traefik-state-init
 verify_traefik_state_init
+"${compose[@]}" run --rm --no-deps cloudflare-state-init
+if [ "$cloudflare_setup_state_available" = "true" ]; then
+	if [ ! -f "$cloudflare_import_dir/setup-state.enc" ] || [ -L "$cloudflare_import_dir/setup-state.enc" ]; then
+		printf '%s\n' 'Cloudflare initializer did not prepare the encrypted setup snapshot' >&2
+		exit 1
+	fi
+else
+	if [ -e "$cloudflare_import_dir/setup-state.enc" ] || [ -L "$cloudflare_import_dir/setup-state.enc" ]; then
+		printf '%s\n' 'Cloudflare initializer fabricated an import snapshot without source state' >&2
+		exit 1
+	fi
+fi
 
 wait_for_healthy() {
 	local service="$1"
@@ -515,8 +533,8 @@ verify_worker_platform_state_boundary() {
 		*) printf 'worker core.yaml is not overlaid read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
 	case "$mounts" in
-		*'/var/lib/stealth/setup-state/setup-state.enc=false '*|*'/var/lib/stealth/setup-state/setup-state.enc=false') ;;
-		*) printf 'worker setup-state snapshot is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
+		*'/var/lib/stealth/setup-state=false '*|*'/var/lib/stealth/setup-state=false') ;;
+		*) printf 'worker setup-state import directory is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
 	case "$mounts" in
 		*'/etc/traefik='*|*'/var/lib/stealth/traefik/traefik.yaml='*|*'/var/lib/stealth/traefik/static='*|*'/run/secrets/cloudflare-tunnel-token='*|*'=/state='*)

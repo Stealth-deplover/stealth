@@ -313,8 +313,8 @@ services:
 
   cloudflare-state-init:
     # Copy only the encrypted setup snapshot into a dedicated read-only worker
-    # mount. The original state directory also contains the cloudflared tunnel
-    # token, so the worker never receives that unrelated file.
+    # directory. The original state directory also contains the cloudflared
+    # tunnel token, so the worker never receives that unrelated file.
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
     restart: "no"
     user: "0:0"
@@ -354,15 +354,16 @@ services:
         if [ -L "$${source}" ]; then
           printf '%s\n' 'encrypted setup state must not be a symlink' >&2
           exit 1
-        elif [ -f "$${source}" ]; then
+        elif [ -f "$${source}" ] && [ -s "$${source}" ]; then
           cp "$${source}" "$${temporary}"
+          chown "$${state_uid}:10001" "$${temporary}"
+          chmod 0640 "$${temporary}"
+          mv -f "$${temporary}" "$${destination}/setup-state.enc"
         else
-          : >"$${temporary}"
+          rm -f "$${destination}/setup-state.enc"
         fi
-        chown "$${state_uid}:10001" "$${destination}" "$${temporary}"
+        chown "$${state_uid}:10001" "$${destination}"
         chmod 0770 "$${destination}"
-        chmod 0640 "$${temporary}"
-        mv -f "$${temporary}" "$${destination}/setup-state.enc"
 
   telemetry-docker-logs-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
@@ -492,7 +493,7 @@ services:
       # the static Traefik file and installation root are not mounted.
       - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
-      - ./state/.cloudflare-import/setup-state.enc:/var/lib/stealth/setup-state/setup-state.enc:ro
+      - ./state/.cloudflare-import:/var/lib/stealth/setup-state:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"

@@ -76,6 +76,7 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	for _, required := range []string{
 		"  traefik:",
 		"  traefik-state-init:",
+		"  cloudflare-state-init:",
 		"./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro",
 		"./traefik/dynamic:/etc/traefik/dynamic:ro",
 		"./traefik/dynamic:/state:rw",
@@ -93,7 +94,7 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	if stateInitStart < 0 {
 		t.Fatal("Traefik state initializer is missing")
 	}
-	stateInitEnd := strings.Index(composeText[stateInitStart+1:], "\n  telemetry-docker-logs-state-init:")
+	stateInitEnd := strings.Index(composeText[stateInitStart+1:], "\n  cloudflare-state-init:")
 	if stateInitEnd < 0 {
 		t.Fatal("could not delimit Traefik state initializer")
 	}
@@ -102,6 +103,28 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 		if strings.Contains(stateInitBlock, forbidden) {
 			t.Fatalf("Traefik state initializer contains forbidden %q", forbidden)
 		}
+	}
+	cloudflareInitStart := strings.Index(composeText, "\n  cloudflare-state-init:")
+	if cloudflareInitStart < 0 {
+		t.Fatal("Cloudflare state initializer is missing")
+	}
+	cloudflareInitEnd := strings.Index(composeText[cloudflareInitStart+1:], "\n  telemetry-docker-logs-state-init:")
+	if cloudflareInitEnd < 0 {
+		t.Fatal("could not delimit Cloudflare state initializer")
+	}
+	cloudflareInitBlock := composeText[cloudflareInitStart : cloudflareInitStart+1+cloudflareInitEnd]
+	for _, required := range []string{"network_mode: none", "read_only: true", "user: \"0:0\"", "restart: \"no\"", "./state:/state:rw", "[ -s \"$${source}\" ]"} {
+		if !strings.Contains(cloudflareInitBlock, required) {
+			t.Fatalf("Cloudflare setup-state initializer is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "cap_add:", "CLOUDFLARE_API_TOKEN", ": >\"$${temporary}\""} {
+		if strings.Contains(cloudflareInitBlock, forbidden) {
+			t.Fatalf("Cloudflare setup-state initializer contains forbidden %q", forbidden)
+		}
+	}
+	if !strings.Contains(composeText, "./state/.cloudflare-import:/var/lib/stealth/setup-state:ro") {
+		t.Fatal("worker must mount only the dedicated encrypted setup-state directory read-only")
 	}
 	traefikStart := strings.Index(composeText, "\n  traefik:")
 	if traefikStart < 0 {

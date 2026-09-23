@@ -3664,13 +3664,23 @@ export interface components {
         AdminCloudflareRoutingStatus: {
             /** @description Whether an encrypted Cloudflare API token and complete existing tunnel identity are stored. */
             configured: boolean;
-            /** @enum {string} */
+            /**
+             * @description Ready means wildcard DNS
+             * @enum {string}
+             */
             status: AdminCloudflareRoutingStatusStatus;
             console_hostname?: string;
             /** @description Desired wildcard derived from workload_base_domain */
             workload_hostname: string | null;
             /** @description Cloudflare zone selected by longest valid DNS suffix match when observed. */
             zone?: string;
+            /**
+             * @description Whether an active production edge certificate proves coverage of the workload wildcard.
+             * @enum {string}
+             */
+            edge_tls_status: AdminCloudflareRoutingStatusEdge_tls_status;
+            /** @description Sanitized certificate readiness reason */
+            edge_tls_error?: string;
             /** Format: date-time */
             last_reconciled_at?: string | null;
             /** @description Sanitized provider status with credentials removed. */
@@ -14355,6 +14365,13 @@ export enum AdminCloudflareRoutingStatusStatus {
     unconfigured = "unconfigured",
     pending = "pending",
     ready = "ready",
+    error = "error"
+}
+export enum AdminCloudflareRoutingStatusEdge_tls_status {
+    not_applicable = "not_applicable",
+    pending = "pending",
+    ready = "ready",
+    action_required = "action_required",
     error = "error"
 }
 export enum AdminPublicIncidentSeverity {

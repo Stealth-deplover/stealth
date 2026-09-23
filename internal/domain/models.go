@@ -177,6 +177,8 @@ type CloudflareConnection struct {
 	WildcardHostname   string     `json:"-"`
 	WildcardRecordID   string     `json:"-"`
 	Status             string     `json:"-"`
+	EdgeTLSStatus      string     `json:"-"`
+	EdgeTLSError       string     `json:"-"`
 	LastReconciledAt   *time.Time `json:"-"`
 	LastError          string     `json:"-"`
 	ConfiguredAt       *time.Time `json:"-"`
@@ -199,6 +201,8 @@ type CloudflareRoutingStatus struct {
 	ConsoleHostname  string     `json:"console_hostname,omitempty"`
 	WorkloadHostname *string    `json:"workload_hostname"`
 	Zone             string     `json:"zone,omitempty"`
+	EdgeTLSStatus    string     `json:"edge_tls_status"`
+	EdgeTLSError     string     `json:"edge_tls_error,omitempty"`
 	LastReconciledAt *time.Time `json:"last_reconciled_at,omitempty"`
 	LastError        string     `json:"last_error,omitempty"`
 }
@@ -209,6 +213,8 @@ type CloudflareRoutingUpdate struct {
 	WorkloadZoneName           string
 	WildcardHostname           string
 	WildcardRecordID           string
+	EdgeTLSStatus              string
+	EdgeTLSError               string
 }
 
 // AdminOperation is a safe, instance-wide projection of durable work already

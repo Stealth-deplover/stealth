@@ -212,23 +212,27 @@ for required in \
 	'target: /var/lib/stealth/traefik' \
 	'source: .*/traefik/dynamic/core\.yaml' \
 	'target: /var/lib/stealth/traefik/core\.yaml' \
-	'source: .*/state/\.cloudflare-import/setup-state\.enc' \
-	'target: /var/lib/stealth/setup-state/setup-state\.enc'; do
+	'source: .*/state/\.cloudflare-import$' \
+	'target: /var/lib/stealth/setup-state'; do
 	if ! printf '%s\n' "$worker_block" | grep -Eq -- "$required"; then
 		printf 'worker is missing the required Traefik state mount: %s\n' "$required" >&2
 		exit 1
 	fi
 done
 if ! printf '%s\n' "$worker_block" | awk '
-/source: .*\/state\/\.cloudflare-import\/setup-state\.enc/ { source=1 }
-/target: \/var\/lib\/stealth\/setup-state\/setup-state\.enc/ { target=1 }
+/source: .*\/state\/\.cloudflare-import$/ { source=1 }
+/target: \/var\/lib\/stealth\/setup-state$/ { target=1 }
 /read_only: true/ && source && target { readonly=1 }
 END { exit(readonly ? 0 : 1) }'; then
-	printf '%s\n' 'worker encrypted setup-state import mount is not explicitly read-only' >&2
+	printf '%s\n' 'worker setup-state import directory is not explicitly read-only' >&2
 	exit 1
 fi
 if printf '%s\n' "$worker_block" | grep -Eqi '/run/secrets/cloudflare-tunnel-token|source: .*/state([[:space:]]|$)'; then
 	printf '%s\n' 'worker receives a broad state directory or plaintext Cloudflared tunnel-token mount' >&2
+	exit 1
+fi
+if ! grep -Fq '[ -s "$${source}" ]' "$compose_file" || grep -Fq ': >"$${temporary}"' "$compose_file"; then
+	printf '%s\n' 'Cloudflare setup-state initializer must not fabricate an empty encrypted snapshot' >&2
 	exit 1
 fi
 if ! printf '%s\n' "$worker_block" | awk '

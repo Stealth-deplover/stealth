@@ -35,11 +35,13 @@ type Reconciler struct {
 }
 
 type ReconcileResult struct {
-	LockAcquired bool
-	Changed      bool
-	Status       string
-	Hostname     string
-	Zone         string
+	LockAcquired  bool
+	Changed       bool
+	Status        string
+	EdgeTLSStatus string
+	EdgeTLSReason string
+	Hostname      string
+	Zone          string
 }
 
 func NewReconciler(store RoutingStore, client ClientFactory, interval time.Duration, logger *slog.Logger) (*Reconciler, error) {
@@ -79,12 +81,20 @@ func (r *Reconciler) runPass(ctx context.Context) {
 		r.logger.Debug("cloudflare reconcile skipped; another worker holds the lock")
 	case errors.Is(err, ErrUnauthorized):
 		r.logger.Error("cloudflare token unauthorized", "error", safeReconcileError(err, ""))
+	case result.EdgeTLSStatus == EdgeTLSError && err != nil:
+		r.logger.Error("cloudflare edge TLS inspection failed", "edge_tls_status", result.EdgeTLSStatus, "error", safeReconcileError(err, ""))
+	case result.EdgeTLSStatus == EdgeTLSActionRequired:
+		r.logger.Error("cloudflare edge TLS action required", "workload_hostname", result.Hostname, "zone", result.Zone, "reason", result.EdgeTLSReason)
+	case result.EdgeTLSStatus == EdgeTLSPending:
+		r.logger.Info("cloudflare edge TLS pending", "workload_hostname", result.Hostname, "zone", result.Zone, "reason", result.EdgeTLSReason)
 	case errors.Is(err, ErrRoutingConflict):
 		r.logger.Error("cloudflare reconcile conflict", "error", safeReconcileError(err, ""))
 	case err != nil:
 		r.logger.Error("cloudflare reconcile failed", "error", safeReconcileError(err, ""))
 	case result.Changed:
 		r.logger.Info("cloudflare reconcile success", "workload_hostname", result.Hostname, "zone", result.Zone)
+	case result.Status == "unconfigured":
+		r.logger.Debug("cloudflare reconcile skipped; no Cloudflare connection is configured")
 	default:
 		r.logger.Debug("cloudflare already converged", "workload_hostname", result.Hostname, "zone", result.Zone)
 	}
@@ -94,7 +104,6 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result ReconcileResult, err
 	if r == nil || r.store == nil || r.client == nil {
 		return result, errors.New("Cloudflare reconciler is not configured")
 	}
-	r.logger.Info("cloudflare reconcile start")
 	release, acquired, err := r.store.TryCloudflareReconcileLock(ctx)
 	if err != nil {
 		return result, fmt.Errorf("acquire Cloudflare reconcile lock: %w", err)
@@ -114,10 +123,17 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result ReconcileResult, err
 		return result, fmt.Errorf("read Cloudflare desired state: %w", err)
 	}
 	result.Status = connection.Status
+	if !hasCloudflareConnectionIntent(connection) {
+		// workload_base_domain is provider-neutral. An instance without a
+		// Cloudflare identity and credential is deliberately outside this
+		// reconciler, even when it has a workload domain configured.
+		result.Status = "unconfigured"
+		result.EdgeTLSStatus = EdgeTLSNotApplicable
+		return result, nil
+	}
+	r.logger.Info("cloudflare reconcile start", "tunnel_id", connection.TunnelID)
 	if !connectionConfigured(connection) {
-		if connection.Status == "unconfigured" && connection.WorkloadBaseDomain == nil {
-			return result, nil
-		}
+		result.Status = "error"
 		err = errors.New("Cloudflare connection is unavailable; an Instance Owner must reconnect the scoped token")
 		return result, r.recordFailure(ctx, connection.APIToken, err)
 	}
@@ -178,7 +194,20 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result ReconcileResult, err
 		r.logger.Info("cloudflare tunnel ingress updated", "console_origin", "http://proxy:80", "workload_origin", workloadOrigin(wildcardHostname))
 	}
 
-	update := domain.CloudflareRoutingUpdate{ExpectedWorkloadBaseDomain: cloneString(connection.WorkloadBaseDomain)}
+	tlsObservation := edgeTLSObservation{Status: EdgeTLSNotApplicable}
+	var tlsInspectionErr error
+	if connection.WorkloadBaseDomain != nil {
+		tlsObservation, tlsInspectionErr = inspectWorkloadEdgeTLS(providerCtx, provider, workloadZone, *connection.WorkloadBaseDomain)
+	}
+	tlsObservation.Reason = boundedEdgeTLSReason(tlsObservation.Reason)
+	result.EdgeTLSStatus = tlsObservation.Status
+	result.EdgeTLSReason = tlsObservation.Reason
+
+	update := domain.CloudflareRoutingUpdate{
+		ExpectedWorkloadBaseDomain: cloneString(connection.WorkloadBaseDomain),
+		EdgeTLSStatus:              tlsObservation.Status,
+		EdgeTLSError:               tlsObservation.Reason,
+	}
 	if connection.WorkloadBaseDomain != nil {
 		update.WorkloadZoneID = workloadZone.ID
 		update.WorkloadZoneName = workloadZone.Name
@@ -193,7 +222,16 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result ReconcileResult, err
 		result.Status = "pending"
 		return result, nil
 	}
-	result.Status = "ready"
+	result.Status = cloudflareRoutingStatus(tlsObservation.Status)
+	if tlsInspectionErr != nil {
+		if errors.Is(tlsInspectionErr, ErrUnauthorized) {
+			return result, ErrUnauthorized
+		}
+		return result, errors.New(safeReconcileError(tlsInspectionErr, connection.APIToken))
+	}
+	if result.Status != "ready" {
+		return result, nil
+	}
 	retired, err := r.cleanupRetiring(providerCtx, provider)
 	if err != nil {
 		return result, r.recordFailure(ctx, connection.APIToken, err)
@@ -290,6 +328,12 @@ func ValidateExistingTunnel(ctx context.Context, client Client, accountID, zoneI
 		if _, err := client.ListDNSRecords(ctx, workloadZone.ID, "*."+workloadDomain); err != nil {
 			return domain.CloudflareConnection{}, validationProviderError("Cloudflare token cannot read the workload DNS zone", err)
 		}
+		if _, err := client.ListCertificatePacks(ctx, workloadZone.ID); err != nil {
+			return domain.CloudflareConnection{}, validationProviderError("Cloudflare token cannot inspect edge certificates; grant SSL and Certificates Read for the workload zone", err)
+		}
+		// The settings are read-only and informational; Total TLS is not
+		// accepted as proof because Cloudflare excludes Tunnel hostnames.
+		_, _ = client.TotalTLSSettings(ctx, workloadZone.ID)
 	}
 	return domain.CloudflareConnection{
 		AccountID: accountID, ConsoleZoneID: consoleZone.ID, ConsoleHostname: consoleHostname,
@@ -334,6 +378,37 @@ func validateExistingConnection(ctx context.Context, client Client, accountID, c
 
 func connectionConfigured(connection domain.CloudflareConnection) bool {
 	return strings.TrimSpace(connection.APIToken) != "" && strings.TrimSpace(connection.AccountID) != "" && strings.TrimSpace(connection.ConsoleZoneID) != "" && strings.TrimSpace(connection.ConsoleHostname) != "" && strings.TrimSpace(connection.TunnelID) != "" && strings.TrimSpace(connection.TunnelName) != "" && strings.TrimSpace(connection.ConsoleRecordID) != ""
+}
+
+func hasCloudflareConnectionIntent(connection domain.CloudflareConnection) bool {
+	return strings.TrimSpace(connection.APIToken) != "" || strings.TrimSpace(connection.AccountID) != "" ||
+		strings.TrimSpace(connection.ConsoleZoneID) != "" || strings.TrimSpace(connection.ConsoleHostname) != "" ||
+		strings.TrimSpace(connection.TunnelID) != "" || strings.TrimSpace(connection.TunnelName) != "" ||
+		strings.TrimSpace(connection.ConsoleRecordID) != ""
+}
+
+func cloudflareRoutingStatus(edgeTLSStatus string) string {
+	switch edgeTLSStatus {
+	case EdgeTLSNotApplicable, EdgeTLSReady:
+		return "ready"
+	case EdgeTLSPending:
+		return "pending"
+	default:
+		return "error"
+	}
+}
+
+func boundedEdgeTLSReason(reason string) string {
+	reason = strings.Map(func(r rune) rune {
+		if r == '\x00' || r == '\r' || r == '\n' {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(reason))
+	if len(reason) > 512 {
+		return reason[:512]
+	}
+	return reason
 }
 
 func desiredTunnelIngress(consoleHostname, wildcardHostname string) []IngressRule {

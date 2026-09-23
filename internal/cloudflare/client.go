@@ -37,6 +37,32 @@ type Zone struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status,omitempty"`
+	Type   string `json:"type,omitempty"`
+}
+
+// CertificatePack and Certificate are the read-only production certificate
+// inventory returned by Cloudflare's certificate-packs API. The reconciler
+// keeps only the coverage decision; these provider objects are never stored.
+type CertificatePack struct {
+	ID           string        `json:"id"`
+	Status       string        `json:"status"`
+	Type         string        `json:"type"`
+	Hosts        []string      `json:"hosts"`
+	Certificates []Certificate `json:"certificates"`
+}
+
+type Certificate struct {
+	ID        string   `json:"id"`
+	Status    string   `json:"status"`
+	Hosts     []string `json:"hosts"`
+	ExpiresOn string   `json:"expires_on,omitempty"`
+}
+
+// TotalTLSSettings is informational only. Cloudflare documents that Total
+// TLS does not issue certificates for hostnames used with Cloudflare Tunnel,
+// so Enabled is never accepted as proof of workload edge coverage.
+type TotalTLSSettings struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type Tunnel struct {
@@ -102,6 +128,8 @@ func (s *TunnelStatus) UnmarshalJSON(contents []byte) error {
 type Client interface {
 	ListAccounts(context.Context) ([]Account, error)
 	ListZones(context.Context, string) ([]Zone, error)
+	ListCertificatePacks(context.Context, string) ([]CertificatePack, error)
+	TotalTLSSettings(context.Context, string) (TotalTLSSettings, error)
 	ListTunnels(context.Context, string, string) ([]Tunnel, error)
 	CreateTunnel(context.Context, string, string) (Tunnel, error)
 	ConfigureTunnel(context.Context, string, string, []IngressRule) error
@@ -180,6 +208,63 @@ func (c *APIClient) ListZones(ctx context.Context, accountID string) ([]Zone, er
 		}
 	}
 	return nil, errors.New("Cloudflare returned too many zone pages")
+}
+
+// ListCertificatePacks reads production certificate packs including
+// non-active states so readiness can distinguish active coverage from a
+// matching certificate that Cloudflare is still provisioning.
+func (c *APIClient) ListCertificatePacks(ctx context.Context, zoneID string) ([]CertificatePack, error) {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return nil, err
+	}
+	packs := make([]CertificatePack, 0)
+	for page := 1; page <= maxListPages; page++ {
+		query := url.Values{}
+		query.Set("deploy", "production")
+		query.Set("page", strconv.Itoa(page))
+		query.Set("per_page", "50")
+		query.Set("status", "all")
+		var result struct {
+			Result     []CertificatePack `json:"result"`
+			ResultInfo pageInfo          `json:"result_info"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/zones/"+zoneID+"/ssl/certificate_packs?"+query.Encode(), nil, &result); err != nil {
+			return nil, err
+		}
+		for _, pack := range result.Result {
+			if strings.TrimSpace(pack.ID) == "" || strings.TrimSpace(pack.Status) == "" || strings.TrimSpace(pack.Type) == "" || len(pack.Hosts) > 50 || len(pack.Certificates) > 50 {
+				return nil, errors.New("Cloudflare returned an invalid certificate pack")
+			}
+			for _, certificate := range pack.Certificates {
+				if strings.TrimSpace(certificate.Status) == "" || len(certificate.Hosts) > 50 {
+					return nil, errors.New("Cloudflare returned an invalid edge certificate")
+				}
+			}
+		}
+		packs = append(packs, result.Result...)
+		if pageInfoDone(page, len(result.Result), result.ResultInfo, 50) {
+			return packs, nil
+		}
+	}
+	return nil, errors.New("Cloudflare returned too many certificate pack pages")
+}
+
+// TotalTLSSettings reads provider capability state without changing it. The
+// result is supplemental only; an active certificate matching the required
+// wildcard is still required for ready status.
+func (c *APIClient) TotalTLSSettings(ctx context.Context, zoneID string) (TotalTLSSettings, error) {
+	zoneID, err := safeID(zoneID, "zone")
+	if err != nil {
+		return TotalTLSSettings{}, err
+	}
+	var result struct {
+		Result TotalTLSSettings `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/zones/"+zoneID+"/acm/total_tls", nil, &result); err != nil {
+		return TotalTLSSettings{}, err
+	}
+	return result.Result, nil
 }
 
 type pageInfo struct {

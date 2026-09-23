@@ -25,7 +25,7 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 			if r.URL.Query().Get("account.id") != "account-1" {
 				t.Errorf("zone account query = %q", r.URL.Query().Get("account.id"))
 			}
-			_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"zone-1","name":"example.test","status":"active"}]}`)
+			_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"zone-1","name":"example.test","status":"active","type":"full"}]}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/accounts/account-1/cfd_tunnel":
 			if r.URL.Query().Get("name") != "stealth-prod" || r.URL.Query().Get("is_deleted") != "false" {
 				t.Errorf("tunnel lookup query = %v", r.URL.Query())
@@ -101,7 +101,7 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 		t.Fatalf("ListAccounts() = %#v, %v", accounts, err)
 	}
 	zones, err := client.ListZones(ctx, "account-1")
-	if err != nil || len(zones) != 1 || zones[0].ID != "zone-1" {
+	if err != nil || len(zones) != 1 || zones[0].ID != "zone-1" || zones[0].Type != "full" {
 		t.Fatalf("ListZones() = %#v, %v", zones, err)
 	}
 	tunnels, err := client.ListTunnels(ctx, "account-1", "stealth-prod")
@@ -148,12 +148,53 @@ func TestAPIClientUsesNarrowCloudflareOperations(t *testing.T) {
 	}
 }
 
+func TestAPIClientReadsProductionCertificatePacksAndTotalTLS(t *testing.T) {
+	const token = "certificate-read-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+			t.Errorf("Authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/zones/workload-zone/ssl/certificate_packs":
+			if r.URL.Query().Get("status") != "all" || r.URL.Query().Get("deploy") != "production" || r.URL.Query().Get("per_page") != "50" {
+				t.Errorf("certificate pack query = %v", r.URL.Query())
+			}
+			switch r.URL.Query().Get("page") {
+			case "1":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"pack-1","type":"universal","status":"active","hosts":["apps.example.com","*.apps.example.com"],"certificates":[{"id":"cert-1","status":"active","hosts":["apps.example.com","*.apps.example.com"],"expires_on":"2099-01-01T00:00:00Z"}]}],"result_info":{"total_pages":2}}`)
+			case "2":
+				_, _ = io.WriteString(w, `{"success":true,"result":[{"id":"pack-2","type":"advanced","status":"pending_deployment","hosts":["apps.example.com","*.apps.example.com"],"certificates":[]}] ,"result_info":{"total_pages":2}}`)
+			default:
+				t.Errorf("unexpected certificate pack page %q", r.URL.Query().Get("page"))
+			}
+		case "/zones/workload-zone/acm/total_tls":
+			_, _ = io.WriteString(w, `{"success":true,"result":{"enabled":true}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := NewClient(token, server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	packs, err := client.ListCertificatePacks(context.Background(), "workload-zone")
+	if err != nil || len(packs) != 2 || packs[0].Certificates[0].ExpiresOn != "2099-01-01T00:00:00Z" || packs[1].Status != "pending_deployment" {
+		t.Fatalf("ListCertificatePacks() = %#v, %v", packs, err)
+	}
+	totalTLS, err := client.TotalTLSSettings(context.Background(), "workload-zone")
+	if err != nil || totalTLS.Enabled == nil || !*totalTLS.Enabled {
+		t.Fatalf("TotalTLSSettings() = %#v, %v", totalTLS, err)
+	}
+}
+
 func TestAPIClientDoesNotExposeTokenInProviderErrors(t *testing.T) {
 	const token = "secret-cloudflare-token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"invalid credentials: secret-cloudflare-token"}]}`)
 		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"success":false,"errors":[{"code":9109,"message":"invalid credentials: secret-cloudflare-token"}]}`)
 	}))
 	defer server.Close()
 	client, err := NewClient(token, server.URL, server.Client())

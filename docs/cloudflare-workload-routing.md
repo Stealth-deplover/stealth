@@ -39,7 +39,10 @@ domain. Changing or clearing it commits independently of Cloudflare API
 availability. The API returns the saved domain; `/v1/admin/cloudflare` reports
 provider convergence as `unconfigured`, `pending`, `ready`, or `error`, with
 the wildcard hostname, discovered zone, last reconcile time, and a sanitized
-error when applicable.
+error when applicable. It also exposes `edge_tls_status` as `not_applicable`,
+`pending`, `ready`, `action_required`, or `error`, plus a sanitized
+`edge_tls_error` when certificate readiness needs attention. Overall routing is
+`ready` only when DNS, tunnel ingress, and Cloudflare edge TLS are ready.
 
 The worker reconciles immediately at startup and then on a configurable
 bounded cadence (`CLOUDFLARE_RECONCILE_INTERVAL`, default `1m`, allowed range
@@ -69,6 +72,28 @@ conflict. Stealth will not overwrite or delete that operator state. Retiring
 records are deleted only by stored ID after a fresh check of their hostname
 and tunnel target. API operations are at-least-once and idempotent; retries
 rediscover provider resources after a crash.
+
+## Cloudflare edge TLS readiness
+
+The reconciler reads the workload zone's production certificate packs and only
+reports edge TLS `ready` when an active, unexpired certificate explicitly
+covers the required wildcard, such as `*.apps.example.com`. A parent wildcard
+such as `*.example.com` does not cover the deeper workload wildcard. Coverage
+uses the DNS rule that a wildcard matches exactly one label. A pending
+certificate is reported as `pending`; missing coverage is `action_required`,
+and certificate API failures are `error`. These states do not remove working
+wildcard DNS or tunnel ingress.
+
+Cloudflare Universal SSL for a full zone generally covers the apex and its
+first-level subdomains. A dedicated workload zone such as `apps.example.com`
+may provide a suitable wildcard shape, but Stealth still checks that the
+provider reports active certificate coverage before declaring readiness.
+Total TLS is inspected only for context; its enabled setting is not treated as
+coverage for Cloudflare Tunnel hostnames. Stealth does not enable Total TLS,
+order certificates, or purchase a Cloudflare feature. If deeper wildcard
+coverage is missing, an operator must arrange a Cloudflare edge certificate or
+zone configuration that actually covers the workload wildcard, then allow the
+worker to reconcile again.
 
 ## Connection storage and upgrade
 
@@ -112,10 +137,13 @@ Create a custom API token with only the permissions used by Stealth:
 - Account: Account Settings Read, for account discovery.
 - Zone: Zone Read, for Console and workload zone discovery.
 - Zone: DNS Edit, for Console and wildcard CNAME operations.
+- Zone: SSL and Certificates Read, to inspect active and pending production
+  certificate packs for workload edge TLS readiness (workload zone only).
 
-Scope Zone Read and DNS Edit to both the Console zone and workload zone when
-they are different. Never use a Global API Key. Cloudflare OAuth is not an
-active setup or production connection path.
+Scope Zone Read and DNS Edit to both the Console and workload zones when they
+are different. Scope SSL and Certificates Read only to the workload zone.
+Never use a Global API Key. Cloudflare OAuth is not an active setup or
+production connection path.
 
 ## Deferred work
 

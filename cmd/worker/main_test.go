@@ -1,14 +1,43 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/domain"
+	"github.com/Stealth-deplover/stealth/internal/functionsecret"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 )
+
+type legacyCloudflareImportFake struct {
+	statusCalls int
+	markCalls   int
+	importCalls int
+	configured  bool
+}
+
+func (f *legacyCloudflareImportFake) CloudflareRoutingStatus(context.Context) (domain.CloudflareRoutingStatus, error) {
+	f.statusCalls++
+	return domain.CloudflareRoutingStatus{Configured: f.configured}, nil
+}
+
+func (f *legacyCloudflareImportFake) MarkCloudflareConnectionUnavailable(context.Context, string) error {
+	f.markCalls++
+	return nil
+}
+
+func (f *legacyCloudflareImportFake) ImportCloudflareConnectionOnce(context.Context, repository.CloudflareConnectionInput, string) (bool, error) {
+	f.importCalls++
+	return false, nil
+}
 
 func TestWorkerMetricsHandlerExposesHealthAndMetrics(t *testing.T) {
 	metrics := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -35,5 +64,23 @@ func TestWorkerMetricsHandlerExposesHealthAndMetrics(t *testing.T) {
 	handler.ServeHTTP(probe, metricsRequest)
 	if probe.Code != http.StatusTeapot || !strings.Contains(probe.Body.String(), "metrics") {
 		t.Fatalf("metrics response = status %d body %q, want delegated handler", probe.Code, probe.Body.String())
+	}
+}
+
+func TestLegacyCloudflareImportMissingSnapshotIsCleanNoop(t *testing.T) {
+	cipher, err := functionsecret.New(bytes.Repeat([]byte{7}, functionsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	store := &legacyCloudflareImportFake{}
+	missingPath := filepath.Join(t.TempDir(), "missing", "setup-state.enc")
+	importLegacyCloudflareConnection(context.Background(), missingPath, cipher, store, logger)
+	if store.statusCalls != 1 || store.markCalls != 0 || store.importCalls != 0 {
+		t.Fatalf("missing snapshot caused import work: %#v", store)
+	}
+	if strings.Contains(logs.String(), "could not be imported") || strings.Contains(logs.String(), "decryption") {
+		t.Fatalf("missing snapshot logged a decryption/import warning: %s", logs.String())
 	}
 }
