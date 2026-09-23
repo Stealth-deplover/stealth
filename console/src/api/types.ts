@@ -21,6 +21,7 @@ export type FunctionExecutionLog =
   components["schemas"]["FunctionExecutionLog"];
 export type FunctionVariable = components["schemas"]["FunctionVariable"];
 export type Site = components["schemas"]["Site"];
+export type StealthApp = components["schemas"]["App"];
 export type SiteDeployment = components["schemas"]["SiteDeployment"];
 export type SiteBuildLog = components["schemas"]["SiteBuildLog"];
 export type Database = components["schemas"]["ProjectDatabase"];

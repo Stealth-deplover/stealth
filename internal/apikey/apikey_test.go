@@ -73,6 +73,19 @@ func TestNormalizeProjectScopesIncludesStorage(t *testing.T) {
 	}
 }
 
+func TestNormalizeProjectScopesIncludesApps(t *testing.T) {
+	got, err := NormalizeProjectScopes([]string{"apps.write", "apps.read", "apps.write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "apps.read,apps.write" {
+		t.Fatalf("normalized Apps scopes = %#v", got)
+	}
+	if _, err := NormalizeProjectScopes([]string{"apps.delete"}); !errors.Is(err, ErrInvalidScopes) {
+		t.Fatalf("unsupported Apps scope error = %v", err)
+	}
+}
+
 func TestValidateExpiryFutureAndBounded(t *testing.T) {
 	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	if err := ValidateExpiry(nil, now); err != nil {

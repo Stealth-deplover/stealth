@@ -3,6 +3,7 @@ export * from "./mutations/setup";
 export * from "./mutations/organizations";
 export * from "./mutations/functions";
 export * from "./mutations/sites";
+export * from "./mutations/apps";
 export * from "./mutations/databases";
 export * from "./mutations/storage";
 export * from "./mutations/users";

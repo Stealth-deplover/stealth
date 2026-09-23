@@ -13,6 +13,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import {
+  AppWindow,
   ArrowUpRight,
   Database,
   FileArchive,
@@ -30,6 +31,7 @@ import {
   useCanvasFunctions,
   useCanvasStorageBuckets,
   useCanvasSites,
+  useCanvasApps,
   useServiceLayout,
 } from "@/api/queries";
 import { useReplaceServiceLayout } from "@/api/mutations";
@@ -45,7 +47,7 @@ import { resourceAccent } from "@/lib/constants";
 
 type ResourceNodeData = {
   label: string;
-  type: "function" | "site" | "database" | "storage";
+  type: "function" | "site" | "app" | "database" | "storage";
   status?: string;
   subtitle?: string;
 };
@@ -54,6 +56,7 @@ type ResourceNode = Node<ResourceNodeData, "resource">;
 const RESOURCE_ICONS: Record<ResourceNodeData["type"], LucideIcon> = {
   function: FunctionSquare,
   site: FileArchive,
+  app: AppWindow,
   database: Database,
   storage: HardDrive,
 };
@@ -61,6 +64,7 @@ const RESOURCE_ICONS: Record<ResourceNodeData["type"], LucideIcon> = {
 const RESOURCE_MINIMAP_COLORS: Record<ResourceNodeData["type"], string> = {
   function: "var(--color-signal-teal)",
   site: "var(--color-iris-violet)",
+  app: "var(--color-amber-300)",
   database: "var(--color-lavender)",
   storage: "var(--color-pulse-green)",
 };
@@ -68,6 +72,7 @@ const RESOURCE_MINIMAP_COLORS: Record<ResourceNodeData["type"], string> = {
 const RESOURCE_PATHS: Record<ResourceNodeData["type"], string> = {
   function: "functions",
   site: "sites",
+  app: "apps",
   database: "databases",
   storage: "storage",
 };
@@ -126,6 +131,7 @@ export function ServicesCanvasView({
 }) {
   const functions = useCanvasFunctions(projectId);
   const sites = useCanvasSites(projectId);
+  const apps = useCanvasApps(projectId);
   const databases = useCanvasDatabases(projectId);
   const buckets = useCanvasStorageBuckets(projectId);
   const layout = useServiceLayout(projectId);
@@ -177,6 +183,23 @@ export function ServicesCanvasView({
         },
       });
     });
+    apps.data?.forEach((item, index) => {
+      const saved = layoutMap.get(`app:${item.id}`);
+      nodes.push({
+        id: `app:${item.id}`,
+        type: "resource",
+        position: {
+          x: saved?.x ?? 820 + (index % 3) * 250,
+          y: saved?.y ?? 80 + Math.floor(index / 3) * 180,
+        },
+        data: {
+          label: item.name,
+          type: "app",
+          status: item.runtime_status,
+          subtitle: `persistent workload · :${item.workload.port}`,
+        },
+      });
+    });
     databases.data?.forEach((item, index) => {
       const saved = layoutMap.get(`database:${item.id}`);
       nodes.push({
@@ -202,7 +225,7 @@ export function ServicesCanvasView({
       });
     });
     return nodes;
-  }, [buckets.data, databases.data, functions.data, layoutMap, sites.data]);
+  }, [apps.data, buckets.data, databases.data, functions.data, layoutMap, sites.data]);
   const [nodes, setNodes, onNodesChange] =
     useNodesState<ResourceNode>(initialNodes);
   const [edges, , onEdgesChange] = useEdgesState([]);
@@ -232,12 +255,14 @@ export function ServicesCanvasView({
   const loading =
     functions.isLoading ||
     sites.isLoading ||
+    apps.isLoading ||
     databases.isLoading ||
     buckets.isLoading ||
     layout.isLoading;
   const error =
     functions.error ??
     sites.error ??
+    apps.error ??
     databases.error ??
     buckets.error ??
     layout.error;
@@ -258,6 +283,7 @@ export function ServicesCanvasView({
         retry={() => {
           void functions.refetch();
           void sites.refetch();
+          void apps.refetch();
           void databases.refetch();
           void buckets.refetch();
           void layout.refetch();
@@ -295,7 +321,7 @@ export function ServicesCanvasView({
         <EmptyState
           icon={<Waypoints className="size-5" />}
           title="No services yet"
-          description="Create a Function, Site, Database, or Storage resource and it will appear here. The canvas only renders resources returned by the API."
+          description="Create a Function, Site, App, Database, or Storage resource and it will appear here. The canvas only renders resources returned by the API."
         />
       ) : (
         <Card className="h-[calc(100vh-15rem)] min-h-[460px] overflow-hidden">

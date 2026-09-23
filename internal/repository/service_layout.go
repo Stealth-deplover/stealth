@@ -113,6 +113,7 @@ const serviceLayoutListQuery = `
 	  AND (
 		(l.resource_type='function' AND EXISTS (SELECT 1 FROM project_functions f WHERE f.project_id=l.project_id AND f.id=l.resource_id))
 		OR (l.resource_type='site' AND EXISTS (SELECT 1 FROM project_sites s WHERE s.project_id=l.project_id AND s.id=l.resource_id))
+		OR (l.resource_type='app' AND EXISTS (SELECT 1 FROM project_apps a WHERE a.project_id=l.project_id AND a.id=l.resource_id))
 		OR (l.resource_type='database' AND EXISTS (SELECT 1 FROM project_databases d WHERE d.project_id=l.project_id AND d.id=l.resource_id))
 		OR (l.resource_type='storage' AND EXISTS (SELECT 1 FROM storage_buckets b WHERE b.project_id=l.project_id AND b.id=l.resource_id))
 	  )
@@ -137,7 +138,7 @@ func listProjectServiceLayoutTx(ctx context.Context, tx pgx.Tx, projectID uuid.U
 
 func validServiceLayoutType(resourceType string) bool {
 	switch resourceType {
-	case "function", "site", "database", "storage":
+	case "function", "site", "app", "database", "storage":
 		return true
 	default:
 		return false
@@ -155,6 +156,8 @@ func projectServiceResourceExists(ctx context.Context, tx pgx.Tx, projectID uuid
 		query = `SELECT EXISTS (SELECT 1 FROM project_functions WHERE project_id=$1 AND id=$2)`
 	case "site":
 		query = `SELECT EXISTS (SELECT 1 FROM project_sites WHERE project_id=$1 AND id=$2)`
+	case "app":
+		query = `SELECT EXISTS (SELECT 1 FROM project_apps WHERE project_id=$1 AND id=$2)`
 	case "database":
 		query = `SELECT EXISTS (SELECT 1 FROM project_databases WHERE project_id=$1 AND id=$2)`
 	case "storage":

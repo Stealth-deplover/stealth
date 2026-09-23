@@ -1,6 +1,6 @@
 // Package platformhostname owns the small, instance-global namespace used by
-// generated Site hostnames. It deliberately does not know about PostgreSQL or
-// routing; persistence and route materialization remain separate capabilities.
+// platform workload hostnames. It deliberately does not know about PostgreSQL
+// or routing; persistence and route materialization remain separate capabilities.
 package platformhostname
 
 import (
@@ -13,7 +13,7 @@ import (
 
 const (
 	MaxLabelLength = 63
-	// The UUID suffix is the complete immutable Site identity. Keeping the
+	// The UUID suffix is the complete immutable resource identity. Keeping the
 	// complete value makes collision variants deterministic without random
 	// retry state or a process-local allocator.
 	stableSuffixLength = 32
@@ -22,7 +22,7 @@ const (
 var ErrInvalidLabel = errors.New("invalid platform hostname label")
 
 // Reserved reports labels that belong to the instance infrastructure rather
-// than to a Site. This is intentionally a short namespace, not a general
+// than to a project workload. This is a short namespace, not a general
 // blacklist of words an operator might want to use.
 func Reserved(label string) bool {
 	switch strings.ToLower(strings.TrimSpace(label)) {
@@ -33,12 +33,12 @@ func Reserved(label string) bool {
 	}
 }
 
-// Candidates returns a bounded, deterministic allocation order. The first
-// candidate preserves the Site name when it is safe and available. Later
-// candidates are globally distinguishable by the immutable Site UUID.
-func Candidates(name string, siteID uuid.UUID) []string {
+// Candidates returns the compatibility-preserving Site allocation order. The
+// first candidate preserves the Site name when it is safe and available.
+// Later candidates are globally distinguishable by the immutable Site UUID.
+func Candidates(name string, resourceID uuid.UUID) []string {
 	name = strings.ToLower(strings.TrimSpace(name))
-	suffix := strings.ReplaceAll(siteID.String(), "-", "")
+	suffix := uuidSuffix(resourceID)
 	if len(suffix) != stableSuffixLength {
 		return nil
 	}
@@ -53,6 +53,31 @@ func Candidates(name string, siteID uuid.UUID) []string {
 		suffix,
 	)
 	return candidates
+}
+
+// AppCandidates returns a bounded, deterministic allocation order for a
+// persistent App. The App-specific fallback names keep its collision sequence
+// distinct from Site's established candidate order.
+func AppCandidates(name string, resourceID uuid.UUID) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	suffix := uuidSuffix(resourceID)
+	if len(suffix) != stableSuffixLength {
+		return nil
+	}
+	candidates := make([]string, 0, 4)
+	if !Reserved(name) && Validate(name) == nil {
+		candidates = append(candidates, name)
+	}
+	candidates = append(candidates,
+		labelWithSuffix(name, suffix),
+		"app-"+suffix,
+		suffix,
+	)
+	return candidates
+}
+
+func uuidSuffix(resourceID uuid.UUID) string {
+	return strings.ReplaceAll(resourceID.String(), "-", "")
 }
 
 func labelWithSuffix(human, suffix string) string {

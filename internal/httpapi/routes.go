@@ -40,6 +40,7 @@ func (s *Server) routes() http.Handler {
 		s.registerStorageRoutes(r)
 		s.registerFunctionRoutes(r)
 		s.registerSiteRoutes(r)
+		s.registerAppRoutes(r)
 	})
 	if s.config.SetupMode {
 		return r

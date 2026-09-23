@@ -60,7 +60,7 @@ func (s *Server) createProjectAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	scopes, err := apikey.NormalizeProjectScopes(req.Scopes)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_error", "scopes must contain supported users.read, users.write, databases.read, databases.write, storage.read, storage.write, functions.read, functions.write, sites.read, sites.write, webhooks.read, webhooks.write, realtime.read, messaging.read, or messaging.write values")
+		writeError(w, http.StatusUnprocessableEntity, "validation_error", "scopes must contain supported users.read, users.write, databases.read, databases.write, storage.read, storage.write, functions.read, functions.write, sites.read, sites.write, apps.read, apps.write, webhooks.read, webhooks.write, realtime.read, messaging.read, or messaging.write values")
 		return
 	}
 	expiresAt, err := parseAPIKeyExpiry(req.ExpiresAt, time.Now().UTC())

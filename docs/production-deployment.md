@@ -6,6 +6,10 @@ and sends `/v1/*` directly to the Go API; PostgreSQL is the durable control
 plane, Redis backs distributed rate limits, and the worker is a separate Go
 process.
 
+The control plane models persistent Apps and their normalized runtime intent.
+OCI image builds and App execution remain subsequent runtime capabilities;
+an App record does not create a container or a public route.
+
 ```text
 TLS terminator / Nginx
   ├── /      → stealth-console:3000

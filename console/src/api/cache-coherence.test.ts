@@ -31,6 +31,19 @@ describe("cache coherence", () => {
     ]);
   });
 
+  it("maps App desired-state changes to the list and detail queries", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "app",
+        projectId: "project-1",
+        appId: "app-1",
+      }),
+    ).toEqual([
+      ["apps", "project-1"],
+      ["app", "project-1", "app-1"],
+    ]);
+  });
+
   it("refreshes the parent Agent when a run can change its derived status", () => {
     expect(
       invalidationKeysFor({

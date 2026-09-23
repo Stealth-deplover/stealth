@@ -2654,6 +2654,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectID}/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List persistent App control-plane metadata. runtime_status=not_deployed means no persistent runtime has been created yet. platform_hostname is reserved metadata and does not imply that an App route is active. API-key callers require apps.read. */
+        get: operations["listApps"];
+        put?: never;
+        /** @description Create a durable App desired-state resource. Workload fields are normalized to WorkloadSpec v1. No image is built and no workload is started. The reserved platform_hostname does not imply an active route. API-key callers require apps.write. */
+        post: operations["createApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return durable App desired state. runtime_status=not_deployed means no persistent runtime has been created yet; platform_hostname is reserved metadata and does not imply an active route. API-key callers require apps.read. */
+        get: operations["getApp"];
+        put?: never;
+        post?: never;
+        /** @description Delete App metadata and its reserved platform hostname claim. No workload runtime exists in this API version. API-key callers require apps.write. */
+        delete: operations["deleteApp"];
+        options?: never;
+        head?: never;
+        /** @description Update mutable App desired state. Only enabled and semantically changed WorkloadSpec fields increment desired_generation. Rename preserves platform hostname. Runtime-owned observed state cannot be changed by clients. API-key callers require apps.write. */
+        patch: operations["updateApp"];
+        trace?: never;
+    };
     "/v1/projects/{projectID}/sites/{siteID}": {
         parameters: {
             query?: never;
@@ -4203,6 +4240,11 @@ export interface components {
             functions: number;
             /** Format: int64 */
             sites: number;
+            /**
+             * Format: int64
+             * @description Free includes 3 Apps
+             */
+            apps: number;
         };
         OrganizationPlanUsage: {
             /** Format: int64 */
@@ -4217,6 +4259,8 @@ export interface components {
             functions: number;
             /** Format: int64 */
             sites: number;
+            /** Format: int64 */
+            apps: number;
         };
         OrganizationPlan: {
             /** Format: uuid */
@@ -5246,6 +5290,121 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        WorkloadHealthCheck: {
+            /** @enum {string} */
+            protocol: WorkloadHealthCheckProtocol;
+            /** @description Required local path beginning with / for HTTP; null for TCP. Health checks always target the App internal port. */
+            path: string | null;
+            interval_seconds: number;
+            /** @description Must not exceed interval_seconds. */
+            timeout_seconds: number;
+            initial_delay_seconds: number;
+            failure_threshold: number;
+        };
+        WorkloadResources: {
+            cpu_millis: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            pids_limit: number;
+        };
+        /** @description Stealth-owned */
+        WorkloadSpec: {
+            /** @constant */
+            schema_version: "v1";
+            /** @description Internal container HTTP port used by future routing; never a host port. */
+            port: number;
+            /** @description Exec-style argument array with at most 64 arguments */
+            command: string[];
+            /** @description Absolute canonical POSIX path inside the container; null uses the OCI image default. */
+            working_directory: string | null;
+            health_check: components["schemas"]["WorkloadHealthCheck"];
+            resources: components["schemas"]["WorkloadResources"];
+            stop_grace_period_seconds: number;
+            /** @constant */
+            restart_policy: "always";
+        };
+        /** @description Partial WorkloadSpec v1 input. Omitted values are normalized by the shared domain capability; unknown fields and versions fail closed. */
+        WorkloadSpecRequest: {
+            /** @constant */
+            schema_version?: "v1";
+            port?: number;
+            command?: string[];
+            working_directory?: string | null;
+            health_check?: {
+                /** @enum {string} */
+                protocol?: WorkloadSpecRequestHealth_checkProtocol;
+                path?: string | null;
+                interval_seconds?: number;
+                timeout_seconds?: number;
+                initial_delay_seconds?: number;
+                failure_threshold?: number;
+            };
+            resources?: {
+                cpu_millis?: number;
+                /** Format: int64 */
+                memory_bytes?: number;
+                pids_limit?: number;
+            };
+            stop_grace_period_seconds?: number;
+            /** @constant */
+            restart_policy?: "always";
+        };
+        App: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            project_id: string;
+            name: components["schemas"]["Slug"];
+            /** @description Desired enabled state. */
+            enabled: boolean;
+            /** @description Reserved metadata derived from the stable App identity and current workload_base_domain. Null when the workload domain is unset. Reservation does not imply an App route is active. */
+            platform_hostname: string | null;
+            workload: components["schemas"]["WorkloadSpec"];
+            /** @description SHA-256 of canonical normalized WorkloadSpec JSON. */
+            workload_spec_sha256: string;
+            /**
+             * Format: int64
+             * @description Runtime-relevant desired configuration generation consumed by future trusted reconciliation.
+             */
+            desired_generation: number;
+            /**
+             * Format: int64
+             * @description Trusted-runtime-owned generation; PostgreSQL persistence alone never advances it.
+             */
+            observed_generation: number;
+            /**
+             * @description not_deployed means no persistent runtime has been created yet.
+             * @enum {string}
+             */
+            runtime_status: AppRuntime_status;
+            /** @description Bounded sanitized error set only by a future trusted runtime. */
+            runtime_error: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CreateAppRequest: {
+            name: components["schemas"]["Slug"];
+            /** @description Defaults to true when omitted. */
+            enabled?: boolean;
+            /** @description Optional partial v1 runtime intent; omitted fields receive the shared WorkloadSpec defaults. */
+            workload?: components["schemas"]["WorkloadSpecRequest"];
+        };
+        /** @description At least one field is required. Runtime-owned status and generation fields cannot be mutated here. */
+        UpdateAppRequest: {
+            name?: components["schemas"]["Slug"];
+            enabled?: boolean;
+            workload?: components["schemas"]["WorkloadSpecRequest"];
+        };
+        AppResponse: {
+            app: components["schemas"]["App"];
+        };
+        AppsPage: {
+            apps: components["schemas"]["App"][];
+            pagination: components["schemas"]["Pagination"];
+            can_manage: boolean;
+        };
         SiteDomain: {
             /** Format: uuid */
             id: string;
@@ -6188,6 +6347,7 @@ export interface components {
         RowID: string;
         FunctionID: string;
         SiteID: string;
+        AppID: string;
         WebhookID: string;
         ProviderID: string;
         TopicID: string;
@@ -12996,6 +13156,161 @@ export interface operations {
             422: components["responses"]["ValidationError"];
         };
     };
+    listApps: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Apps page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppsPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAppRequest"];
+            };
+        };
+        responses: {
+            /** @description App created with normalized desired WorkloadSpec and runtime_status=not_deployed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App metadata and normalized WorkloadSpec */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App metadata and claim deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAppRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated App desired state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getSite: {
         parameters: {
             query?: never;
@@ -14527,6 +14842,8 @@ export enum CreateProjectAPIKeyRequestScopes {
     functions_write = "functions.write",
     sites_read = "sites.read",
     sites_write = "sites.write",
+    apps_read = "apps.read",
+    apps_write = "apps.write",
     webhooks_read = "webhooks.read",
     webhooks_write = "webhooks.write",
     realtime_read = "realtime.read",
@@ -14553,12 +14870,14 @@ export enum MembershipRole {
 export enum ProjectServiceLayoutResource_type {
     function = "function",
     site = "site",
+    app = "app",
     database = "database",
     storage = "storage"
 }
 export enum ProjectServiceLayoutItemRequestResource_type {
     function = "function",
     site = "site",
+    app = "app",
     database = "database",
     storage = "storage"
 }
@@ -14630,6 +14949,8 @@ export enum ProjectAPIKeyScopes {
     functions_write = "functions.write",
     sites_read = "sites.read",
     sites_write = "sites.write",
+    apps_read = "apps.read",
+    apps_write = "apps.write",
     webhooks_read = "webhooks.read",
     webhooks_write = "webhooks.write",
     realtime_read = "realtime.read",
@@ -14757,6 +15078,22 @@ export enum SiteFramework {
 export enum SiteStatus {
     active = "active",
     disabled = "disabled"
+}
+export enum WorkloadHealthCheckProtocol {
+    tcp = "tcp",
+    http = "http"
+}
+export enum WorkloadSpecRequestHealth_checkProtocol {
+    tcp = "tcp",
+    http = "http"
+}
+export enum AppRuntime_status {
+    not_deployed = "not_deployed",
+    pending = "pending",
+    running = "running",
+    degraded = "degraded",
+    stopped = "stopped",
+    failed = "failed"
 }
 export enum SiteDomainStatus {
     pending = "pending",

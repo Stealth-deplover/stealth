@@ -106,6 +106,7 @@ func ShouldFanout(eventType string) bool {
 		"database.create", "database.delete", "project.update", "project_auth.settings_update",
 		"function.create", "function.update", "function.delete",
 		"site.create", "site.update", "site.delete",
+		"app.create", "app.update", "app.delete",
 		"storage_bucket.create", "storage_bucket.update", "storage_bucket.delete":
 		return true
 	default:

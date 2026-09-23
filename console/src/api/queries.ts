@@ -5,6 +5,7 @@ export * from "./queries/organizations";
 export * from "./queries/projects";
 export * from "./queries/functions";
 export * from "./queries/sites";
+export * from "./queries/apps";
 export * from "./queries/databases";
 export * from "./queries/storage";
 export * from "./queries/users";
