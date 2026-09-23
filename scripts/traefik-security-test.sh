@@ -222,9 +222,7 @@ for required in \
 	'read_only: true' \
 	'seccomp=unconfined' \
 	'apparmor=unconfined' \
-	'systempaths=unconfined' \
-	'buildkit_state:/home/user/.local/share/buildkit' \
-	'buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro'; do
+	'systempaths=unconfined'; do
 	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
 		printf 'App BuildKit service is missing required setting: %s\n' "$required" >&2
 		exit 1
@@ -232,6 +230,30 @@ for required in \
 done
 if ! printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*user: "?1000:1000"?$'; then
 	printf '%s\n' 'App BuildKit must run as the dedicated non-root user' >&2
+	exit 1
+fi
+buildkit_state_volume="$(env_value APPS_BUILDKIT_STATE_VOLUME)"
+if [ -z "$buildkit_state_volume" ]; then
+	buildkit_state_volume='stealth_app_buildkit_state'
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq "source: $buildkit_state_volume" ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'target: /home/user/.local/share/buildkit'; then
+	printf '%s\n' 'App BuildKit must mount only its dedicated persistent cache volume' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | awk '
+function check_mount() {
+  if (mount_type == "bind" && source ~ /\/buildkit\/buildkitd\.toml$/ && target == "/etc/buildkit/buildkitd.toml" && read_only) found=1
+}
+/^    volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_volumes && /^      - type:/ { check_mount(); mount_type=$3; source=""; target=""; read_only=0; next }
+in_volumes && /source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); source=$0 }
+in_volumes && /target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); target=$0 }
+in_volumes && /read_only:[[:space:]]*true/ { read_only=1 }
+END { check_mount(); exit(found ? 0 : 1) }
+'; then
+	printf '%s\n' 'App BuildKit daemon configuration must be mounted read-only' >&2
 	exit 1
 fi
 for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
