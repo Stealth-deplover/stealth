@@ -85,6 +85,7 @@ func hasRequiredConfig(values map[string]string) bool {
 	for _, key := range []string{
 		"STEALTH_API_IMAGE",
 		"STEALTH_WORKER_IMAGE",
+		"STEALTH_INGRESS_CONTROL_IMAGE",
 		"STEALTH_MIGRATE_IMAGE",
 		"STEALTH_CONSOLE_IMAGE",
 		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE",

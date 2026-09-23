@@ -24,7 +24,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Build local API, setup, worker, isolated Collectors, proxy, and Console images
+      - name: Build local API, setup, worker, ingress control, isolated Collectors, proxy, and Console images
         shell: bash
         run: |
           set -euo pipefail
@@ -43,6 +43,11 @@ jobs:
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t "stealth-worker:smoke-${GITHUB_RUN_ID}" .
+          docker build --target ingress-control \
+            --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT_SHA="$COMMIT_SHA" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            -t "stealth-ingress-control:smoke-${GITHUB_RUN_ID}" .
           docker build --target migrate \
             --build-arg VERSION="$VERSION" \
             --build-arg COMMIT_SHA="$COMMIT_SHA" \
@@ -87,6 +92,7 @@ jobs:
           COMPOSE_PROJECT_NAME=stealth-pr-smoke-${GITHUB_RUN_ID}
           STEALTH_API_IMAGE=stealth-api:smoke-${GITHUB_RUN_ID}
           STEALTH_WORKER_IMAGE=stealth-worker:smoke-${GITHUB_RUN_ID}
+          STEALTH_INGRESS_CONTROL_IMAGE=stealth-ingress-control:smoke-${GITHUB_RUN_ID}
           STEALTH_MIGRATE_IMAGE=stealth-migrate:smoke-${GITHUB_RUN_ID}
           STEALTH_CONSOLE_IMAGE=stealth-console:smoke-${GITHUB_RUN_ID}
           OTEL_COLLECTOR_IMAGE=stealth-otel-collector:smoke-${GITHUB_RUN_ID}

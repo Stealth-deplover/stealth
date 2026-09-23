@@ -106,7 +106,7 @@ printed or sent in the setup URL. `FUNCTIONS_SECRET_KEY` is a separate security
 domain and is never used as a bootstrap-key fallback.
 
 The Compose, Collector, and proxy files are downloaded from the same versioned
-Git tag as the CLI. The config pins API, setup, worker, migration, Console,
+Git tag as the CLI. The config pins API, setup, worker, ingress-control, migration, Console,
 the capability-free Collector image, the dedicated Docker-log Collector image,
 and the restricted telemetry Docker proxy image to the same GHCR release tag.
 
@@ -138,6 +138,10 @@ stealth logs
 stealth logs api
 stealth logs worker --follow
 stealth logs console
+stealth ingress status
+stealth ingress verify
+stealth ingress cutover
+stealth ingress rollback
 ```
 
 `status` reads Compose service state and prints the configured Console URL.
@@ -145,6 +149,30 @@ stealth logs console
 service health, API health/readiness/version endpoints, Console/proxy HTTP
 reachability, and available disk space. `logs` delegates to
 `docker compose logs`; it does not build a log storage subsystem.
+
+`stealth ingress status` reports the saved Cloudflare Console origin state.
+`stealth ingress verify` is read-only and checks the provider's current Tunnel
+configuration, local Traefik routes, public Console HTTPS behavior, browser
+security headers, and HSTS. Console routes may use up to five safe HTTPS
+redirects on the configured hostname and port; `/` normally redirects to
+`/organizations`. Every redirect response must retain the required security
+headers and HSTS. Add `--site-hostname portfolio.apps.example.com`
+to verify a platform Site below the configured workload domain;
+`--site-sha256` can require a deterministic body digest.
+
+`stealth ingress cutover` explicitly changes the Console rule in the existing
+Cloudflare Named Tunnel from `proxy`/Nginx to `traefik`. The host checks
+production service health, local route behavior, and public HTTPS before the
+provider change. If post-cutover verification fails, it requests Nginx again,
+reconciles the existing tunnel, and verifies public recovery. If automatic
+rollback cannot be verified, run `stealth ingress rollback` from the host.
+Manual rollback uses the origin-only one-shot maintenance operation, preserves
+the workload wildcard and catch-all, and does not call workload DNS or
+certificate APIs. It preflights healthy local Nginx, running Cloudflared, and
+healthy bundled PostgreSQL when applicable; it does not require public API,
+Console, or Traefik health. Neither command removes Nginx or changes Cloudflare
+HSTS settings. Existing installations default to Nginx and updates do not
+change their desired origin.
 
 To update the installed Stealth CLI to the latest stable GitHub Release:
 

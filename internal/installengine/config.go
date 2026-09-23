@@ -125,6 +125,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"STEALTH_API_IMAGE":                     apiImage,
 		"STEALTH_SETUP_IMAGE":                   setupImage,
 		"STEALTH_WORKER_IMAGE":                  ImageName("stealth-worker", options.Version),
+		"STEALTH_INGRESS_CONTROL_IMAGE":         ImageName("stealth-ingress-control", options.Version),
 		"STEALTH_MIGRATE_IMAGE":                 ImageName("stealth-migrate", options.Version),
 		"STEALTH_CONSOLE_IMAGE":                 ImageName("stealth-console", options.Version),
 		"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE":  ImageName("stealth-telemetry-docker-proxy", options.Version),
@@ -205,6 +206,7 @@ var releaseManagedImageNames = map[string]string{
 	"STEALTH_API_IMAGE":                    "stealth-api",
 	"STEALTH_SETUP_IMAGE":                  "stealth-setup",
 	"STEALTH_WORKER_IMAGE":                 "stealth-worker",
+	"STEALTH_INGRESS_CONTROL_IMAGE":        "stealth-ingress-control",
 	"STEALTH_MIGRATE_IMAGE":                "stealth-migrate",
 	"STEALTH_CONSOLE_IMAGE":                "stealth-console",
 	"STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE": "stealth-telemetry-docker-proxy",
@@ -318,7 +320,7 @@ func validateConfigValues(values map[string]string) error {
 			return fmt.Errorf("generated configuration value for %s is empty", key)
 		}
 	}
-	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE", "TRAEFIK_IMAGE"} {
+	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_INGRESS_CONTROL_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE", "TRAEFIK_IMAGE"} {
 		if !validImageReference(values[key]) {
 			return fmt.Errorf("generated image reference for %s is invalid", key)
 		}

@@ -438,6 +438,9 @@ func assertMigratedV025State(t *testing.T, layout installengine.Layout, targetVe
 	if values["STEALTH_API_IMAGE"] != operatorAPIImage || values["PUBLIC_APP_URL"] != operatorPublicURL {
 		t.Fatalf("operator overrides changed: API=%q public_url=%q", values["STEALTH_API_IMAGE"], values["PUBLIC_APP_URL"])
 	}
+	if want := installengine.ImageName("stealth-ingress-control", targetVersion); values["STEALTH_INGRESS_CONTROL_IMAGE"] != want {
+		t.Fatalf("migration did not set ingress control image to target release: got %q want %q", values["STEALTH_INGRESS_CONTROL_IMAGE"], want)
+	}
 	for _, key := range []string{
 		"OTEL_COLLECTOR_IMAGE",
 		"OTEL_HOST_COLLECTOR_IMAGE",

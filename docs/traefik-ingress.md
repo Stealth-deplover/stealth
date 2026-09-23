@@ -1,8 +1,10 @@
-# Traefik ingress foundation
+# Traefik ingress and Console origin cutover
 
-This release establishes the production Traefik data-plane foundation while
-leaving the current Nginx edge in place. It is a migration stage of the final
-architecture, not a disposable canary topology.
+The production stack supports a reversible Console/API origin switch from
+Nginx to Traefik. Existing installations retain Nginx as their desired public
+origin until an operator runs the host-side cutover command. Both origins stay
+running after cutover so rollback changes only the existing Cloudflare Tunnel
+configuration.
 
 ## Current, migration, and target paths
 
@@ -17,7 +19,7 @@ Nginx proxy:80 on the private `stealth` network
         `-- / and Console fallback -> stealth-web:3000
 ```
 
-With Cloudflare workload routing enabled, the public paths are:
+The default and upgrade-safe public paths are:
 
 ```text
 cloud.example.com -> Named Tunnel -> proxy/Nginx -> API/Console
@@ -25,12 +27,13 @@ cloud.example.com -> Named Tunnel -> proxy/Nginx -> API/Console
                                                 (platform Site routes)
 ```
 
-Traefik also retains its internal core routes. The workload wildcard path is
-reconciled from PostgreSQL desired state and does not change the Console
-origin. The Console and wildcard names may use separate Cloudflare DNS zones
-when the scoped API token can access both.
+Traefik also retains its core routes. The workload wildcard path is reconciled
+from PostgreSQL desired state and does not change the Console origin. The
+Console and wildcard names may use separate Cloudflare DNS zones when the
+scoped API token can access both.
 
-The later Console/API origin cutover architecture is:
+An explicit host-side cutover changes only the Console rule in the same named
+tunnel:
 
 ```text
 PostgreSQL desired Site routes -> worker reconciler -> atomic file-provider files
@@ -38,12 +41,33 @@ PostgreSQL desired Site routes -> worker reconciler -> atomic file-provider file
 Cloudflare -> Traefik -> API/Console/workloads ------------+
 ```
 
-That cutover is deferred. In this PR, the Console hostname continues through
-the existing `http://proxy:80` tunnel origin and Nginx. Nginx and its health
-checks remain available as the production Console origin and rollback anchor.
-Platform Site hostnames use a separate wildcard ingress rule on the same
-tunnel, targeting `http://traefik:8080`. No Site-specific DNS records are
-created. Custom-domain DNS and public routing remain user-managed and deferred.
+`stealth ingress cutover` preflights the local Traefik core route and existing
+public HTTPS behavior, persists `traefik` as the desired origin, uses the
+origin-only Cloudflare reconciler under the existing PostgreSQL advisory lock,
+then verifies the provider read-back and public HTTPS Console/API routes,
+browser security headers, and HSTS. The Console root may safely redirect (for
+example, `307 /organizations`); verification follows at most five redirects
+only when they remain on the configured HTTPS hostname and port. Every hop
+must preserve the required security headers and HSTS. If public verification
+fails, it persists `proxy`, uses the same origin-only operation to restore
+Nginx, and verifies public recovery. `stealth ingress rollback` provides
+host-side recovery without depending on the public Console or API.
+
+Emergency Console-origin reconciliation changes only the Console Tunnel rule
+and preserves the current workload wildcard and final 404 catch-all. It does
+not call workload DNS, certificate-pack, or retiring-record APIs, so workload
+DNS conflicts or TLS inspection failures cannot block restoration to Nginx.
+Before manual rollback, the host checks only local rollback dependencies:
+healthy proxy/Nginx, running Cloudflared, and healthy bundled PostgreSQL when
+PostgreSQL is bundled. Public API, Console, and Traefik health are not required.
+An upgrade never changes the stored desired origin; migration defaults
+existing installations to `proxy`.
+
+Nginx and its health checks remain installed, running, and available as the
+immediate rollback origin. Platform Site hostnames keep their wildcard rule on
+the same tunnel, targeting `http://traefik:8080`; Console cutover does not
+change it. No Site-specific DNS records are created. Custom-domain DNS and
+public routing remain user-managed and deferred.
 
 The setup Compose project remains separate. Its temporary browser setup UI/API
 continues to use its own Nginx service and has no Docker socket, Docker CLI,
@@ -145,7 +169,8 @@ security headers on representative Console and API responses and an Admin SSE
 connection. It also runs a temporary echo backend through Traefik to verify the
 forwarded-header trust boundary at runtime: an untrusted ingress peer cannot
 preserve spoofed forwarding metadata, while the configured Cloudflared `/32`
-can.
+can. For `/`, it observes the first `307 /organizations` response and the
+successful final document response on both origins.
 
 ## Browser security headers and HSTS
 
@@ -160,12 +185,14 @@ Traefik's `stealth-security-headers` middleware preserves the Nginx policy:
 The parallel Traefik entrypoint is plain internal HTTP. It deliberately does
 not emit `Strict-Transport-Security`, because unconditional HSTS would pin
 local HTTP clients and Traefik cannot safely infer the external HTTPS scheme
-from an untrusted forwarded header. During the current phase Nginx remains the
-active edge and keeps its existing conditional HSTS behavior. After cutover,
-the Cloudflare HTTPS edge remains the HSTS owner; the cutover checklist must
-verify that Cloudflare continues to emit
-`max-age=31536000; includeSubDomains` for externally visible HTTPS responses.
-Traefik's other browser security headers remain present after Nginx removal.
+from an untrusted forwarded header. Before cutover Nginx keeps its existing
+conditional HSTS behavior. After cutover, the Cloudflare HTTPS edge remains the
+HSTS owner. The host command requires externally visible
+`max-age >= 31536000; includeSubDomains` and the current browser security
+policy on both Console and API responses. It does not change zone-wide
+Cloudflare settings. Missing HSTS or weaker headers fail the cutover and
+trigger automatic provider rollback to Nginx. Traefik's browser security
+headers remain active on its core routers.
 
 ## Request-body policy
 
@@ -279,8 +306,7 @@ operator files. No persistent Traefik state is added to purge handling.
 ## Deferred work
 
 This capability intentionally does not implement custom-domain Traefik route
-lifecycle, Docker discovery, custom certificates, or the Cloudflare origin
-cutover. The planned custom-domain lifecycle is
+lifecycle, Docker discovery, or custom certificates. The planned custom-domain lifecycle is
 `requested -> ownership verification -> DNS verified -> route generated ->
 proxy health verified -> active`; deletion disables the route, waits for
 reconciliation, then finalizes metadata. A later focused PR can add this

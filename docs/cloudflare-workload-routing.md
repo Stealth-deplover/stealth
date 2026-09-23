@@ -22,10 +22,27 @@ platform Sites such as `portfolio.apps.example.com`; Stealth does not create
 one DNS record per Site. Custom Site domains remain user-managed and
 TXT-verified. This capability does not add custom-domain Traefik routing.
 
-The Console hostname remains routed to `http://proxy:80`. Nginx stays in
-production with its health checks and remains the rollback anchor. Moving the
-Console/API origin to Traefik is deferred until a separate public E2E and
-rollback validation phase.
+The upgrade-safe default Console route remains `http://proxy:80`. Nginx stays
+installed, healthy, and available as the rollback origin after cutover. An
+operator can switch the Console rule in the same named tunnel with
+`stealth ingress cutover`; the workload wildcard rule and DNS record remain
+unchanged. The migration sets existing installations' desired origin to
+`proxy`, and installation/update never cuts over automatically.
+
+The cutover command checks the local Traefik Console and API routes, captures
+the current public HTTPS behavior, persists `traefik` as desired state, then
+uses the origin-only Cloudflare reconciler and PostgreSQL advisory lock to
+update and verify just the Console rule in the existing tunnel. Console public
+verification follows at most five same-host HTTPS redirects, including the
+Console root's expected `307 /organizations`, while checking browser security
+headers and HSTS on each hop. If a post-cutover check fails, it changes the
+desired origin back to `proxy`, reconciles the same tunnel through the same
+narrow path, and verifies public recovery. This emergency operation preserves
+the workload wildcard and catch-all without calling wildcard DNS, certificate,
+or retiring-record APIs. Manual `stealth ingress rollback` requires healthy
+local Nginx, running Cloudflared, and healthy bundled PostgreSQL when used; it
+does not require public API, Console, or Traefik health. The operator command
+never changes zone-wide Cloudflare security settings.
 
 Traefik stays private on the existing ingress network. Cloudflared uses its
 reserved fixed ingress IP, which remains the only trusted forwarded-header
@@ -154,7 +171,7 @@ production connection path.
 
 ## Deferred work
 
-This routing path does not move the Console/API origin from Nginx to Traefik,
-remove Nginx, provision DNS for arbitrary custom domains, or add a generic DNS
-provider layer. BuildKit, Apps runtime, OCI, and gVisor work are also outside
+This routing path does not remove Nginx or provision DNS and Traefik routes
+for arbitrary custom domains. Custom domains remain user-managed and
+TXT-verified. BuildKit, Apps runtime, OCI, and gVisor work are also outside
 this release.

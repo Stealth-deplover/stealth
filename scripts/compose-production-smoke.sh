@@ -794,6 +794,11 @@ http_probe_status() {
 	printf '%s\n' "$output" | awk '/HTTP\/[0-9.]+/ { code=$2 } END { gsub(/\r/, "", code); print code }'
 }
 
+http_probe_first_status() {
+	local output="$1"
+	printf '%s\n' "$output" | awk '/HTTP\/[0-9.]+/ { code=$2; gsub(/\r/, "", code); print code; exit }'
+}
+
 http_probe_header() {
 	local output="$1" wanted="$2"
 	printf '%s\n' "$output" | awk -v wanted="$wanted" '
@@ -841,6 +846,17 @@ verify_nginx_traefik_parity() {
 		if [ "$nginx_status" != "$traefik_status" ]; then
 			printf 'Nginx/Traefik status mismatch path=%s nginx=%s traefik=%s\n' "$path" "$nginx_status" "$traefik_status" >&2
 			return 1
+		fi
+		if [ "$path" = "/" ]; then
+			local nginx_first_status traefik_first_status nginx_location traefik_location
+			nginx_first_status="$(http_probe_first_status "$nginx_response")"
+			traefik_first_status="$(http_probe_first_status "$traefik_response")"
+			nginx_location="$(http_probe_header "$nginx_response" Location)"
+			traefik_location="$(http_probe_header "$traefik_response" Location)"
+			if [ "$nginx_first_status" != "307" ] || [ "$traefik_first_status" != "307" ] || [ "$nginx_location" != "/organizations" ] || [ "$traefik_location" != "/organizations" ] || [ "$nginx_status" != "200" ] || [ "$traefik_status" != "200" ]; then
+				printf 'Console root redirect mismatch: Nginx initial=%s location=%q final=%s; Traefik initial=%s location=%q final=%s\n' "$nginx_first_status" "$nginx_location" "$nginx_status" "$traefik_first_status" "$traefik_location" "$traefik_status" >&2
+				return 1
+			fi
 		fi
 		nginx_digest="$(http_probe_body_digest proxy "$path" "$traefik_host" "$auth_cookie_header")"
 		traefik_digest="$(http_probe_body_digest traefik "$path" "$traefik_host" "$auth_cookie_header")"
@@ -1358,6 +1374,12 @@ wait_for_healthy worker
 wait_for_healthy console
 wait_for_healthy proxy
 wait_for_healthy traefik
+ingress_control_status="$("${compose[@]}" run --rm --no-deps ingress-control status)"
+if ! printf '%s\n' "$ingress_control_status" | grep -Fq 'Cloudflare Tunnel: not configured' || ! printf '%s\n' "$ingress_control_status" | grep -Fq 'Console origin: not applicable'; then
+	printf 'unconfigured Cloudflare ingress-control status is incorrect: %s\n' "$ingress_control_status" >&2
+	exit 1
+fi
+printf '%s\n' 'ingress-control one-shot status passed with an unconfigured Cloudflare provider'
 verify_telemetry_runtime_boundaries
 verify_traefik_runtime_boundaries
 verify_worker_platform_state_boundary

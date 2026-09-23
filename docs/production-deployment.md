@@ -26,9 +26,10 @@ and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
 
 Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
-route while Console traffic remains on Nginx. See the
-[Traefik ingress foundation](traefik-ingress.md) for its network boundary,
-ownership model, and the deferred Console/API origin cutover.
+route. The Console/API hostname defaults to Nginx and can be switched to
+Traefik explicitly with the reversible host-side ingress commands below. See
+the [Traefik ingress guide](traefik-ingress.md) for the trust boundary and
+rollback path.
 
 ## Fresh install
 
@@ -78,7 +79,8 @@ logs.
 
 Required production values:
 
-- `STEALTH_API_IMAGE`, `STEALTH_WORKER_IMAGE`, `STEALTH_MIGRATE_IMAGE`,
+- `STEALTH_API_IMAGE`, `STEALTH_WORKER_IMAGE`, `STEALTH_INGRESS_CONTROL_IMAGE`,
+  `STEALTH_MIGRATE_IMAGE`,
   `STEALTH_CONSOLE_IMAGE`, `OTEL_COLLECTOR_IMAGE`,
   `OTEL_HOST_COLLECTOR_IMAGE`, `OTEL_DOCKER_COLLECTOR_IMAGE`,
   `OTEL_DOCKER_LOGS_COLLECTOR_IMAGE`, and
@@ -148,6 +150,57 @@ include the private Nginx network and the Cloudflare/LB address ranges that
 appear in the sanitized forwarding chain. Do not use `0.0.0.0/0`; if the list
 is empty, forwarded client-IP headers are ignored and public rate limits use
 the direct peer.
+
+## Cloudflare Console origin cutover
+
+New and upgraded installations use the existing Cloudflare Named Tunnel with
+the Console hostname pointed at `http://proxy:80` (Nginx). The platform Site
+wildcard continues to point at `http://traefik:8080` on that same tunnel.
+Migration defaults the durable Console origin to `proxy`; installing or
+updating a release never changes it remotely.
+
+After public HTTPS, API, Traefik, Cloudflared, and proxy health checks pass,
+request the explicit cutover from the installation host:
+
+```bash
+stealth ingress status
+stealth ingress verify
+stealth ingress cutover
+stealth ingress verify --site-hostname portfolio.apps.example.com
+```
+
+The host invokes a restricted one-shot `ingress-control` Compose service. It
+uses configured PostgreSQL and the encrypted Cloudflare connection, takes the
+existing reconciler's PostgreSQL advisory lock, changes only the Console ingress
+inside the existing tunnel, verifies the provider configuration, and probes
+public DNS and HTTPS. The Console root may return its normal `307 /organizations`
+redirect; public verification follows at most five same-host HTTPS redirects
+and rejects host/port changes, IP literals, loops, and downgrades. Every hop
+must retain the required browser security headers and HSTS. The public checks
+include the Console root, unauthenticated
+`/v1/account`, `/healthz`, `/readyz`, `/version`, an unknown path, the existing
+browser security headers, and HSTS with `max-age >= 31536000; includeSubDomains`.
+When a Site hostname is supplied it must be exactly one label below the
+configured `workload_base_domain`, and its public HTTPS response must succeed.
+
+If any post-cutover public check fails, Stealth stores `proxy` as the desired
+origin, reconciles the same tunnel back to Nginx, then verifies recovery. A
+successful recovery still reports the cutover as failed. If automatic rollback
+cannot be confirmed, the command reports a high-severity error; run
+`stealth ingress rollback` from the host. Emergency rollback uses the narrow
+Console-origin provider operation and preserves workload wildcard/catch-all
+rules; it does not call workload DNS or certificate APIs. The host preflight
+requires healthy proxy/Nginx, running Cloudflared, and healthy bundled
+PostgreSQL when bundled, but does not require the public API, Console, or
+Traefik. Manual rollback does not depend on the public Console or API. Neither command enables or changes Cloudflare HSTS
+or any other zone-wide security setting. Nginx remains installed and running
+after successful cutover so rollback requires no rebuild or service recreation.
+
+For an external public-network acceptance, follow the
+[release checklist](RELEASING.md) and run
+[`scripts/public-hosting-acceptance.sh`](../scripts/public-hosting-acceptance.sh)
+with explicit Console and platform Site URLs. CI uses fake Cloudflare clients
+and local Compose/Traefik checks; it does not claim a real Cloudflare E2E.
 
 ## Persistence and external services
 

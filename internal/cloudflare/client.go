@@ -83,9 +83,57 @@ type DNSRecord struct {
 }
 
 type IngressRule struct {
-	Hostname string          `json:"hostname,omitempty"`
-	Service  string          `json:"service"`
-	Origin   json.RawMessage `json:"originRequest,omitempty"`
+	Hostname string                     `json:"hostname,omitempty"`
+	Service  string                     `json:"service"`
+	Origin   json.RawMessage            `json:"originRequest,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
+}
+
+func (rule *IngressRule) UnmarshalJSON(data []byte) error {
+	type knownFields struct {
+		Hostname string          `json:"hostname,omitempty"`
+		Service  string          `json:"service"`
+		Origin   json.RawMessage `json:"originRequest,omitempty"`
+	}
+	var known knownFields
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	delete(fields, "hostname")
+	delete(fields, "service")
+	delete(fields, "originRequest")
+	*rule = IngressRule{Hostname: known.Hostname, Service: known.Service, Origin: known.Origin, Extra: fields}
+	return nil
+}
+
+func (rule IngressRule) MarshalJSON() ([]byte, error) {
+	fields := make(map[string]json.RawMessage, len(rule.Extra)+3)
+	if rule.Hostname != "" {
+		hostname, err := json.Marshal(rule.Hostname)
+		if err != nil {
+			return nil, err
+		}
+		fields["hostname"] = hostname
+	}
+	service, err := json.Marshal(rule.Service)
+	if err != nil {
+		return nil, err
+	}
+	fields["service"] = service
+	if len(rule.Origin) != 0 {
+		fields["originRequest"] = rule.Origin
+	}
+	for key, value := range rule.Extra {
+		if key == "hostname" || key == "service" || key == "originRequest" {
+			continue
+		}
+		fields[key] = value
+	}
+	return json.Marshal(fields)
 }
 
 type TunnelStatus struct {

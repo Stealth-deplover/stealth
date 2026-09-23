@@ -1,7 +1,8 @@
 # Upgrade and rollback
 
 Stealth releases are coordinated application releases. Use the same version
-for `stealth-api`, `stealth-worker`, `stealth-migrate`, `stealth-console`,
+for `stealth-api`, `stealth-worker`, `stealth-ingress-control`,
+`stealth-migrate`, `stealth-console`,
 `stealth-otel-collector`, `stealth-otel-docker-logs`, and
 `stealth-telemetry-docker-proxy`. The host-metrics and Docker-metrics
 collectors use the capability-free `stealth-otel-collector` image; the

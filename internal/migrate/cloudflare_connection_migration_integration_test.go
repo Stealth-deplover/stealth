@@ -50,6 +50,15 @@ func TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegratio
 	if _, err := conn.Exec(ctx, string(up)); err != nil {
 		t.Fatal(err)
 	}
+	for _, migrationName := range []string{"000055_cloudflare_edge_tls.up.sql", "000056_cloudflare_console_origin.up.sql"} {
+		migration, err := files.ReadFile("migrations/" + migrationName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply populated upgrade migration %s: %v", migrationName, err)
+		}
+	}
 	var status string
 	var tokenCiphertext []byte
 	if err := conn.QueryRow(ctx, `SELECT status,api_token_ciphertext FROM cloudflare_connections WHERE id=TRUE`).Scan(&status, &tokenCiphertext); err != nil {
@@ -58,16 +67,25 @@ func TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegratio
 	if status != "unconfigured" || tokenCiphertext != nil {
 		t.Fatalf("migration fabricated provider state: status=%q ciphertext=%x", status, tokenCiphertext)
 	}
+	var desired, observed, originStatus string
+	if err := conn.QueryRow(ctx, `SELECT console_origin_desired,console_origin_observed,console_origin_status FROM cloudflare_connections WHERE id=TRUE`).Scan(&desired, &observed, &originStatus); err != nil {
+		t.Fatal(err)
+	}
+	if desired != "proxy" || observed != "unknown" || originStatus != "pending" {
+		t.Fatalf("migration origin state = desired:%q observed:%q status:%q; want safe proxy default", desired, observed, originStatus)
+	}
 	var workloadDomain string
 	if err := conn.QueryRow(ctx, `SELECT workload_base_domain FROM instance_domain_settings WHERE id=TRUE`).Scan(&workloadDomain); err != nil || workloadDomain != "apps.example.net" {
 		t.Fatalf("populated workload domain after migration=%q err=%v", workloadDomain, err)
 	}
-	down, err := files.ReadFile("migrations/000054_cloudflare_connections.down.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(ctx, string(down)); err != nil {
-		t.Fatal(err)
+	for _, migrationName := range []string{"000056_cloudflare_console_origin.down.sql", "000055_cloudflare_edge_tls.down.sql", "000054_cloudflare_connections.down.sql"} {
+		down, err := files.ReadFile("migrations/" + migrationName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, string(down)); err != nil {
+			t.Fatalf("apply down migration %s: %v", migrationName, err)
+		}
 	}
 	var remaining int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=$1 AND table_name IN ('cloudflare_connections','cloudflare_retiring_wildcard_dns')`, schema).Scan(&remaining); err != nil {

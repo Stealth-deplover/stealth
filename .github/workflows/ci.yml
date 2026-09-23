@@ -155,6 +155,15 @@ jobs:
             '^(TestInstanceDomainSettingsIntegration|TestPlatformSiteAPIAndNarrowListenerIntegration)$' \
             TestInstanceDomainSettingsIntegration \
             TestPlatformSiteAPIAndNarrowListenerIntegration
+          run_and_require_tests ./internal/migrate \
+            '^TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegration$' \
+            TestCloudflareConnectionMigrationOnPopulatedNonCloudflareInstanceIntegration
+          run_and_require_tests ./internal/repository \
+            '^TestCloudflareConnectionPersistenceAndReconciliationIntegration$' \
+            TestCloudflareConnectionPersistenceAndReconciliationIntegration
+          run_and_require_tests ./internal/httpapi \
+            '^TestAdminCloudflareConnectionOwnerBoundaryAndSecretProjectionIntegration$' \
+            TestAdminCloudflareConnectionOwnerBoundaryAndSecretProjectionIntegration
 
       - name: Real Collector and telemetry integration suites
         env:
@@ -207,6 +216,9 @@ jobs:
       - name: Docker image build
         run: docker build --target api -t stealth-api .
 
+      - name: Ingress control image build
+        run: docker build --target ingress-control -t stealth-ingress-control:ci .
+
       - name: Stealth Collector image build
         run: docker build --target telemetry-collector -t stealth-otel-collector:ci .
 
@@ -251,7 +263,16 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Validate bootstrap and release scripts
-        run: bash -n scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh scripts/compose-production-smoke.sh scripts/traefik-security-test.sh
+        run: |
+          for script in scripts/bootstrap.sh scripts/bootstrap_test.sh scripts/release_workflow_test.sh scripts/managed-asset-upgrade-smoke.sh scripts/real-v025-upgrade-smoke.sh scripts/compose-production-smoke.sh scripts/public-hosting-acceptance.sh scripts/public-hosting-addresses.sh scripts/public-hosting-addresses-test.sh scripts/traefik-security-test.sh; do
+            bash -n "$script"
+          done
+
+      - name: Test public acceptance redirect policy
+        run: python3 -m unittest discover -s scripts -p 'test_public_hosting_redirect.py'
+
+      - name: Test public acceptance address selection
+        run: bash scripts/public-hosting-addresses-test.sh
 
       - name: Verify release smoke revision pinning
         run: ./scripts/release_workflow_test.sh
