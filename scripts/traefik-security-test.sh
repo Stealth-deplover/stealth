@@ -219,7 +219,6 @@ fi
 
 for required in \
 	'image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef' \
-	'user: "1000:1000"' \
 	'read_only: true' \
 	'seccomp=unconfined' \
 	'apparmor=unconfined' \
@@ -231,6 +230,10 @@ for required in \
 		exit 1
 	fi
 done
+if ! printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*user: "?1000:1000"?$'; then
+	printf '%s\n' 'App BuildKit must run as the dedicated non-root user' >&2
+	exit 1
+fi
 for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
 	if printf '%s\n' "$buildkit_block" | grep -Fqi -- "$forbidden"; then
 		printf 'App BuildKit service contains forbidden setting: %s\n' "$forbidden" >&2
