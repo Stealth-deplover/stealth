@@ -140,6 +140,7 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 		t.Fatal(err)
 	}
 	assertAppRuntimeCleanupContainerID(t, f, appID)
+	prioritizeAppRuntimeCleanupForTest(t, f, appID)
 	cleanup, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "cleanup-worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +150,7 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 		if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(container_id,'') FROM app_runtime_cleanup_jobs WHERE id=$1`, cleanup.ID).Scan(&persistedContainerID); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("App deletion cleanup claim disagrees with its row: job=%+v persisted_container_id=%q", cleanup, persistedContainerID)
+		t.Fatalf("App deletion cleanup claim disagrees with its row: expected_app_id=%s job=%+v persisted_container_id=%q", appID, cleanup, persistedContainerID)
 	}
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
@@ -180,6 +181,7 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 		t.Fatal(err)
 	}
 	assertAppRuntimeCleanupContainerID(t, f, appID)
+	prioritizeAppRuntimeCleanupForTest(t, f, appID)
 	cleanup, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "project-cleanup-worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +191,7 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 		if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(container_id,'') FROM app_runtime_cleanup_jobs WHERE id=$1`, cleanup.ID).Scan(&persistedContainerID); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("project deletion cleanup claim disagrees with its row: job=%+v persisted_container_id=%q", cleanup, persistedContainerID)
+		t.Fatalf("project deletion cleanup claim disagrees with its row: expected_app_id=%s job=%+v persisted_container_id=%q", appID, cleanup, persistedContainerID)
 	}
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
@@ -220,6 +222,20 @@ func assertAppRuntimeCleanupContainerID(t *testing.T, f appRepositoryFixture, ap
 	}
 	if containerID != strings.Repeat("a", 64) {
 		t.Fatalf("App runtime cleanup job did not persist the container ID: %v", containerID)
+	}
+}
+
+func prioritizeAppRuntimeCleanupForTest(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
+	t.Helper()
+	result, err := f.pool.Exec(f.ctx, `
+		UPDATE app_runtime_cleanup_jobs
+		SET next_attempt_at='epoch'::timestamptz
+		WHERE app_id=$1 AND container_name=$2 AND status='pending'`, appID, AppRuntimeContainerName(appID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RowsAffected() != 1 {
+		t.Fatalf("updated %d target App runtime cleanup jobs, want exactly one", result.RowsAffected())
 	}
 }
 
