@@ -80,10 +80,11 @@ worker. The official rootless image requires the Compose `seccomp=unconfined`,
 `apparmor=unconfined`, and `systempaths=unconfined` exceptions for nested user
 and mount namespaces; the service remains non-privileged and runs as UID/GID
 1000, with no host namespaces, Docker socket, backend networks, host ports, or
-Stealth storage/staging mounts. Its only persistent volume is bounded,
-disposable BuildKit cache. Dockerfile execution can fetch ordinary base images
-and dependencies over outbound Internet, but cannot resolve backend services
-by Compose network name.
+Stealth storage/staging mounts. A private tmpfs holds rootlesskit's transient
+state while the container root filesystem stays read-only. Its only persistent
+volume is bounded, disposable BuildKit cache. Dockerfile execution can fetch
+ordinary base images and dependencies over outbound Internet, but cannot
+resolve backend services by Compose network name.
 
 The worker sends only a validated source context and explicit build request to
 BuildKit. It does not forward SSH agents, secrets, arbitrary build arguments,

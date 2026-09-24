@@ -502,6 +502,8 @@ services:
     tmpfs:
       - /tmp
       - /run/user/1000
+      # rootlesskit keeps transient namespace state under this directory.
+      - /home/user/.local/tmp
     security_opt:
       # Required by the official rootless BuildKit image to establish its
       # nested user/mount namespaces. The service remains non-privileged and

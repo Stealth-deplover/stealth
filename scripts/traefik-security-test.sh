@@ -232,6 +232,10 @@ if ! printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*user: "?1000:1000"
 	printf '%s\n' 'App BuildKit must run as the dedicated non-root user' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/home/user/.local/tmp'; then
+	printf '%s\n' 'App BuildKit rootless state directory must use ephemeral tmpfs storage' >&2
+	exit 1
+fi
 buildkit_state_volume="$(env_value APPS_BUILDKIT_STATE_VOLUME)"
 if [ -z "$buildkit_state_volume" ]; then
 	buildkit_state_volume='stealth_app_buildkit_state'
