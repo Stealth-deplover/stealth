@@ -471,7 +471,7 @@ services:
       - |
         set -eu
         chmod 0755 /output
-        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$stale" ] && [ ! -L "$stale" ] || rm -rf -- "$stale"; done
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$$stale" ] && [ ! -L "$$stale" ] || rm -rf -- "$$stale"; done
         install -m 0444 /input/ca.pem /output/ca.pem
         install -m 0444 /input/client-cert.pem /output/client-cert.pem
         install -m 0400 /input/client-key.pem /output/client-key.pem
@@ -500,7 +500,7 @@ services:
       - |
         set -eu
         chmod 0755 /output
-        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$stale" ] && [ ! -L "$stale" ] || rm -rf -- "$stale"; done
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$$stale" ] && [ ! -L "$$stale" ] || rm -rf -- "$$stale"; done
         install -m 0444 /input/ca.pem /output/ca.pem
         install -m 0444 /input/server-cert.pem /output/server-cert.pem
         install -m 0400 /input/server-key.pem /output/server-key.pem

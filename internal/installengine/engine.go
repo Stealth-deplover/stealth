@@ -1258,7 +1258,7 @@ func validateProductionComposeAsset(contents []byte) error {
 			return fmt.Errorf("worker BuildKit credential initializer is missing %q", required)
 		}
 	}
-	if !strings.Contains(workerInit, "for stale in /output/* /output/.[!.]* /output/..?*") {
+	if !strings.Contains(workerInit, "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e ") || !strings.Contains(workerInit, "$$stale") {
 		return errors.New("worker BuildKit credential initializer must clear stale volume contents before copying its identity")
 	}
 	if strings.Contains(workerInit, "/server/") || strings.Contains(workerInit, "/health/") || strings.Contains(workerInit, "ca-key.pem") {
@@ -1276,7 +1276,7 @@ func validateProductionComposeAsset(contents []byte) error {
 			return fmt.Errorf("BuildKit credential initializer is missing %q", required)
 		}
 	}
-	if !strings.Contains(serverInit, "for stale in /output/* /output/.[!.]* /output/..?*") {
+	if !strings.Contains(serverInit, "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e ") || !strings.Contains(serverInit, "$$stale") {
 		return errors.New("BuildKit credential initializer must clear stale volume contents before copying its identities")
 	}
 	if strings.Contains(serverInit, "/worker/") || strings.Contains(serverInit, "ca-key.pem") {

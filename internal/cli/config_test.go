@@ -24,7 +24,7 @@ func testProductionComposeAsset() string {
     restart: "no"
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE]
-    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*"]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
     volumes:
       - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
       - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro
@@ -35,7 +35,7 @@ func testProductionComposeAsset() string {
     restart: "no"
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE]
-    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*"]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
     volumes:
       - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
       - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro

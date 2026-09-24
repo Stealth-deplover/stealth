@@ -38,6 +38,7 @@ func TestProductionComposeKeepsBuildKitCredentialsRoleSeparated(t *testing.T) {
 			"./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro", 1),
 		"healthcheck client identity omitted": strings.Replace(valid,
 			`"/run/secrets/stealth-buildkit/health-client-key.pem", `, "", 1),
+		"worker initializer Compose interpolation is not escaped": strings.Replace(valid, "$$stale", "$stale", 1),
 		"BuildKit service receives host key paths": strings.Replace(valid,
 			"buildkit_server_credentials:/run/secrets/stealth-buildkit:ro",
 			"./state/buildkit-mtls/server/key.pem:/run/secrets/stealth-buildkit/server-key.pem:ro", 1),

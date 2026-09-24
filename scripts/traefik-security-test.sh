@@ -388,7 +388,8 @@ if ! grep -Fq '[grpc.tls]' "$buildkit_config" ||
 fi
 if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
 	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem' ||
-	! printf '%s\n' "$buildkit_block" | grep -Fq 'debug workers'; then
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'debug' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'workers'; then
 	printf '%s\n' 'BuildKit healthcheck does not authenticate with the health-only identity' >&2
 	exit 1
 fi
