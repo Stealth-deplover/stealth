@@ -1268,7 +1268,7 @@ import zipfile
 
 archive, marker, probe = sys.argv[1:]
 with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\nCOPY buildkit-secret-probe /buildkit-secret-probe\nRUN [\"/buildkit-secret-probe\"]\n")
+    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\nCOPY --chmod=0755 buildkit-secret-probe /buildkit-secret-probe\nRUN [\"/buildkit-secret-probe\"]\n")
     output.writestr("payload.txt", marker + "\n")
     output.write(probe, "buildkit-secret-probe")
 PY
