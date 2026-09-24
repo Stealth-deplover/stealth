@@ -50,6 +50,12 @@ func (r *uninstallTestRunner) Output(_ context.Context, dir, name string, args .
 	if r.outputErr != nil {
 		return nil, r.outputErr
 	}
+	if containsArgs(args, "network", "inspect") {
+		return nil, errors.New("Error response from daemon: network stealth_app_runtime not found")
+	}
+	if containsArgs(args, "container", "ls") {
+		return nil, nil
+	}
 	if containsArgs(args, "config") && containsArgs(args, "--volumes") {
 		if r.volumeNames != "" {
 			return []byte(r.volumeNames), nil

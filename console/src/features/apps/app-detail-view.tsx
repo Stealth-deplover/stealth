@@ -28,6 +28,7 @@ import { AppDeploymentDialog } from "@/features/apps/app-deployment-dialog";
 import { updateAppPayload, type AppFormValues } from "@/features/apps/app-form";
 import { BackLink } from "@/features/resources/detail-shared";
 import type { AppDeployment } from "@/api/types";
+import { AppRuntime_status } from "@/api/generated/schema";
 import { pageControls } from "@/lib/pagination";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 
@@ -98,7 +99,7 @@ export function AppDetailView({
   const onSelectDeployment = async (deploymentId: string) => {
     try {
       await selectDeployment.mutateAsync(deploymentId);
-      toast.success("Selected as desired image. Runtime remains not deployed.");
+      toast.success("Desired image selected; runtime reconciliation has been queued.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not select image");
     }
@@ -123,7 +124,7 @@ export function AppDetailView({
       <PageHeader
         eyebrow="Persistent App"
         title={app.name}
-        description="Durable desired configuration for a future long-running project workload."
+        description="Desired App configuration and observed persistent runtime state."
         actions={
           canManage ? (
             <>
@@ -146,6 +147,13 @@ export function AppDetailView({
         <ResourceId id={app.id} label="App ID" />
       </div>
 
+      {app.runtime_error ? (
+        <div role="alert" className="mb-5 rounded-md border border-rose-300/25 bg-rose-300/[0.06] px-4 py-3 text-sm text-rose-100">
+          <p className="font-medium">Runtime reconciliation needs attention</p>
+          <p className="mt-1 text-xs leading-5 text-rose-100/75">{app.runtime_error}</p>
+        </div>
+      ) : null}
+
       {app.desired_deployment_id ? (
         <Card className="mb-5 border-cyan-300/20 bg-cyan-300/[0.03]">
           <CardContent className="flex items-start gap-3 p-4">
@@ -153,7 +161,7 @@ export function AppDetailView({
             <div>
               <p className="text-sm font-medium text-cyan-100">Desired image selected</p>
               <p className="mt-1 text-xs leading-5 text-cyan-100/70">
-                This selection records which immutable image a future runtime should use. No container has been created; runtime status remains Not deployed.
+                This immutable image is the desired release. {runtimeSummary(app.runtime_status, app.desired_generation, app.observed_generation)}
               </p>
             </div>
           </CardContent>
@@ -218,7 +226,12 @@ export function AppDetailView({
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Health check</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Health check</CardTitle>
+            <p className="mt-1 text-xs leading-5 text-fog">
+              Stored for future routing. Runtime status reports process liveness only; application health and public routing are not available yet.
+            </p>
+          </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <Metric label="Protocol">{app.workload.health_check.protocol.toUpperCase()}</Metric>
             <Metric label="Path">{app.workload.health_check.path ?? "None for TCP"}</Metric>
@@ -325,7 +338,7 @@ export function AppDetailView({
           <DialogHeader>
             <DialogTitle>Delete {app.name}?</DialogTitle>
             <DialogDescription>
-              This removes the App configuration and releases its reserved hostname. No workload runtime exists to stop.
+              This removes the App configuration and releases its reserved hostname. Any managed runtime is queued for cleanup.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -338,6 +351,25 @@ export function AppDetailView({
       </Dialog>
     </>
   );
+}
+
+function runtimeSummary(status: AppRuntime_status, desired: number, observed: number) {
+  switch (status) {
+    case AppRuntime_status.pending:
+      return `The runtime is reconciling generation ${desired}; generation ${observed} remains the last successfully applied state.`;
+    case AppRuntime_status.running:
+      return `The expected container is running and matches generation ${observed}. This does not report application health.`;
+    case AppRuntime_status.degraded:
+      return `The runtime is not currently matching the desired state. Generation ${observed} remains the last successfully applied state while the worker retries.`;
+    case AppRuntime_status.stopped:
+      return "The App is disabled and its managed container is absent.";
+    case AppRuntime_status.failed:
+      return `The desired runtime could not be applied. Generation ${observed} remains the last successfully applied state; the worker will retry.`;
+    case AppRuntime_status.not_deployed:
+      return "No deployment is selected, so no App container should be running.";
+    default:
+      return `Desired generation ${desired}; last observed generation ${observed}.`;
+  }
 }
 
 function Metric({ label, children }: { label: string; children: ReactNode }) {

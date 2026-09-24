@@ -87,6 +87,28 @@ if [ -z "$api_block" ]; then
 	printf '%s\n' 'API service is missing from rendered production Compose' >&2
 	exit 1
 fi
+console_block="$(service_block console)"
+if [ -z "$console_block" ]; then
+	printf '%s\n' 'Console service is missing from rendered production Compose' >&2
+	exit 1
+fi
+for service_name in api console buildkit traefik; do
+	case "$service_name" in
+		api) service_contents="$api_block" ;;
+		console) service_contents="$console_block" ;;
+		buildkit) service_contents="$buildkit_block" ;;
+		traefik) service_contents="$traefik_block" ;;
+	esac
+	if printf '%s\n' "$service_contents" | grep -Fq '/var/run/docker.sock'; then
+		printf 'Docker socket must not be mounted into %s\n' "$service_name" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$worker_block" | grep -Fq 'source: /var/run/docker.sock' ||
+	! printf '%s\n' "$worker_block" | grep -Fq 'target: /var/run/docker.sock'; then
+	printf '%s\n' 'worker must retain the Docker socket required by trusted runtime reconciliation' >&2
+	exit 1
+fi
 state_init_block="$(service_block traefik-state-init)"
 if [ -z "$state_init_block" ]; then
 	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
@@ -582,6 +604,18 @@ in_networks && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
 in_networks && /^      [^[:space:]][^:]*:/ { sub(/^[[:space:]]+/, ""); sub(/:.*/, ""); print }
 '
 }
+runtime_network_name="${APPS_RUNTIME_NETWORK_NAME:-stealth_app_runtime}"
+if [ -f "$env_file" ] && [ -z "${APPS_RUNTIME_NETWORK_NAME:-}" ]; then
+	runtime_network_name="$(sed -n 's/^APPS_RUNTIME_NETWORK_NAME=//p' "$env_file" | tail -n 1 | tr -d "\"'")"
+	runtime_network_name="${runtime_network_name:-stealth_app_runtime}"
+fi
+while IFS= read -r service; do
+	block="$(service_block "$service")"
+	if printf '%s\n' "$(service_networks "$block")" | grep -Fxq "$runtime_network_name"; then
+		printf 'App runtime network must not be attached to Compose service %s\n' "$service" >&2
+		exit 1
+	fi
+done < <("${compose[@]}" config --services)
 buildkit_networks="$(service_networks "$buildkit_block" | sort -u | paste -sd, -)"
 worker_networks="$(service_networks "$worker_block" | sort -u | paste -sd, -)"
 if [ "$buildkit_networks" != 'app_build' ]; then

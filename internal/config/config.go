@@ -109,6 +109,11 @@ type Config struct {
 	AppsBuildStagingRoot          string
 	AppsBuildStagingVolume        string
 	AppsBuildkitStateVolume       string
+	AppsRuntimeNetworkName        string
+	AppsRuntimePollInterval       time.Duration
+	AppsRuntimeLeaseAge           time.Duration
+	AppsRuntimeActionTimeout      time.Duration
+	AppsRuntimeImageImportTimeout time.Duration
 	// Agent runner settings control the trusted queue lifecycle. Provider
 	// adapters remain a separate capability and an empty registry never claims
 	// queued runs.
@@ -366,6 +371,13 @@ func (c Config) ValidateApps() error {
 	}
 	if !isDockerName(c.AppsBuildStagingVolume) || !isDockerName(c.AppsBuildkitStateVolume) {
 		return fmt.Errorf("App build volume names are invalid")
+	}
+	if len(c.AppsRuntimeNetworkName) > 63 || !isDockerName(c.AppsRuntimeNetworkName) ||
+		c.AppsRuntimePollInterval < 100*time.Millisecond || c.AppsRuntimePollInterval > time.Minute ||
+		c.AppsRuntimeLeaseAge < 30*time.Second || c.AppsRuntimeLeaseAge > 10*time.Minute ||
+		c.AppsRuntimeActionTimeout < 5*time.Second || c.AppsRuntimeActionTimeout > 2*time.Minute ||
+		c.AppsRuntimeImageImportTimeout < time.Minute || c.AppsRuntimeImageImportTimeout > 30*time.Minute {
+		return fmt.Errorf("App runtime network, poll, lease, or Docker timeout settings are invalid")
 	}
 	return nil
 }

@@ -67,6 +67,7 @@ func TestShouldFanoutOnlyIncludesRealtimeConsumerEvents(t *testing.T) {
 		"app.create",
 		"app.update",
 		"app.delete",
+		"app.runtime.updated",
 		"project_api_key.revoke",
 		"project_user.status_change",
 		"messaging.subscriber.create",

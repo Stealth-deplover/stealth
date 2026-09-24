@@ -166,6 +166,7 @@ describe("AppDetailView", () => {
   it("shows a selected ready image without claiming a running runtime and renders build logs", () => {
     const app = makeApp();
     app.desired_deployment_id = "deployment-1";
+    app.runtime_status = AppRuntime_status.pending;
     mocks.app = app;
     mocks.deployments = [makeDeployment()];
     render(
@@ -177,14 +178,35 @@ describe("AppDetailView", () => {
     );
 
     expect(screen.getByText("Desired image selected")).toBeInTheDocument();
-    expect(screen.getAllByText("Not deployed").length).toBeGreaterThan(0);
+    expect(screen.getByText(/The runtime is reconciling generation 1/)).toBeInTheDocument();
+    expect(screen.getAllByText("Pending")).toHaveLength(2);
     expect(screen.queryByText("Running")).toBeNull();
     expect(screen.queryByText("Healthy")).toBeNull();
+    expect(screen.getByText(/application health and public routing are not available yet/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getAllByText(`sha256:${"c".repeat(64)}`)).toHaveLength(2);
     expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Build logs");
     expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Runtime logs are not available");
+  });
+
+  it("shows safe runtime failure details and preserves the last observed generation", () => {
+    const app = makeApp();
+    app.desired_deployment_id = "deployment-1";
+    app.runtime_status = AppRuntime_status.degraded;
+    app.runtime_error = "image verification failed";
+    mocks.app = app;
+    mocks.deployments = [makeDeployment()];
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("image verification failed");
+    expect(screen.getByText(/Generation 0 remains the last successfully applied state/)).toBeInTheDocument();
   });
 
   it("shows build failure details and never offers failed output for selection", () => {

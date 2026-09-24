@@ -123,9 +123,20 @@ claim a full browser/provider installation or run a full production stack.
       installer loads the Stealth-managed userns-only profile before BuildKit
       starts, preserves it across reboot, and removes it during configuration
       removal or purge.
-- [ ] Run the production Compose smoke's `FROM scratch` App build. Confirm
-      BuildKit readiness, a verified OCI digest/archive, and that the App stays
-      `not_deployed` with no App route in the Site route snapshot.
+- [ ] Run the production Compose `FROM scratch` App runtime smoke. Confirm the
+      persisted OCI checksum/manifest, running container and matching desired /
+      observed generations, bounded Moby settings, no host ports, no Docker
+      socket/storage/secrets in the App, and no public App route.
+- [ ] Confirm the Compose smoke covers disable/enable reuse, CPU replacement,
+      v2 image selection, worker restart, deleted container recovery, unexpected
+      exit recovery, foreign deterministic-name refusal, and valid orphan cleanup.
+- [ ] Confirm `scripts/traefik-security-test.sh` keeps the App runtime network
+      outside Compose services and the Docker socket out of API, Console,
+      BuildKit, and Traefik.
+- [ ] On a test VPS, perform the manual host reboot acceptance in
+      [`production-deployment.md`](production-deployment.md): one running App,
+      matching generations, and exactly one managed container after worker
+      recovery. CI does not reboot its host.
 - [ ] Verify BuildKit cache can be removed without affecting completed App
       deployment metadata or persisted OCI archives.
 - [ ] Restart the API, worker, Console, and proxy containers, then rerun

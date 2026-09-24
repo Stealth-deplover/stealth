@@ -392,6 +392,22 @@ func (a *App) runDoctor(args []string) int {
 	setupMode := strings.EqualFold(strings.TrimSpace(config["SETUP_MODE"]), "true")
 	if setupMode {
 		check("Setup Compose file", regularFile(layout.SetupComposeFile), layout.SetupComposeFile)
+		fmt.Fprintln(a.out, renderCheck(SystemCheck{Name: "App runtime", Detail: "not started in setup mode", OK: false, Required: false}))
+	} else {
+		runtimeNetwork := strings.TrimSpace(config["APPS_RUNTIME_NETWORK_NAME"])
+		if runtimeNetwork == "" {
+			runtimeNetwork = "stealth_app_runtime"
+		}
+		output, inspectErr := a.runner.Output(ctx, "", "docker", "network", "inspect", "--format", "{{json .}}", runtimeNetwork)
+		if inspectErr != nil {
+			check("App runtime", false, "Docker runtime network is unavailable")
+		} else {
+			if appRuntimeNetworkOwned(runtimeNetwork, output) {
+				check("App runtime", true, "owned bridge network is available")
+			} else {
+				check("App runtime", false, "Docker runtime network ownership could not be verified")
+			}
+		}
 	}
 	check("Configuration syntax", hasRequiredConfig(config), "required values are present")
 

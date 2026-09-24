@@ -18,6 +18,13 @@ func TestValidateOCIArchive(t *testing.T) {
 	if err := Validate(bytes.NewReader(archive), digest, int64(len(archive))); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	info, err := Inspect(bytes.NewReader(archive), digest, int64(len(archive)))
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if info.ManifestDigest != digest || info.OS != "linux" || info.Architecture != "amd64" || len(info.LayerDiffIDs) != 0 {
+		t.Fatalf("Inspect() info = %+v", info)
+	}
 }
 
 func TestValidateRejectsInvalidOCIArchives(t *testing.T) {
@@ -68,7 +75,7 @@ type tarEntry struct {
 
 func validEntries(t *testing.T) ([]tarEntry, string) {
 	t.Helper()
-	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	config := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
 	configDigest := digestBytes(config)
 	manifest, err := json.Marshal(map[string]any{
 		"schemaVersion": 2,

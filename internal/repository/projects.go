@@ -170,17 +170,27 @@ func (r *Repository) DeleteProject(ctx context.Context, projectID, accountID uui
 	if confirmationName != name {
 		return ErrConfirmationRequired
 	}
-	appRows, err := tx.Query(ctx, `SELECT artifact_reserved_bytes FROM project_apps WHERE project_id=$1 ORDER BY id FOR UPDATE`, projectID)
+	appRows, err := tx.Query(ctx, `
+		SELECT id,COALESCE((workload_spec->>'stop_grace_period_seconds')::integer,15),artifact_reserved_bytes
+		FROM project_apps WHERE project_id=$1 ORDER BY id FOR UPDATE`, projectID)
 	if err != nil {
 		return err
 	}
 	appArtifactPublishInProgress := false
+	type appRuntimeDeletion struct {
+		appID     uuid.UUID
+		stopGrace int
+	}
+	appsToClean := make([]appRuntimeDeletion, 0)
 	for appRows.Next() {
+		var appID uuid.UUID
+		var stopGrace int
 		var reserved int64
-		if err := appRows.Scan(&reserved); err != nil {
+		if err := appRows.Scan(&appID, &stopGrace, &reserved); err != nil {
 			appRows.Close()
 			return err
 		}
+		appsToClean = append(appsToClean, appRuntimeDeletion{appID: appID, stopGrace: stopGrace})
 		if reserved > 0 {
 			appArtifactPublishInProgress = true
 		}
@@ -192,6 +202,11 @@ func (r *Repository) DeleteProject(ctx context.Context, projectID, accountID uui
 	appRows.Close()
 	if appArtifactPublishInProgress {
 		return ErrAppArtifactPublishInProgress
+	}
+	for _, app := range appsToClean {
+		if err := queueAppRuntimeCleanupForAppTx(ctx, tx, projectID, app.appID, app.stopGrace); err != nil {
+			return err
+		}
 	}
 	if err := writeAuditMetadata(ctx, tx, orgID, accountID, "project.delete", "project", projectID, map[string]any{
 		"project_id": projectID.String(),

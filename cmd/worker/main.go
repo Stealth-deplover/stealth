@@ -19,6 +19,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/adminnotification"
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
 	"github.com/Stealth-deplover/stealth/internal/appbuilder"
+	"github.com/Stealth-deplover/stealth/internal/appruntime"
 	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
@@ -241,6 +242,16 @@ func main() {
 	appBuildWorker.ArchiveLimit.MaxEntry = cfg.AppsMaxExpandedSourceBytes
 	appBuildWorker.ArchiveLimit.MaxFiles = cfg.AppsMaxSourceFiles
 	appBuildWorker.ArchiveLimit.MaxCompressed = cfg.AppsMaxSourceArchiveBytes
+	appRuntimeMoby, err := appruntime.NewMoby(nil, cfg.AppsRuntimeNetworkName, cfg.AppsRuntimeActionTimeout, cfg.AppsRuntimeImageImportTimeout)
+	if err != nil {
+		logger.Error("App runtime Docker configuration error", "error", err)
+		os.Exit(1)
+	}
+	appRuntimeWorker, err := appruntime.New(repo, appArtifactStore, appRuntimeMoby, cfg.FunctionsWorkerID, cfg.AppsRuntimePollInterval, cfg.AppsRuntimeLeaseAge, cfg.AppsMaxImageArchiveBytes, logger)
+	if err != nil {
+		logger.Error("App runtime worker configuration error", "error", err)
+		os.Exit(1)
+	}
 	var agentWorker *agentrunner.Worker
 	if cfg.AgentRunnerEnabled {
 		// Provider adapters are deliberately opt-in and process-local. This
@@ -261,6 +272,7 @@ func main() {
 		workerContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		appBuildWorker.Metrics = observability.NewWorkerMetrics()
+		appRuntimeWorker.Metrics = appBuildWorker.Metrics
 		realtimePublisher.Metrics = appBuildWorker.Metrics
 		metricsServer := &http.Server{
 			Addr:              cfg.FunctionsRunnerMetricsAddress,
@@ -273,6 +285,7 @@ func main() {
 			{Name: "platform route reconciler", Runner: platformRouteReconciler},
 			{Name: "artifact cleanup worker", Runner: artifactCleanupWorker},
 			{Name: "App build worker", Runner: appBuildWorker},
+			{Name: "App runtime reconciler", Runner: appRuntimeWorker},
 			{Name: "realtime publisher", Runner: realtimePublisher},
 			{Name: "webhook worker", Runner: webhookWorker},
 			{Name: "messaging worker", Runner: messagingWorker},
@@ -306,6 +319,7 @@ func main() {
 	worker.BuildTimeout = cfg.FunctionsRunnerBuildTimeout
 	worker.ArchiveLimit.MaxCompressed = cfg.FunctionsMaxArtifactSize
 	appBuildWorker.Metrics = worker.Metrics
+	appRuntimeWorker.Metrics = worker.Metrics
 	siteWorker, err := functionrunner.NewSiteWorker(repo, siteSourceStore, sitePublicStore, executor, cfg.FunctionsWorkerID, cfg.FunctionsRunnerStagingRoot, logger)
 	if err != nil {
 		logger.Error("site worker configuration error", "error", err)
@@ -338,6 +352,7 @@ func main() {
 		{Name: "function worker", Runner: worker},
 		{Name: "site worker", Runner: siteWorker},
 		{Name: "App build worker", Runner: appBuildWorker},
+		{Name: "App runtime reconciler", Runner: appRuntimeWorker},
 		{Name: "realtime publisher", Runner: realtimePublisher},
 		{Name: "webhook worker", Runner: webhookWorker},
 		{Name: "messaging worker", Runner: messagingWorker},

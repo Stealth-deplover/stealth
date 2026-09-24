@@ -195,6 +195,11 @@ jobs:
             TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration \
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
+          run_and_require_tests ./internal/repository \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration)$' \
+            TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
+            TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
+            TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration

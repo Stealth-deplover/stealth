@@ -155,23 +155,34 @@ invariant near the SQL that enforces it.
 Apps are long-running project workloads with durable desired configuration.
 Their versioned `WorkloadSpec` is normalized before persistence and identified
 by the SHA-256 digest of its canonical JSON representation. Desired and
-observed generations remain separate: writes advance desired state only, and
-runtime status, errors, and observed generation belong to trusted future
-workers. A newly created App is `not_deployed`.
+observed generations remain separate: API writes advance desired state only;
+the trusted App runtime worker advances observed state only after it verifies
+the requested container is actually running or has been removed. `pending`
+means reconciliation is queued or in progress, `running` means the requested
+container process is running, `stopped` means a disabled App has no container,
+`not_deployed` means no image has been selected, and `failed` or `degraded`
+report a bounded runtime failure or drift. A running process does not mean
+the App passed its configured application-level health check.
 
 Apps and Sites reserve labels in one database-enforced platform hostname
-namespace. An App hostname is reserved metadata; Apps do not enter the static
-Site route snapshot and are not executed yet. WorkloadSpec contains runtime
-intent only: build and image identity are outside the contract. A future
-immutable AppDeployment will own source identity, build definition, OCI digest,
-and a WorkloadSpec snapshot/hash. Future workers may advance
-`observed_generation` only after the actual workload reflects the desired
-generation; PostgreSQL accepting a write is not observation. The intended
-future pipeline is BuildKit → OCI → Moby → gVisor. Runtime implementations must
-translate the Stealth-owned contract into constrained settings; WorkloadSpec
-grants no host access, host mounts, host networking, host PID/IPC, Linux
-capabilities, privileged mode, or Docker API access. Secret values have a
-separate future encrypted lifecycle and never belong in WorkloadSpec.
+namespace. An App hostname is reserved metadata; Apps do not enter the Site
+route snapshot or receive a public route. WorkloadSpec contains runtime intent
+only: build and image identity are separate. The worker imports a selected
+immutable OCI archive into Moby and reconciles a deterministic container on
+the separately managed `stealth_app_runtime` bridge network. The worker alone
+receives the Docker socket; API, Console, BuildKit, Traefik, and App containers
+do not. App containers have no host-published ports, host mounts, host
+networking, host PID/IPC, added Linux capabilities, privileged mode, Docker
+socket, backend credentials, or Stealth storage. The image's own environment
+is preserved; Stealth injects no environment values. The current runtime uses
+Moby directly; gVisor is not configured yet. Secret values have a separate
+future encrypted lifecycle and never belong in WorkloadSpec.
+
+All Apps currently share the private runtime bridge, so this topology does not
+isolate one App from another. App filesystems are ephemeral: only `/tmp` is
+writable, as a bounded tmpfs, and OCI images declaring Dockerfile `VOLUME`
+paths are rejected. The host Docker image cache can consume disk; Stealth does
+not garbage-collect it automatically. Production acceptance targets cgroup v2.
 
 An `AppDeployment` is an immutable build input snapshot and durable result.
 Uploaded source bytes, the Dockerfile build definition, and the current
@@ -180,12 +191,16 @@ BuildKit service builds that source into an OCI archive; BuildKit cache is
 disposable and never defines application identity. The durable image identity
 is the verified BuildKit `image_digest` together with Stealth's persisted OCI
 archive and its separate archive checksum. Deployment selection changes the
-App's desired image and desired generation only. The App remains
-`not_deployed`; no App container, runtime health state, or App route exists yet.
-Future runtime reconciliation consumes `App.enabled`,
+App's desired image and desired generation; it does not itself claim that
+Moby work has run. The runtime worker consumes `App.enabled`,
 `App.desired_deployment_id`, the current WorkloadSpec, and
-`App.desired_generation`; only a worker that proves convergence may advance
-`observed_generation`.
+`App.desired_generation`. It rechecks the persisted archive checksum and OCI
+manifest before import, then verifies the image identity and container settings
+before advancing `observed_generation`. Docker's restart policy is disabled;
+the worker implements `restart_policy=always` through durable, bounded retries
+after unexpected exits. Runtime status confirms process liveness only.
+Application health probing, public routing, runtime log viewing, and encrypted
+App secrets are not implemented.
 
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no
@@ -224,10 +239,17 @@ filesystems stops safely instead of copying private keys. A data-preserving
 uninstall keeps the PKI, while a destructive purge removes it.
 
 BuildKit cache identifiers are never durable application identity. The
-persisted `image_digest` and verified OCI archive are authoritative. Future
-runtime reconciliation consumes the selected immutable image and current App
-desired state; it remains a separate capability from the BuildKit control
-connection.
+persisted `image_digest` and verified OCI archive are authoritative. Moby
+import remains a separate worker-owned capability from the BuildKit control
+connection. `stealth doctor` reads the runtime network name, driver, scope, and
+ownership labels but does not create it or start Apps. The worker creates and
+validates the network during startup and before reconciliation.
+
+For a manual host-reboot acceptance check, record an App's desired and observed
+generations while it is `running`, reboot the VPS, then wait for Docker and the
+worker to return. Confirm the App again reports `running` with matching
+generations and exactly one container carrying its App ID label. This procedure
+is not run by CI.
 
 ## Backend authentication email delivery
 
