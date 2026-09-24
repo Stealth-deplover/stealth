@@ -74,6 +74,13 @@ if ! printf '%s\n' "$host_metrics_block" | grep -F '/:/hostfs:ro' >/dev/null 2>&
 	printf 'telemetry security check: host metrics Collector is missing its read-only host mount\n' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$host_metrics_block" | grep -F 'type: tmpfs' >/dev/null 2>&1 ||
+	! printf '%s\n' "$host_metrics_block" | grep -F 'target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private' >/dev/null 2>&1 ||
+	! printf '%s\n' "$host_metrics_block" | grep -F 'read_only: true' >/dev/null 2>&1 ||
+	! printf '%s\n' "$host_metrics_block" | grep -F 'size: 1048576' >/dev/null 2>&1; then
+	printf 'telemetry security check: host metrics Collector must mask the installation private directory with a read-only bounded tmpfs\n' >&2
+	exit 1
+fi
 if printf '%s\n' "$host_metrics_block" | grep -E '/var/lib/docker/containers|/var/run/docker\.sock|DAC_READ_SEARCH' >/dev/null 2>&1; then
 	printf 'telemetry security check: host metrics Collector has Docker log/socket authority\n' >&2
 	exit 1

@@ -91,6 +91,13 @@ func testProductionComposeAsset() string {
       - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
   otel-collector:
   telemetry-host:
+    volumes:
+      - /:/hostfs:ro
+      - type: tmpfs
+        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private
+        read_only: true
+        tmpfs:
+          size: 1048576
   telemetry-docker-logs:
   telemetry-docker:
   telemetry-docker-proxy:

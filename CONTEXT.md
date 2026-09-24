@@ -205,6 +205,8 @@ the Cloudflare importer runs, a networkless copy-only initializer transfers
 only the optional encrypted `setup-state.enc` file into a dedicated named
 volume; the importer reads that narrow input and publishes its Cloudflare-only
 artifact. Missing legacy setup state remains a valid no-import case.
+Host metrics retain a read-only host filesystem view, with a read-only tmpfs
+mask over the installation's `private/` subtree inside that view.
 One-shot networkless initializers populate separate read-only runtime volumes:
 BuildKit receives its server and healthcheck identities, while the worker
 receives its client identity. The API and tenant build steps receive no

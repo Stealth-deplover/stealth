@@ -685,11 +685,16 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		}
 		prepared.newEnv = []byte(contents)
 	}
+	values, err := ParseEnvContents(string(prepared.newEnv))
+	if err != nil {
+		return nil, fmt.Errorf("parse prepared configuration: %w", err)
+	}
+	// Compose uses this generated absolute root to mask the installation-private
+	// directory from telemetry-host's otherwise read-only host filesystem view.
+	// Keep it current on both fresh installs and upgrades from older configs.
+	values["STEALTH_INSTALL_ROOT"] = plan.Layout.Root
+	prepared.newEnv = []byte(FormatEnvFile(values))
 	if !plan.Setup {
-		values, err := ParseEnvContents(string(prepared.newEnv))
-		if err != nil {
-			return nil, fmt.Errorf("parse prepared configuration: %w", err)
-		}
 		if generatedConfig {
 			// GenerateConfig writes complete defaults so it can also be used as a
 			// standalone config generator. For a fresh install, however, those
@@ -1336,6 +1341,15 @@ func validateProductionComposeAsset(contents []byte) error {
 	} {
 		if strings.Contains(text, forbidden) {
 			return fmt.Errorf("production Compose contains a broad or legacy private-state bind %q", forbidden)
+		}
+	}
+	telemetryHost := productionServiceBlock(text, "telemetry-host")
+	for _, required := range []string{
+		"- /:/hostfs:ro", "type: tmpfs", "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private",
+		"read_only: true", "size: 1048576",
+	} {
+		if !strings.Contains(telemetryHost, required) {
+			return fmt.Errorf("telemetry-host must mask the installation private directory from its host filesystem view: missing %q", required)
 		}
 	}
 	for _, name := range productionServiceNames(text) {

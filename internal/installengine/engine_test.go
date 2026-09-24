@@ -179,6 +179,13 @@ func testProductionComposeAsset() string {
       - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
   otel-collector:
   telemetry-host:
+    volumes:
+      - /:/hostfs:ro
+      - type: tmpfs
+        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private
+        read_only: true
+        tmpfs:
+          size: 1048576
   telemetry-docker-logs:
   telemetry-docker:
   telemetry-docker-proxy:
@@ -308,6 +315,13 @@ func TestExistingConfigurationInitializesTraefikStateBeforeAssetActivation(t *te
 	if !equalArgs(calls[2].args[len(calls[2].args)-2:], []string{"config", "--quiet"}) {
 		t.Fatalf("configuration validation command = %#v", calls[2])
 	}
+	values, err := ReadEnvFile(layout.EnvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["STEALTH_INSTALL_ROOT"] != layout.Root {
+		t.Fatalf("upgraded STEALTH_INSTALL_ROOT = %q, want %q", values["STEALTH_INSTALL_ROOT"], layout.Root)
+	}
 }
 
 func TestGenerateConfigAcceptsReleaseCandidateVersion(t *testing.T) {
@@ -335,6 +349,24 @@ func TestGenerateConfigAcceptsReleaseCandidateVersion(t *testing.T) {
 		if !strings.Contains(config, expected) {
 			t.Fatalf("generated config did not include %q", expected)
 		}
+	}
+}
+
+func TestGenerateProductionConfigPersistsInstallRootForTelemetryMask(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "stealth")
+	config, err := GenerateConfig(ConfigOptions{
+		Version: "v1.2.3", PublicURL: "https://console.example.test",
+		GitHubAppClientID: "Iv1.test-client-id", InstallRoot: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["STEALTH_INSTALL_ROOT"] != root {
+		t.Fatalf("generated STEALTH_INSTALL_ROOT = %q, want %q", values["STEALTH_INSTALL_ROOT"], root)
 	}
 }
 

@@ -55,6 +55,8 @@ func TestProductionComposeKeepsBuildKitCredentialsRoleSeparated(t *testing.T) {
 			"  traefik:\n", "  traefik:\n    volumes:\n      - ./private:/private:ro\n", 1),
 		"unrelated service mounts installation root": strings.Replace(valid,
 			"  traefik:\n", "  traefik:\n    volumes:\n      - ./:/install:ro\n", 1),
+		"telemetry does not mask its host filesystem view": strings.Replace(valid,
+			"      - type: tmpfs\n        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private\n        read_only: true\n        tmpfs:\n          size: 1048576\n", "", 1),
 		"BuildKit initializer mounts PKI parent": strings.Replace(valid,
 			"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro\"\n",
 			"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro\"\n      - ${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls:/input/pki:ro\n", 1),

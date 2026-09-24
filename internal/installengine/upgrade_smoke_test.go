@@ -96,6 +96,23 @@ func assertUpgradeSmokeTopology(t *testing.T, layout Layout) {
 			t.Fatalf("migrated main Collector retained %q", forbidden)
 		}
 	}
+	hostMetricsStart := strings.Index(text, "  telemetry-host:")
+	if hostMetricsStart < 0 {
+		t.Fatal("migrated Compose misses telemetry host metrics Collector")
+	}
+	hostMetricsEnd := len(text)
+	if next := strings.Index(text[hostMetricsStart+1:], "\n  telemetry-docker-logs:"); next >= 0 {
+		hostMetricsEnd = hostMetricsStart + 1 + next
+	}
+	hostMetrics := text[hostMetricsStart:hostMetricsEnd]
+	for _, required := range []string{
+		"- /:/hostfs:ro", "type: tmpfs", "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private",
+		"read_only: true", "size: 1048576",
+	} {
+		if !strings.Contains(hostMetrics, required) {
+			t.Fatalf("migrated telemetry host Collector misses private-tree mask %q", required)
+		}
+	}
 	for _, path := range []string{
 		layout.TraefikStatic,
 		layout.TraefikCore,

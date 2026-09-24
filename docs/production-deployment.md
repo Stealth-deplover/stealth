@@ -56,6 +56,12 @@ private keys are owned by their single service user at mode `0400`. The API
 receives no BuildKit key. Tenant build contexts and `RUN` steps receive none
 of these control credentials.
 
+The host-metrics Collector retains its read-only host filesystem view, but a
+read-only tmpfs masks `<install-root>/private` inside that view. The masking
+target is derived from the generated `STEALTH_INSTALL_ROOT`, so the Collector
+cannot read BuildKit CA, server, worker, or health-client private keys even
+though it can inspect other host filesystem paths.
+
 The CA key remains in the installation state so the installer can renew the
 CA and issue a new leaf set before the CA's final year. Leaf identities renew
 when fewer than 30 days remain; renewal uses the same CA, updates role-specific

@@ -219,8 +219,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"SETUP_MODE":                            strconv.FormatBool(options.Setup),
 	}
 	values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] = "stealth_telemetry_ingest"
-	if options.Setup {
+	if strings.TrimSpace(options.InstallRoot) != "" {
 		values["STEALTH_INSTALL_ROOT"] = options.InstallRoot
+	}
+	if options.Setup {
 		root := strings.TrimRight(options.InstallRoot, "/")
 		values["STEALTH_SETUP_STATE_FILE"] = root + "/state/setup-state.enc"
 		values["STEALTH_PRODUCTION_COMPOSE_FILE"] = root + "/compose.production.yaml"

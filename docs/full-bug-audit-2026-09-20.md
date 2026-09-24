@@ -194,9 +194,10 @@ union; that is tracked as AUD-14.
   `DAC_READ_SEARCH`; its image target is capability-free and its container
   drops all capabilities.
 - **Residual security note:** `telemetry-host` still needs a read-only host-root
-  mount for hostmetrics, but it has no DAC bypass capability, no Docker socket,
-  a non-root identity, and only private telemetry networking. This is a
-  deliberately narrower boundary, not the former combined privilege.
+  mount for hostmetrics. Its mount namespace masks the installation-private
+  directory with a read-only tmpfs, and the Collector has no DAC bypass
+  capability, no Docker socket, a non-root identity, and only private
+  telemetry networking.
 - **Recommended regression test:** Keep the explicit service-level mount and
   capability assertions in `scripts/telemetry-security-test.sh` and the
   production smoke health/host-metric checks.

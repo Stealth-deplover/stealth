@@ -198,6 +198,14 @@ services:
     volumes:
       - ./telemetry/host-metrics.yaml:/etc/otelcol-contrib/config.yaml:ro
       - /:/hostfs:ro
+      # Host metrics need a read-only view of the host filesystem. Mask the
+      # installation-private tree inside that view so telemetry cannot read
+      # control-plane credentials such as the BuildKit CA key.
+      - type: tmpfs
+        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private
+        read_only: true
+        tmpfs:
+          size: 1048576
     user: "10001:10001"
     read_only: true
     tmpfs:
