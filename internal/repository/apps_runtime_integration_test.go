@@ -188,11 +188,11 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 
 func assertAppRuntimeContainerID(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
 	t.Helper()
-	var containerID *string
-	if err := f.pool.QueryRow(f.ctx, `SELECT container_id FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&containerID); err != nil {
+	var containerID string
+	if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(container_id,'') FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&containerID); err != nil {
 		t.Fatal(err)
 	}
-	if containerID == nil || *containerID != strings.Repeat("a", 64) {
+	if containerID != strings.Repeat("a", 64) {
 		t.Fatalf("successful runtime completion did not persist the inspected container ID: %v", containerID)
 	}
 }

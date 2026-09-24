@@ -472,12 +472,13 @@ func (r *Repository) ClaimNextAppRuntimeCleanup(ctx context.Context, workerID st
 	}
 	defer tx.Rollback(ctx)
 	var job AppRuntimeCleanupJob
+	var containerID string
 	err = tx.QueryRow(ctx, `
-		SELECT id,project_id,app_id,container_id,container_name,stop_grace_period_seconds,attempt_count
+		SELECT id,project_id,app_id,COALESCE(container_id,''),container_name,stop_grace_period_seconds,attempt_count
 		FROM app_runtime_cleanup_jobs
 		WHERE (status='pending' AND next_attempt_at<=now()) OR (status='leased' AND lease_expires_at<=now())
 		ORDER BY next_attempt_at,created_at,id
-		FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&job.ID, &job.ProjectID, &job.AppID, &job.ContainerID, &job.ContainerName, &job.StopGracePeriodSecs, &job.AttemptCount)
+		FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&job.ID, &job.ProjectID, &job.AppID, &containerID, &job.ContainerName, &job.StopGracePeriodSecs, &job.AttemptCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AppRuntimeCleanupJob{}, ErrNoAppRuntimeCleanup
 	}
@@ -492,6 +493,9 @@ func (r *Repository) ClaimNextAppRuntimeCleanup(ctx context.Context, workerID st
 	}
 	job.WorkerID = workerID
 	job.LeaseToken = token
+	if containerID != "" {
+		job.ContainerID = &containerID
+	}
 	return job, nil
 }
 
