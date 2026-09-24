@@ -799,7 +799,7 @@ verify_traefik_network_address_model() {
 		return 1
 	fi
 	compose_config="$("${compose[@]}" --profile cloudflare config)"
-	if ! printf '%s\n' "$compose_config" | grep -Fq "ipv4_address: $cloudflared_ip"; then
+	if ! grep -Fq -- "ipv4_address: $cloudflared_ip" <<<"$compose_config"; then
 		printf 'rendered Cloudflared profile does not reserve persisted IP %s\n' "$cloudflared_ip" >&2
 		return 1
 	fi
