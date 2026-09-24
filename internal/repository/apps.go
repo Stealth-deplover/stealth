@@ -41,7 +41,7 @@ type AppPatch struct {
 	Workload *workloadspec.Spec
 }
 
-const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id,COALESCE(runtime.health_status,'pending'),runtime.health_generation,runtime.health_deployment_id::text,runtime.health_container_id,runtime.container_id,runtime.container_address::text,runtime.applied_generation,runtime.applied_deployment_id::text,runtime.applied_workload_spec_sha256,EXISTS(SELECT 1 FROM app_deployments deployment WHERE deployment.id=app.desired_deployment_id AND deployment.app_id=app.id AND deployment.project_id=app.project_id AND deployment.status='ready' AND deployment.build_status='succeeded')`
+const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id,COALESCE(runtime.health_status,'pending'),runtime.health_generation,runtime.health_deployment_id::text,runtime.health_container_id,runtime.container_id,host(runtime.container_address),runtime.applied_generation,runtime.applied_deployment_id::text,runtime.applied_workload_spec_sha256,EXISTS(SELECT 1 FROM app_deployments deployment WHERE deployment.id=app.desired_deployment_id AND deployment.app_id=app.id AND deployment.project_id=app.project_id AND deployment.status='ready' AND deployment.build_status='succeeded')`
 
 type appScanner interface{ Scan(...any) error }
 
