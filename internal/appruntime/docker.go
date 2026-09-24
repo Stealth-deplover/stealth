@@ -675,7 +675,9 @@ func dockerNotFound(err error) bool {
 	if errors.As(err, &failure) {
 		message := strings.ToLower(failure.Stderr)
 		return strings.Contains(message, "no such container") || strings.Contains(message, "no such image") ||
-			strings.Contains(message, "no such network") || strings.Contains(message, "no such object")
+			strings.Contains(message, "no such network") ||
+			(strings.Contains(message, "network ") && strings.Contains(message, " not found")) ||
+			strings.Contains(message, "no such object")
 	}
 	return false
 }

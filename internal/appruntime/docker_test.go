@@ -138,7 +138,7 @@ func TestEnsureNetworkCreatesOnlyTheLabeledPrivateBridge(t *testing.T) {
 	}
 	runner := &scriptedRuntimeRunner{
 		results: []CommandResult{{}, {}, {Stdout: mustJSON([]NetworkInspect{network})}},
-		errors:  []error{&CommandFailure{ExitCode: 1, Stderr: "Error: No such network: stealth_app_runtime"}, nil, nil},
+		errors:  []error{&CommandFailure{ExitCode: 1, Stderr: "Error response from daemon: network stealth_app_runtime not found"}, nil, nil},
 	}
 	moby, err := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
 	if err != nil {
