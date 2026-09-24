@@ -359,7 +359,11 @@ func TestFunctionsControlPlaneIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for attempts := 0; attempts < cleanupJobs+8; attempts++ {
+	// The cleanup queue is shared by all integration tests in this database.
+	// App source and image deletions add more store kinds to that queue, so
+	// local project job counts cannot bound how many earlier jobs a worker may
+	// need to drain before reaching this function's artifacts.
+	for attempts := 0; attempts < 1024; attempts++ {
 		processed, runErr := cleanupWorker.RunOnce(ctx)
 		if runErr != nil {
 			t.Fatal(runErr)
