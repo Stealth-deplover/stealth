@@ -322,18 +322,18 @@ END { check_mount(); exit(found ? 0 : 1) }
 	fi
 }
 
-assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/ca-cert\.pem$' '/input/ca.pem' 'worker initializer CA source'
-assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/cert\.pem$' '/input/client-cert.pem' 'worker initializer client certificate source'
-assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/key\.pem$' '/input/client-key.pem' 'worker initializer client key source'
-assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/ca-cert\.pem$' '/input/ca.pem' 'BuildKit initializer CA source'
-assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/cert\.pem$' '/input/server-cert.pem' 'BuildKit initializer server certificate source'
-assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/key\.pem$' '/input/server-key.pem' 'BuildKit initializer server key source'
-assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/cert\.pem$' '/input/health-client-cert.pem' 'BuildKit initializer health certificate source'
-assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/key\.pem$' '/input/health-client-key.pem' 'BuildKit initializer health key source'
-assert_read_only_mount "$worker_block" '^buildkit_worker_credentials$' '/run/secrets/stealth-buildkit' 'worker client credential volume'
-assert_read_only_mount "$buildkit_block" '^buildkit_server_credentials$' '/run/secrets/stealth-buildkit' 'BuildKit server credential volume'
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/ca-cert[.]pem$' '/input/ca.pem' 'worker initializer CA source'
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/cert[.]pem$' '/input/client-cert.pem' 'worker initializer client certificate source'
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/key[.]pem$' '/input/client-key.pem' 'worker initializer client key source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/ca-cert[.]pem$' '/input/ca.pem' 'BuildKit initializer CA source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/cert[.]pem$' '/input/server-cert.pem' 'BuildKit initializer server certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/key[.]pem$' '/input/server-key.pem' 'BuildKit initializer server key source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/cert[.]pem$' '/input/health-client-cert.pem' 'BuildKit initializer health certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/key[.]pem$' '/input/health-client-key.pem' 'BuildKit initializer health key source'
+assert_read_only_mount "$worker_block" '^[A-Za-z0-9_.-]+_app_buildkit_worker_credentials$' '/run/secrets/stealth-buildkit' 'worker client credential volume'
+assert_read_only_mount "$buildkit_block" '^[A-Za-z0-9_.-]+_app_buildkit_server_credentials$' '/run/secrets/stealth-buildkit' 'BuildKit server credential volume'
 
-if printf '%s\n' "$buildkit_block" | grep -Eq 'buildkit-mtls|/client-key\.pem|worker'; then
+if printf '%s\n' "$buildkit_block" | grep -Eq 'buildkit-mtls|/client-key\.pem|buildkit_worker_credentials'; then
 	printf '%s\n' 'BuildKit must not receive the worker identity or host PKI bind mounts' >&2
 	exit 1
 fi
