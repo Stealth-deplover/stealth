@@ -184,9 +184,10 @@ jobs:
             done
           }
           run_and_require_tests ./internal/migrate \
-            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration)$' \
+            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration)$' \
             TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration \
-            TestAppDeploymentMigrationPreservesExistingAppsIntegration
+            TestAppDeploymentMigrationPreservesExistingAppsIntegration \
+            TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration
           run_and_require_tests ./internal/repository \
             '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration|TestAppDeploymentSnapshotSelectionAndQuotaIntegration|TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration|TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration|TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration)$' \
             TestAppsPersistenceGenerationAndPlanLimitIntegration \
@@ -196,10 +197,11 @@ jobs:
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration)$' \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration)$' \
             TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
             TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
-            TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration
+            TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration \
+            TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration
