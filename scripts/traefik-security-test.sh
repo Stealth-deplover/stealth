@@ -43,8 +43,8 @@ cleanup() {
 trap cleanup EXIT
 "${compose[@]}" config >"$rendered"
 setup_compose=(docker compose --env-file "$env_file" -f "$(dirname -- "$compose_file")/compose.setup.yaml")
-"${setup_compose[@]}" config --quiet
-"${setup_compose[@]}" config >"$setup_rendered"
+STEALTH_ENV_FILE="$env_file" "${setup_compose[@]}" config --quiet
+STEALTH_ENV_FILE="$env_file" "${setup_compose[@]}" config >"$setup_rendered"
 
 service_block() {
 	local service="$1"
