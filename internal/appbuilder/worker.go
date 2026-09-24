@@ -472,9 +472,6 @@ func (w *Worker) build(parent context.Context, job repository.AppBuildJob) (resu
 		// be ambiguous, so deleting the artifact here could break a committed row.
 		return "error", errors.New("App deployment completion was not confirmed")
 	}
-	if err := w.appendLog(parent, job.WorkerID, projectID, appID, deploymentID, "info", "Build completed; App remains not deployed"); err != nil {
-		w.Logger.Warn("could not persist App build completion log", "deployment_id", deploymentID, "error", err)
-	}
 	return "succeeded", nil
 }
 
@@ -509,9 +506,6 @@ func (w *Worker) fail(ctx context.Context, workerID string, projectID, appID, de
 	}
 	if _, err := w.Store.FailAppDeploymentBuild(ctx, projectID, appID, deploymentID, workerID, message); err != nil {
 		return "error", err
-	}
-	if err := w.appendLog(ctx, workerID, projectID, appID, deploymentID, "error", message); err != nil {
-		w.Logger.Warn("could not persist App build failure log", "deployment_id", deploymentID, "error", err)
 	}
 	return "failed", nil
 }

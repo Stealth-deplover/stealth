@@ -1,7 +1,6 @@
 package buildkitmetadata
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,15 +10,15 @@ import (
 
 const testDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-func TestParseRequiresVerifiedDigestAndDescriptor(t *testing.T) {
+func TestParseReadsCurrentBuildKitMetadataDescriptorObject(t *testing.T) {
 	descriptor, err := json.Marshal(map[string]any{
 		"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": testDigest, "size": 42,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded := base64.StdEncoding.EncodeToString(descriptor)
-	got, err := Parse(strings.NewReader(fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":%q}`, testDigest, encoded)))
+	input := fmt.Sprintf(`{"containerimage.config.digest":"sha256:%s","containerimage.descriptor":%s,"containerimage.digest":%q}`, strings.Repeat("b", 64), descriptor, testDigest)
+	got, err := Parse(strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,15 +33,14 @@ func TestParseRejectsMalformedMetadata(t *testing.T) {
 		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.digest":%q}`, testDigest, testDigest),
 		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":{"digest":%q,"digest":%q,"size":42,"mediaType":"application/vnd.oci.image.manifest.v1+json"}}`, testDigest, testDigest, testDigest),
 		fmt.Sprintf(`{"containerimage.digest":%q} {}`, testDigest),
-		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":"not-base64"}`, testDigest),
-		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":%q}`, testDigest, base64.StdEncoding.EncodeToString([]byte(`{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`))),
+		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":"not-an-object"}`, testDigest),
+		fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1,"mediaType":"application/vnd.oci.image.manifest.v1+json"}}`, testDigest),
 	} {
 		if _, err := Parse(strings.NewReader(input)); !errors.Is(err, ErrInvalidMetadata) && err == nil {
 			t.Fatalf("Parse(%s) accepted malformed metadata", input)
 		}
 	}
-	duplicateDescriptor := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf(`{"digest":%q,"digest":%q,"size":42,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`, testDigest, testDigest)))
-	input := fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":%q}`, testDigest, duplicateDescriptor)
+	input := fmt.Sprintf(`{"containerimage.digest":%q,"containerimage.descriptor":{"digest":%q,"digest":%q,"size":42,"mediaType":"application/vnd.oci.image.manifest.v1+json"}}`, testDigest, testDigest, testDigest)
 	if _, err := Parse(strings.NewReader(input)); !errors.Is(err, ErrInvalidMetadata) {
 		t.Fatalf("Parse() accepted duplicate descriptor fields: %v", err)
 	}

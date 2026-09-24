@@ -4,7 +4,6 @@ package buildkitmetadata
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,8 +30,8 @@ type descriptor struct {
 }
 
 // Parse reads one bounded JSON object and requires the OCI export digest.
-// Current BuildKit releases provide containerimage.descriptor as a base64
-// encoded OCI descriptor; older compatible metadata can omit it.
+// Current BuildKit metadata files include containerimage.descriptor as a JSON
+// object; older compatible metadata can omit it.
 func Parse(reader io.Reader) (Metadata, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, MaxMetadataBytes+1))
 	if err != nil || len(data) == 0 || len(data) > MaxMetadataBytes {
@@ -62,19 +61,11 @@ func Parse(reader io.Reader) (Metadata, error) {
 		return Metadata{}, ErrInvalidMetadata
 	}
 	if rawDescriptor, ok := values["containerimage.descriptor"]; ok {
-		var encoded string
-		if json.Unmarshal(rawDescriptor, &encoded) != nil || len(encoded) > 32<<10 {
-			return Metadata{}, ErrInvalidMetadata
-		}
-		descriptorJSON, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return Metadata{}, ErrInvalidMetadata
-		}
-		if err := rejectDuplicateJSONKeysBytes(descriptorJSON); err != nil {
+		if len(rawDescriptor) > 32<<10 || rejectDuplicateJSONKeysBytes(rawDescriptor) != nil {
 			return Metadata{}, ErrInvalidMetadata
 		}
 		var item descriptor
-		if err := json.Unmarshal(descriptorJSON, &item); err != nil || item.Digest != result.ImageDigest || item.Size <= 0 {
+		if err := json.Unmarshal(rawDescriptor, &item); err != nil || item.Digest != result.ImageDigest || item.Size <= 0 {
 			return Metadata{}, ErrInvalidMetadata
 		}
 		if item.MediaType != "application/vnd.oci.image.manifest.v1+json" && item.MediaType != "application/vnd.oci.image.index.v1+json" && item.MediaType != "application/vnd.docker.distribution.manifest.v2+json" && item.MediaType != "application/vnd.docker.distribution.manifest.list.v2+json" {

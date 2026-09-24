@@ -74,11 +74,13 @@ func (p *fakePersistence) CompleteAppDeploymentBuildWithCleanup(_ context.Contex
 		return domain.AppDeployment{}, p.completeErr
 	}
 	p.completed, p.digest, p.imagePath, p.imageChecksum, p.imageSize = true, digest, path, checksum, size
+	p.logs = append(p.logs, "Build completed; verified OCI artifact persisted")
 	return domain.AppDeployment{Status: "ready", BuildStatus: "succeeded", ImageDigest: &digest}, nil
 }
 
 func (p *fakePersistence) FailAppDeploymentBuild(_ context.Context, _, _, _ uuid.UUID, _ string, message string) (domain.AppDeployment, error) {
 	p.failed = message
+	p.logs = append(p.logs, message)
 	return domain.AppDeployment{Status: "failed", BuildStatus: "failed"}, nil
 }
 
@@ -216,6 +218,9 @@ func TestWorkerPublishesVerifiedOCIAndKeepsBuildInputsPrivate(t *testing.T) {
 			t.Fatalf("build progress exposed worker path: %q", message)
 		}
 	}
+	if countLogMessage(persistence.logs, "Build completed; verified OCI artifact persisted") != 1 {
+		t.Fatalf("completion log should be recorded by the durable completion transaction: %#v", persistence.logs)
+	}
 }
 
 func TestWorkerReadinessFailureDoesNotClaimQueuedDeployment(t *testing.T) {
@@ -278,8 +283,21 @@ func TestWorkerClassifiesSourceMismatchTimeoutAndInvalidOCI(t *testing.T) {
 			if err != nil || !processed || persistence.failed != test.wantFailure || persistence.completed {
 				t.Fatalf("RunOnce = %v, %v; failed=%q completed=%v", processed, err, persistence.failed, persistence.completed)
 			}
+			if countLogMessage(persistence.logs, test.wantFailure) != 1 {
+				t.Fatalf("failure log should be recorded by the durable failure transaction: %#v", persistence.logs)
+			}
 		})
 	}
+}
+
+func countLogMessage(messages []string, wanted string) int {
+	count := 0
+	for _, message := range messages {
+		if message == wanted {
+			count++
+		}
+	}
+	return count
 }
 
 func newTestWorker(t *testing.T, mode string) (*Worker, *fakePersistence, *fakeCommandRunner, *appstore.Store, uuid.UUID, uuid.UUID, uuid.UUID) {
