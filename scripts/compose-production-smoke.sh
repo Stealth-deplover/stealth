@@ -1363,6 +1363,7 @@ wait_for_app_runtime() {
 			if [ "$status" = 'failed' ] || [ "$status" = 'degraded' ]; then
 				runtime_error="$(platform_json_field "$platform_response" app.runtime_error)"
 				printf 'App runtime entered %s while waiting for %s: %s (desired=%s observed=%s)\n' "$status" "$wanted" "$runtime_error" "$desired" "$observed" >&2
+				print_app_runtime_diagnostics "$app_id"
 				return 1
 			fi
 		fi
@@ -1373,6 +1374,106 @@ wait_for_app_runtime() {
 		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
 	done
 	return 1
+}
+
+print_app_runtime_diagnostics() {
+	local app_id="$1" container_name
+	container_name="$(printf 'stealth-app-%s' "${app_id//-/}")"
+	if ! docker inspect "$container_name" >"$platform_response" 2>/dev/null; then
+		printf 'App runtime diagnostic: container %s is absent\n' "$container_name" >&2
+		return 0
+	fi
+	python3 - "$platform_response" <<'PY' >&2
+import hashlib
+import json
+import subprocess
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    rows = json.load(source)
+if len(rows) != 1:
+    print(f"App runtime diagnostic: expected one container, got {len(rows)}")
+    raise SystemExit(0)
+
+container = rows[0]
+config = container.get("Config") or {}
+host = container.get("HostConfig") or {}
+state = container.get("State") or {}
+
+def env_summary(values):
+    values = values or []
+    encoded = json.dumps(values, separators=(",", ":"), ensure_ascii=True).encode()
+    return {
+        "count": len(values),
+        "names": sorted({entry.split("=", 1)[0] for entry in values}),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+image_config = None
+result = subprocess.run(["docker", "image", "inspect", container.get("Image", "")], capture_output=True, text=True)
+if result.returncode == 0:
+    try:
+        image_rows = json.loads(result.stdout)
+        if len(image_rows) == 1:
+            image_config = image_rows[0].get("Config") or {}
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+summary = {
+    "id": container.get("Id"),
+    "name": container.get("Name"),
+    "image_id": container.get("Image"),
+    "state": state.get("Status"),
+    "labels": container.get("Config", {}).get("Labels") or {},
+    "container_config": {
+        "cmd": config.get("Cmd"),
+        "entrypoint": config.get("Entrypoint"),
+        "working_dir": config.get("WorkingDir"),
+        "user": config.get("User"),
+        "env": env_summary(config.get("Env")),
+    },
+    "image_config": None if image_config is None else {
+        "cmd": image_config.get("Cmd"),
+        "entrypoint": image_config.get("Entrypoint"),
+        "working_dir": image_config.get("WorkingDir"),
+        "user": image_config.get("User"),
+        "env": env_summary(image_config.get("Env")),
+    },
+    "host_config": {
+        "network_mode": host.get("NetworkMode"),
+        "privileged": host.get("Privileged"),
+        "auto_remove": host.get("AutoRemove"),
+        "read_only_rootfs": host.get("ReadonlyRootfs"),
+        "cap_add": host.get("CapAdd"),
+        "cap_drop": host.get("CapDrop"),
+        "security_opt": host.get("SecurityOpt"),
+        "memory": host.get("Memory"),
+        "memory_swap": host.get("MemorySwap"),
+        "nano_cpus": host.get("NanoCpus"),
+        "pids_limit": host.get("PidsLimit"),
+        "tmpfs": host.get("Tmpfs"),
+        "restart_policy": host.get("RestartPolicy"),
+        "log_config": host.get("LogConfig"),
+        "init": host.get("Init"),
+        "mount_counts": {
+            "binds": len(host.get("Binds") or []),
+            "volumes_from": len(host.get("VolumesFrom") or []),
+            "port_bindings": len(host.get("PortBindings") or {}),
+            "devices": len(host.get("Devices") or []),
+        },
+        "host_namespace_modes": {
+            key: host.get(key) for key in ("PidMode", "IpcMode", "UTSMode", "UsernsMode")
+        },
+        "ulimits": host.get("Ulimits"),
+    },
+    "network_names": sorted((container.get("NetworkSettings", {}).get("Networks") or {}).keys()),
+    "mounts": [
+        {"type": mount.get("Type"), "destination": mount.get("Destination")}
+        for mount in container.get("Mounts", [])
+    ],
+}
+print("App runtime container diagnostic: " + json.dumps(summary, sort_keys=True))
+PY
 }
 
 app_runtime_network_name() {
