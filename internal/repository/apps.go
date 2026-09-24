@@ -353,12 +353,27 @@ func (r *Repository) UpdateApp(ctx context.Context, projectID, appID uuid.UUID, 
 			return domain.App{}, err
 		}
 	}
+	runtimeStatus := existing.RuntimeStatus
+	runtimeError := existing.RuntimeError
+	if runtimeChanged {
+		runtimeError = nil
+		if !enabled || existing.DesiredDeploymentID != nil {
+			runtimeStatus = "pending"
+		} else {
+			runtimeStatus = "not_deployed"
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE project_apps
 		SET name=$3,enabled=$4,workload_spec=$5::jsonb,workload_spec_sha256=$6,
-		    desired_generation=$7,updated_at=now()
-		WHERE project_id=$1 AND id=$2`, projectID, appID, name, enabled, canonical, digest, desiredGeneration); err != nil {
+		    desired_generation=$7,runtime_status=$8,runtime_error=$9,updated_at=now()
+		WHERE project_id=$1 AND id=$2`, projectID, appID, name, enabled, canonical, digest, desiredGeneration, runtimeStatus, runtimeError); err != nil {
 		return domain.App{}, mapError(err)
+	}
+	if runtimeChanged {
+		if err := resetAppRuntimeRetryTx(ctx, tx, appID); err != nil {
+			return domain.App{}, err
+		}
 	}
 	item, err := appByID(ctx, tx, projectID, appID, false)
 	if err != nil {
@@ -392,6 +407,9 @@ func (r *Repository) DeleteApp(ctx context.Context, projectID, appID uuid.UUID, 
 	}
 	if reservedBytes > 0 {
 		return ErrAppArtifactPublishInProgress
+	}
+	if err := queueAppRuntimeCleanupForAppTx(ctx, tx, projectID, appID, item.Workload.StopGracePeriodSeconds); err != nil {
+		return err
 	}
 	if err := queueAppDeploymentArtifactsForDeletionTx(ctx, tx, projectID, appID); err != nil {
 		return err

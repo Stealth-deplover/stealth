@@ -7,9 +7,11 @@ plane, Redis backs distributed rate limits, and the worker is a separate Go
 process.
 
 The control plane models persistent Apps and their normalized runtime intent.
-Uploaded App source can be built by a dedicated rootless BuildKit service into
-a durable OCI archive. App execution remains a subsequent runtime capability:
-building or selecting an image does not create a container or a public route.
+Uploaded App source is built by a dedicated rootless BuildKit service into a
+durable OCI archive. A separate trusted worker loop imports selected archives
+into Moby and reconciles persistent App containers. Building or selecting an
+image changes desired state; the App reports `running` only after the worker
+verifies the container process.
 
 ```text
 TLS terminator / Nginx
@@ -24,8 +26,17 @@ TLS terminator / Nginx
                                       ├── telemetry-host → otel-collector
                                       └── telemetry-docker-logs → otel-collector
 worker → app_build network → dedicated rootless BuildKit → OCI archive in Stealth storage
+worker → Docker socket → Moby → stealth_app_runtime bridge → App containers
 OTLP / Prometheus → otel-collector → ClickHouse
 ```
+
+The Docker socket is mounted only into the trusted worker for Docker-backed
+build and runtime work. API, Console, BuildKit, Traefik, and App containers do
+not receive it. The managed `stealth_app_runtime` bridge is separate from
+Compose networks and has no App port publishing or Traefik route. App
+containers can make outbound connections through the host bridge, but cannot
+resolve services on Stealth's Compose networks. The worker validates ownership
+labels and the bridge network before adopting or removing runtime resources.
 
 The worker and BuildKit authenticate the private TCP control endpoint with
 mutual TLS. The BuildKit certificate is valid for the `buildkit` DNS name; the
@@ -100,9 +111,11 @@ do not generate or rotate certificates; they only copy the validated,
 installer-owned identities into separate runtime volumes.
 
 `stealth uninstall --keep-data` preserves the host PKI, runtime credential
-volumes, and BuildKit cache for a restorable installation. `--purge` removes
-the generated identities and these Compose-owned volumes. Losing the BuildKit
-PKI requires issuing a new trust set for future builds but does not invalidate
+volumes, BuildKit cache, managed App containers, and the App runtime network
+for a restorable installation. `--purge` removes only App containers and the
+runtime network that pass explicit ownership validation, then removes the
+generated identities and Compose-owned volumes. Losing the BuildKit PKI
+requires issuing a new trust set for future builds but does not invalidate
 completed OCI artifacts.
 
 Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
@@ -115,7 +128,8 @@ rollback path.
 
 Prerequisites:
 
-- Docker Engine with Compose v2.
+- Docker Engine and CLI 25.0 or newer, with Compose v2. Stealth's installer
+  checks Docker availability but does not install or pin the Engine version.
 - A DNS name and TLS termination in front of the proxy. The bundled Nginx
   config is HTTP on the internal/public port and is suitable behind an
   existing TLS terminator; do not expose plain HTTP to the Internet.
@@ -164,9 +178,11 @@ required storage implementation, function/site stores, and Redis. API `/healthz`
 is liveness only. The worker exposes `/healthz` on its private metrics
 listener; a failed worker loop exits so the container supervisor can restart
 it. Build metadata is available at API `/version` and in structured startup
-logs. `stealth doctor` reports App BuildKit readiness separately; a BuildKit
-outage leaves queued App builds available for later retry and does not couple
-the Function, Site, webhook, or messaging workers to that service.
+logs. `stealth doctor` checks that the App runtime network is a local bridge
+with Stealth's ownership labels. The check is read-only; it does not create a
+network or start Apps. The worker creates the network at startup, while a
+BuildKit or Moby outage leaves queued work available for retry and does not
+stop Function, Site, webhook, or messaging worker loops.
 
 ## App builds
 
@@ -214,9 +230,71 @@ BuildKit.
 
 When a build succeeds, its immutable digest and OCI archive are persisted.
 Selecting that deployment records the desired image and advances the App's
-desired generation. It does not advance observed generation or mark the App
-running. Apps remain `not_deployed`, no App container is created or loaded into
-Moby, and App hostnames are still absent from the platform Site routes.
+desired generation. The runtime worker verifies the archive size, checksum,
+OCI manifest digest, platform, and config identity before importing it into
+Moby. `observed_generation` advances only after the requested container is
+inspected as running or, for a disabled App, absent.
+
+## Persistent App runtime
+
+The runtime worker polls durable App desired state and uses fenced PostgreSQL
+leases before performing Moby work. It rechecks the selected persisted OCI
+archive on reconciliation, uses a deterministic container name and labels, and
+verifies container configuration before reporting `running`. A worker restart
+marks prior observations for inspection; expired leases are recoverable and
+orphaned Stealth-labeled containers are queued for ownership-checked cleanup.
+Docker's restart policy stays disabled. The durable worker retries unexpected
+process exits according to the logical `restart_policy=always`, with bounded
+backoff.
+
+The worker creates and owns the local bridge named by
+`APPS_RUNTIME_NETWORK_NAME` (default `stealth_app_runtime`). App containers
+have no host-published ports, no extra network attachments, no host mounts or
+devices, and no backend environment variables. Their filesystem root is
+read-only, Linux capabilities are dropped, `no-new-privileges` is enabled, and
+CPU, memory/swap, process count, `/tmp`, logs, and ulimits are bounded by
+Stealth-owned values. Docker host restart policy is `no`; the worker owns
+recovery. The selected image's `ENTRYPOINT`, default `CMD`, `ENV`, working
+directory, and user are retained. WorkloadSpec command and working-directory
+overrides are applied as container argv/config, never through a shell.
+
+All Apps currently share this one bridge, so an App may be able to reach
+another App over that network. The bridge separates Apps from Stealth's Compose
+services; it is not per-tenant network isolation or a sandbox boundary. The
+runtime uses Docker's default runtime, not gVisor. Treat uploaded App images as
+untrusted code with the protections and limitations described here.
+
+App filesystems are ephemeral in this release. The root filesystem is
+read-only, `/tmp` is a bounded tmpfs, and image-declared Dockerfile `VOLUME`
+paths are rejected before import so Docker cannot create hidden anonymous
+storage. App writes outside `/tmp` fail; `/tmp` contents disappear when the
+container is replaced. Persistent App storage is future work. Image-defined
+environment values remain part of the selected image. Stealth does not inject
+platform secrets, and image configuration is not returned by the App API; do
+not bake secrets into Dockerfile `ENV` instructions.
+
+The runtime image cache lives in the host Docker data root and may grow as
+deployments change. Stealth does not run automatic image garbage collection;
+monitor host disk use and use Docker's supported maintenance process. Completed
+OCI archives in Stealth storage remain authoritative if the local Docker image
+cache is lost, and the worker can import the selected image again. Production
+acceptance targets Docker Engine with Compose v2 and cgroup v2 resource
+accounting; verify the host with `docker info --format '{{.CgroupVersion}}'`.
+
+`running` means Moby reports the container process running. The stored
+WorkloadSpec health check is not yet executed, and there is no runtime log
+viewer, public hostname route, or encrypted App secret injection. Reserved App
+hostnames remain absent from Site routes and return 404. Do not use the
+runtime status as an application readiness or Internet reachability probe.
+
+### Manual host-reboot acceptance
+
+For an operator acceptance check, record the App's desired and observed
+generations while it reports `running`, reboot the VPS, and wait for Docker,
+Compose, and the worker to return. Verify the App reports `running` again with
+matching generations and exactly one container with its `stealth.app_id` label.
+The worker recreates a missing runtime bridge or container during recovery.
+This procedure is manual and is not part of CI.
 
 ## Configuration
 
@@ -245,9 +323,10 @@ Required production values:
   configures its HTTPS callback URL, and stores the resulting App identifier
   server-side; it does not ask the operator to enable Device Flow.
 - `PUBLIC_APP_URL`, normally `https://console.example.com`.
-- `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the existing
-  Docker-backed function runner is enabled. The same numeric group is used by
-  the internal telemetry proxy, but the proxy is not published to the host.
+- `DOCKER_GID`, from `stat -c '%g' /var/run/docker.sock`, while the
+  Docker-backed function runner or persistent App runtime is enabled. The same
+  numeric group is used by the internal telemetry proxy, but the proxy is not
+  published to the host.
 
 Strongly recommended values:
 
@@ -260,6 +339,14 @@ Strongly recommended values:
 - `STORAGE_DRIVER=s3` with provider-specific `STORAGE_S3_*` credentials for a
   production object-store service. The bundled local mode is a persistent
   single-host volume, not highly available object storage.
+
+App runtime bounds have validated defaults in
+[`.env.production.example`](../.env.production.example): network name
+`stealth_app_runtime`, one-second worker poll interval, two-minute lease,
+30-second Docker action timeout, and ten-minute image-import timeout. Adjust
+`APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
+`APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`, or
+`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` only within the accepted limits.
 
 Development-only defaults remain in [`.env.example`](../.env.example). Do not
 copy its local database password or `COOKIE_SECURE=false` setting into a

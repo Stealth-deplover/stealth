@@ -2661,7 +2661,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description List persistent App control-plane metadata. runtime_status=not_deployed means no persistent runtime has been created yet. platform_hostname is reserved metadata and does not imply that an App route is active. API-key callers require apps.read. */
+        /** @description List persistent App desired and observed runtime state. runtime_status=not_deployed means no image is selected and no runtime is desired. platform_hostname is reserved metadata and does not imply that an App route is active. API-key callers require apps.read. */
         get: operations["listApps"];
         put?: never;
         /** @description Create a durable App desired-state resource. Workload fields are normalized to WorkloadSpec v1. No image is built and no workload is started. The reserved platform_hostname does not imply an active route. API-key callers require apps.write. */
@@ -2679,7 +2679,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Return durable App desired state. runtime_status=not_deployed means no persistent runtime has been created yet; platform_hostname is reserved metadata and does not imply an active route. API-key callers require apps.read. */
+        /** @description Return durable App desired and observed runtime state. runtime_status=not_deployed means no image is selected and no runtime is desired; platform_hostname is reserved metadata and does not imply an active route. API-key callers require apps.read. */
         get: operations["getApp"];
         put?: never;
         post?: never;
@@ -2736,7 +2736,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Select a ready verified immutable image as desired state. This advances desired_generation only when selection changes; observed_generation and runtime_status remain trusted-runtime-owned. Selecting does not start an App. API-key callers require apps.write. */
+        /** @description Select a ready verified immutable image as desired state. This advances desired_generation only when selection changes; the trusted runtime reconciler then creates or replaces the persistent App container. The response does not wait for that reconciliation; observed_generation and runtime_status report its progress. API-key callers require apps.write. */
         post: operations["selectAppDeployment"];
         delete?: never;
         options?: never;
@@ -5434,25 +5434,25 @@ export interface components {
             workload_spec_sha256: string;
             /**
              * Format: int64
-             * @description Runtime-relevant desired configuration generation consumed by future trusted reconciliation.
+             * @description Runtime-relevant desired configuration generation consumed by the trusted runtime reconciler.
              */
             desired_generation: number;
             /**
              * Format: int64
-             * @description Trusted-runtime-owned generation; PostgreSQL persistence alone never advances it.
+             * @description Generation last confirmed by the trusted runtime reconciler; PostgreSQL persistence alone never advances it.
              */
             observed_generation: number;
             /**
              * Format: uuid
-             * @description Immutable image selected as future desired state. A selection does not mean a runtime exists or is running.
+             * @description Immutable image selected as desired state. The trusted runtime reconciler converges the persistent container asynchronously.
              */
             desired_deployment_id: string | null;
             /**
-             * @description not_deployed means no persistent runtime has been created yet.
+             * @description not_deployed means no image is selected and no runtime is desired.
              * @enum {string}
              */
             runtime_status: AppRuntime_status;
-            /** @description Bounded sanitized error set only by a future trusted runtime. */
+            /** @description Bounded sanitized error set by the trusted runtime reconciler. */
             runtime_error: string | null;
             /** Format: date-time */
             created_at: string;
@@ -13388,7 +13388,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description App created with normalized desired WorkloadSpec and runtime_status=not_deployed */
+            /** @description App created with normalized desired WorkloadSpec and runtime_status=not_deployed because no image is selected */
             201: {
                 headers: {
                     [name: string]: unknown;

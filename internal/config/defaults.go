@@ -66,4 +66,19 @@ func (c *Config) applyAppBuildDefaults() {
 	if c.AppsBuildkitStateVolume == "" {
 		c.AppsBuildkitStateVolume = "stealth_app_buildkit_state"
 	}
+	if c.AppsRuntimeNetworkName == "" {
+		c.AppsRuntimeNetworkName = "stealth_app_runtime"
+	}
+	if c.AppsRuntimePollInterval <= 0 {
+		c.AppsRuntimePollInterval = time.Second
+	}
+	if c.AppsRuntimeLeaseAge <= 0 {
+		c.AppsRuntimeLeaseAge = 2 * time.Minute
+	}
+	if c.AppsRuntimeActionTimeout <= 0 {
+		c.AppsRuntimeActionTimeout = 30 * time.Second
+	}
+	if c.AppsRuntimeImageImportTimeout <= 0 {
+		c.AppsRuntimeImageImportTimeout = 10 * time.Minute
+	}
 }

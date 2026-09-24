@@ -74,6 +74,11 @@ x-backend-environment: &backend-environment
   APPS_BUILD_STAGING_ROOT: /var/lib/stealth/app-build-staging
   APPS_BUILD_STAGING_VOLUME: "${APPS_BUILD_STAGING_VOLUME:-stealth_app_build_staging}"
   APPS_BUILDKIT_STATE_VOLUME: "${APPS_BUILDKIT_STATE_VOLUME:-stealth_app_buildkit_state}"
+  APPS_RUNTIME_NETWORK_NAME: "${APPS_RUNTIME_NETWORK_NAME:-stealth_app_runtime}"
+  APPS_RUNTIME_POLL_INTERVAL: "${APPS_RUNTIME_POLL_INTERVAL:-1s}"
+  APPS_RUNTIME_LEASE_AGE: "${APPS_RUNTIME_LEASE_AGE:-2m}"
+  APPS_RUNTIME_ACTION_TIMEOUT: "${APPS_RUNTIME_ACTION_TIMEOUT:-30s}"
+  APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT: "${APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT:-10m}"
   PLATFORM_ROUTE_RECONCILE_INTERVAL: "${PLATFORM_ROUTE_RECONCILE_INTERVAL:-5s}"
   # Keep these targets fixed so the worker's writable Compose mounts remain a
   # narrow, auditable boundary. Standalone deployments may override the

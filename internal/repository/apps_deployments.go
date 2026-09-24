@@ -390,7 +390,10 @@ func (r *Repository) SelectAppDeployment(ctx context.Context, projectID, appID, 
 		if app.DesiredGeneration == math.MaxInt64 {
 			return domain.AppDeployment{}, ErrInvalidAppDeployment
 		}
-		if _, err := tx.Exec(ctx, `UPDATE project_apps SET desired_deployment_id=$3,desired_generation=desired_generation+1,updated_at=now() WHERE project_id=$1 AND id=$2`, projectID, appID, deploymentID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE project_apps SET desired_deployment_id=$3,desired_generation=desired_generation+1,runtime_status='pending',runtime_error=NULL,updated_at=now() WHERE project_id=$1 AND id=$2`, projectID, appID, deploymentID); err != nil {
+			return domain.AppDeployment{}, err
+		}
+		if err := resetAppRuntimeRetryTx(ctx, tx, appID); err != nil {
 			return domain.AppDeployment{}, err
 		}
 		metadata := appDeploymentAuditMetadata(item)
@@ -765,7 +768,10 @@ func (r *Repository) CompleteAppDeploymentBuildWithCleanup(ctx context.Context, 
 	}
 	autoSelected := false
 	if selectRequested && sameOptionalID(app.DesiredDeploymentID, selectionBaseDeploymentID) && app.DesiredGeneration < math.MaxInt64 {
-		if _, err := tx.Exec(ctx, `UPDATE project_apps SET desired_deployment_id=$3,desired_generation=desired_generation+1,updated_at=now() WHERE project_id=$1 AND id=$2 AND desired_generation=$4`, projectID, appID, deploymentID, app.DesiredGeneration); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE project_apps SET desired_deployment_id=$3,desired_generation=desired_generation+1,runtime_status='pending',runtime_error=NULL,updated_at=now() WHERE project_id=$1 AND id=$2 AND desired_generation=$4`, projectID, appID, deploymentID, app.DesiredGeneration); err != nil {
+			return domain.AppDeployment{}, err
+		}
+		if err := resetAppRuntimeRetryTx(ctx, tx, appID); err != nil {
 			return domain.AppDeployment{}, err
 		}
 		autoSelected = true

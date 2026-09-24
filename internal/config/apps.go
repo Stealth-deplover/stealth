@@ -26,6 +26,11 @@ type appBuildSettings struct {
 	buildStagingRoot          string
 	buildStagingVolume        string
 	buildkitStateVolume       string
+	runtimeNetworkName        string
+	runtimePollInterval       time.Duration
+	runtimeLeaseAge           time.Duration
+	runtimeActionTimeout      time.Duration
+	runtimeImageImportTimeout time.Duration
 }
 
 func loadAppBuildSettings() (appBuildSettings, error) {
@@ -89,6 +94,26 @@ func loadAppBuildSettings() (appBuildSettings, error) {
 	if len(settings.buildkitStateVolume) > 255 || !isDockerName(settings.buildkitStateVolume) {
 		return appBuildSettings{}, fmt.Errorf("APPS_BUILDKIT_STATE_VOLUME must be a valid Docker volume name")
 	}
+	settings.runtimeNetworkName = value("APPS_RUNTIME_NETWORK_NAME", "stealth_app_runtime")
+	if len(settings.runtimeNetworkName) > 63 || !isDockerName(settings.runtimeNetworkName) {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_NETWORK_NAME must be a valid Docker network name")
+	}
+	settings.runtimePollInterval, err = time.ParseDuration(value("APPS_RUNTIME_POLL_INTERVAL", "1s"))
+	if err != nil || settings.runtimePollInterval < 100*time.Millisecond || settings.runtimePollInterval > time.Minute {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_POLL_INTERVAL must be between 100ms and 1m")
+	}
+	settings.runtimeLeaseAge, err = time.ParseDuration(value("APPS_RUNTIME_LEASE_AGE", "2m"))
+	if err != nil || settings.runtimeLeaseAge < 30*time.Second || settings.runtimeLeaseAge > 10*time.Minute {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_LEASE_AGE must be between 30s and 10m")
+	}
+	settings.runtimeActionTimeout, err = time.ParseDuration(value("APPS_RUNTIME_ACTION_TIMEOUT", "30s"))
+	if err != nil || settings.runtimeActionTimeout < 5*time.Second || settings.runtimeActionTimeout > 2*time.Minute {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_ACTION_TIMEOUT must be between 5s and 2m")
+	}
+	settings.runtimeImageImportTimeout, err = time.ParseDuration(value("APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT", "10m"))
+	if err != nil || settings.runtimeImageImportTimeout < time.Minute || settings.runtimeImageImportTimeout > 30*time.Minute {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT must be between 1m and 30m")
+	}
 	return settings, nil
 }
 
@@ -129,6 +154,11 @@ func (s appBuildSettings) apply(config *Config) {
 	config.AppsBuildStagingRoot = s.buildStagingRoot
 	config.AppsBuildStagingVolume = s.buildStagingVolume
 	config.AppsBuildkitStateVolume = s.buildkitStateVolume
+	config.AppsRuntimeNetworkName = s.runtimeNetworkName
+	config.AppsRuntimePollInterval = s.runtimePollInterval
+	config.AppsRuntimeLeaseAge = s.runtimeLeaseAge
+	config.AppsRuntimeActionTimeout = s.runtimeActionTimeout
+	config.AppsRuntimeImageImportTimeout = s.runtimeImageImportTimeout
 }
 
 func defaultBuildKitPath(key string) string {

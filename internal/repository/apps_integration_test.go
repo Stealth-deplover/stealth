@@ -96,7 +96,7 @@ func TestAppDeploymentSnapshotSelectionAndQuotaIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ready.Status != "ready" || !ready.Selected || app.DesiredDeploymentID == nil || *app.DesiredDeploymentID != deploymentID.String() || app.DesiredGeneration != 3 || app.ObservedGeneration != 0 || app.RuntimeStatus != "not_deployed" || app.WorkloadSpecSHA256 == workloadHash {
+	if ready.Status != "ready" || !ready.Selected || app.DesiredDeploymentID == nil || *app.DesiredDeploymentID != deploymentID.String() || app.DesiredGeneration != 3 || app.ObservedGeneration != 0 || app.RuntimeStatus != "pending" || app.WorkloadSpecSHA256 == workloadHash {
 		t.Fatalf("successful build and selection violated runtime truth or generation semantics: App=%+v deployment=%+v", app, ready)
 	}
 	if !workloadspec.Equal(ready.WorkloadSnapshot, workloadspec.Default()) || ready.WorkloadSpecSHA256 != workloadHash {
@@ -287,7 +287,7 @@ func TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration(t *tes
 			t.Fatal(err)
 		}
 		wantGeneration := int64(index + 2)
-		if app.DesiredGeneration != wantGeneration || app.ObservedGeneration != 0 || app.RuntimeStatus != "not_deployed" || app.DesiredDeploymentID == nil || *app.DesiredDeploymentID != item.ID {
+		if app.DesiredGeneration != wantGeneration || app.ObservedGeneration != 0 || app.RuntimeStatus != "pending" || app.DesiredDeploymentID == nil || *app.DesiredDeploymentID != item.ID {
 			t.Fatalf("selection %d violated desired/runtime state: App=%+v selected=%+v", index, app, selected)
 		}
 	}
@@ -299,7 +299,7 @@ func TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if app.DesiredGeneration != 4 || app.ObservedGeneration != 0 || app.RuntimeStatus != "not_deployed" {
+	if app.DesiredGeneration != 4 || app.ObservedGeneration != 0 || app.RuntimeStatus != "pending" {
 		t.Fatalf("no-op selection advanced generation or runtime state: %+v", app)
 	}
 	if err := f.repo.DeleteAppDeployment(f.ctx, f.projectOneID, appID, uuid.MustParse(first.ID), f.actor); !errors.Is(err, ErrAppDeploymentSelected) {
@@ -730,7 +730,7 @@ func TestAppsPersistenceGenerationAndPlanLimitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.DesiredGeneration != 2 || updated.ObservedGeneration != 0 || updated.RuntimeStatus != "not_deployed" {
+	if updated.DesiredGeneration != 2 || updated.ObservedGeneration != 0 || updated.RuntimeStatus != "pending" {
 		t.Fatalf("enabled-state change violated generation truth: %+v", updated)
 	}
 	portChange := workloadspec.Default()
@@ -739,7 +739,7 @@ func TestAppsPersistenceGenerationAndPlanLimitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.DesiredGeneration != 3 || updated.ObservedGeneration != 0 || updated.WorkloadSpecSHA256 == first.WorkloadSpecSHA256 {
+	if updated.DesiredGeneration != 3 || updated.ObservedGeneration != 0 || updated.RuntimeStatus != "pending" || updated.WorkloadSpecSHA256 == first.WorkloadSpecSHA256 {
 		t.Fatalf("workload change violated generation or digest semantics: %+v", updated)
 	}
 	updated, err = f.repo.UpdateApp(f.ctx, f.projectOneID, firstID, f.actor, AppPatch{Workload: &portChange})

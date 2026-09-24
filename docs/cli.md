@@ -69,9 +69,10 @@ resumable state; closing the browser does not cancel the host operation.
 The temporary setup image has no Docker socket, Docker CLI, or Compose plugin.
 The host CLI writes the finalized production configuration, runs Docker Compose,
 performs health checks, owns Quick Tunnel cleanup, and removes the setup API,
-Console, and proxy after the one-time handoff. The production API and Console
-images do not receive the socket. The production worker still mounts it for the
-existing non-root Docker-backed function and site runner.
+Console, and proxy after the one-time handoff. The production API, Console,
+BuildKit, Traefik, and App containers do not receive the socket. The production
+worker still mounts it for non-root Docker-backed build and persistent App
+runtime work.
 
 See the [browser setup guide](web-setup.md) for the complete wizard, provider
 connection, external infrastructure, and recovery behavior. The owner is an
@@ -147,7 +148,9 @@ stealth ingress rollback
 `status` reads Compose service state and prints the configured Console URL.
 `doctor` is read-only and checks Docker, Compose, private configuration,
 service health, API health/readiness/version endpoints, Console/proxy HTTP
-reachability, and available disk space. `logs` delegates to
+reachability, available disk space, and the App runtime network's local bridge
+driver and Stealth ownership labels. It does not create the network or start an
+App. In setup mode the runtime check is skipped. `logs` delegates to
 `docker compose logs`; it does not build a log storage subsystem.
 
 `stealth ingress status` reports the saved Cloudflare Console origin state.
@@ -313,20 +316,26 @@ stealth uninstall --purge --yes
 ```
 
 The safest mode runs the equivalent of `docker compose down
---remove-orphans`; it never passes `--volumes`. PostgreSQL data,
-`stealth_storage`, function-runner staging, `config.env`, the Compose/proxy
-assets, `VERSION`, and CLI recovery files remain available for reinstall or
-recovery. The middle interactive mode also removes the generated Compose,
+--remove-orphans`; it never passes `--volumes`. It preserves persistent App
+containers and their separately managed runtime network along with PostgreSQL
+data, `stealth_storage`, function-runner staging, `config.env`, the Compose/proxy
+assets, `VERSION`, and CLI recovery files. The middle interactive mode also
+preserves App containers/network while removing the generated Compose,
 proxy, `VERSION`, and `state/` runtime files, but deliberately keeps
 `config.env`: it contains `FUNCTIONS_SECRET_KEY` and database credentials
 needed to recover preserved encrypted data.
 
 Purge first validates that the local Compose file declares exactly the
 installation's configured named volumes and that any existing volumes carry
-the matching Compose project labels. It then removes the services and those
-project-owned volumes with `docker compose down --volumes --remove-orphans`,
-verifies the resources are gone, and only then removes the local configuration
-and secrets. It never runs `docker system prune` or `docker volume prune`.
+the matching Compose project labels. It also validates the runtime bridge's
+Stealth labels and each persistent App container's schema, UUID ownership
+labels, workload digest, and deterministic name. After stopping Compose
+services, it stops and removes only those validated App container IDs and the
+exact owned runtime bridge, then removes project-owned Compose volumes with
+`docker compose down --volumes --remove-orphans`. It verifies the resources are
+gone before removing local configuration and secrets. An unowned/conflicting
+container or network stops purge before destructive cleanup. It never runs
+`docker system prune` or `docker volume prune`.
 External S3 object storage is not deleted because the CLI cannot safely prove
 ownership of a bucket or prefix; remove it separately with provider tooling
 after verifying the scope. Redis has no persistent volume in the bundled

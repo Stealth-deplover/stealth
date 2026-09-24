@@ -29,7 +29,11 @@ api_url=""
 filelog_smoke_pid=""
 platform_archive=""
 app_archive=""
+app_archive_v2=""
 app_probe_binary=""
+app_runtime_inspect_json=""
+app_runtime_foreign_container=""
+app_runtime_orphan_container=""
 buildkit_wrong_identity_dir=""
 buildkit_pki_smoke_created="false"
 buildkit_apparmor_profile_file=""
@@ -39,7 +43,10 @@ platform_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-platform.XXXX
 platform_project_id=""
 platform_site_id=""
 platform_app_id=""
+platform_app_no_image_id=""
+platform_app_disabled_id=""
 platform_app_deployment_id=""
+platform_disabled_deployment_id=""
 platform_host=""
 platform_app_host=""
 platform_base_domain=""
@@ -152,8 +159,25 @@ cleanup() {
 	if [ -n "$platform_site_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/sites/${platform_site_id}" >/dev/null 2>&1 || true
 	fi
-	if [ -n "$platform_app_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
-		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}" >/dev/null 2>&1 || true
+	if [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
+		if [ -n "$app_runtime_foreign_container" ]; then
+			docker rm -f "$app_runtime_foreign_container" >/dev/null 2>&1 || true
+		fi
+		if [ -n "$app_runtime_orphan_container" ]; then
+			docker rm -f "$app_runtime_orphan_container" >/dev/null 2>&1 || true
+		fi
+		for cleanup_app_id in "$platform_app_id" "$platform_app_disabled_id" "$platform_app_no_image_id"; do
+			if [ -z "$cleanup_app_id" ]; then
+				continue
+			fi
+			runtime_containers="$(docker ps -aq --filter "label=stealth.app_id=${cleanup_app_id}" 2>/dev/null || true)"
+			if [ -n "$runtime_containers" ]; then
+				while IFS= read -r runtime_container; do
+					[ -z "$runtime_container" ] || docker rm -f "$runtime_container" >/dev/null 2>&1 || true
+				done <<<"$runtime_containers"
+			fi
+			curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/apps/${cleanup_app_id}" >/dev/null 2>&1 || true
+		done
 	fi
 	if [ -n "$platform_project_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --header 'Content-Type: application/json' --request DELETE --data '{"confirm_name":"platform-route-smoke"}' "${api_url%/}/v1/projects/${platform_project_id}" >/dev/null 2>&1 || true
@@ -218,7 +242,7 @@ cleanup() {
 	if [ -n "$cloudflare_handoff_listing" ]; then
 		rm -rf -- "$cloudflare_handoff_listing"
 	fi
-	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$app_probe_binary" "$buildkit_apparmor_profile_file"
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$app_archive_v2" "$app_probe_binary" "$app_runtime_inspect_json" "$buildkit_apparmor_profile_file"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
@@ -1295,6 +1319,310 @@ else:
 PY
 }
 
+create_app_archive() {
+	local archive="$1" marker="$2" probe="$3"
+	python3 - "$archive" "$marker" "$probe" <<'PY'
+import sys
+import zipfile
+
+archive, marker, probe = sys.argv[1:]
+dockerfile = (
+    "FROM scratch\n"
+    "COPY payload.txt /payload.txt\n"
+    "COPY --chmod=0755 buildkit-secret-probe /buildkit-secret-probe\n"
+    "RUN [\"/buildkit-secret-probe\"]\n"
+    "ENTRYPOINT [\"/buildkit-secret-probe\"]\n"
+    "CMD [\"serve\"]\n"
+)
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    output.writestr("Dockerfile", dockerfile)
+    output.writestr("payload.txt", marker + "\n")
+    output.write(probe, "buildkit-secret-probe")
+PY
+}
+
+fetch_app_runtime() {
+	local app_id="${1:-$platform_app_id}" status
+	status="$(platform_request GET "/v1/projects/${platform_project_id}/apps/${app_id}" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'App runtime smoke read returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+}
+
+wait_for_app_runtime() {
+	local wanted="$1" app_id="${2:-$platform_app_id}" status desired observed runtime_error
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if fetch_app_runtime "$app_id"; then
+			status="$(platform_json_field "$platform_response" app.runtime_status)"
+			desired="$(platform_json_field "$platform_response" app.desired_generation)"
+			observed="$(platform_json_field "$platform_response" app.observed_generation)"
+			if [ "$status" = "$wanted" ] && [ -n "$desired" ] && [ "$observed" = "$desired" ]; then
+				return 0
+			fi
+			if [ "$status" = 'failed' ] || [ "$status" = 'degraded' ]; then
+				runtime_error="$(platform_json_field "$platform_response" app.runtime_error)"
+				printf 'App runtime entered %s while waiting for %s: %s (desired=%s observed=%s)\n' "$status" "$wanted" "$runtime_error" "$desired" "$observed" >&2
+				print_app_runtime_diagnostics "$app_id"
+				return 1
+			fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'App runtime did not converge to %s: status=%s desired=%s observed=%s\n' "$wanted" "$(platform_json_field "$platform_response" app.runtime_status)" "$(platform_json_field "$platform_response" app.desired_generation)" "$(platform_json_field "$platform_response" app.observed_generation)" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+print_app_runtime_diagnostics() {
+	local app_id="$1" container_name
+	container_name="$(printf 'stealth-app-%s' "${app_id//-/}")"
+	if ! docker inspect "$container_name" >"$platform_response" 2>/dev/null; then
+		printf 'App runtime diagnostic: container %s is absent\n' "$container_name" >&2
+		return 0
+	fi
+	python3 - "$platform_response" <<'PY' >&2
+import hashlib
+import json
+import subprocess
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    rows = json.load(source)
+if len(rows) != 1:
+    print(f"App runtime diagnostic: expected one container, got {len(rows)}")
+    raise SystemExit(0)
+
+container = rows[0]
+config = container.get("Config") or {}
+host = container.get("HostConfig") or {}
+state = container.get("State") or {}
+
+def env_summary(values):
+    values = values or []
+    encoded = json.dumps(values, separators=(",", ":"), ensure_ascii=True).encode()
+    return {
+        "count": len(values),
+        "names": sorted({entry.split("=", 1)[0] for entry in values}),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+image_config = None
+result = subprocess.run(["docker", "image", "inspect", container.get("Image", "")], capture_output=True, text=True)
+if result.returncode == 0:
+    try:
+        image_rows = json.loads(result.stdout)
+        if len(image_rows) == 1:
+            image_config = image_rows[0].get("Config") or {}
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+summary = {
+    "id": container.get("Id"),
+    "name": container.get("Name"),
+    "image_id": container.get("Image"),
+    "state": state.get("Status"),
+    "labels": container.get("Config", {}).get("Labels") or {},
+    "container_config": {
+        "cmd": config.get("Cmd"),
+        "entrypoint": config.get("Entrypoint"),
+        "working_dir": config.get("WorkingDir"),
+        "user": config.get("User"),
+        "env": env_summary(config.get("Env")),
+    },
+    "image_config": None if image_config is None else {
+        "cmd": image_config.get("Cmd"),
+        "entrypoint": image_config.get("Entrypoint"),
+        "working_dir": image_config.get("WorkingDir"),
+        "user": image_config.get("User"),
+        "env": env_summary(image_config.get("Env")),
+    },
+    "host_config": {
+        "network_mode": host.get("NetworkMode"),
+        "privileged": host.get("Privileged"),
+        "auto_remove": host.get("AutoRemove"),
+        "read_only_rootfs": host.get("ReadonlyRootfs"),
+        "cap_add": host.get("CapAdd"),
+        "cap_drop": host.get("CapDrop"),
+        "security_opt": host.get("SecurityOpt"),
+        "memory": host.get("Memory"),
+        "memory_swap": host.get("MemorySwap"),
+        "nano_cpus": host.get("NanoCpus"),
+        "pids_limit": host.get("PidsLimit"),
+        "tmpfs": host.get("Tmpfs"),
+        "restart_policy": host.get("RestartPolicy"),
+        "log_config": host.get("LogConfig"),
+        "init": host.get("Init"),
+        "mount_counts": {
+            "binds": len(host.get("Binds") or []),
+            "volumes_from": len(host.get("VolumesFrom") or []),
+            "port_bindings": len(host.get("PortBindings") or {}),
+            "devices": len(host.get("Devices") or []),
+        },
+        "host_namespace_modes": {
+            key: host.get(key) for key in ("PidMode", "IpcMode", "UTSMode", "UsernsMode")
+        },
+        "ulimits": host.get("Ulimits"),
+    },
+    "network_names": sorted((container.get("NetworkSettings", {}).get("Networks") or {}).keys()),
+    "mounts": [
+        {"type": mount.get("Type"), "destination": mount.get("Destination")}
+        for mount in container.get("Mounts", [])
+    ],
+}
+print("App runtime container diagnostic: " + json.dumps(summary, sort_keys=True))
+PY
+}
+
+app_runtime_network_name() {
+	local configured="${APPS_RUNTIME_NETWORK_NAME:-}"
+	if [ -z "$configured" ] && [ -f "$env_file" ]; then
+		configured="$(sed -n 's/^APPS_RUNTIME_NETWORK_NAME=//p' "$env_file" | tail -n 1 | tr -d "\"'")"
+	fi
+	printf '%s' "${configured:-stealth_app_runtime}"
+}
+
+app_runtime_name() {
+	printf 'stealth-app-%s' "${platform_app_id//-/}"
+}
+
+app_runtime_container_id() {
+	local app_id="${1:-$platform_app_id}" containers count
+	containers="$(docker ps -aq --filter "label=stealth.app_id=${app_id}" --filter 'label=stealth.resource_type=app')"
+	count="$(printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' ')"
+	if [ "$count" != '1' ]; then
+		printf 'expected exactly one managed container for App %s, got: %s\n' "$platform_app_id" "$containers" >&2
+		return 1
+	fi
+	printf '%s' "$containers"
+}
+
+wait_for_app_runtime_container_replacement() {
+	local previous_container="$1" containers count
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		containers="$(docker ps -q --filter "label=stealth.app_id=${platform_app_id}" --filter 'label=stealth.resource_type=app')"
+		count="$(printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' ')"
+		if [ "$count" = '1' ] && [ "$containers" != "$previous_container" ]; then
+			printf '%s' "$containers"
+			return 0
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'expected one running replacement App container, got %s: %s\n' "$count" "$containers" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+wait_for_running_app_runtime_container() {
+	local containers count
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		containers="$(docker ps -q --filter "label=stealth.app_id=${platform_app_id}" --filter 'label=stealth.resource_type=app')"
+		count="$(printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' ')"
+		if [ "$count" = '1' ]; then
+			printf '%s' "$containers"
+			return 0
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'expected one running App container, got %s: %s\n' "$count" "$containers" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+assert_app_runtime_network() {
+	local network_name actual
+	network_name="$(app_runtime_network_name)"
+	actual="$(docker network inspect --format '{{.Driver}}|{{.Scope}}|{{.Internal}}|{{index .Labels "stealth.managed"}}|{{index .Labels "stealth.resource_type"}}|{{index .Labels "stealth.runtime_schema"}}' "$network_name")"
+	if [ "$actual" != 'bridge|local|false|true|app_runtime_network|v1' ]; then
+		printf 'App runtime network identity = %s, expected the owned local bridge\n' "$actual" >&2
+		return 1
+	fi
+}
+
+assert_app_runtime_container() {
+	local container_id="$1" generation="$2" deployment_id="$3" spec_sha256="$4" cpu_millis="$5"
+	local network_name
+	network_name="$(app_runtime_network_name)"
+	if [ -z "$app_runtime_inspect_json" ]; then
+		app_runtime_inspect_json="$(mktemp "${TMPDIR:-/tmp}/stealth-app-runtime-inspect.XXXXXX.json")"
+	fi
+	docker inspect "$container_id" >"$app_runtime_inspect_json"
+	python3 - "$app_runtime_inspect_json" "$platform_app_id" "$platform_project_id" "$generation" "$deployment_id" "$spec_sha256" "$cpu_millis" "$network_name" <<'PY'
+import json
+import sys
+
+path, app_id, project_id, generation, deployment_id, spec_sha256, cpu_millis, network_name = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    rows = json.load(source)
+if len(rows) != 1:
+    raise SystemExit("expected one Docker inspect record")
+container = rows[0]
+labels = container.get("Config", {}).get("Labels") or {}
+host = container.get("HostConfig") or {}
+state = container.get("State") or {}
+mounts = container.get("Mounts") or []
+networks = container.get("NetworkSettings", {}).get("Networks") or {}
+forbidden_env = {"DATABASE_URL", "REDIS_URL", "FUNCTIONS_SECRET_KEY", "CLOUDFLARE_API_TOKEN", "APPS_BUILDKIT_CLIENT_KEY"}
+env_names = {entry.split("=", 1)[0] for entry in container.get("Config", {}).get("Env", [])}
+expected_image = f"stealth-app/{deployment_id}:runtime"
+errors = []
+if container.get("Name") != "/stealth-app-" + app_id.replace("-", ""):
+    errors.append("deterministic name")
+for key, value in {
+    "stealth.managed": "true",
+    "stealth.resource_type": "app",
+    "stealth.app_id": app_id,
+    "stealth.project_id": project_id,
+    "stealth.deployment_id": deployment_id,
+    "stealth.generation": generation,
+    "stealth.workload_spec_sha256": spec_sha256,
+    "stealth.runtime_schema": "v1",
+}.items():
+    if labels.get(key) != value:
+        errors.append(f"label {key}")
+if not state.get("Running"):
+    errors.append("container is not running")
+if container.get("Config", {}).get("Image") != expected_image:
+    errors.append("image reference")
+if host.get("NetworkMode") != network_name or set(networks) != {network_name}:
+    errors.append("runtime network")
+if host.get("PortBindings"):
+    errors.append("published host ports")
+if host.get("Privileged") or host.get("AutoRemove") or host.get("CapAdd"):
+    errors.append("privilege or auto-remove setting")
+if not host.get("ReadonlyRootfs") or "ALL" not in (host.get("CapDrop") or []):
+    errors.append("read-only root or capability drop")
+if "no-new-privileges:true" not in (host.get("SecurityOpt") or []):
+    errors.append("no-new-privileges")
+if host.get("NanoCpus") != int(cpu_millis) * 1_000_000:
+    errors.append("CPU limit")
+if host.get("Memory") != 536870912 or host.get("MemorySwap") != 536870912 or host.get("PidsLimit") != 256:
+    errors.append("memory, swap, or process limit")
+if (host.get("RestartPolicy") or {}).get("Name") != "no":
+    errors.append("Docker restart policy")
+if host.get("PidMode") == "host" or host.get("IpcMode") == "host" or host.get("UTSMode") == "host" or host.get("UsernsMode") == "host":
+    errors.append("host namespace")
+if host.get("Binds") or host.get("VolumesFrom") or host.get("Devices"):
+    errors.append("host mount or device")
+if mounts:
+	errors.append("unexpected Docker volume or bind mounts")
+if host.get("Tmpfs") != {"/tmp": "rw,nosuid,nodev,noexec,size=67108864"}:
+    errors.append("unexpected tmpfs configuration")
+if host.get("Init") is not True:
+    errors.append("init process")
+if env_names & forbidden_env:
+    errors.append("backend secret environment")
+if errors:
+    raise SystemExit("App container runtime security check failed: " + ", ".join(errors))
+PY
+}
+
 prepare_platform_route_smoke() {
 	local account_id organization_id project_status site_status site_status_after_upload app_status app_architecture
 	local upload_body
@@ -1384,6 +1712,26 @@ PY
 		printf '%s\n' 'platform smoke App response did not contain its id and reserved hostname' >&2
 		return 1
 	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"no-image-smoke","enabled":true}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'no-image App creation returned HTTP %s\n' "$app_status" >&2
+		return 1
+	fi
+	platform_app_no_image_id="$(platform_json_field "$platform_response" app.id)"
+	if [ -z "$platform_app_no_image_id" ]; then
+		printf '%s\n' 'no-image App response did not contain an ID' >&2
+		return 1
+	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"disabled-image-smoke","enabled":false}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'disabled App creation returned HTTP %s\n' "$app_status" >&2
+		return 1
+	fi
+	platform_app_disabled_id="$(platform_json_field "$platform_response" app.id)"
+	if [ -z "$platform_app_disabled_id" ]; then
+		printf '%s\n' 'disabled App response did not contain an ID' >&2
+		return 1
+	fi
 
 	app_archive="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke.XXXXXX.zip")"
 	case "$(uname -m)" in
@@ -1394,16 +1742,7 @@ PY
 	app_probe_binary="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-secret-probe.XXXXXX")"
 	(cd -- "$repo_root" && GOOS=linux GOARCH="$app_architecture" CGO_ENABLED=0 go build -trimpath -o "$app_probe_binary" ./scripts/fixtures/app-buildkit-secret-probe)
 	chmod 0755 "$app_probe_binary"
-	python3 - "$app_archive" "$smoke_marker" "$app_probe_binary" <<'PY'
-import sys
-import zipfile
-
-archive, marker, probe = sys.argv[1:]
-with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\nCOPY --chmod=0755 buildkit-secret-probe /buildkit-secret-probe\nRUN [\"/buildkit-secret-probe\"]\n")
-    output.writestr("payload.txt", marker + "\n")
-    output.write(probe, "buildkit-secret-probe")
-PY
+	create_app_archive "$app_archive" "$smoke_marker" "$app_probe_binary"
 	local deployment_response="$platform_response"
 	local deployment_status
 	deployment_status="$(curl --silent --show-error --max-time 30 \
@@ -1459,7 +1798,7 @@ verify_platform_route_smoke() {
 
 verify_app_build_smoke() {
 	local deployment_url status image_row image_path image_archive_sha256 image_digest image_size actual_sha
-	local app_runtime app_desired_generation app_observed_generation app_desired_deployment build_status selected
+	local app_runtime app_desired_generation app_observed_generation app_desired_deployment app_spec_sha256 build_status selected runtime_container_id
 	deployment_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_deployment_id}"
 	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
 		status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "$deployment_url")"
@@ -1532,19 +1871,21 @@ PY
 		printf '%s\n' 'persisted OCI archive checksum does not match its bytes' >&2
 		return 1
 	fi
-	status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}")"
-	if [ "$status" != '200' ]; then
-		printf 'App runtime truth smoke read returned HTTP %s\n' "$status" >&2
-		return 1
-	fi
+	wait_for_app_runtime running
+	fetch_app_runtime
 	app_runtime="$(platform_json_field "$platform_response" app.runtime_status)"
 	app_desired_generation="$(platform_json_field "$platform_response" app.desired_generation)"
 	app_observed_generation="$(platform_json_field "$platform_response" app.observed_generation)"
 	app_desired_deployment="$(platform_json_field "$platform_response" app.desired_deployment_id)"
-	if [ "$app_runtime" != 'not_deployed' ] || [ "$app_desired_generation" != '2' ] || [ "$app_observed_generation" != '0' ] || [ "$app_desired_deployment" != "$platform_app_deployment_id" ]; then
+	app_spec_sha256="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	if [ "$app_runtime" != 'running' ] || [ -z "$app_desired_generation" ] || [ "$app_observed_generation" != "$app_desired_generation" ] || [ "$app_desired_deployment" != "$platform_app_deployment_id" ]; then
 		printf 'App runtime truth changed after build: status=%s desired=%s observed=%s deployment=%s\n' "$app_runtime" "$app_desired_generation" "$app_observed_generation" "$app_desired_deployment" >&2
 		return 1
 	fi
+	runtime_container_id="$(app_runtime_container_id)"
+	assert_app_runtime_container "$runtime_container_id" "$app_desired_generation" "$app_desired_deployment" "$app_spec_sha256" 500
+	assert_app_runtime_network
+	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime
 	if [ ! -f "$generated_state_dir/platform-sites.yaml" ] || ! grep -Fq -- "$platform_host" "$generated_state_dir/platform-sites.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
 		printf '%s\n' 'App hostname appeared in the current Site-only Traefik route snapshot' >&2
 		return 1
@@ -1554,7 +1895,376 @@ PY
 		printf 'built App hostname returned HTTP %s, want fail-closed 404\n' "$status" >&2
 		return 1
 	fi
-	printf 'real BuildKit App build passed: digest=%s archive_sha256=%s runtime=%s route=absent\n' "$image_digest" "$image_archive_sha256" "$app_runtime"
+	printf 'real BuildKit App build and runtime passed: digest=%s archive_sha256=%s generation=%s runtime=%s route=absent\n' "$image_digest" "$image_archive_sha256" "$app_desired_generation" "$app_runtime"
+}
+
+verify_app_secondary_state_smoke() {
+	local upload_status app_status generation observed selected containers
+	upload_status="$(curl --silent --show-error --max-time 30 \
+		--header "Cookie: $auth_cookie_header" \
+		--form "source=@${app_archive};type=application/zip" \
+		--form 'select=true' \
+		--output "$platform_response" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_disabled_id}/deployments")"
+	if [ "$upload_status" != '202' ]; then
+		printf 'disabled App source upload returned HTTP %s\n' "$upload_status" >&2
+		return 1
+	fi
+	platform_disabled_deployment_id="$(platform_json_field "$platform_response" deployment.id)"
+	if [ -z "$platform_disabled_deployment_id" ]; then
+		printf '%s\n' 'disabled App deployment response did not contain an ID' >&2
+		return 1
+	fi
+	wait_for_app_deployment_ready "$platform_disabled_deployment_id" "$platform_app_disabled_id"
+	wait_for_app_runtime stopped "$platform_app_disabled_id"
+	fetch_app_runtime "$platform_app_disabled_id"
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	containers="$(docker ps -aq --filter "label=stealth.app_id=${platform_app_disabled_id}" --filter 'label=stealth.resource_type=app')"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_disabled_deployment_id" ] || [ -n "$containers" ]; then
+		printf 'disabled selected App did not remain stopped: status=%s generation=%s/%s deployment=%s containers=%s\n' \
+			"$(platform_json_field "$platform_response" app.runtime_status)" "$observed" "$generation" "$selected" "$containers" >&2
+		return 1
+	fi
+	wait_for_app_runtime not_deployed "$platform_app_no_image_id"
+	fetch_app_runtime "$platform_app_no_image_id"
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	containers="$(docker ps -aq --filter "label=stealth.app_id=${platform_app_no_image_id}" --filter 'label=stealth.resource_type=app')"
+	if [ "$observed" != "$generation" ] || [ -n "$containers" ]; then
+		printf 'App without a selected image has runtime artifacts: generation=%s/%s containers=%s\n' "$observed" "$generation" "$containers" >&2
+		return 1
+	fi
+	printf 'disabled selected App is stopped and App without an image is not_deployed; neither has a runtime container\n'
+}
+
+assert_container_absent() {
+	local identifier="$1"
+	if docker inspect "$identifier" >/dev/null 2>&1; then
+		printf 'expected App container to be absent, but it remains: %s\n' "$identifier" >&2
+		return 1
+	fi
+}
+
+wait_for_app_runtime_conflict() {
+	local expected_observed="$1" status="" runtime_error="" observed=""
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if fetch_app_runtime; then
+			status="$(platform_json_field "$platform_response" app.runtime_status)"
+			observed="$(platform_json_field "$platform_response" app.observed_generation)"
+			runtime_error="$(platform_json_field "$platform_response" app.runtime_error)"
+			if [ "$status" = 'failed' ] && [ "$runtime_error" = 'container ownership conflict' ] && [ "$observed" = "$expected_observed" ]; then
+				return 0
+			fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'foreign name conflict did not fail safely: status=%s error=%s observed=%s\n' "$status" "$runtime_error" "$observed" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+wait_for_app_deployment_ready() {
+	local deployment_id="$1" app_id="${2:-$platform_app_id}" response_url build_status status
+	response_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${app_id}/deployments/${deployment_id}"
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "$response_url")"
+		if [ "$status" != '200' ]; then
+			printf 'App deployment read returned HTTP %s for %s\n' "$status" "$deployment_id" >&2
+			return 1
+		fi
+		build_status="$(platform_json_field "$platform_response" deployment.build_status)"
+		case "$build_status" in
+			succeeded)
+			if [ "$(platform_json_field "$platform_response" deployment.status)" = 'ready' ] && [ "$(platform_json_field "$platform_response" deployment.selected)" = 'True' ]; then
+				return 0
+			fi
+			;;
+			failed)
+				printf 'App deployment %s failed: %s\n' "$deployment_id" "$(platform_json_field "$platform_response" deployment.error_message)" >&2
+				return 1
+			;;
+			queued|running|deferred) ;;
+			*) printf 'unexpected App deployment state %s: %s\n' "$deployment_id" "$build_status" >&2; return 1 ;;
+		esac
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'App deployment did not finish: id=%s build_status=%s\n' "$deployment_id" "$build_status" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+verify_app_runtime_lifecycle() {
+	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha
+	local disabled_generation conflict_observed foreign_managed_label runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local orphan_app orphan_project orphan_name
+
+	fetch_app_runtime
+	old_container="$(app_runtime_container_id)"
+	old_image_id="$(docker inspect --format '{{.Image}}' "$old_container")"
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'disabling smoke App returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime stopped
+	disabled_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
+		printf '%s\n' 'disabled App still has its deterministic runtime container' >&2
+		return 1
+	fi
+	printf 'App disable converged at generation %s with no container\n' "$disabled_generation"
+
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 're-enabling smoke App returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	new_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$new_image_id" != "$old_image_id" ]; then
+		printf 're-enable did not restore the selected image: generation=%s/%s deployment=%s image=%s/%s\n' "$observed" "$generation" "$selected" "$new_image_id" "$old_image_id" >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 500
+	printf 'App re-enable restored the selected image at generation %s\n' "$generation"
+
+	old_container="$new_container"
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"workload":{"resources":{"cpu_millis":750}}}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'App workload update returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$generation" -le "$disabled_generation" ]; then
+		printf 'workload change did not converge on the selected image: generation=%s/%s deployment=%s\n' "$observed" "$generation" "$selected" >&2
+		return 1
+	fi
+	assert_container_absent "$old_container"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'App CPU update replaced the container and converged at generation %s\n' "$generation"
+
+	old_container="$new_container"
+	app_archive_v2="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke-v2.XXXXXX.zip")"
+	create_app_archive "$app_archive_v2" "${smoke_marker}-app-v2" "$app_probe_binary"
+	upload_status="$(curl --silent --show-error --max-time 30 \
+		--header "Cookie: $auth_cookie_header" \
+		--form "source=@${app_archive_v2};type=application/zip" \
+		--form 'select=true' \
+		--output "$platform_response" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments")"
+	if [ "$upload_status" != '202' ]; then
+		printf 'App v2 upload returned HTTP %s\n' "$upload_status" >&2
+		sed -n '1,80p' "$platform_response" >&2
+		return 1
+	fi
+	platform_app_deployment_id="$(platform_json_field "$platform_response" deployment.id)"
+	if [ -z "$platform_app_deployment_id" ]; then
+		printf '%s\n' 'App v2 upload did not return a deployment ID' >&2
+		return 1
+	fi
+	wait_for_app_deployment_ready "$platform_app_deployment_id"
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	new_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$new_image_id" = "$old_image_id" ]; then
+		printf 'App v2 selection did not replace the previous image: generation=%s/%s deployment=%s image=%s\n' "$observed" "$generation" "$selected" "$new_image_id" >&2
+		return 1
+	fi
+	assert_container_absent "$old_container"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	docker exec "$new_container" /buildkit-secret-probe verify-runtime
+	printf 'App v2 deployment switch removed the previous container and converged at generation %s\n' "$generation"
+
+	old_container="$new_container"
+	runtime_tag="stealth-app/${platform_app_deployment_id}:runtime"
+	buildkit_container="$("${compose[@]}" ps -q buildkit)"
+	if [ -z "$buildkit_container" ]; then
+		printf '%s\n' 'BuildKit service container is missing before the OCI reimport test' >&2
+		return 1
+	fi
+	"${compose[@]}" stop worker buildkit >/dev/null
+	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
+		printf '%s\n' 'BuildKit remained running after the OCI reimport test stopped it' >&2
+		return 1
+	fi
+	docker rm -f "$old_container" >/dev/null
+	docker image rm --force "$runtime_tag" >/dev/null
+	if docker image inspect "$new_image_id" >/dev/null 2>&1; then
+		printf 'App runtime image still exists locally after removing tag %s (image=%s)\n' "$runtime_tag" "$new_image_id" >&2
+		return 1
+	fi
+	"${compose[@]}" start worker >/dev/null
+	new_container="$(wait_for_app_runtime_container_replacement "$old_container")"
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	replacement_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$replacement_image_id" != "$new_image_id" ]; then
+		printf 'OCI reimport did not restore the selected App image: generation=%s/%s deployment=%s image=%s/%s\n' "$observed" "$generation" "$selected" "$replacement_image_id" "$new_image_id" >&2
+		return 1
+	fi
+	if [ "$(docker image inspect --format '{{.Id}}' "$runtime_tag")" != "$new_image_id" ]; then
+		printf 'OCI reimport restored an unexpected image under %s\n' "$runtime_tag" >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	docker exec "$new_container" /buildkit-secret-probe verify-runtime
+	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
+		printf '%s\n' 'BuildKit restarted during the OCI reimport test' >&2
+		return 1
+	fi
+	printf 'BuildKit stayed stopped; worker reimported the App image from its persisted OCI artifact (container=%s)\n' "$new_container"
+
+	old_container="$new_container"
+	"${compose[@]}" restart worker
+	wait_for_app_runtime running
+	new_container="$(app_runtime_container_id)"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'worker restart recovered exactly one App container (id=%s)\n' "$new_container"
+
+	old_container="$new_container"
+	docker rm -f "$old_container" >/dev/null
+	wait_for_app_runtime running
+	new_container="$(app_runtime_container_id)"
+	if [ "$new_container" = "$old_container" ]; then
+		printf '%s\n' 'runtime did not recreate the deleted App container' >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'deleted App container was recreated (id=%s)\n' "$new_container"
+
+	old_container="$new_container"
+	docker stop --time 1 "$old_container" >/dev/null
+	wait_for_app_runtime running
+	new_container="$(wait_for_running_app_runtime_container)"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'unexpected App container exit was recovered (id=%s)\n' "$new_container"
+
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'disabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime stopped
+	network_name="$(app_runtime_network_name)"
+	docker network rm "$network_name" >/dev/null
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 're-enabling App after runtime-network deletion returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	assert_app_runtime_network
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'deleted App runtime bridge was recreated with owned labels\n'
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'disabling App before foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime stopped
+	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
+		printf '%s\n' 'App container remained before foreign-name conflict fixture' >&2
+		return 1
+	fi
+	runtime_name="$(app_runtime_name)"
+	worker="$("${compose[@]}" ps -q worker)"
+	worker_image="$(docker inspect --format '{{.Config.Image}}' "$worker")"
+	app_runtime_foreign_container="$(docker create --name "$runtime_name" "$worker_image")"
+	conflict_observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 're-enabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime_conflict "$conflict_observed"
+	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
+	if [ -n "$foreign_managed_label" ]; then
+		printf 'foreign container was adopted or labeled by the runtime (stealth.managed=%s)\n' "$foreign_managed_label" >&2
+		return 1
+	fi
+	docker inspect "$app_runtime_foreign_container" >/dev/null
+	docker rm "$app_runtime_foreign_container" >/dev/null
+	app_runtime_foreign_container=""
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'disabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime stopped
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 're-enabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	printf 'foreign deterministic-name conflict remained untouched and recovered after removal\n'
+
+	orphan_app="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+	orphan_project="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+	orphan_name="stealth-app-${orphan_app//-/}"
+	network_name="$(app_runtime_network_name)"
+	app_runtime_orphan_container="$(docker create --name "$orphan_name" --network "$network_name" \
+		--label stealth.managed=true --label stealth.resource_type=app \
+		--label "stealth.app_id=$orphan_app" --label "stealth.project_id=$orphan_project" \
+		--label 'stealth.deployment_id=44444444-4444-4444-8444-444444444444' \
+		--label stealth.generation=1 --label "stealth.workload_spec_sha256=$(printf '0%.0s' {1..64})" \
+		--label stealth.runtime_schema=v1 "$worker_image")"
+	"${compose[@]}" restart worker
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if ! docker inspect "$app_runtime_orphan_container" >/dev/null 2>&1; then
+			break
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'valid orphan App container was not removed: %s\n' "$app_runtime_orphan_container" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	app_runtime_orphan_container=""
+	printf 'valid orphan App container was removed after worker recovery\n'
+
+	if [ "$(traefik_http_status / "$platform_app_host")" != '404' ]; then
+		printf '%s\n' 'App runtime lifecycle unexpectedly created a public Traefik route' >&2
+		return 1
+	fi
 }
 
 clear_platform_route_smoke() {
@@ -1915,6 +2625,8 @@ verify_traefik_routing
 prepare_platform_route_smoke
 verify_platform_route_smoke
 verify_app_build_smoke
+verify_app_secondary_state_smoke
+verify_app_runtime_lifecycle
 clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"
@@ -1940,7 +2652,9 @@ emit_otlp_signal logs "$log_payload"
 emit_otlp_signal traces "$trace_payload"
 emit_otlp_signal metrics "$metric_payload"
 
-from="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
+# Keep the lower bound anchored to the emitted OTLP event while including the
+# later Docker file log generated after the App lifecycle checks.
+from="$(date -u -d "@$((timestamp_seconds - 60))" +%Y-%m-%dT%H:%M:%SZ)"
 to="$(date -u -d '1 minute' +%Y-%m-%dT%H:%M:%SZ)"
 wait_for_telemetry_rows "smoke metric" "SELECT count() FROM otel_metrics_gauge WHERE TimeUnix >= now() - INTERVAL 10 MINUTE AND MetricName = '${metric_name}' AND ResourceAttributes['smoke.marker'] = '${smoke_marker}'"
 wait_for_telemetry_rows "smoke log" "SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND positionCaseInsensitiveUTF8(Body, '${smoke_marker}') > 0"

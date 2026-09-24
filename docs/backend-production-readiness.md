@@ -13,6 +13,7 @@ providers.
 | Function execution | Execution row is created with `status=accepted`. | `ClaimNextFunctionExecution` uses `FOR UPDATE OF e SKIP LOCKED`; the runtime receives a context timeout and terminal writes are fenced by worker ID. | Runtime failures are terminal rather than blindly retried because user code may have side effects. | Stale `running` executions return to `accepted`; a replacement worker can claim them. |
 | Site build | Site deployment row is created with `build_status=queued`. | `ClaimNextSiteDeployment` uses `FOR UPDATE OF d SKIP LOCKED`; archive extraction and build have bounded limits and a deadline. | Invalid archives, build errors, and quota failures are terminal. | Stale `running` builds become `deferred`; completion checks the build worker ID. |
 | App build | AppDeployment and a reserved immutable source artifact are recorded before the queued row is committed. | `ClaimNextAppDeployment` uses PostgreSQL `FOR UPDATE SKIP LOCKED`; a dedicated worker verifies and extracts the archive, then invokes `buildctl` against the isolated BuildKit service under a deadline. | BuildKit output must include a valid metadata digest and a verified OCI layout before publication; failures have bounded messages and release artifact/quota reservations. | Stale leases become reclaimable, and every completion is fenced by a unique per-claim worker token. BuildKit unavailability leaves the queue deferred/available and does not stop unrelated worker loops. |
+| App runtime | App mutations and deployment selection advance desired generation; deleting an App or project writes durable cleanup work before removing rows. | `ClaimNextAppRuntime` uses a PostgreSQL transaction and `FOR UPDATE ... SKIP LOCKED`; a worker verifies the persisted OCI archive and uses typed Docker CLI argv to reconcile a deterministic Moby container. | Runtime failures are sanitized and retried with bounded exponential backoff; Docker's restart policy remains disabled so only the fenced worker restarts an exited process. | Startup marks prior observations for inspection, expired leases are reclaimable, cleanup jobs survive App/project deletion, and orphan sweeps queue only ownership-validated Stealth-labeled containers. `observed_generation` advances only after Moby inspect confirms running state or container absence. |
 | Agent run | Run row is created with `status=queued`. | Provider workers claim with `FOR UPDATE OF r SKIP LOCKED`; provider calls use a context timeout and terminal writes require the claiming worker ID. | Provider failures are terminal. Unknown providers remain queued. | Stale `running` runs return to `queued`; the agent status is refreshed transactionally. |
 | Webhook delivery | Mutation transaction writes an outbox event and its delivery rows. | Delivery claim is transactional and `SKIP LOCKED`; outbound HTTP has SSRF checks, a response limit, and a timeout. | HTTP 408/425/429/5xx and network failures retry up to 12 attempts with bounded exponential jitter (or a bounded `Retry-After`); permanent 4xx and expiry are terminal. | Stale leases return to `pending`; expired events are marked failed. `X-Stealth-Delivery` is stable for consumer idempotency. |
 | Messaging delivery | Message and delivery rows are created transactionally with message idempotency constraints. | Delivery claim is transactional and `SKIP LOCKED`; provider calls have a timeout and bounded response handling. | Provider adapters classify retryable failures; attempts are capped at 12 and use bounded exponential jitter. | Stale leases return to `pending`; worker ownership fences terminal updates. |
@@ -72,6 +73,13 @@ daemon process existing. `stealth doctor` includes that service as a separate
 diagnostic so an App build outage is visible without coupling its recovery to
 other queues.
 
+App runtime reconciliation has separate `apps.runtime` tracing and bounded
+poll, claim, completion, duration, retry, error, in-flight, cleanup, and orphan
+metrics. `APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
+`APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`, and
+`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` set validated runtime bounds. Docker daemon
+or bridge ownership errors do not terminate unrelated worker loops.
+
 ## Security assumptions
 
 The BuildKit service is pinned to an exact rootless release and an immutable
@@ -119,6 +127,28 @@ and the exported OCI layout are verified and the archive is durably published.
 The Dockerfile build is not promised to be bit-for-bit reproducible; the
 immutable result is the exact digest and archive captured for that deployment.
 
+Persistent App containers are created only by the trusted worker through Moby.
+The API, Console, BuildKit, and Traefik have no Docker socket. The App bridge is
+not attached to Compose services and App containers publish no host ports. A
+container uses a read-only root, drops all Linux capabilities, enables
+`no-new-privileges`, and receives bounded CPU, memory/swap, PID, tmpfs, log,
+and ulimit settings. No Stealth backend or provider environment variables,
+storage mounts, Docker socket, build staging, BuildKit credentials, Cloudflare
+import state, or Traefik state are passed into the App container. The selected
+OCI image's own user, environment, entrypoint, and default command remain part
+of its immutable configuration; WorkloadSpec command and working-directory
+overrides are applied separately.
+
+The runtime verifies the persisted archive size and checksum, OCI manifest,
+platform, config digest, root filesystem diff IDs, and unsupported volume
+declarations before Moby import. Container ownership uses only Stealth-added
+Docker labels plus the deterministic name; OCI image labels are not trusted.
+`stealth doctor` only inspects network identity and does not create a network
+or start an App. Runtime `running` means process liveness; the configured App
+health probe, public route, runtime log API, gVisor, and encrypted App secrets
+remain unimplemented. App container outbound access follows Docker's bridge
+and host firewall policy.
+
 The Go API owns sessions and uses HttpOnly cookies with `Secure` and
 `SameSite=None` for explicitly configured cross-origin HTTPS console requests;
 local HTTP uses `SameSite=Lax`. CORS is an explicit allowlist. Because the
@@ -139,12 +169,10 @@ network policy boundary.
 
 These are intentional boundaries, not hidden reliability claims:
 
-- Persistent App containers are not created yet. AppDeployment builds can
-  produce and preserve an immutable OCI artifact, but selecting that artifact
-  changes desired state only; Apps remain `not_deployed` and have no App
-  Traefik route. Moby import/lifecycle, `observed_generation` convergence,
-  gVisor, App health, routing, runtime logs, and encrypted App secrets are
-  subsequent capabilities.
+- App health probes, public App routing, runtime log viewing, encrypted App
+  secrets, and gVisor isolation are not implemented. The current Moby `running`
+  status confirms that the container process is running and App hostnames stay
+  outside the Site route snapshot.
 
 - External provider side effects cannot be made exactly-once by PostgreSQL.
   Webhook consumers have a stable delivery ID, and messaging has database

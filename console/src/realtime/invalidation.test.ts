@@ -48,6 +48,19 @@ describe("realtime query invalidation", () => {
     ]);
   });
 
+  it("invalidates the App detail when its runtime observation changes", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "app.runtime.updated",
+        resource_id: "app-1",
+        payload: { runtime_status: "running", observed_generation: 2 },
+      }),
+    ).toEqual([
+      ["apps", "project-1"],
+      ["app", "project-1", "app-1"],
+    ]);
+  });
+
   it("maps database row and storage file notifications to scoped caches", () => {
     expect(
       realtimeInvalidationKeys("project-1", {

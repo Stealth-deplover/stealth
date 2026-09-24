@@ -42,22 +42,23 @@ type uninstallVolume struct {
 }
 
 type uninstallPlan struct {
-	layout           InstallLayout
-	mode             uninstallMode
-	config           map[string]string
-	configPresent    bool
-	configErr        error
-	composePresent   bool
-	proxyPresent     bool
-	telemetryPresent bool
-	versionPresent   bool
-	statePresent     bool
-	privatePresent   bool
-	partial          bool
-	unsafeReason     string
-	unknownEntries   []string
-	volumes          []uninstallVolume
-	externalStorage  bool
+	layout            InstallLayout
+	mode              uninstallMode
+	config            map[string]string
+	configPresent     bool
+	configErr         error
+	composePresent    bool
+	proxyPresent      bool
+	telemetryPresent  bool
+	versionPresent    bool
+	statePresent      bool
+	privatePresent    bool
+	partial           bool
+	unsafeReason      string
+	unknownEntries    []string
+	volumes           []uninstallVolume
+	appRuntimeNetwork string
+	externalStorage   bool
 }
 
 func (a *App) runUninstall(args []string) int {
@@ -214,6 +215,7 @@ func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan 
 		plan.externalStorage = storageDriver == "s3"
 	}
 	plan.volumes = configuredUninstallVolumes(plan.config)
+	plan.appRuntimeNetwork = configuredRuntimeNetwork(plan.config)
 	plan.unknownEntries = unknownLayoutEntries(layout)
 	plan.partial = !plan.configPresent || plan.configErr != nil || !plan.composePresent || !plan.proxyPresent || !plan.versionPresent
 	return plan
@@ -470,6 +472,7 @@ func (p uninstallPlan) removalItems() []string {
 		}
 	}
 	if p.mode == uninstallPurge {
+		items = append(items, "Managed persistent App containers and App runtime network ("+p.appRuntimeNetwork+")")
 		for _, volume := range p.volumes {
 			items = append(items, volume.label+" ("+volume.name+")")
 		}
@@ -480,6 +483,7 @@ func (p uninstallPlan) removalItems() []string {
 func (p uninstallPlan) preservedItems() []string {
 	items := make([]string, 0, 16)
 	if p.mode != uninstallPurge {
+		items = append(items, "Persistent App containers and App runtime network")
 		for _, volume := range p.volumes {
 			items = append(items, volume.label+" ("+volume.name+")")
 		}
@@ -608,7 +612,7 @@ type uninstallOperation struct {
 }
 
 func (a *App) uninstallOperations(plan uninstallPlan) []uninstallOperation {
-	operations := make([]uninstallOperation, 0, 6)
+	operations := make([]uninstallOperation, 0, 7)
 	if plan.mode == uninstallPurge {
 		operations = append(operations, uninstallOperation{
 			name:   "Validate project-owned Docker resources",
@@ -624,6 +628,12 @@ func (a *App) uninstallOperations(plan uninstallPlan) []uninstallOperation {
 		operations = append(operations, uninstallOperation{
 			name:   "Confirm Compose runtime is already absent",
 			action: func(context.Context) error { return nil },
+		})
+	}
+	if plan.mode == uninstallPurge {
+		operations = append(operations, uninstallOperation{
+			name:   "Remove managed App containers and runtime network",
+			action: func(ctx context.Context) error { return a.removeAppRuntimeResources(ctx, plan) },
 		})
 	}
 	if plan.mode == uninstallPurge {
@@ -745,6 +755,9 @@ func (a *App) validatePurgeScope(ctx context.Context, plan uninstallPlan) error 
 	if err := a.validateExistingVolumeOwnership(ctx, plan); err != nil {
 		return err
 	}
+	if err := a.validateAppRuntimePurgeScope(ctx, plan); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -825,6 +838,13 @@ func (a *App) verifyDockerPurge(ctx context.Context, plan uninstallPlan) error {
 		if _, ok := remaining[volume.name]; ok {
 			return fmt.Errorf("project-owned volume %q still exists", volume.name)
 		}
+	}
+	containers, network, err := a.inspectAppRuntimeResources(ctx, plan)
+	if err != nil {
+		return err
+	}
+	if len(containers) > 0 || network != nil {
+		return fmt.Errorf("managed App runtime containers or network remain after purge")
 	}
 	return nil
 }
@@ -985,7 +1005,7 @@ func (a *App) printUninstallSuccess(plan uninstallPlan) {
 		fmt.Fprintln(a.out, "\nStealth services and local runtime files were removed.")
 		fmt.Fprintln(a.out, "Persistent data was preserved. config.env remains because it contains recovery secrets and the encryption key.")
 	case uninstallPurge:
-		fmt.Fprintln(a.out, "\nStealth instance data, services, configuration, and project-owned Docker volumes were permanently removed.")
+		fmt.Fprintln(a.out, "\nStealth instance data, services, configuration, managed App containers, the App runtime network, and project-owned Docker volumes were permanently removed.")
 		if plan.externalStorage {
 			fmt.Fprintln(a.out, "External S3 object storage was preserved; remove it separately after verifying ownership.")
 		}
