@@ -125,8 +125,10 @@ claim a full browser/provider installation or run a full production stack.
       removal or purge.
 - [ ] Run the production Compose `FROM scratch` App runtime smoke. Confirm the
       persisted OCI checksum/manifest, running container and matching desired /
-      observed generations, bounded Moby settings, no host ports, no Docker
-      socket/storage/secrets in the App, and no public App route.
+      observed generations, pending then healthy health convergence, route
+      activation through Traefik, unhealthy route withdrawal and recovery,
+      bounded Moby settings, no host ports, and no Docker socket/storage/secrets
+      in the App.
 - [ ] Confirm the Compose smoke covers disable/enable reuse, CPU replacement,
       v2 image selection, worker restart, deleted container recovery, unexpected
       exit recovery, foreign deterministic-name refusal, and valid orphan cleanup.

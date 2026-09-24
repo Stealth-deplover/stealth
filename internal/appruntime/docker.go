@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -165,11 +167,17 @@ func NewMoby(runner CommandRunner, networkName string, actionTimeout, importTime
 }
 
 type NetworkInspect struct {
-	Name       string            `json:"Name"`
-	Driver     string            `json:"Driver"`
-	Scope      string            `json:"Scope"`
-	Internal   bool              `json:"Internal"`
-	Labels     map[string]string `json:"Labels"`
+	ID       string            `json:"Id"`
+	Name     string            `json:"Name"`
+	Driver   string            `json:"Driver"`
+	Scope    string            `json:"Scope"`
+	Internal bool              `json:"Internal"`
+	Labels   map[string]string `json:"Labels"`
+	IPAM     struct {
+		Config []struct {
+			Subnet string `json:"Subnet"`
+		} `json:"Config"`
+	} `json:"IPAM"`
 	Containers map[string]struct {
 		Name string `json:"Name"`
 	} `json:"Containers"`
@@ -191,14 +199,19 @@ type Image struct {
 }
 
 type Container struct {
-	ID         string              `json:"Id"`
-	Name       string              `json:"Name"`
-	ImageID    string              `json:"Image"`
-	Config     containerConfig     `json:"Config"`
-	State      containerState      `json:"State"`
-	HostConfig hostConfig          `json:"HostConfig"`
-	Networks   map[string]struct{} `json:"-"`
-	Mounts     []containerMount    `json:"Mounts"`
+	ID         string                      `json:"Id"`
+	Name       string                      `json:"Name"`
+	ImageID    string                      `json:"Image"`
+	Config     containerConfig             `json:"Config"`
+	State      containerState              `json:"State"`
+	HostConfig hostConfig                  `json:"HostConfig"`
+	Networks   map[string]ContainerNetwork `json:"-"`
+	Mounts     []containerMount            `json:"Mounts"`
+}
+
+type ContainerNetwork struct {
+	NetworkID string `json:"NetworkID"`
+	IPAddress string `json:"IPAddress"`
 }
 
 type containerConfig struct {
@@ -313,6 +326,23 @@ func (m *Moby) EnsureNetwork(ctx context.Context) error {
 	return nil
 }
 
+// EnsureRuntimeNetworkPeers validates the owned runtime bridge and joins only
+// trusted Compose worker and Traefik peers. It is retried periodically so a
+// Compose recreation or Docker daemon restart repairs membership.
+func (m *Moby) EnsureRuntimeNetworkPeers(ctx context.Context) error {
+	network, found, err := m.inspectNetwork(ctx)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrRuntimeNetworkConflict
+	}
+	if err := m.validateNetwork(ctx, network); err != nil {
+		return err
+	}
+	return m.ensureRuntimeNetworkPeers(ctx)
+}
+
 func (m *Moby) inspectNetwork(ctx context.Context) (NetworkInspect, bool, error) {
 	result, err := m.runAction(ctx, []string{"network", "inspect", m.NetworkName}, nil)
 	if errors.Is(err, ErrDockerObjectNotFound) {
@@ -341,11 +371,105 @@ func (m *Moby) validateNetwork(ctx context.Context, network NetworkInspect) erro
 		if err != nil {
 			return err
 		}
-		if !found || !managedAppContainer(container) {
+		if !found || (!managedAppContainer(container) && !managedRuntimeNetworkPeer(container)) {
 			return ErrRuntimeNetworkConflict
 		}
 	}
 	return nil
+}
+
+// ensureRuntimeNetworkPeers joins only the current trusted worker and
+// Traefik containers to the separately owned App bridge. Apps remain isolated
+// from all backend networks and no host ports are published.
+func (m *Moby) ensureRuntimeNetworkPeers(ctx context.Context) error {
+	for _, peer := range []struct {
+		resourceType string
+		service      string
+		optional     bool
+	}{
+		{resourceType: "app_runtime_worker", service: "worker"},
+		{resourceType: "app_runtime_ingress", service: "traefik", optional: true},
+	} {
+		result, err := m.runAction(ctx, []string{
+			"container", "ls", "--quiet", "--no-trunc",
+			"--filter", "label=stealth.managed=true",
+			"--filter", "label=stealth.resource_type=" + peer.resourceType,
+			"--filter", "label=stealth.runtime_schema=" + runtimeSchema,
+		}, nil)
+		if err != nil || result.StdoutTruncated {
+			return errors.Join(ErrRuntimeNetworkConflict, err)
+		}
+		ids := strings.Fields(string(result.Stdout))
+		if len(ids) == 0 && peer.optional {
+			continue
+		}
+		if len(ids) != 1 || !validRuntimeID(ids[0]) {
+			return ErrRuntimeNetworkConflict
+		}
+		container, found, err := m.inspectContainer(ctx, ids[0])
+		if err != nil || !found || !runtimeNetworkPeerMatches(container, peer.resourceType, peer.service) {
+			return errors.Join(ErrRuntimeNetworkConflict, err)
+		}
+		network, found, err := m.inspectNetwork(ctx)
+		if err != nil || !found || m.validateNetwork(ctx, network) != nil {
+			return errors.Join(ErrRuntimeNetworkConflict, err)
+		}
+		if _, connected := network.Containers[container.ID]; connected {
+			continue
+		}
+		_, connectErr := m.runAction(ctx, []string{"network", "connect", m.NetworkName, container.ID}, nil)
+		// A lost response or another worker may have completed the connection.
+		network, found, err = m.inspectNetwork(ctx)
+		if err != nil || !found || m.validateNetwork(ctx, network) != nil {
+			return errors.Join(ErrRuntimeNetworkConflict, connectErr, err)
+		}
+		if _, connected := network.Containers[container.ID]; !connected {
+			return errors.Join(ErrRuntimeNetworkConflict, connectErr)
+		}
+	}
+	return nil
+}
+
+func managedRuntimeNetworkPeer(container Container) bool {
+	labels := container.Config.Labels
+	return runtimeNetworkPeerMatches(container, labels["stealth.resource_type"], labels["com.docker.compose.service"])
+}
+
+func runtimeNetworkPeerMatches(container Container, resourceType, service string) bool {
+	labels := container.Config.Labels
+	if labels["stealth.managed"] != "true" || labels["stealth.runtime_schema"] != runtimeSchema ||
+		labels["stealth.resource_type"] != resourceType || labels["com.docker.compose.service"] != service ||
+		container.HostConfig.Privileged || container.HostConfig.NetworkMode == "host" || container.HostConfig.NetworkMode == "none" || container.HostConfig.PidMode == "host" || container.HostConfig.IpcMode == "host" || container.HostConfig.UTSMode == "host" || container.HostConfig.UsernsMode == "host" ||
+		len(container.HostConfig.PortBindings) != 0 || len(container.HostConfig.CapAdd) != 0 {
+		return false
+	}
+	switch resourceType {
+	case "app_runtime_worker":
+		return service == "worker" && hasDockerSocketMount(container.Mounts)
+	case "app_runtime_ingress":
+		return service == "traefik" && container.HostConfig.ReadonlyRootfs && slices.Contains(container.HostConfig.CapDrop, "ALL") &&
+			slices.Contains(container.HostConfig.SecurityOpt, "no-new-privileges:true") && !hasMountDestination(container.Mounts, "/var/run/docker.sock")
+	default:
+		return false
+	}
+}
+
+func hasMountDestination(mounts []containerMount, destination string) bool {
+	for _, mount := range mounts {
+		if filepath.Clean(mount.Destination) == destination {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDockerSocketMount(mounts []containerMount) bool {
+	for _, mount := range mounts {
+		if mount.Type == "bind" && filepath.Clean(mount.Source) == "/var/run/docker.sock" && filepath.Clean(mount.Destination) == "/var/run/docker.sock" {
+			return true
+		}
+	}
+	return false
 }
 
 func networkLabels() map[string]string {
@@ -466,6 +590,100 @@ func (m *Moby) InspectApp(ctx context.Context, appID uuid.UUID) (Container, bool
 	return m.inspectContainer(ctx, repository.AppRuntimeContainerName(appID))
 }
 
+// ProbeApp probes only the current owned container on the Stealth App bridge.
+// The destination is rebuilt from that container's Docker inspection and
+// checked against the owned network subnet for every probe.
+func (m *Moby) ProbeApp(ctx context.Context, job repository.AppHealthCheckJob, expected Container) error {
+	if !validHealthCheckJobIdentity(job) || !containerMatchesHealthIdentity(expected, job, m.NetworkName) {
+		return ErrHealthRuntimeDrift
+	}
+	latest, found, err := m.inspectContainer(ctx, expected.ID)
+	if err != nil || !found || latest.ID != expected.ID || !containerMatchesHealthIdentity(latest, job, m.NetworkName) {
+		return errors.Join(ErrHealthRuntimeDrift, err)
+	}
+	network, found, err := m.inspectNetwork(ctx)
+	if err != nil || !found || m.validateNetwork(ctx, network) != nil {
+		return errors.Join(ErrHealthRuntimeDrift, err)
+	}
+	address, ok := managedContainerAddress(latest, network, m.NetworkName)
+	if !ok || address != job.Address {
+		return ErrHealthRuntimeDrift
+	}
+	return runHealthProbe(ctx, address, job.App.Workload)
+}
+
+func managedContainerAddress(container Container, network NetworkInspect, networkName string) (string, bool) {
+	attachment, attached := container.Networks[networkName]
+	if !attached || attachment.IPAddress == "" || network.ID == "" || attachment.NetworkID != network.ID {
+		return "", false
+	}
+	address := net.ParseIP(attachment.IPAddress)
+	if address == nil || address.To4() == nil || !address.IsPrivate() || address.IsLoopback() || address.IsUnspecified() || address.IsLinkLocalUnicast() || address.IsMulticast() {
+		return "", false
+	}
+	for _, configured := range network.IPAM.Config {
+		_, subnet, err := net.ParseCIDR(configured.Subnet)
+		if err == nil && subnet.Contains(address) {
+			return address.To4().String(), true
+		}
+	}
+	return "", false
+}
+
+func containerAddress(container Container, networkName string) string {
+	return container.Networks[networkName].IPAddress
+}
+
+func validHealthCheckJobIdentity(job repository.AppHealthCheckJob) bool {
+	if job.App.DesiredDeploymentID == nil || job.App.WorkloadSpecSHA256 == "" {
+		return false
+	}
+	appID, appErr := uuid.Parse(job.App.ID)
+	projectID, projectErr := uuid.Parse(job.App.ProjectID)
+	deploymentID, deploymentErr := uuid.Parse(*job.App.DesiredDeploymentID)
+	workload, workloadErr := workloadspec.Normalize(job.App.Workload)
+	workloadDigest, digestErr := workloadspec.Digest(workload)
+	return appErr == nil && projectErr == nil && deploymentErr == nil && appID != uuid.Nil && projectID != uuid.Nil && deploymentID != uuid.Nil &&
+		job.App.Enabled && job.App.RuntimeStatus == "running" && job.App.ObservedGeneration == job.App.DesiredGeneration &&
+		job.App.DesiredGeneration > 0 && validRuntimeID(job.ContainerID) && job.LeaseToken != uuid.Nil && job.WorkerID != "" &&
+		len(job.App.WorkloadSpecSHA256) == 64 && workloadErr == nil && digestErr == nil && workloadDigest == job.App.WorkloadSpecSHA256 &&
+		validPrivateProbeAddress(job.Address)
+}
+
+func containerMatchesHealthIdentity(container Container, job repository.AppHealthCheckJob, networkName string) bool {
+	if !validHealthCheckJobIdentity(job) || job.App.DesiredDeploymentID == nil {
+		return false
+	}
+	appID, appErr := uuid.Parse(job.App.ID)
+	projectID, projectErr := uuid.Parse(job.App.ProjectID)
+	if appErr != nil || projectErr != nil || !managedForApp(container, appID, projectID) || container.ID != job.ContainerID || !container.State.Running {
+		return false
+	}
+	deploymentID, err := uuid.Parse(*job.App.DesiredDeploymentID)
+	if err != nil {
+		return false
+	}
+	expected := map[string]string{
+		"stealth.managed": "true", "stealth.resource_type": "app", "stealth.app_id": appID.String(),
+		"stealth.project_id": projectID.String(), "stealth.deployment_id": deploymentID.String(),
+		"stealth.generation":           strconv.FormatInt(job.App.DesiredGeneration, 10),
+		"stealth.workload_spec_sha256": job.App.WorkloadSpecSHA256, "stealth.runtime_schema": runtimeSchema,
+	}
+	if !hasLabels(container.Config.Labels, expected) || container.HostConfig.NetworkMode != networkName || len(container.Networks) != 1 ||
+		container.HostConfig.Privileged || container.HostConfig.AutoRemove || len(container.HostConfig.CapAdd) != 0 || !container.HostConfig.ReadonlyRootfs ||
+		!slices.Contains(container.HostConfig.CapDrop, "ALL") || !slices.Contains(container.HostConfig.SecurityOpt, "no-new-privileges:true") ||
+		container.HostConfig.Memory != job.App.Workload.Resources.MemoryBytes || container.HostConfig.MemorySwap != job.App.Workload.Resources.MemoryBytes ||
+		container.HostConfig.NanoCpus != int64(job.App.Workload.Resources.CPUMillis)*1_000_000 || container.HostConfig.PidsLimit == nil || *container.HostConfig.PidsLimit != int64(job.App.Workload.Resources.PIDsLimit) ||
+		container.HostConfig.NetworkMode == "host" || container.HostConfig.PidMode == "host" || container.HostConfig.IpcMode == "host" ||
+		container.HostConfig.UTSMode == "host" || container.HostConfig.UsernsMode == "host" || len(container.HostConfig.Binds) != 0 ||
+		len(container.HostConfig.VolumesFrom) != 0 || len(container.HostConfig.PortBindings) != 0 || len(container.HostConfig.Devices) != 0 ||
+		!exactTmpfs(container.HostConfig.Tmpfs) || !noUnexpectedMounts(container.Mounts) {
+		return false
+	}
+	_, ok := container.Networks[networkName]
+	return ok
+}
+
 func (m *Moby) inspectContainer(ctx context.Context, identifier string) (Container, bool, error) {
 	result, err := m.runAction(ctx, []string{"container", "inspect", identifier}, nil)
 	if errors.Is(err, ErrDockerObjectNotFound) {
@@ -477,7 +695,7 @@ func (m *Moby) inspectContainer(ctx context.Context, identifier string) (Contain
 	var values []struct {
 		Container
 		NetworkSettings struct {
-			Networks map[string]json.RawMessage `json:"Networks"`
+			Networks map[string]ContainerNetwork `json:"Networks"`
 		} `json:"NetworkSettings"`
 	}
 	if result.StdoutTruncated || json.Unmarshal(result.Stdout, &values) != nil || len(values) != 1 {
@@ -487,9 +705,9 @@ func (m *Moby) inspectContainer(ctx context.Context, identifier string) (Contain
 	if container.ID == "" || !validRuntimeID(container.ID) || container.Name == "" {
 		return Container{}, false, ErrContainerInspection
 	}
-	container.Networks = make(map[string]struct{}, len(values[0].NetworkSettings.Networks))
-	for name := range values[0].NetworkSettings.Networks {
-		container.Networks[name] = struct{}{}
+	container.Networks = values[0].NetworkSettings.Networks
+	if container.Networks == nil {
+		container.Networks = map[string]ContainerNetwork{}
 	}
 	return container, true, nil
 }

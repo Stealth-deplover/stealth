@@ -30,6 +30,20 @@ type appRuntimePurgeNetwork struct {
 	} `json:"Containers"`
 }
 
+type appRuntimePurgeHostConfig struct {
+	NetworkMode    string           `json:"NetworkMode"`
+	Privileged     bool             `json:"Privileged"`
+	PortBindings   map[string][]any `json:"PortBindings"`
+	PidMode        string           `json:"PidMode"`
+	IpcMode        string           `json:"IpcMode"`
+	UTSMode        string           `json:"UTSMode"`
+	UsernsMode     string           `json:"UsernsMode"`
+	CapAdd         []string         `json:"CapAdd"`
+	ReadonlyRootfs bool             `json:"ReadonlyRootfs"`
+	CapDrop        []string         `json:"CapDrop"`
+	SecurityOpt    []string         `json:"SecurityOpt"`
+}
+
 func appRuntimeNetworkOwned(name string, output []byte) bool {
 	var network appRuntimePurgeNetwork
 	return json.Unmarshal(output, &network) == nil && network.Name == name && network.Driver == "bridge" &&
@@ -46,9 +60,12 @@ type appRuntimePurgeInspect struct {
 	State struct {
 		Running bool `json:"Running"`
 	} `json:"State"`
-	HostConfig struct {
-		NetworkMode string `json:"NetworkMode"`
-	} `json:"HostConfig"`
+	HostConfig appRuntimePurgeHostConfig `json:"HostConfig"`
+	Mounts     []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+	} `json:"Mounts"`
 }
 
 func configuredRuntimeNetwork(values map[string]string) string {
@@ -99,7 +116,9 @@ func (a *App) inspectAppRuntimeResources(ctx context.Context, plan uninstallPlan
 				return nil, nil, fmt.Errorf("App runtime network contains a malformed container ID")
 			}
 			if _, managed := containerIDs[id]; !managed {
-				return nil, nil, fmt.Errorf("App runtime network contains a container outside the managed App ownership set; refusing purge")
+				if err := a.inspectAppRuntimePeer(ctx, id); err != nil {
+					return nil, nil, fmt.Errorf("App runtime network contains a container outside the managed App ownership set; refusing purge: %w", err)
+				}
 			}
 		}
 		for _, container := range containers {
@@ -110,6 +129,59 @@ func (a *App) inspectAppRuntimeResources(ctx context.Context, plan uninstallPlan
 		return containers, &network, nil
 	}
 	return containers, nil, nil
+}
+
+func (a *App) inspectAppRuntimePeer(ctx context.Context, id string) error {
+	output, err := a.runner.CombinedOutput(ctx, "", "docker", "container", "inspect", id)
+	if err != nil {
+		return fmt.Errorf("inspect App runtime peer: %w", err)
+	}
+	if len(output) > 1<<20 {
+		return fmt.Errorf("App runtime peer inspect exceeds the validation limit")
+	}
+	var rows []appRuntimePurgeInspect
+	if json.Unmarshal(output, &rows) != nil || len(rows) != 1 || !validDockerContainerID(rows[0].ID) || rows[0].ID != id {
+		return fmt.Errorf("refusing to purge an unreadable App runtime peer")
+	}
+	item := rows[0]
+	if appRuntimePurgePeerMatches(item) {
+		return nil
+	}
+	return fmt.Errorf("App runtime peer is not an expected hardened worker or Traefik service")
+}
+
+func appRuntimePurgePeerMatches(item appRuntimePurgeInspect) bool {
+	labels := item.Config.Labels
+	if labels["stealth.managed"] != "true" || labels["stealth.runtime_schema"] != appRuntimeSchema || item.HostConfig.Privileged ||
+		item.HostConfig.NetworkMode == "host" || item.HostConfig.NetworkMode == "none" || item.HostConfig.PidMode == "host" || item.HostConfig.IpcMode == "host" || item.HostConfig.UTSMode == "host" || item.HostConfig.UsernsMode == "host" ||
+		len(item.HostConfig.PortBindings) != 0 || len(item.HostConfig.CapAdd) != 0 {
+		return false
+	}
+	socketMount := false
+	for _, mount := range item.Mounts {
+		if mount.Type == "bind" && mount.Source == "/var/run/docker.sock" && mount.Destination == "/var/run/docker.sock" {
+			socketMount = true
+			break
+		}
+	}
+	switch {
+	case labels["stealth.resource_type"] == "app_runtime_worker" && labels["com.docker.compose.service"] == "worker":
+		return socketMount
+	case labels["stealth.resource_type"] == "app_runtime_ingress" && labels["com.docker.compose.service"] == "traefik":
+		return !socketMount && item.HostConfig.ReadonlyRootfs && containsString(item.HostConfig.CapDrop, "ALL") &&
+			containsString(item.HostConfig.SecurityOpt, "no-new-privileges:true")
+	default:
+		return false
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) inspectAppRuntimeContainer(ctx context.Context, id, runtimeNetwork string) (appRuntimePurgeContainer, error) {

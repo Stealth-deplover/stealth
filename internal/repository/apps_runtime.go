@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 
 var (
 	ErrNoAppRuntimeJob      = errors.New("no App runtime job available")
+	ErrNoAppHealthCheckJob  = errors.New("no App health check available")
 	ErrNoAppRuntimeCleanup  = errors.New("no App runtime cleanup job available")
 	ErrAppRuntimeLeaseLost  = errors.New("App runtime lease is no longer owned by this worker")
 	ErrAppRuntimeStale      = errors.New("App desired state changed during runtime reconciliation")
@@ -47,6 +49,19 @@ type AppRuntimeContainer struct {
 	ImageID     string
 	ImageDigest string
 	RuntimeTag  string
+	Address     string
+}
+
+// AppHealthCheckJob is fenced by the same per-App runtime lease used by
+// reconciliation. Its container identity is an internal worker value only.
+type AppHealthCheckJob struct {
+	App                domain.App
+	ContainerID        string
+	Address            string
+	HealthStatus       string
+	HealthFailureCount int
+	WorkerID           string
+	LeaseToken         uuid.UUID
 }
 
 // AppRuntimeCleanupJob survives deletion of its App and project rows. The
@@ -76,7 +91,14 @@ func (r *Repository) ScheduleAppRuntimeStartupSweep(ctx context.Context) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO app_runtime_state (app_id,project_id,container_name)
 		SELECT id,project_id,'stealth-app-'||replace(id::text,'-','') FROM project_apps
-		ON CONFLICT (app_id) DO UPDATE SET next_inspection_at=now(),updated_at=now()`)
+		ON CONFLICT (app_id) DO UPDATE SET
+		  next_inspection_at=now(),
+		  next_health_check_at=CASE
+		    WHEN app_runtime_state.health_status='pending' AND app_runtime_state.health_checked_at IS NULL
+		      THEN app_runtime_state.next_health_check_at
+		    ELSE now()
+		  END,
+		  updated_at=now()`)
 	return err
 }
 
@@ -262,7 +284,7 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 		(status == "not_deployed" && (!job.App.Enabled || job.App.DesiredDeploymentID != nil)) {
 		return ErrInvalidAppRuntimeJob
 	}
-	if container != nil && (!validRuntimeContainerID(container.ID) || container.Name != AppRuntimeContainerName(uuid.MustParse(job.App.ID)) || !validRuntimeImageID(container.ImageID) || !validRuntimeDigest(container.ImageDigest) || len(container.RuntimeTag) > 255) {
+	if container != nil && (!validRuntimeContainerID(container.ID) || container.Name != AppRuntimeContainerName(uuid.MustParse(job.App.ID)) || !validRuntimeImageID(container.ImageID) || !validRuntimeDigest(container.ImageDigest) || len(container.RuntimeTag) > 255 || !validPrivateRuntimeAddress(container.Address)) {
 		return ErrInvalidAppRuntimeJob
 	}
 	tx, err := r.pool.Begin(ctx)
@@ -281,7 +303,13 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 	}
 	var owner string
 	var currentToken uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT worker_id,lease_token FROM app_runtime_state WHERE app_id=$1 AND lease_expires_at>now() FOR UPDATE`, appID).Scan(&owner, &currentToken); errors.Is(err, pgx.ErrNoRows) {
+	var oldContainerID, oldAddress, oldAppliedSpec *string
+	var oldAppliedGeneration *int64
+	var oldAppliedDeploymentID *uuid.UUID
+	var oldHealthStatus string
+	if err := tx.QueryRow(ctx, `SELECT worker_id,lease_token,container_id,host(container_address),applied_generation,applied_deployment_id,applied_workload_spec_sha256,health_status FROM app_runtime_state WHERE app_id=$1 AND lease_expires_at>now() FOR UPDATE`, appID).Scan(
+		&owner, &currentToken, &oldContainerID, &oldAddress, &oldAppliedGeneration, &oldAppliedDeploymentID, &oldAppliedSpec, &oldHealthStatus,
+	); errors.Is(err, pgx.ErrNoRows) {
 		return ErrAppRuntimeLeaseLost
 	} else if err != nil {
 		return err
@@ -298,6 +326,11 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 		}
 		return ErrAppRuntimeStale
 	}
+	identityChanged := status != "running" || oldContainerID == nil || container == nil || *oldContainerID != container.ID ||
+		oldAppliedGeneration == nil || *oldAppliedGeneration != job.App.DesiredGeneration ||
+		oldAppliedDeploymentID == nil || job.App.DesiredDeploymentID == nil || *oldAppliedDeploymentID != uuid.MustParse(*job.App.DesiredDeploymentID) ||
+		oldAppliedSpec == nil || *oldAppliedSpec != job.App.WorkloadSpecSHA256 ||
+		oldAddress == nil || container == nil || *oldAddress != container.Address
 	result, err := tx.Exec(ctx, `
 		UPDATE project_apps
 		SET observed_generation=desired_generation,runtime_status=$7,runtime_error=NULL,updated_at=now()
@@ -322,10 +355,30 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 	if container != nil {
 		containerID, imageID, imageDigest, runtimeTag = container.ID, container.ImageID, container.ImageDigest, container.RuntimeTag
 	}
+	var containerAddress any
+	var healthDelaySeconds any
+	if container != nil {
+		containerAddress = container.Address
+	}
+	if identityChanged && status == "running" {
+		delay := 0
+		if job.App.Workload.HealthCheck.InitialDelaySeconds != nil {
+			delay = *job.App.Workload.HealthCheck.InitialDelaySeconds
+		}
+		healthDelaySeconds = delay
+	}
 	stateResult, err := tx.Exec(ctx, `
 		UPDATE app_runtime_state
 		SET container_id=$4,container_name=$5,image_id=$6,image_digest=$7,runtime_tag=$8,
 		    applied_deployment_id=$9,applied_workload_spec_sha256=$10,applied_generation=$11,
+		    container_address=$17::inet,
+		    health_status=CASE WHEN $14 THEN 'pending' ELSE health_status END,
+		    health_generation=CASE WHEN $14 AND $15='running' THEN $11 ELSE CASE WHEN $14 THEN NULL ELSE health_generation END END,
+		    health_deployment_id=CASE WHEN $14 AND $15='running' THEN $9 ELSE CASE WHEN $14 THEN NULL ELSE health_deployment_id END END,
+		    health_container_id=CASE WHEN $14 AND $15='running' THEN $4 ELSE CASE WHEN $14 THEN NULL ELSE health_container_id END END,
+		    health_failure_count=CASE WHEN $14 THEN 0 ELSE health_failure_count END,
+		    health_checked_at=CASE WHEN $14 THEN NULL ELSE health_checked_at END,
+		    next_health_check_at=CASE WHEN $14 AND $15='running' THEN now()+($16::double precision*interval '1 second') WHEN $14 THEN NULL ELSE next_health_check_at END,
 		    stop_grace_period_seconds=$12,failure_count=0,next_retry_at=NULL,last_failure_at=NULL,
 		    last_inspected_at=now(),next_inspection_at=now()+($13::double precision*interval '1 second'),
 		    last_transition_at=CASE WHEN $14 THEN now() ELSE last_transition_at END,
@@ -336,8 +389,7 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 		appID, job.WorkerID, job.LeaseToken, containerID, containerName, imageID, imageDigest, runtimeTag,
 		optionalUUID(job.App.DesiredDeploymentID), job.App.WorkloadSpecSHA256, job.App.DesiredGeneration,
 		job.App.Workload.StopGracePeriodSeconds, AppRuntimeDriftInterval.Seconds(),
-		current.RuntimeStatus != status || current.ObservedGeneration != job.App.DesiredGeneration,
-		status)
+		identityChanged, status, healthDelaySeconds, containerAddress)
 	if err != nil {
 		return err
 	}
@@ -352,7 +404,296 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 			return err
 		}
 	}
+	if identityChanged && (oldHealthStatus != "pending" || oldAddress == nil || container == nil || (oldAddress != nil && container != nil && *oldAddress != container.Address)) {
+		if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "app.runtime.updated", "app", appID, map[string]any{
+			"runtime_status": status, "health_status": "pending", "desired_generation": job.App.DesiredGeneration,
+			"observed_generation": job.App.DesiredGeneration,
+		}); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+// ClaimNextAppHealthCheck leases one due probe while keeping probe work outside
+// the database transaction. The selected row must still describe the current
+// observed generation and exact managed container.
+func (r *Repository) ClaimNextAppHealthCheck(ctx context.Context, workerID string, leaseAge time.Duration) (AppHealthCheckJob, error) {
+	if r == nil || r.pool == nil || !validFunctionWorkerID(workerID) || leaseAge < 15*time.Second || leaseAge > 10*time.Minute {
+		return AppHealthCheckJob{}, ErrInvalidAppRuntimeJob
+	}
+	token, err := uuid.NewV7()
+	if err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	defer tx.Rollback(ctx)
+	var job AppHealthCheckJob
+	var projectID, appID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT app.project_id,app.id,runtime.container_id,host(runtime.container_address),runtime.health_status,runtime.health_failure_count
+		FROM project_apps app
+		JOIN app_runtime_state runtime ON runtime.app_id=app.id AND runtime.project_id=app.project_id
+		WHERE app.enabled=TRUE AND app.desired_deployment_id IS NOT NULL
+		  AND app.desired_generation=app.observed_generation AND app.runtime_status='running'
+		  AND runtime.applied_generation=app.desired_generation
+		  AND runtime.applied_deployment_id=app.desired_deployment_id
+		  AND runtime.applied_workload_spec_sha256=app.workload_spec_sha256
+		  AND runtime.container_id IS NOT NULL AND runtime.container_address IS NOT NULL
+		  AND runtime.health_generation=app.desired_generation
+		  AND runtime.health_deployment_id=app.desired_deployment_id
+		  AND runtime.health_container_id=runtime.container_id
+		  AND runtime.next_health_check_at IS NOT NULL AND runtime.next_health_check_at<=now()
+		  AND (runtime.lease_token IS NULL OR runtime.lease_expires_at<=now())
+		ORDER BY runtime.next_health_check_at,app.updated_at,app.id
+		FOR UPDATE OF app,runtime SKIP LOCKED LIMIT 1`).Scan(
+		&projectID, &appID, &job.ContainerID, &job.Address, &job.HealthStatus, &job.HealthFailureCount,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AppHealthCheckJob{}, ErrNoAppHealthCheckJob
+	}
+	if err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE app_runtime_state SET worker_id=$2,lease_token=$3,lease_expires_at=now()+($4::double precision*interval '1 second'),updated_at=now() WHERE app_id=$1`, appID, workerID, token, leaseAge.Seconds()); err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	job.App, err = appByID(ctx, tx, projectID, appID, false)
+	if err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	job.WorkerID = workerID
+	job.LeaseToken = token
+	if !validHealthCheckJob(job) {
+		return AppHealthCheckJob{}, ErrInvalidAppRuntimeJob
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return AppHealthCheckJob{}, err
+	}
+	return job, nil
+}
+
+// IsAppHealthCheckCurrent rechecks a due probe's desired identity and lease
+// before and after network I/O. CompleteAppHealthCheck repeats this fence in
+// its write transaction.
+func (r *Repository) IsAppHealthCheckCurrent(ctx context.Context, job AppHealthCheckJob) (bool, error) {
+	if r == nil || r.pool == nil || !validHealthCheckJob(job) {
+		return false, ErrInvalidAppRuntimeJob
+	}
+	var current bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+		  SELECT 1 FROM project_apps app
+		  JOIN app_runtime_state runtime ON runtime.app_id=app.id AND runtime.project_id=app.project_id
+		  WHERE app.project_id=$1 AND app.id=$2 AND app.enabled=TRUE AND app.runtime_status='running'
+		    AND app.desired_generation=$3 AND app.observed_generation=$3
+		    AND app.desired_deployment_id=$4 AND app.workload_spec_sha256=$5
+		    AND runtime.applied_generation=$3 AND runtime.applied_deployment_id=$4
+		    AND runtime.applied_workload_spec_sha256=$5
+		    AND runtime.container_id=$6 AND host(runtime.container_address)=$7
+		    AND runtime.health_generation=$3 AND runtime.health_deployment_id=$4 AND runtime.health_container_id=$6
+		    AND runtime.worker_id=$8 AND runtime.lease_token=$9 AND runtime.lease_expires_at>now()
+		)`, uuid.MustParse(job.App.ProjectID), uuid.MustParse(job.App.ID), job.App.DesiredGeneration,
+		uuid.MustParse(*job.App.DesiredDeploymentID), job.App.WorkloadSpecSHA256, job.ContainerID, job.Address,
+		job.WorkerID, job.LeaseToken).Scan(&current)
+	return current, err
+}
+
+// CompleteAppHealthCheck publishes only an outcome for the exact current
+// lease, desired generation, deployment, container ID, and inspected address.
+func (r *Repository) CompleteAppHealthCheck(ctx context.Context, job AppHealthCheckJob, succeeded bool) error {
+	if r == nil || r.pool == nil || !validHealthCheckJob(job) {
+		return ErrInvalidAppRuntimeJob
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	appID := uuid.MustParse(job.App.ID)
+	projectID := uuid.MustParse(job.App.ProjectID)
+	current, err := appByID(ctx, tx, projectID, appID, true)
+	if errors.Is(err, ErrNotFound) {
+		return ErrAppRuntimeLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if !runtimeDesiredStateMatches(current, job.App) {
+		_, releaseErr := tx.Exec(ctx, `UPDATE app_runtime_state SET worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3`, appID, job.WorkerID, job.LeaseToken)
+		if releaseErr != nil {
+			return releaseErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return ErrAppRuntimeStale
+	}
+	var owner string
+	var token uuid.UUID
+	var containerID, healthContainerID, healthStatus string
+	var address string
+	var healthGeneration int64
+	var healthDeploymentID uuid.UUID
+	var failures int
+	if err := tx.QueryRow(ctx, `
+		SELECT worker_id,lease_token,container_id,host(container_address),health_status,health_generation,health_deployment_id,health_container_id,health_failure_count
+		FROM app_runtime_state WHERE app_id=$1 AND lease_expires_at>now() FOR UPDATE`, appID).Scan(
+		&owner, &token, &containerID, &address, &healthStatus, &healthGeneration, &healthDeploymentID, &healthContainerID, &failures,
+	); errors.Is(err, pgx.ErrNoRows) {
+		return ErrAppRuntimeLeaseLost
+	} else if err != nil {
+		return err
+	}
+	if owner != job.WorkerID || token != job.LeaseToken {
+		return ErrAppRuntimeLeaseLost
+	}
+	if containerID != job.ContainerID || address != job.Address || healthContainerID != job.ContainerID ||
+		healthGeneration != job.App.DesiredGeneration || job.App.DesiredDeploymentID == nil || healthDeploymentID != uuid.MustParse(*job.App.DesiredDeploymentID) ||
+		current.RuntimeStatus != "running" || current.ObservedGeneration != current.DesiredGeneration {
+		_, releaseErr := tx.Exec(ctx, `UPDATE app_runtime_state SET worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,next_inspection_at=now(),updated_at=now() WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3`, appID, job.WorkerID, job.LeaseToken)
+		if releaseErr != nil {
+			return releaseErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return ErrAppRuntimeStale
+	}
+	newStatus, newFailures := healthStateAfterProbe(healthStatus, failures, succeeded, job.App.Workload.HealthCheck.FailureThreshold)
+	interval := job.App.Workload.HealthCheck.IntervalSeconds
+	result, err := tx.Exec(ctx, `
+		UPDATE app_runtime_state
+		SET health_status=$4,health_failure_count=$5,health_checked_at=now(),
+		    next_health_check_at=now()+($6::double precision*interval '1 second'),
+		    worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+		WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3 AND lease_expires_at>now()
+		  AND container_id=$7 AND host(container_address)=$8 AND health_generation=$9
+		  AND health_deployment_id=$10 AND health_container_id=$7`,
+		appID, job.WorkerID, job.LeaseToken, newStatus, newFailures, interval,
+		job.ContainerID, job.Address, job.App.DesiredGeneration, uuid.MustParse(*job.App.DesiredDeploymentID))
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrAppRuntimeLeaseLost
+	}
+	if newStatus != healthStatus {
+		if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "app.runtime.updated", "app", appID, map[string]any{
+			"runtime_status": current.RuntimeStatus, "health_status": newStatus,
+			"route_status":       appRouteStatus(current, newStatus),
+			"desired_generation": current.DesiredGeneration, "observed_generation": current.ObservedGeneration,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// InvalidateAppHealthIdentity removes routing eligibility as soon as a due
+// inspection finds that the expected container or its owned bridge address
+// changed. Runtime reconciliation is made immediately due for recovery.
+func (r *Repository) InvalidateAppHealthIdentity(ctx context.Context, job AppHealthCheckJob) error {
+	if r == nil || r.pool == nil || !validHealthCheckJob(job) {
+		return ErrInvalidAppRuntimeJob
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	appID := uuid.MustParse(job.App.ID)
+	projectID := uuid.MustParse(job.App.ProjectID)
+	current, err := appByID(ctx, tx, projectID, appID, true)
+	if errors.Is(err, ErrNotFound) {
+		return ErrAppRuntimeLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if !runtimeDesiredStateMatches(current, job.App) {
+		_, releaseErr := tx.Exec(ctx, `UPDATE app_runtime_state SET worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3`, appID, job.WorkerID, job.LeaseToken)
+		if releaseErr != nil {
+			return releaseErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return ErrAppRuntimeStale
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE app_runtime_state
+		SET health_status='pending',health_generation=NULL,health_deployment_id=NULL,health_container_id=NULL,
+		    health_failure_count=0,health_checked_at=NULL,next_health_check_at=NULL,
+		    container_address=NULL,next_inspection_at=now(),last_inspected_at=NULL,
+		    worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+		WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3 AND lease_expires_at>now()
+		  AND container_id=$4 AND host(container_address)=$5 AND applied_generation=$6
+		  AND applied_deployment_id=$7 AND applied_workload_spec_sha256=$8`,
+		appID, job.WorkerID, job.LeaseToken, job.ContainerID, job.Address,
+		job.App.DesiredGeneration, uuid.MustParse(*job.App.DesiredDeploymentID), job.App.WorkloadSpecSHA256)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrAppRuntimeLeaseLost
+	}
+	if _, err := tx.Exec(ctx, `UPDATE project_apps SET runtime_status='degraded',runtime_error='runtime unavailable',updated_at=now() WHERE project_id=$1 AND id=$2 AND desired_generation=$3`, projectID, appID, job.App.DesiredGeneration); err != nil {
+		return err
+	}
+	if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "app.runtime.updated", "app", appID, map[string]any{
+		"runtime_status": "degraded", "health_status": "pending", "route_status": appRouteStatus(current, "pending"),
+		"desired_generation": current.DesiredGeneration, "observed_generation": current.ObservedGeneration,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReleaseAppHealthCheck makes a cancelled probe immediately eligible again
+// while requiring the same lease token.
+func (r *Repository) ReleaseAppHealthCheck(ctx context.Context, job AppHealthCheckJob) error {
+	if r == nil || r.pool == nil || !validHealthCheckJob(job) {
+		return ErrInvalidAppRuntimeJob
+	}
+	_, err := r.pool.Exec(ctx, `UPDATE app_runtime_state SET worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3`, uuid.MustParse(job.App.ID), job.WorkerID, job.LeaseToken)
+	return err
+}
+
+func healthStateAfterProbe(current string, failures int, succeeded bool, threshold int) (string, int) {
+	if succeeded {
+		return "healthy", 0
+	}
+	if failures < 0 {
+		failures = 0
+	}
+	failures++
+	if threshold < 1 {
+		threshold = 1
+	}
+	if failures >= threshold {
+		return "unhealthy", failures
+	}
+	if current == "healthy" || current == "unhealthy" {
+		return current, failures
+	}
+	return "pending", failures
+}
+
+func appRouteStatus(app domain.App, healthStatus string) string {
+	switch {
+	case !app.Enabled || app.DesiredDeploymentID == nil || app.PlatformHostname == nil:
+		return "not_available"
+	case !app.RouteDeploymentReady || app.ObservedGeneration != app.DesiredGeneration || app.RuntimeStatus != "running":
+		return "waiting_for_runtime"
+	case healthStatus != "healthy":
+		return "waiting_for_health"
+	default:
+		return "active"
+	}
 }
 
 // FailAppRuntime records a retryable safe summary and deliberately leaves
@@ -583,7 +924,10 @@ func resetAppRuntimeRetryTx(ctx context.Context, tx pgx.Tx, appID uuid.UUID) err
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE app_runtime_state
-		SET failure_count=0,next_retry_at=NULL,next_inspection_at=now(),updated_at=now()
+		SET failure_count=0,next_retry_at=NULL,next_inspection_at=now(),
+		    health_status='pending',health_generation=NULL,health_deployment_id=NULL,health_container_id=NULL,
+		    health_failure_count=0,health_checked_at=NULL,next_health_check_at=NULL,
+		    container_address=NULL,updated_at=now()
 		WHERE app_id=$1`, appID)
 	return err
 }
@@ -620,6 +964,27 @@ func validateRuntimeJob(job AppRuntimeJob) error {
 		}
 	}
 	return nil
+}
+
+func validHealthCheckJob(job AppHealthCheckJob) bool {
+	appID, appErr := uuid.Parse(job.App.ID)
+	projectID, projectErr := uuid.Parse(job.App.ProjectID)
+	deploymentID := uuid.Nil
+	if job.App.DesiredDeploymentID != nil {
+		deploymentID, _ = uuid.Parse(*job.App.DesiredDeploymentID)
+	}
+	return appErr == nil && projectErr == nil && deploymentID != uuid.Nil && appID != uuid.Nil && projectID != uuid.Nil &&
+		job.App.Enabled && job.App.DesiredGeneration >= 1 && job.App.ObservedGeneration == job.App.DesiredGeneration &&
+		job.App.RuntimeStatus == "running" && job.LeaseToken != uuid.Nil && validFunctionWorkerID(job.WorkerID) &&
+		validRuntimeContainerID(job.ContainerID) && validPrivateRuntimeAddress(job.Address) &&
+		(job.HealthStatus == "pending" || job.HealthStatus == "healthy" || job.HealthStatus == "unhealthy") &&
+		job.HealthFailureCount >= 0
+}
+
+func validPrivateRuntimeAddress(value string) bool {
+	address := net.ParseIP(value)
+	return address != nil && address.To4() != nil && address.IsPrivate() && !address.IsLoopback() &&
+		!address.IsUnspecified() && !address.IsLinkLocalUnicast() && !address.IsMulticast()
 }
 
 func validateCleanupJob(job AppRuntimeCleanupJob) error {

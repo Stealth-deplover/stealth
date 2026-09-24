@@ -122,7 +122,7 @@ export function AppsView({
       <ProjectResourceIntro
         icon={AppWindow}
         title="Persistent workloads"
-        description="This control plane stores desired runtime configuration. No image, running process, or public App route exists yet."
+        description="Build versioned deployments, follow process and health convergence, and publish a platform route after the current generation is healthy."
       />
       {query.isError ? (
         <ErrorState title="Could not load Apps" error={query.error} retry={() => query.refetch()} />

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,6 +161,107 @@ func TestEnsureNetworkCreatesOnlyTheLabeledPrivateBridge(t *testing.T) {
 		if !slices.Equal(runner.calls[index].args, want[index]) {
 			t.Errorf("network command %d = %#v, want %#v", index, runner.calls[index].args, want[index])
 		}
+	}
+}
+
+func TestRuntimeNetworkAcceptsOnlyExpectedTrustedPeers(t *testing.T) {
+	workerLabels := map[string]string{
+		"stealth.managed": "true", "stealth.resource_type": "app_runtime_worker", "stealth.runtime_schema": runtimeSchema,
+		"com.docker.compose.service": "worker",
+	}
+	worker := Container{
+		Config:     containerConfig{Labels: workerLabels},
+		HostConfig: hostConfig{NetworkMode: "stealth_backend"},
+		Mounts:     []containerMount{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"}},
+	}
+	if !managedRuntimeNetworkPeer(worker) {
+		t.Fatal("current labeled worker with the expected socket mount was rejected")
+	}
+	traefik := Container{
+		Config: containerConfig{Labels: map[string]string{
+			"stealth.managed": "true", "stealth.resource_type": "app_runtime_ingress", "stealth.runtime_schema": runtimeSchema,
+			"com.docker.compose.service": "traefik",
+		}},
+		HostConfig: hostConfig{NetworkMode: "stealth_ingress", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}},
+	}
+	if !managedRuntimeNetworkPeer(traefik) {
+		t.Fatal("current hardened Traefik peer was rejected")
+	}
+	mutations := []struct {
+		name   string
+		change func(*Container)
+	}{
+		{name: "unexpected Compose service", change: func(value *Container) { value.Config.Labels["com.docker.compose.service"] = "api" }},
+		{name: "privileged worker", change: func(value *Container) { value.HostConfig.Privileged = true }},
+		{name: "host network", change: func(value *Container) { value.HostConfig.NetworkMode = "host" }},
+		{name: "no network", change: func(value *Container) { value.HostConfig.NetworkMode = "none" }},
+		{name: "host PID", change: func(value *Container) { value.HostConfig.PidMode = "host" }},
+		{name: "host IPC", change: func(value *Container) { value.HostConfig.IpcMode = "host" }},
+		{name: "host UTS", change: func(value *Container) { value.HostConfig.UTSMode = "host" }},
+		{name: "host user namespace", change: func(value *Container) { value.HostConfig.UsernsMode = "host" }},
+		{name: "published port", change: func(value *Container) {
+			value.HostConfig.PortBindings = map[string][]any{"80/tcp": {map[string]any{"HostPort": "80"}}}
+		}},
+		{name: "added capability", change: func(value *Container) { value.HostConfig.CapAdd = []string{"NET_ADMIN"} }},
+		{name: "missing Docker socket", change: func(value *Container) { value.Mounts = nil }},
+		{name: "unexpected Docker socket source", change: func(value *Container) { value.Mounts[0].Source = "/tmp/other.sock" }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			candidate := worker
+			candidate.Config.Labels = maps.Clone(worker.Config.Labels)
+			candidate.HostConfig = worker.HostConfig
+			candidate.Mounts = append([]containerMount(nil), worker.Mounts...)
+			mutation.change(&candidate)
+			if managedRuntimeNetworkPeer(candidate) {
+				t.Fatal("invalid network peer was accepted")
+			}
+		})
+	}
+	traefikMutations := []func(*Container){
+		func(value *Container) {
+			value.Mounts = []containerMount{{Type: "bind", Destination: "/var/run/docker.sock"}}
+		},
+		func(value *Container) { value.HostConfig.ReadonlyRootfs = false },
+		func(value *Container) { value.HostConfig.CapDrop = nil },
+		func(value *Container) { value.HostConfig.SecurityOpt = nil },
+	}
+	for index, mutation := range traefikMutations {
+		candidate := traefik
+		candidate.Config.Labels = maps.Clone(traefik.Config.Labels)
+		candidate.HostConfig = traefik.HostConfig
+		mutation(&candidate)
+		if managedRuntimeNetworkPeer(candidate) {
+			t.Errorf("invalid Traefik network peer mutation %d was accepted", index)
+		}
+	}
+}
+
+func TestManagedContainerAddressRequiresCurrentOwnedNetworkIdentity(t *testing.T) {
+	network := NetworkInspect{Name: "stealth_app_runtime", ID: "network-current"}
+	network.IPAM.Config = []struct {
+		Subnet string `json:"Subnet"`
+	}{{Subnet: "172.22.0.0/16"}}
+	container := Container{Networks: map[string]ContainerNetwork{
+		"stealth_app_runtime": {NetworkID: "network-current", IPAddress: "172.22.0.5"},
+	}}
+	if address, ok := managedContainerAddress(container, network, "stealth_app_runtime"); !ok || address != "172.22.0.5" {
+		t.Fatalf("current address = %q, %v", address, ok)
+	}
+	for _, changed := range []struct {
+		name      string
+		container Container
+		network   NetworkInspect
+	}{
+		{name: "network identity changed", container: Container{Networks: map[string]ContainerNetwork{"stealth_app_runtime": {NetworkID: "network-old", IPAddress: "172.22.0.5"}}}, network: network},
+		{name: "address outside subnet", container: Container{Networks: map[string]ContainerNetwork{"stealth_app_runtime": {NetworkID: "network-current", IPAddress: "10.0.0.5"}}}, network: network},
+		{name: "public address", container: Container{Networks: map[string]ContainerNetwork{"stealth_app_runtime": {NetworkID: "network-current", IPAddress: "8.8.8.8"}}}, network: network},
+	} {
+		t.Run(changed.name, func(t *testing.T) {
+			if address, ok := managedContainerAddress(changed.container, changed.network, "stealth_app_runtime"); ok {
+				t.Fatalf("untrusted address %q was accepted", address)
+			}
+		})
 	}
 }
 
@@ -504,7 +606,7 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 			}{{Name: "nofile", Soft: 4096, Hard: 4096}, {Name: "core", Soft: 0, Hard: 0}},
 			Init: &initEnabled,
 		},
-		Networks: map[string]struct{}{"stealth_app_runtime": {}},
+		Networks: map[string]ContainerNetwork{"stealth_app_runtime": {NetworkID: "network-id", IPAddress: "172.22.0.5"}},
 	}
 	if !ContainerMatchesDesired(container, job, image, "stealth_app_runtime") {
 		t.Fatal("complete isolated container did not match desired state")
@@ -519,7 +621,9 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 		}},
 		{name: "host mount", change: func(value *Container) { value.HostConfig.Binds = []string{"/var/run/docker.sock:/var/run/docker.sock"} }},
 		{name: "unexpected Docker mount", change: func(value *Container) { value.Mounts = []containerMount{{Type: "bind", Destination: "/data"}} }},
-		{name: "wrong network", change: func(value *Container) { value.Networks = map[string]struct{}{"bridge": {}} }},
+		{name: "wrong network", change: func(value *Container) {
+			value.Networks = map[string]ContainerNetwork{"bridge": {NetworkID: "foreign", IPAddress: "172.22.0.5"}}
+		}},
 		{name: "writable root", change: func(value *Container) { value.HostConfig.ReadonlyRootfs = false }},
 	}
 	for _, mutation := range mutations {
@@ -530,7 +634,7 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 				changed.Config.Labels[key] = value
 			}
 			changed.HostConfig = container.HostConfig
-			changed.Networks = map[string]struct{}{"stealth_app_runtime": {}}
+			changed.Networks = map[string]ContainerNetwork{"stealth_app_runtime": {NetworkID: "network-id", IPAddress: "172.22.0.5"}}
 			mutation.change(&changed)
 			if ContainerMatchesDesired(changed, job, image, "stealth_app_runtime") {
 				t.Fatal("runtime drift was accepted as converged")

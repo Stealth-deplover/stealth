@@ -85,6 +85,66 @@ func (r *Repository) ListPlatformRoutes(ctx context.Context) ([]domain.PlatformR
 	return routes, nil
 }
 
+// ListAppPlatformRoutes returns only Apps whose current observed runtime and
+// fenced application health state permit public routing. Backend addresses
+// are private worker-derived runtime facts and never enter an API projection.
+func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPlatformRoute, error) {
+	if r == nil || r.pool == nil {
+		return nil, ErrNotFound
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT app.id::text,app.platform_label,settings.workload_base_domain,
+		       host(runtime.container_address),
+		       CASE WHEN app.workload_spec->>'port' ~ '^[0-9]{1,5}$'
+		            THEN (app.workload_spec->>'port')::integer ELSE NULL END
+		FROM project_apps app
+		JOIN app_runtime_state runtime ON runtime.app_id=app.id AND runtime.project_id=app.project_id
+		JOIN app_deployments deployment ON deployment.id=app.desired_deployment_id
+		  AND deployment.app_id=app.id AND deployment.project_id=app.project_id
+		  AND deployment.status='ready' AND deployment.build_status='succeeded'
+		JOIN instance_domain_settings settings ON settings.id=TRUE
+		WHERE app.enabled=TRUE
+		  AND app.desired_deployment_id IS NOT NULL
+		  AND app.desired_generation=app.observed_generation
+		  AND app.runtime_status='running'
+		  AND settings.workload_base_domain IS NOT NULL
+		  AND app.platform_label IS NOT NULL
+		  AND runtime.applied_generation=app.desired_generation
+		  AND runtime.applied_deployment_id=app.desired_deployment_id
+		  AND runtime.applied_workload_spec_sha256=app.workload_spec_sha256
+		  AND runtime.container_id IS NOT NULL
+		  AND runtime.container_address IS NOT NULL
+		  AND runtime.health_status='healthy'
+		  AND runtime.health_generation=app.desired_generation
+		  AND runtime.health_deployment_id=app.desired_deployment_id
+		  AND runtime.health_container_id=runtime.container_id
+		ORDER BY app.platform_label,app.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	routes := make([]domain.AppPlatformRoute, 0)
+	for rows.Next() {
+		var appID, label, baseDomain, address string
+		var port *int32
+		if err := rows.Scan(&appID, &label, &baseDomain, &address, &port); err != nil {
+			return nil, err
+		}
+		parsedID, idErr := ParseUUID(appID)
+		hostname, hostErr := platformhostname.Hostname(label, baseDomain)
+		if idErr != nil || hostErr != nil || !validPrivateRuntimeAddress(address) || port == nil || *port < 1 || *port > 65535 {
+			// Fail closed for this App only. A bad App record must not prevent
+			// Site snapshots or other valid App routes from converging.
+			continue
+		}
+		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), Hostname: hostname, Address: address, Port: int(*port)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return routes, nil
+}
+
 // GetActiveSiteArtifactByPlatformHostname resolves the current request Host
 // against PostgreSQL state before opening an artifact. A stale Traefik router
 // therefore cannot keep deleted or disabled Sites public.

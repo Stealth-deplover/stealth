@@ -46,6 +46,11 @@ type Persistence interface {
 	ReleaseAppRuntimeJob(context.Context, repository.AppRuntimeJob) error
 	CompleteAppRuntime(context.Context, repository.AppRuntimeJob, string, *repository.AppRuntimeContainer) error
 	FailAppRuntime(context.Context, repository.AppRuntimeJob, string, string, time.Time) error
+	ClaimNextAppHealthCheck(context.Context, string, time.Duration) (repository.AppHealthCheckJob, error)
+	IsAppHealthCheckCurrent(context.Context, repository.AppHealthCheckJob) (bool, error)
+	CompleteAppHealthCheck(context.Context, repository.AppHealthCheckJob, bool) error
+	InvalidateAppHealthIdentity(context.Context, repository.AppHealthCheckJob) error
+	ReleaseAppHealthCheck(context.Context, repository.AppHealthCheckJob) error
 	AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID) (bool, error)
 	QueueAppRuntimeCleanup(context.Context, *uuid.UUID, uuid.UUID, string, string, int) error
 	ClaimNextAppRuntimeCleanup(context.Context, string, time.Duration) (repository.AppRuntimeCleanupJob, error)
@@ -58,8 +63,10 @@ var _ Persistence = (*repository.Repository)(nil)
 
 type Runtime interface {
 	EnsureNetwork(context.Context) error
+	EnsureRuntimeNetworkPeers(context.Context) error
 	EnsureImage(context.Context, ociartifact.ImageInfo, io.ReadSeeker, string) (Image, error)
 	InspectApp(context.Context, uuid.UUID) (Container, bool, error)
+	ProbeApp(context.Context, repository.AppHealthCheckJob, Container) error
 	CreateApp(context.Context, repository.AppRuntimeJob, Image) (Container, error)
 	StartApp(context.Context, repository.AppRuntimeJob, string) (Container, error)
 	RemoveApp(context.Context, repository.AppRuntimeJob, string) error
@@ -79,7 +86,6 @@ type Worker struct {
 	Logger            *slog.Logger
 	Metrics           *observability.WorkerMetrics
 	startSweepDone    bool
-	networkReady      bool
 	networkRetryAfter time.Time
 	lastOrphanSweep   time.Time
 	startupSweepMutex sync.Mutex
@@ -155,14 +161,21 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err := w.ensureStartupSweep(ctx); err != nil {
 		w.Logger.Warn("App runtime startup recovery scheduling failed", "error", err)
 	}
-	if !w.networkReady && time.Now().After(w.networkRetryAfter) {
+	if time.Now().After(w.networkRetryAfter) {
 		if err := w.Runtime.EnsureNetwork(ctx); err != nil {
 			if ctx.Err() == nil {
 				w.Logger.Warn("App runtime network is unavailable", "error", err)
 				w.networkRetryAfter = time.Now().Add(30 * time.Second)
 			}
 		} else {
-			w.networkReady = true
+			if peerErr := w.Runtime.EnsureRuntimeNetworkPeers(ctx); peerErr != nil {
+				if ctx.Err() == nil {
+					w.Logger.Warn("App routing network peers are unavailable", "error", safeRuntimeError(peerErr))
+					w.networkRetryAfter = time.Now().Add(30 * time.Second)
+				}
+			} else {
+				w.networkRetryAfter = time.Now().Add(30 * time.Second)
+			}
 		}
 	}
 	if requeued, err := w.Store.RequeueStaleAppRuntimeLeases(ctx); err != nil && ctx.Err() == nil {
@@ -187,7 +200,17 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 
 	job, err := w.Store.ClaimNextAppRuntime(ctx, w.WorkerID, w.LeaseAge)
 	if errors.Is(err, repository.ErrNoAppRuntimeJob) {
-		return false, nil
+		healthJob, healthErr := w.Store.ClaimNextAppHealthCheck(ctx, w.WorkerID, w.LeaseAge)
+		if errors.Is(healthErr, repository.ErrNoAppHealthCheckJob) {
+			return false, nil
+		}
+		if healthErr != nil {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			return false, healthErr
+		}
+		return true, w.processHealthCheck(ctx, healthJob)
 	}
 	if err != nil {
 		return false, err
@@ -196,6 +219,66 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.Metrics.AppRuntimeJobsClaimed.Inc()
 	}
 	return true, w.processApp(ctx, job)
+}
+
+func (w *Worker) processHealthCheck(parent context.Context, job repository.AppHealthCheckJob) error {
+	appID := uuid.MustParse(job.App.ID)
+	err := w.withHeartbeat(parent, func(ctx context.Context) error {
+		return w.Store.RenewAppRuntimeLease(ctx, appID, job.WorkerID, job.LeaseToken, w.LeaseAge)
+	}, func(ctx context.Context) error {
+		current, err := w.Store.IsAppHealthCheckCurrent(ctx, job)
+		if err != nil {
+			return err
+		}
+		if !current {
+			_ = w.Store.ReleaseAppHealthCheck(ctx, job)
+			return repository.ErrAppRuntimeStale
+		}
+		container, found, err := w.Runtime.InspectApp(ctx, appID)
+		if err != nil || !found || container.ID != job.ContainerID || !container.State.Running || containerAddress(container, w.runtimeNetworkName()) != job.Address {
+			invalidateErr := w.Store.InvalidateAppHealthIdentity(ctx, job)
+			if errors.Is(invalidateErr, repository.ErrAppRuntimeLeaseLost) || errors.Is(invalidateErr, repository.ErrAppRuntimeStale) {
+				return invalidateErr
+			}
+			if invalidateErr != nil {
+				return errors.Join(err, invalidateErr)
+			}
+			w.Logger.Warn("App runtime identity changed during health reconciliation", "app_id", appID)
+			return nil
+		}
+
+		probeErr := w.Runtime.ProbeApp(ctx, job, container)
+		if errors.Is(probeErr, ErrHealthRuntimeDrift) {
+			if err := w.Store.InvalidateAppHealthIdentity(ctx, job); err != nil && !errors.Is(err, repository.ErrAppRuntimeStale) && !errors.Is(err, repository.ErrAppRuntimeLeaseLost) {
+				return err
+			}
+			return nil
+		}
+		current, err = w.Store.IsAppHealthCheckCurrent(ctx, job)
+		if err != nil {
+			return err
+		}
+		if !current {
+			_ = w.Store.ReleaseAppHealthCheck(ctx, job)
+			return repository.ErrAppRuntimeStale
+		}
+		latest, found, inspectErr := w.Runtime.InspectApp(ctx, appID)
+		if inspectErr != nil || !found || latest.ID != job.ContainerID || !latest.State.Running || containerAddress(latest, w.runtimeNetworkName()) != job.Address {
+			invalidateErr := w.Store.InvalidateAppHealthIdentity(ctx, job)
+			if errors.Is(invalidateErr, repository.ErrAppRuntimeLeaseLost) || errors.Is(invalidateErr, repository.ErrAppRuntimeStale) {
+				return invalidateErr
+			}
+			if invalidateErr != nil {
+				return errors.Join(inspectErr, invalidateErr)
+			}
+			return nil
+		}
+		return w.Store.CompleteAppHealthCheck(ctx, job, probeErr == nil)
+	})
+	if errors.Is(err, repository.ErrAppRuntimeStale) || errors.Is(err, repository.ErrAppRuntimeLeaseLost) || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
 func (w *Worker) ensureStartupSweep(ctx context.Context) error {
@@ -438,6 +521,7 @@ func (w *Worker) completeRunning(ctx context.Context, job repository.AppRuntimeJ
 		ImageID:     imageID,
 		ImageDigest: imageInfo.ManifestDigest,
 		RuntimeTag:  runtimeTag,
+		Address:     containerAddress(container, w.runtimeNetworkName()),
 	}
 	return w.Store.CompleteAppRuntime(ctx, job, "running", state)
 }

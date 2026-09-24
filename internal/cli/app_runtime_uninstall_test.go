@@ -82,9 +82,7 @@ func validRuntimePurgeFixture() (*runtimePurgeTestRunner, uninstallPlan) {
 	containerID := strings.Repeat("a", 64)
 	container := appRuntimePurgeInspect{ID: containerID, Name: "/" + repository.AppRuntimeContainerName(appID), State: struct {
 		Running bool `json:"Running"`
-	}{Running: true}, HostConfig: struct {
-		NetworkMode string `json:"NetworkMode"`
-	}{NetworkMode: "stealth_app_runtime"}}
+	}{Running: true}, HostConfig: appRuntimePurgeHostConfig{NetworkMode: "stealth_app_runtime"}}
 	container.Config.Labels = map[string]string{
 		"stealth.managed": "true", "stealth.resource_type": "app", "stealth.runtime_schema": "v1",
 		"stealth.app_id": appID.String(), "stealth.project_id": projectID.String(),
@@ -100,6 +98,70 @@ func validRuntimePurgeFixture() (*runtimePurgeTestRunner, uninstallPlan) {
 	}
 	runner := &runtimePurgeTestRunner{containers: []string{containerID}, inspects: map[string]appRuntimePurgeInspect{containerID: container}, network: network}
 	return runner, uninstallPlan{appRuntimeNetwork: "stealth_app_runtime"}
+}
+
+func TestAppRuntimePurgeAcceptsOnlyExpectedHardenedNetworkPeers(t *testing.T) {
+	worker := appRuntimePurgeInspect{
+		Config: struct {
+			Labels map[string]string `json:"Labels"`
+		}{Labels: map[string]string{
+			"stealth.managed": "true", "stealth.runtime_schema": appRuntimeSchema,
+			"stealth.resource_type": "app_runtime_worker", "com.docker.compose.service": "worker",
+		}},
+		HostConfig: appRuntimePurgeHostConfig{NetworkMode: "stealth_backend"},
+		Mounts: []struct {
+			Type        string `json:"Type"`
+			Source      string `json:"Source"`
+			Destination string `json:"Destination"`
+		}{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"}},
+	}
+	if !appRuntimePurgePeerMatches(worker) {
+		t.Fatal("trusted worker with socket mount was rejected")
+	}
+	traefik := appRuntimePurgeInspect{
+		Config: struct {
+			Labels map[string]string `json:"Labels"`
+		}{Labels: map[string]string{
+			"stealth.managed": "true", "stealth.runtime_schema": appRuntimeSchema,
+			"stealth.resource_type": "app_runtime_ingress", "com.docker.compose.service": "traefik",
+		}},
+		HostConfig: appRuntimePurgeHostConfig{NetworkMode: "stealth_ingress", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}},
+	}
+	if !appRuntimePurgePeerMatches(traefik) {
+		t.Fatal("trusted hardened Traefik peer was rejected")
+	}
+	worker.HostConfig.PidMode = "host"
+	if appRuntimePurgePeerMatches(worker) {
+		t.Fatal("worker using host PID namespace was accepted")
+	}
+	worker.HostConfig.PidMode = ""
+	worker.HostConfig.UTSMode = "host"
+	if appRuntimePurgePeerMatches(worker) {
+		t.Fatal("worker using host UTS namespace was accepted")
+	}
+	worker.HostConfig.UTSMode = ""
+	worker.HostConfig.UsernsMode = "host"
+	if appRuntimePurgePeerMatches(worker) {
+		t.Fatal("worker using host user namespace was accepted")
+	}
+	worker.HostConfig.UsernsMode = ""
+	worker.HostConfig.CapAdd = []string{"NET_ADMIN"}
+	if appRuntimePurgePeerMatches(worker) {
+		t.Fatal("worker with added capability was accepted")
+	}
+	traefik.Mounts = []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+	}{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"}}
+	if appRuntimePurgePeerMatches(traefik) {
+		t.Fatal("Traefik with Docker socket was accepted")
+	}
+	traefik.Mounts = nil
+	traefik.HostConfig.ReadonlyRootfs = false
+	if appRuntimePurgePeerMatches(traefik) {
+		t.Fatal("writable Traefik root filesystem was accepted")
+	}
 }
 
 func TestAppRuntimeNetworkOwnershipInspection(t *testing.T) {

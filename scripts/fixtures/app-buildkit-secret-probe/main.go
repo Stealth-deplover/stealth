@@ -17,6 +17,18 @@ func main() {
 	case len(os.Args) == 2 && os.Args[1] == "verify-runtime":
 		verifyRuntime()
 		return
+	case len(os.Args) == 2 && os.Args[1] == "set-unhealthy":
+		if err := os.WriteFile("/tmp/stealth-health-unhealthy", []byte("unhealthy\n"), 0o600); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "could not set health fixture state")
+			os.Exit(9)
+		}
+		return
+	case len(os.Args) == 2 && os.Args[1] == "set-healthy":
+		if err := os.Remove("/tmp/stealth-health-unhealthy"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			_, _ = fmt.Fprintln(os.Stderr, "could not clear health fixture state")
+			os.Exit(9)
+		}
+		return
 	case len(os.Args) != 1:
 		_, _ = fmt.Fprintln(os.Stderr, "usage: buildkit-secret-probe [serve|verify-runtime]")
 		os.Exit(2)
@@ -46,6 +58,14 @@ func verifyBuildKitSecrets() {
 
 func serve() {
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := os.Stat("/tmp/stealth-health-unhealthy"); err == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("app-runtime-smoke-unhealthy\n"))
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("app-runtime-smoke-ok\n"))
 	})

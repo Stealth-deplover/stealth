@@ -41,7 +41,7 @@ type AppPatch struct {
 	Workload *workloadspec.Spec
 }
 
-const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id`
+const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id,COALESCE(runtime.health_status,'pending'),runtime.health_generation,runtime.health_deployment_id::text,runtime.health_container_id,runtime.container_id,runtime.container_address::text,runtime.applied_generation,runtime.applied_deployment_id::text,runtime.applied_workload_spec_sha256,EXISTS(SELECT 1 FROM app_deployments deployment WHERE deployment.id=app.desired_deployment_id AND deployment.app_id=app.id AND deployment.project_id=app.project_id AND deployment.status='ready' AND deployment.build_status='succeeded')`
 
 type appScanner interface{ Scan(...any) error }
 
@@ -51,6 +51,12 @@ func scanApp(row appScanner) (domain.App, error) {
 	var platformLabel string
 	var workloadBaseDomain *string
 	var desiredDeploymentID *uuid.UUID
+	var healthStatus string
+	var healthGeneration *int64
+	var healthDeploymentID, healthContainerID, runtimeContainerID, runtimeAddress *string
+	var appliedGeneration *int64
+	var appliedDeploymentID, appliedWorkloadSHA *string
+	var routeDeploymentReady bool
 	if err := row.Scan(
 		&item.ID,
 		&item.ProjectID,
@@ -67,6 +73,16 @@ func scanApp(row appScanner) (domain.App, error) {
 		&platformLabel,
 		&workloadBaseDomain,
 		&desiredDeploymentID,
+		&healthStatus,
+		&healthGeneration,
+		&healthDeploymentID,
+		&healthContainerID,
+		&runtimeContainerID,
+		&runtimeAddress,
+		&appliedGeneration,
+		&appliedDeploymentID,
+		&appliedWorkloadSHA,
+		&routeDeploymentReady,
 	); err != nil {
 		return domain.App{}, err
 	}
@@ -92,6 +108,27 @@ func scanApp(row appScanner) (domain.App, error) {
 			return domain.App{}, hostnameErr
 		}
 		item.PlatformHostname = &hostname
+	}
+	healthIdentityCurrent := healthGeneration != nil && *healthGeneration == item.DesiredGeneration &&
+		healthDeploymentID != nil && desiredDeploymentID != nil && *healthDeploymentID == desiredDeploymentID.String() &&
+		healthContainerID != nil && runtimeContainerID != nil && *healthContainerID == *runtimeContainerID &&
+		appliedGeneration != nil && *appliedGeneration == item.DesiredGeneration && appliedDeploymentID != nil &&
+		desiredDeploymentID != nil && *appliedDeploymentID == desiredDeploymentID.String() && appliedWorkloadSHA != nil &&
+		*appliedWorkloadSHA == item.WorkloadSpecSHA256
+	item.HealthStatus = healthStatus
+	item.RouteDeploymentReady = routeDeploymentReady
+	if !healthIdentityCurrent || item.ObservedGeneration != item.DesiredGeneration || item.RuntimeStatus != "running" {
+		item.HealthStatus = "pending"
+	}
+	switch {
+	case !item.Enabled || item.DesiredDeploymentID == nil || item.PlatformHostname == nil:
+		item.RouteStatus = "not_available"
+	case !item.RouteDeploymentReady || item.ObservedGeneration != item.DesiredGeneration || item.RuntimeStatus != "running":
+		item.RouteStatus = "waiting_for_runtime"
+	case item.HealthStatus != "healthy" || runtimeAddress == nil || !validPrivateRuntimeAddress(*runtimeAddress):
+		item.RouteStatus = "waiting_for_health"
+	default:
+		item.RouteStatus = "active"
 	}
 	return item, nil
 }
@@ -152,6 +189,7 @@ func appByID(ctx context.Context, query interface {
 		SELECT `+appProjection+`
 		FROM project_apps app
 		LEFT JOIN instance_domain_settings settings ON settings.id=TRUE
+		LEFT JOIN app_runtime_state runtime ON runtime.app_id=app.id AND runtime.project_id=app.project_id
 		WHERE app.project_id=$1 AND app.id=$2`+suffix, projectID, appID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.App{}, ErrNotFound
@@ -168,6 +206,7 @@ func (r *Repository) ListApps(ctx context.Context, projectID uuid.UUID, actor Ap
 		SELECT `+appProjection+`
 		FROM project_apps app
 		LEFT JOIN instance_domain_settings settings ON settings.id=TRUE
+		LEFT JOIN app_runtime_state runtime ON runtime.app_id=app.id AND runtime.project_id=app.project_id
 		WHERE app.project_id=$1 AND ($3::uuid IS NULL OR app.id>$3)
 		ORDER BY app.id LIMIT $2`, projectID, limit+1, cursor)
 	if err != nil {

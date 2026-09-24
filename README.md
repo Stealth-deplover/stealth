@@ -136,7 +136,7 @@ managed-service availability.
 | Projects                         | Beta         | Project lifecycle, users, API keys, service layout, scoped access                                              |
 | Functions                        | Beta         | Source archives, Docker-backed builds/execution, variables, logs, quotas                                       |
 | Sites                            | Beta         | Static deployments, Git source, domains, publication, build logs                                               |
-| Apps                             | Experimental | Persistent App control-plane resources and versioned workload intent; OCI builds and execution are not available yet |
+| Apps                             | Experimental | Persistent Apps, versioned OCI deployments, process and health convergence, and health-gated platform routes |
 | Database                         | Beta         | Tables, rows, indexes, relationships, exports, backups, restore                                                |
 | Storage                          | Beta         | Buckets/files, quotas, local or S3-compatible drivers                                                          |
 | Messaging                        | Beta         | Providers, topics, subscribers, queued delivery, retry adapters                                                |

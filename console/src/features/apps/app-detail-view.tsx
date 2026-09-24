@@ -28,7 +28,11 @@ import { AppDeploymentDialog } from "@/features/apps/app-deployment-dialog";
 import { updateAppPayload, type AppFormValues } from "@/features/apps/app-form";
 import { BackLink } from "@/features/resources/detail-shared";
 import type { AppDeployment } from "@/api/types";
-import { AppRuntime_status } from "@/api/generated/schema";
+import {
+  AppHealth_status,
+  AppRoute_status,
+  AppRuntime_status,
+} from "@/api/generated/schema";
 import { pageControls } from "@/lib/pagination";
 import { useCursorPagination } from "@/hooks/use-cursor-pagination";
 
@@ -124,7 +128,7 @@ export function AppDetailView({
       <PageHeader
         eyebrow="Persistent App"
         title={app.name}
-        description="Desired App configuration and observed persistent runtime state."
+        description="Desired configuration, process runtime, application health and route eligibility."
         actions={
           canManage ? (
             <>
@@ -141,7 +145,6 @@ export function AppDetailView({
         }
       />
       <div className="mb-5 flex flex-wrap items-center gap-2">
-        <StatusBadge status={app.runtime_status} />
         <Badge variant="neutral">{app.enabled ? "Enabled · desired" : "Disabled · desired"}</Badge>
         <span className="text-xs text-fog">Updated {formatDate(app.updated_at)}</span>
         <ResourceId id={app.id} label="App ID" />
@@ -180,20 +183,50 @@ export function AppDetailView({
         </Card>
       ) : null}
 
+      <Card className="mb-5">
+        <CardHeader>
+          <CardTitle>Availability</CardTitle>
+          <p className="mt-1 text-xs leading-5 text-fog">
+            Running confirms the expected container process. The public route waits for the current generation to pass its configured health check.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-3">
+          <Metric label="Runtime"><StatusBadge status={app.runtime_status} /></Metric>
+          <Metric label="Health"><HealthBadge status={app.health_status} /></Metric>
+          <Metric label="Public route"><RouteBadge status={app.route_status} /></Metric>
+        </CardContent>
+        <CardContent className="border-t border-white/[0.06] py-3">
+          <Metric label="Platform hostname">
+            {app.platform_hostname ? (
+              app.route_status === "active" ? (
+                <a
+                  className="break-all font-mono text-xs text-cyan-200 underline decoration-cyan-200/30 underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                  href={`https://${app.platform_hostname}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {app.platform_hostname}
+                </a>
+              ) : (
+                <span className="break-all font-mono text-xs">{app.platform_hostname}</span>
+              )
+            ) : (
+              <span className="text-fog">Not configured</span>
+            )}
+          </Metric>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle>Runtime identity</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Desired configuration</CardTitle></CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
-            <Metric label="Reserved platform hostname">
-              <span className="break-all font-mono text-xs">{app.platform_hostname ?? "Not configured"}</span>
-            </Metric>
             <Metric label="WorkloadSpec version">{app.workload.schema_version}</Metric>
             <Metric label="Spec digest">
               <span className="break-all font-mono text-[11px]">{app.workload_spec_sha256}</span>
             </Metric>
             <Metric label="Desired generation">{app.desired_generation}</Metric>
             <Metric label="Observed generation">{app.observed_generation}</Metric>
-            <Metric label="Runtime status"><StatusBadge status={app.runtime_status} /></Metric>
           </CardContent>
         </Card>
 
@@ -229,7 +262,7 @@ export function AppDetailView({
           <CardHeader>
             <CardTitle>Health check</CardTitle>
             <p className="mt-1 text-xs leading-5 text-fog">
-              Stored for future routing. Runtime status reports process liveness only; application health and public routing are not available yet.
+              The worker probes this container on its internal port. HTTP checks pass on 2xx responses; redirects are not followed.
             </p>
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -358,7 +391,7 @@ function runtimeSummary(status: AppRuntime_status, desired: number, observed: nu
     case AppRuntime_status.pending:
       return `The runtime is reconciling generation ${desired}; generation ${observed} remains the last successfully applied state.`;
     case AppRuntime_status.running:
-      return `The expected container is running and matches generation ${observed}. This does not report application health.`;
+      return `The expected container is running and matches generation ${observed}. Application health is shown separately.`;
     case AppRuntime_status.degraded:
       return `The runtime is not currently matching the desired state. Generation ${observed} remains the last successfully applied state while the worker retries.`;
     case AppRuntime_status.stopped:
@@ -370,6 +403,32 @@ function runtimeSummary(status: AppRuntime_status, desired: number, observed: nu
     default:
       return `Desired generation ${desired}; last observed generation ${observed}.`;
   }
+}
+
+function HealthBadge({ status }: { status: AppHealth_status }) {
+  const state = status === AppHealth_status.healthy ? "success" : status === AppHealth_status.unhealthy ? "error" : "building";
+  const label = status === AppHealth_status.healthy ? "Healthy" : status === AppHealth_status.unhealthy ? "Unhealthy" : "Starting";
+  return (
+    <Badge variant={state}>
+      <span className={`size-1.5 rounded-full bg-current ${status === AppHealth_status.pending ? "animate-pulse" : ""}`} aria-hidden="true" />
+      {label}
+    </Badge>
+  );
+}
+
+function RouteBadge({ status }: { status: AppRoute_status }) {
+  const view = {
+    [AppRoute_status.active]: { label: "Active", variant: "success" as const },
+    [AppRoute_status.waiting_for_runtime]: { label: "Waiting for runtime", variant: "building" as const },
+    [AppRoute_status.waiting_for_health]: { label: "Waiting for health", variant: "warning" as const },
+    [AppRoute_status.not_available]: { label: "Not published", variant: "neutral" as const },
+  }[status];
+  return (
+    <Badge variant={view.variant}>
+      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+      {view.label}
+    </Badge>
+  );
 }
 
 function Metric({ label, children }: { label: string; children: ReactNode }) {

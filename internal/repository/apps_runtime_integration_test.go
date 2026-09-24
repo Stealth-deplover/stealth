@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/appbuildspec"
+	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
+	"github.com/Stealth-deplover/stealth/internal/workloadspec"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -206,6 +208,202 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 	}
 }
 
+func TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	var previousDomain string
+	if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(workload_base_domain,'') FROM instance_domain_settings WHERE id=TRUE`).Scan(&previousDomain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE instance_domain_settings SET workload_base_domain='health-integration.example.test',updated_at=now() WHERE id=TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if previousDomain == "" {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=NULL,updated_at=now() WHERE id=TRUE`)
+		} else {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=$1,updated_at=now() WHERE id=TRUE`, previousDomain)
+		}
+	})
+
+	workload := workloadspec.Default()
+	initialDelay := 60
+	workload.HealthCheck.InitialDelaySeconds = &initialDelay
+	appID := uuid.Must(uuid.NewV7())
+	app, err := f.repo.CreateApp(f.ctx, appID, f.projectOneID, f.actor, AppInput{Name: "health-convergence", Enabled: true, Workload: workload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.HealthStatus != "pending" || app.RouteStatus != "not_available" {
+		t.Fatalf("new App health/route default = %s/%s", app.HealthStatus, app.RouteStatus)
+	}
+	deploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, appID)
+	runtimeJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "health-runtime-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppRuntime(f.ctx, runtimeJob, "running", runtimeRepositoryContainer(runtimeJob, deploymentID)); err != nil {
+		t.Fatal(err)
+	}
+	var delayHonored bool
+	if err := f.pool.QueryRow(f.ctx, `SELECT next_health_check_at > now() + interval '50 seconds' FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&delayHonored); err != nil {
+		t.Fatal(err)
+	}
+	if !delayHonored {
+		t.Fatal("configured initial health delay was not persisted")
+	}
+	starting, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starting.RuntimeStatus != "running" || starting.HealthStatus != "pending" || starting.RouteStatus != "waiting_for_health" {
+		t.Fatalf("running App became routable before health converged: %+v", starting)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("pending App appeared in route snapshot: routes=%+v err=%v", routes, err)
+	}
+
+	forceAppHealthCheckDue(t, f, appID)
+	job, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, job, true); err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healthy.HealthStatus != "healthy" || healthy.RouteStatus != "active" || healthy.PlatformHostname == nil {
+		t.Fatalf("healthy current App did not become route eligible: %+v", healthy)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
+		t.Fatalf("healthy App is absent from route snapshot: routes=%+v err=%v", routes, err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE project_apps SET workload_spec=jsonb_set(workload_spec,'{port}','"malformed"'::jsonb) WHERE id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("malformed App port was published or blocked a valid snapshot: routes=%+v err=%v", routes, err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE project_apps SET workload_spec=jsonb_set(workload_spec,'{port}','8080'::jsonb) WHERE id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt <= workload.HealthCheck.FailureThreshold; attempt++ {
+		forceAppHealthCheckDue(t, f, appID)
+		job, err = f.repo.ClaimNextAppHealthCheck(f.ctx, "health-worker", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.repo.CompleteAppHealthCheck(f.ctx, job, false); err != nil {
+			t.Fatal(err)
+		}
+		current, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attempt < workload.HealthCheck.FailureThreshold {
+			if current.HealthStatus != "healthy" || current.RouteStatus != "active" {
+				t.Fatalf("route flapped before failure threshold %d: %+v", workload.HealthCheck.FailureThreshold, current)
+			}
+		} else if current.HealthStatus != "unhealthy" || current.RouteStatus != "waiting_for_health" {
+			t.Fatalf("failure threshold did not withdraw route: %+v", current)
+		}
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("unhealthy App remained in route snapshot: routes=%+v err=%v", routes, err)
+	}
+
+	// Hold a valid old-generation lease, then write a new desired generation.
+	// The old success must not restore health or route eligibility.
+	forceAppHealthCheckDue(t, f, appID)
+	staleJob, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedWorkload := workload
+	changedWorkload.Port++
+	changed, err := f.repo.UpdateApp(f.ctx, f.projectOneID, appID, f.actor, AppPatch{Workload: &changedWorkload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, staleJob, true); !errors.Is(err, ErrAppRuntimeStale) {
+		t.Fatalf("old generation health completion = %v, want stale", err)
+	}
+	current, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.DesiredGeneration != changed.DesiredGeneration || current.HealthStatus != "pending" || current.RouteStatus != "waiting_for_runtime" {
+		t.Fatalf("stale health result authorized newer generation: %+v", current)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("new desired generation inherited old route: routes=%+v err=%v", routes, err)
+	}
+
+	newRuntimeJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "health-runtime-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppRuntime(f.ctx, newRuntimeJob, "running", runtimeRepositoryContainer(newRuntimeJob, deploymentID)); err != nil {
+		t.Fatal(err)
+	}
+	forceAppHealthCheckDue(t, f, appID)
+	newHealthJob, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, newHealthJob, true); err != nil {
+		t.Fatal(err)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
+		t.Fatalf("recovered current generation is absent from route snapshot: routes=%+v err=%v", routes, err)
+	}
+	if _, err := f.repo.UpdateApp(f.ctx, f.projectOneID, appID, f.actor, AppPatch{Enabled: boolPointer(false)}); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.RouteStatus != "not_available" {
+		t.Fatalf("disabled App remained route eligible: %+v", disabled)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("disabled App remained in route snapshot: routes=%+v err=%v", routes, err)
+	}
+	if err := f.repo.DeleteApp(f.ctx, f.projectOneID, appID, f.actor); err != nil {
+		t.Fatal(err)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("deleted App remained in route snapshot: routes=%+v err=%v", routes, err)
+	}
+}
+
+func forceAppHealthCheckDue(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
+	t.Helper()
+	result, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_health_check_at=now() WHERE app_id=$1`, appID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RowsAffected() != 1 {
+		t.Fatalf("updated %d health rows, want one", result.RowsAffected())
+	}
+}
+
+func appRouteExists(routes []domain.AppPlatformRoute, appID uuid.UUID) bool {
+	for _, route := range routes {
+		if route.AppID == appID.String() {
+			return true
+		}
+	}
+	return false
+}
+
+func boolPointer(value bool) *bool { return &value }
+
 func assertAppRuntimeContainerID(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
 	t.Helper()
 	var containerID string
@@ -289,7 +487,7 @@ func runtimeRepositoryContainer(job AppRuntimeJob, deploymentID uuid.UUID) *AppR
 	return &AppRuntimeContainer{
 		ID: strings.Repeat("a", 64), Name: AppRuntimeContainerName(uuid.MustParse(job.App.ID)),
 		ImageID: "sha256:" + strings.Repeat("b", 64), ImageDigest: "sha256:" + strings.Repeat("d", 64),
-		RuntimeTag: "stealth-app/" + deploymentID.String() + ":runtime",
+		RuntimeTag: "stealth-app/" + deploymentID.String() + ":runtime", Address: "172.22.0.5",
 	}
 }
 

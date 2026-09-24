@@ -76,6 +76,22 @@ func (s *runtimeTestStore) FailAppRuntime(_ context.Context, _ repository.AppRun
 	s.failureMessage = message
 	return nil
 }
+func (s *runtimeTestStore) ClaimNextAppHealthCheck(context.Context, string, time.Duration) (repository.AppHealthCheckJob, error) {
+	return repository.AppHealthCheckJob{}, repository.ErrNoAppHealthCheckJob
+}
+func (s *runtimeTestStore) IsAppHealthCheckCurrent(context.Context, repository.AppHealthCheckJob) (bool, error) {
+	return s.current, s.currentErr
+}
+func (s *runtimeTestStore) CompleteAppHealthCheck(context.Context, repository.AppHealthCheckJob, bool) error {
+	return nil
+}
+func (s *runtimeTestStore) InvalidateAppHealthIdentity(context.Context, repository.AppHealthCheckJob) error {
+	return nil
+}
+func (s *runtimeTestStore) ReleaseAppHealthCheck(context.Context, repository.AppHealthCheckJob) error {
+	s.released++
+	return nil
+}
 func (s *runtimeTestStore) AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return true, nil
 }
@@ -131,6 +147,7 @@ func (r *runtimeTestDriver) EnsureNetwork(context.Context) error {
 	r.networkCalls++
 	return r.ensureNetworkErr
 }
+func (r *runtimeTestDriver) EnsureRuntimeNetworkPeers(context.Context) error { return nil }
 func (r *runtimeTestDriver) EnsureImage(_ context.Context, info ociartifact.ImageInfo, archive io.ReadSeeker, tag string) (Image, error) {
 	r.ensureImageCalls++
 	if r.ensureImageErr != nil {
@@ -151,6 +168,9 @@ func (r *runtimeTestDriver) EnsureImage(_ context.Context, info ociartifact.Imag
 }
 func (r *runtimeTestDriver) InspectApp(context.Context, uuid.UUID) (Container, bool, error) {
 	return r.container, r.found, r.inspectErr
+}
+func (r *runtimeTestDriver) ProbeApp(context.Context, repository.AppHealthCheckJob, Container) error {
+	return nil
 }
 func (r *runtimeTestDriver) CreateApp(_ context.Context, job repository.AppRuntimeJob, image Image) (Container, error) {
 	r.createCalls++
@@ -523,7 +543,7 @@ func runtimeTestContainer(job repository.AppRuntimeJob, image Image, running boo
 			}{{Name: "nofile", Soft: 4096, Hard: 4096}, {Name: "core", Soft: 0, Hard: 0}},
 			Init: &initEnabled,
 		},
-		Networks: map[string]struct{}{defaultRuntimeNetwork: {}},
+		Networks: map[string]ContainerNetwork{defaultRuntimeNetwork: {NetworkID: "network-id", IPAddress: "172.22.0.5"}},
 	}
 }
 

@@ -71,6 +71,18 @@ if [ -z "$worker_block" ]; then
 	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
 	exit 1
 fi
+if ! printf '%s\n' "$worker_block" | grep -Fq 'stealth.resource_type: app_runtime_worker' ||
+	! printf '%s\n' "$worker_block" | grep -Fq 'stealth.runtime_schema: v1' ||
+	! printf '%s\n' "$worker_block" | grep -Fq 'stealth.managed: "true"'; then
+	printf '%s\n' 'worker is missing the managed App runtime peer identity labels' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$traefik_block" | grep -Fq 'stealth.resource_type: app_runtime_ingress' ||
+	! printf '%s\n' "$traefik_block" | grep -Fq 'stealth.runtime_schema: v1' ||
+	! printf '%s\n' "$traefik_block" | grep -Fq 'stealth.managed: "true"'; then
+	printf '%s\n' 'Traefik is missing the managed App runtime peer identity labels' >&2
+	exit 1
+fi
 buildkit_block="$(service_block buildkit)"
 if [ -z "$buildkit_block" ]; then
 	printf '%s\n' 'dedicated App BuildKit service is missing from rendered production Compose' >&2

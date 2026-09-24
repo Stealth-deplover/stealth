@@ -5381,7 +5381,7 @@ export interface components {
         WorkloadSpec: {
             /** @constant */
             schema_version: "v1";
-            /** @description Internal container HTTP port used by future routing; never a host port. */
+            /** @description Internal App HTTP port used by private health probes and eligible platform routing; never a host port. */
             port: number;
             /** @description Exec-style argument array with at most 64 arguments */
             command: string[];
@@ -5427,7 +5427,7 @@ export interface components {
             name: components["schemas"]["Slug"];
             /** @description Desired enabled state. */
             enabled: boolean;
-            /** @description Reserved metadata derived from the stable App identity and current workload_base_domain. Null when the workload domain is unset. Reservation does not imply an App route is active. */
+            /** @description Canonical App hostname derived from the stable App identity and current workload_base_domain. Null when the workload domain is unset. A hostname alone does not make a route eligible. */
             platform_hostname: string | null;
             workload: components["schemas"]["WorkloadSpec"];
             /** @description SHA-256 of canonical normalized WorkloadSpec JSON. */
@@ -5448,12 +5448,22 @@ export interface components {
              */
             desired_deployment_id: string | null;
             /**
-             * @description not_deployed means no image is selected and no runtime is desired.
+             * @description Running means the current expected container process is running; it does not imply application health.
              * @enum {string}
              */
             runtime_status: AppRuntime_status;
             /** @description Bounded sanitized error set by the trusted runtime reconciler. */
             runtime_error: string | null;
+            /**
+             * @description Health is generation and container specific. Healthy means the configured TCP or HTTP probe has converged.
+             * @enum {string}
+             */
+            health_status: AppHealth_status;
+            /**
+             * @description Active means the current desired
+             * @enum {string}
+             */
+            route_status: AppRoute_status;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -15464,6 +15474,17 @@ export enum AppRuntime_status {
     degraded = "degraded",
     stopped = "stopped",
     failed = "failed"
+}
+export enum AppHealth_status {
+    pending = "pending",
+    healthy = "healthy",
+    unhealthy = "unhealthy"
+}
+export enum AppRoute_status {
+    not_available = "not_available",
+    waiting_for_runtime = "waiting_for_runtime",
+    waiting_for_health = "waiting_for_health",
+    active = "active"
 }
 export enum AppDeploymentSource {
     upload = "upload"

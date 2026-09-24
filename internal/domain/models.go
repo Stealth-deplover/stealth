@@ -1000,20 +1000,23 @@ type Site struct {
 // Runtime status and observed generation remain owned by a trusted runtime
 // reconciler; creating or updating metadata never claims that work ran.
 type App struct {
-	ID                  string            `json:"id"`
-	ProjectID           string            `json:"project_id"`
-	Name                string            `json:"name"`
-	Enabled             bool              `json:"enabled"`
-	PlatformHostname    *string           `json:"platform_hostname"`
-	Workload            workloadspec.Spec `json:"workload"`
-	WorkloadSpecSHA256  string            `json:"workload_spec_sha256"`
-	DesiredGeneration   int64             `json:"desired_generation"`
-	ObservedGeneration  int64             `json:"observed_generation"`
-	DesiredDeploymentID *string           `json:"desired_deployment_id"`
-	RuntimeStatus       string            `json:"runtime_status"`
-	RuntimeError        *string           `json:"runtime_error"`
-	CreatedAt           time.Time         `json:"created_at"`
-	UpdatedAt           time.Time         `json:"updated_at"`
+	ID                   string            `json:"id"`
+	ProjectID            string            `json:"project_id"`
+	Name                 string            `json:"name"`
+	Enabled              bool              `json:"enabled"`
+	PlatformHostname     *string           `json:"platform_hostname"`
+	Workload             workloadspec.Spec `json:"workload"`
+	WorkloadSpecSHA256   string            `json:"workload_spec_sha256"`
+	DesiredGeneration    int64             `json:"desired_generation"`
+	ObservedGeneration   int64             `json:"observed_generation"`
+	DesiredDeploymentID  *string           `json:"desired_deployment_id"`
+	RuntimeStatus        string            `json:"runtime_status"`
+	RuntimeError         *string           `json:"runtime_error"`
+	HealthStatus         string            `json:"health_status"`
+	RouteStatus          string            `json:"route_status"`
+	RouteDeploymentReady bool              `json:"-"`
+	CreatedAt            time.Time         `json:"created_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
 // AppDeployment is the immutable build identity and verified output for one
@@ -1069,6 +1072,16 @@ type AppBuildLog struct {
 type PlatformRoute struct {
 	SiteID   string
 	Hostname string
+}
+
+// AppPlatformRoute is private worker input for the generated App route file.
+// Address is a runtime-inspected private bridge address and never enters the
+// public API projection.
+type AppPlatformRoute struct {
+	AppID    string
+	Hostname string
+	Address  string
+	Port     int
 }
 
 // SiteDomain binds a verified DNS hostname to a Site. The verification token
