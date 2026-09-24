@@ -1398,6 +1398,24 @@ app_runtime_container_id() {
 	printf '%s' "$containers"
 }
 
+wait_for_app_runtime_container_replacement() {
+	local previous_container="$1" containers count
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		containers="$(docker ps -q --filter "label=stealth.app_id=${platform_app_id}" --filter 'label=stealth.resource_type=app')"
+		count="$(printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' ')"
+		if [ "$count" = '1' ] && [ "$containers" != "$previous_container" ]; then
+			printf '%s' "$containers"
+			return 0
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'expected one running replacement App container, got %s: %s\n' "$count" "$containers" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
 assert_app_runtime_network() {
 	local network_name actual
 	network_name="$(app_runtime_network_name)"
@@ -1864,7 +1882,7 @@ wait_for_app_deployment_ready() {
 
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha
-	local disabled_generation conflict_observed runtime_name network_name worker worker_image upload_status
+	local disabled_generation conflict_observed runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -1960,6 +1978,49 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
 	printf 'App v2 deployment switch removed the previous container and converged at generation %s\n' "$generation"
+
+	old_container="$new_container"
+	runtime_tag="stealth-app/${platform_app_deployment_id}:runtime"
+	buildkit_container="$("${compose[@]}" ps -q buildkit)"
+	if [ -z "$buildkit_container" ]; then
+		printf '%s\n' 'BuildKit service container is missing before the OCI reimport test' >&2
+		return 1
+	fi
+	"${compose[@]}" stop worker buildkit >/dev/null
+	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
+		printf '%s\n' 'BuildKit remained running after the OCI reimport test stopped it' >&2
+		return 1
+	fi
+	docker rm -f "$old_container" >/dev/null
+	docker image rm --force "$runtime_tag" >/dev/null
+	if docker image inspect "$new_image_id" >/dev/null 2>&1; then
+		printf 'App runtime image still exists locally after removing tag %s (image=%s)\n' "$runtime_tag" "$new_image_id" >&2
+		return 1
+	fi
+	"${compose[@]}" start worker >/dev/null
+	new_container="$(wait_for_app_runtime_container_replacement "$old_container")"
+	wait_for_app_runtime running
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	replacement_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$replacement_image_id" != "$new_image_id" ]; then
+		printf 'OCI reimport did not restore the selected App image: generation=%s/%s deployment=%s image=%s/%s\n' "$observed" "$generation" "$selected" "$replacement_image_id" "$new_image_id" >&2
+		return 1
+	fi
+	if [ "$(docker image inspect --format '{{.Id}}' "$runtime_tag")" != "$new_image_id" ]; then
+		printf 'OCI reimport restored an unexpected image under %s\n' "$runtime_tag" >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	docker exec "$new_container" /buildkit-secret-probe verify-runtime
+	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
+		printf '%s\n' 'BuildKit restarted during the OCI reimport test' >&2
+		return 1
+	fi
+	printf 'BuildKit stayed stopped; worker reimported the App image from its persisted OCI artifact (container=%s)\n' "$new_container"
 
 	old_container="$new_container"
 	"${compose[@]}" restart worker
