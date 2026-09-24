@@ -1,6 +1,7 @@
 package appruntime
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -394,18 +395,60 @@ func TestEnsureImageIsIdempotentAndRepairsOnlyExpectedTag(t *testing.T) {
 	})
 
 	t.Run("missing image imports the verified archive once", func(t *testing.T) {
+		archive, manifestDigest, _ := runtimeTestOCIArchive(t, false)
+		info, err := ociartifact.Inspect(bytes.NewReader(archive), manifestDigest, int64(len(archive)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		configID := info.ConfigDigest
+		image := func(id string) []byte {
+			return mustJSON([]map[string]any{{
+				"Id": id, "Os": "linux", "Architecture": runtimeArchitecture(), "Variant": "",
+				"RepoTags": []string{tag}, "Config": map[string]any{}, "RootFS": map[string]any{"Layers": []string{}},
+			}})
+		}
 		notFound := &CommandFailure{ExitCode: 1, Stderr: "Error: No such image: " + configID}
 		runner := &scriptedRuntimeRunner{
 			results: []CommandResult{{}, {}, {Stdout: image(configID)}, {}, {}, {Stdout: image(configID)}},
 			errors:  []error{notFound, nil, nil, notFound, nil, nil},
 		}
 		moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, time.Minute)
-		archive := []byte("verified oci bytes")
 		if _, err := moby.EnsureImage(context.Background(), info, bytes.NewReader(archive), tag); err != nil {
 			t.Fatal(err)
 		}
-		if len(runner.calls) != 6 || !slices.Equal(runner.calls[1].args, []string{"image", "load"}) || runner.calls[1].stdin != string(archive) {
-			t.Fatalf("image import sequence did not stream the archive: %#v", runner.calls)
+		if len(runner.calls) != 6 || !slices.Equal(runner.calls[1].args, []string{"image", "load"}) {
+			t.Fatalf("image import command sequence = %#v", runner.calls)
+		}
+		loadedArchive := tar.NewReader(strings.NewReader(runner.calls[1].stdin))
+		var loadManifest []byte
+		for {
+			header, err := loadedArchive.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("converted image archive read error = %v", err)
+			}
+			if header.Name == "manifest.json" {
+				loadManifest, err = io.ReadAll(loadedArchive)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		var loadedImages []struct {
+			Config   string   `json:"Config"`
+			RepoTags []string `json:"RepoTags"`
+			Layers   []string `json:"Layers"`
+		}
+		if err := json.Unmarshal(loadManifest, &loadedImages); err != nil || len(loadedImages) != 1 {
+			t.Fatalf("image load stream lacks Docker compatibility manifest: %s", loadManifest)
+		}
+		if loadedImages[0].Config != "blobs/sha256/"+strings.TrimPrefix(configID, "sha256:") || len(loadedImages[0].RepoTags) != 0 || len(loadedImages[0].Layers) != 0 {
+			t.Fatalf("Docker load manifest = %+v", loadedImages[0])
+		}
+		if !slices.Equal(runner.calls[4].args, []string{"image", "tag", configID, tag}) {
+			t.Fatalf("runtime tag was not assigned after image verification: %#v", runner.calls)
 		}
 	})
 }

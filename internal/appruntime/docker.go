@@ -56,8 +56,8 @@ type CommandResult struct {
 	StderrTruncated bool
 }
 
-// CommandRunner executes one typed Docker argv vector and can stream an
-// immutable OCI archive to stdin. Implementations must not invoke a shell.
+// CommandRunner executes one typed Docker argv vector and can stream an image
+// archive to stdin. Implementations must not invoke a shell.
 type CommandRunner interface {
 	Run(context.Context, []string, io.Reader) (CommandResult, error)
 }
@@ -375,7 +375,18 @@ func (m *Moby) EnsureImage(ctx context.Context, info ociartifact.ImageInfo, arch
 			return Image{}, ErrImageVerification
 		}
 		importContext, cancel := context.WithTimeout(ctx, m.ImportTimeout)
-		_, importErr := m.run(importContext, []string{"image", "load"}, archive)
+		archiveReader, archiveWriter := io.Pipe()
+		conversionDone := make(chan error, 1)
+		go func() {
+			conversionErr := ociartifact.WriteDockerArchive(archive, info, archiveWriter)
+			_ = archiveWriter.CloseWithError(conversionErr)
+			conversionDone <- conversionErr
+		}()
+		_, importErr := m.run(importContext, []string{"image", "load"}, archiveReader)
+		_ = archiveReader.Close()
+		if conversionErr := <-conversionDone; conversionErr != nil {
+			importErr = errors.Join(importErr, conversionErr)
+		}
 		cancel()
 		image, found, err = m.inspectImage(ctx, info.ConfigDigest)
 		if err != nil && !errors.Is(err, ErrDockerObjectNotFound) {

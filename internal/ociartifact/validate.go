@@ -48,9 +48,11 @@ type imageManifest struct {
 type ImageInfo struct {
 	ManifestDigest string
 	ConfigDigest   string
+	ArchiveSize    int64 // Exact size of the verified archive.
 	OS             string
 	Architecture   string
 	Variant        string
+	LayerDigests   []string // OCI layer blob digests in manifest order.
 	LayerDiffIDs   []string
 	VolumePaths    []string
 }
@@ -221,6 +223,10 @@ func Inspect(reader io.ReadSeeker, expectedDigest string, maxBytes int64) (Image
 	if err := Validate(reader, expectedDigest, maxBytes); err != nil {
 		return ImageInfo{}, err
 	}
+	archiveSize, err := reader.Seek(0, io.SeekEnd)
+	if err != nil || archiveSize <= 0 || archiveSize > maxBytes {
+		return ImageInfo{}, ErrInvalidArchive
+	}
 	manifestBytes, err := readBlob(reader, expectedDigest, maxIndexBytes, maxBytes)
 	if err != nil || archiveDigestBytes(manifestBytes) != expectedDigest {
 		return ImageInfo{}, ErrInvalidArchive
@@ -253,12 +259,22 @@ func Inspect(reader io.ReadSeeker, expectedDigest string, maxBytes int64) (Image
 	return ImageInfo{
 		ManifestDigest: expectedDigest,
 		ConfigDigest:   manifest.Config.Digest,
+		ArchiveSize:    archiveSize,
 		OS:             config.OS,
 		Architecture:   config.Architecture,
 		Variant:        config.Variant,
+		LayerDigests:   layerDigests(manifest.Layers),
 		LayerDiffIDs:   append([]string(nil), config.RootFS.DiffIDs...),
 		VolumePaths:    volumes,
 	}, nil
+}
+
+func layerDigests(layers []descriptor) []string {
+	digests := make([]string, len(layers))
+	for index, layer := range layers {
+		digests[index] = layer.Digest
+	}
+	return digests
 }
 
 func readBlob(reader io.ReadSeeker, digest string, maxMetadataBytes, maxArchiveBytes int64) ([]byte, error) {
