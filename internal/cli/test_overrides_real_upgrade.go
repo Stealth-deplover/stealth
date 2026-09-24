@@ -35,9 +35,10 @@ func compiledCLITestOverrides() *cliTestOverrides {
 		return nil
 	}
 	return &cliTestOverrides{
-		assetBase:    assetBase,
-		runner:       realUpgradeCommandRunner{},
-		pollAttempts: 1,
-		pollInterval: time.Millisecond,
+		assetBase:                   assetBase,
+		runner:                      realUpgradeCommandRunner{},
+		pollAttempts:                1,
+		pollInterval:                time.Millisecond,
+		buildKitAppArmorProfilePath: strings.TrimSpace(os.Getenv("STEALTH_REAL_V025_APPARMOR_PROFILE_PATH")),
 	}
 }

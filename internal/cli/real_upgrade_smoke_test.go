@@ -246,6 +246,10 @@ func runRealV025BridgeReconciliation(t *testing.T, fixtureRoot, assetBase, bridg
 	var output, errorsOutput bytes.Buffer
 	app := NewApp(strings.NewReader(""), &output, &errorsOutput)
 	app.assetBase = assetBase
+	app.buildKitAppArmorProfilePath = filepath.Join(reconciliationRoot, "apparmor.d", installengine.BuildKitAppArmorProfileName)
+	if err := os.MkdirAll(filepath.Dir(app.buildKitAppArmorProfilePath), 0o700); err != nil {
+		t.Fatalf("create isolated AppArmor profile directory: %v", err)
+	}
 	releaseClient := releaseServer.server.Client()
 	app.httpClient = &http.Client{
 		Timeout: 20 * time.Second,

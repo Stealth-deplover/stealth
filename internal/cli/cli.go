@@ -40,10 +40,11 @@ type CommandRunner interface {
 type execCommandRunner struct{}
 
 type cliTestOverrides struct {
-	assetBase    string
-	runner       CommandRunner
-	pollAttempts int
-	pollInterval time.Duration
+	assetBase                   string
+	runner                      CommandRunner
+	pollAttempts                int
+	pollInterval                time.Duration
+	buildKitAppArmorProfilePath string
 }
 
 // App owns process dependencies and CLI configuration. A single App is used
@@ -81,7 +82,8 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	assetBase := defaultRawBaseURL
 	pollAttempts := 60
 	pollInterval := 2 * time.Second
-	if overrides := compiledCLITestOverrides(); overrides != nil {
+	overrides := compiledCLITestOverrides()
+	if overrides != nil {
 		if overrides.assetBase != "" {
 			assetBase = overrides.assetBase
 		}
@@ -95,7 +97,7 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 			pollInterval = overrides.pollInterval
 		}
 	}
-	return &App{
+	app := &App{
 		in:                  in,
 		out:                 out,
 		errOut:              errOut,
@@ -111,6 +113,10 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 		pollAttempts:        pollAttempts,
 		pollInterval:        pollInterval,
 	}
+	if overrides != nil {
+		app.buildKitAppArmorProfilePath = overrides.buildKitAppArmorProfilePath
+	}
+	return app
 }
 
 // Run dispatches one CLI invocation and returns a shell-friendly exit code.
