@@ -139,6 +139,7 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 	if err := f.repo.DeleteApp(f.ctx, f.projectOneID, appID, f.actor); err != nil {
 		t.Fatal(err)
 	}
+	assertAppRuntimeCleanupContainerID(t, f, appID)
 	cleanup, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "cleanup-worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +175,7 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 	if err := f.repo.DeleteProject(f.ctx, f.projectTwoID, f.accountID, f.projectTwoName); err != nil {
 		t.Fatal(err)
 	}
+	assertAppRuntimeCleanupContainerID(t, f, appID)
 	cleanup, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "project-cleanup-worker", time.Minute)
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +196,22 @@ func assertAppRuntimeContainerID(t *testing.T, f appRepositoryFixture, appID uui
 	}
 	if containerID != strings.Repeat("a", 64) {
 		t.Fatalf("successful runtime completion did not persist the inspected container ID: %v", containerID)
+	}
+}
+
+func assertAppRuntimeCleanupContainerID(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
+	t.Helper()
+	var containerID string
+	err := f.pool.QueryRow(f.ctx, `
+		SELECT COALESCE(container_id,'')
+		FROM app_runtime_cleanup_jobs
+		WHERE app_id=$1 AND container_name=$2 AND status='pending'
+		ORDER BY created_at DESC LIMIT 1`, appID, AppRuntimeContainerName(appID)).Scan(&containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containerID != strings.Repeat("a", 64) {
+		t.Fatalf("App runtime cleanup job did not persist the container ID: %v", containerID)
 	}
 }
 

@@ -565,13 +565,9 @@ func queueAppRuntimeCleanupTx(ctx context.Context, tx pgx.Tx, projectID *uuid.UU
 	if err != nil {
 		return err
 	}
-	var containerIDValue any
-	if containerID != "" {
-		containerIDValue = containerID
-	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO app_runtime_cleanup_jobs (id,project_id,app_id,container_id,container_name,stop_grace_period_seconds)
-		VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, id, projectID, appID, containerIDValue, containerName, stopGrace)
+		VALUES ($1,$2,$3,NULLIF($4::text,''),$5,$6) ON CONFLICT DO NOTHING`, id, projectID, appID, containerID, containerName, stopGrace)
 	return err
 }
 
