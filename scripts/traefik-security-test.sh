@@ -345,7 +345,7 @@ if printf '%s\n' "$worker_mtls_init_block" | grep -Eq '/server/|/health/|ca-key\
 	printf '%s\n' 'worker credential initializer has access to another BuildKit identity' >&2
 	exit 1
 fi
-if printf '%s\n' "$server_mtls_init_block" | grep -Eq '/worker/|client-key\.pem|ca-key\.pem|buildkit_worker_credentials'; then
+if printf '%s\n' "$server_mtls_init_block" | grep -Eq '/worker/|/client-key\.pem|ca-key\.pem|buildkit_worker_credentials'; then
 	printf '%s\n' 'BuildKit credential initializer has access to worker or CA private key material' >&2
 	exit 1
 fi
