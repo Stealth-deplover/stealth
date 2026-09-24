@@ -1517,6 +1517,24 @@ wait_for_app_runtime_container_replacement() {
 	return 1
 }
 
+wait_for_running_app_runtime_container() {
+	local containers count
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		containers="$(docker ps -q --filter "label=stealth.app_id=${platform_app_id}" --filter 'label=stealth.resource_type=app')"
+		count="$(printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' ')"
+		if [ "$count" = '1' ]; then
+			printf '%s' "$containers"
+			return 0
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'expected one running App container, got %s: %s\n' "$count" "$containers" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
 assert_app_runtime_network() {
 	local network_name actual
 	network_name="$(app_runtime_network_name)"
@@ -2144,7 +2162,7 @@ verify_app_runtime_lifecycle() {
 	old_container="$new_container"
 	docker stop --time 1 "$old_container" >/dev/null
 	wait_for_app_runtime running
-	new_container="$(app_runtime_container_id)"
+	new_container="$(wait_for_running_app_runtime_container)"
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	printf 'unexpected App container exit was recovered (id=%s)\n' "$new_container"
 
