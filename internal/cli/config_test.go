@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
 const testGitHubAppClientID = "Iv1.test-client-id"
@@ -65,6 +66,15 @@ func testBuildKitAppArmorProfileAsset() string {
 		"profile stealth-buildkit-rootless flags=(unconfined) {\n" +
 		"  # Ubuntu 24.04+ requires this permission for rootlesskit user namespaces.\n" +
 		"  userns,\n}\n"
+}
+
+func isolatedBuildKitAppArmorProfilePath(t *testing.T) string {
+	t.Helper()
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(profileDir, installengine.BuildKitAppArmorProfileName)
 }
 
 func testManagedTraefikStaticAsset() string {
@@ -257,6 +267,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
 	app.runner = &setupRunner{}
+	app.buildKitAppArmorProfilePath = isolatedBuildKitAppArmorProfilePath(t)
 	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)

@@ -50,21 +50,22 @@ type cliTestOverrides struct {
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
 type App struct {
-	in                  io.Reader
-	out                 io.Writer
-	errOut              io.Writer
-	runner              CommandRunner
-	httpClient          *http.Client
-	homeDir             string
-	assetBase           string
-	releaseAPIBase      string
-	releaseDownloadBase string
-	executablePath      func() (string, error)
-	renameFile          func(string, string) error
-	currentVersion      func() string
-	runTargetMigration  func(context.Context, string, string) error
-	cloudflareFactory   cloudflareClientFactory
-	verbose             bool
+	in                          io.Reader
+	out                         io.Writer
+	errOut                      io.Writer
+	runner                      CommandRunner
+	httpClient                  *http.Client
+	homeDir                     string
+	assetBase                   string
+	releaseAPIBase              string
+	releaseDownloadBase         string
+	executablePath              func() (string, error)
+	renameFile                  func(string, string) error
+	currentVersion              func() string
+	runTargetMigration          func(context.Context, string, string) error
+	cloudflareFactory           cloudflareClientFactory
+	verbose                     bool
+	buildKitAppArmorProfilePath string
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.

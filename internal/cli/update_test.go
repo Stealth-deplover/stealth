@@ -359,6 +359,7 @@ func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) 
 	bridge.assetBase = assetServer.URL
 	bridge.httpClient = releaseServer.Client()
 	bridge.runner = &setupRunner{}
+	bridge.buildKitAppArmorProfilePath = isolatedBuildKitAppArmorProfilePath(t)
 	bridge.releaseAPIBase = releaseServer.URL
 	bridge.releaseDownloadBase = releaseServer.URL
 	bridge.currentVersion = func() string { return bridgeVersion }

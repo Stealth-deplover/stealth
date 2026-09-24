@@ -857,9 +857,14 @@ func TestPrepareRemovesDefaultPeerWhenAutoSelectingFreeSubnet(t *testing.T) {
 	}
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	defer assetServer.Close()
+	profilePath := filepath.Join(t.TempDir(), "apparmor.d", BuildKitAppArmorProfileName)
+	if err := os.MkdirAll(filepath.Dir(profilePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	engine := New(Options{
-		AssetBaseURL: assetServer.URL,
-		Runner:       ingressNetworkTestRunner{networks: []testDockerNetwork{{name: "unrelated", subnet: defaultIngressSubnet}}},
+		AssetBaseURL:                assetServer.URL,
+		Runner:                      ingressNetworkTestRunner{networks: []testDockerNetwork{{name: "unrelated", subnet: defaultIngressSubnet}}},
+		BuildKitAppArmorProfilePath: profilePath,
 	})
 	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id", IngressNetworkName: "stealth_b_ingress"}); err != nil {
 		t.Fatal(err)
