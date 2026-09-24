@@ -586,19 +586,15 @@ func resetAppRuntimeRetryTx(ctx context.Context, tx pgx.Tx, appID uuid.UUID) err
 
 func queueAppRuntimeCleanupForAppTx(ctx context.Context, tx pgx.Tx, projectID, appID uuid.UUID, stopGrace int) error {
 	containerName := AppRuntimeContainerName(appID)
-	var containerID, storedName *string
-	err := tx.QueryRow(ctx, `SELECT container_id,container_name FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&containerID, &storedName)
+	var containerID, storedName string
+	err := tx.QueryRow(ctx, `SELECT COALESCE(container_id,''),COALESCE(container_name,'') FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&containerID, &storedName)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if storedName != nil && validRuntimeContainerName(appID, *storedName) {
-		containerName = *storedName
+	if storedName != "" && validRuntimeContainerName(appID, storedName) {
+		containerName = storedName
 	}
-	containerIDValue := ""
-	if containerID != nil {
-		containerIDValue = *containerID
-	}
-	return queueAppRuntimeCleanupTx(ctx, tx, &projectID, appID, containerIDValue, containerName, stopGrace)
+	return queueAppRuntimeCleanupTx(ctx, tx, &projectID, appID, containerID, containerName, stopGrace)
 }
 
 func validateRuntimeJob(job AppRuntimeJob) error {
