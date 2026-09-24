@@ -15,8 +15,9 @@ import (
 )
 
 type recordedCommand struct {
-	name string
-	args []string
+	name  string
+	args  []string
+	stdin []byte
 }
 
 type fakeRunner struct {
@@ -29,6 +30,17 @@ func (r *fakeRunner) Run(_ context.Context, _ string, _, _ io.Writer, name strin
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
+	return r.err
+}
+
+func (r *fakeRunner) RunInput(_ context.Context, _ string, stdin io.Reader, _, _ io.Writer, name string, args ...string) error {
+	contents, err := io.ReadAll(stdin)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, recordedCommand{name: name, args: append([]string(nil), args...), stdin: contents})
 	return r.err
 }
 
@@ -56,7 +68,7 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 	if err := os.MkdirAll(filepath.Dir(layout.ProxyFile), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://127.0.0.1:8080\n"); err != nil {
+	if err := WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://127.0.0.1:8080\nAPPS_BUILDKIT_APPARMOR_PROFILE=unconfined\n"); err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteAtomic(layout.ComposeFile, []byte("services:\n"), 0o644); err != nil {
@@ -81,7 +93,8 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 		}
 	}
 	for path, contents := range map[string]string{
-		filepath.Join(layout.Root, "buildkit", "buildkitd.toml"): testBuildKitConfigAsset(),
+		filepath.Join(layout.Root, "buildkit", "buildkitd.toml"):                     testBuildKitConfigAsset(),
+		filepath.Join(layout.Root, "buildkit", "stealth-buildkit-rootless.apparmor"): testBuildKitAppArmorProfileAsset(),
 		layout.TraefikStatic: testTraefikStaticAsset(),
 		layout.TraefikCore:   strings.ReplaceAll(testTraefikCoreAsset(), "__STEALTH_PUBLIC_HOST__", "127.0.0.1"),
 		filepath.Join(layout.TraefikGenerated, ".gitkeep"): "# Stealth route reconciler\n",
@@ -94,11 +107,22 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=unconfined\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\n"
+	return "services:\n  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\n"
 }
 
 func testBuildKitConfigAsset() string {
 	return "[worker.oci]\nrootless = true\nnoProcessSandbox = false\ngc = true\nreservedSpace = \"1GB\"\nmaxUsedSpace = \"10GB\"\nminFreeSpace = \"5GB\"\nmax-parallelism = 2\n\n[frontend.\"dockerfile.v0\"]\nenabled = true\n"
+}
+
+func testBuildKitAppArmorProfileAsset() string {
+	return buildKitAppArmorProfile
+}
+
+func expectedAppArmorParserCommand(args ...string) (string, []string) {
+	if os.Geteuid() != 0 {
+		return "sudo", append([]string{"apparmor_parser"}, args...)
+	}
+	return "apparmor_parser", args
 }
 
 func testMainCollectorAsset() string {
@@ -122,17 +146,18 @@ func testTraefikCoreAsset() string {
 func newEngineAssetServer(t *testing.T, version string) *httptest.Server {
 	t.Helper()
 	assets := map[string]string{
-		"compose.production.yaml":            testProductionComposeAsset(),
-		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
-		"compose.setup.yaml":                 "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
-		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":          "server {\n}",
-		"traefik/traefik.yaml":               testTraefikStaticAsset(),
-		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
-		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
+		"compose.production.yaml":                     testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":                     testBuildKitConfigAsset(),
+		"buildkit/stealth-buildkit-rootless.apparmor": testBuildKitAppArmorProfileAsset(),
+		"compose.setup.yaml":                          "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":               testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":                 "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":                  "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":                 "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":                   "server {\n}",
+		"traefik/traefik.yaml":                        testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":                   testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep":          "# Stealth route reconciler\n",
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/"+version+"/")
@@ -261,8 +286,194 @@ func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
 	if !containsPair(calls[0].args, "--profile", "cloudflare") {
 		t.Fatalf("Cloudflare profile was not enabled: %#v", calls[0])
 	}
-	if got := calls[0].args[len(calls[0].args)-11:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "traefik", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "cloudflared"}) {
+	if got := calls[0].args[len(calls[0].args)-12:]; !equalArgs(got, []string{"api", "worker", "console", "proxy", "traefik", "buildkit", "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker", "cloudflared"}) {
 		t.Fatalf("Cloudflare service command = %#v", calls[0])
+	}
+}
+
+func TestRunStepStartsBuildKitWithoutWorkerDependency(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner})
+	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true}
+	if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	if len(calls) != 1 || calls[0].name != "docker" || !contains(calls[0].args, "buildkit") {
+		t.Fatalf("service startup calls = %#v, want BuildKit started in the production service step", calls)
+	}
+	if containsPair(calls[0].args, "--no-deps", "buildkit") {
+		t.Fatalf("BuildKit unexpectedly couples worker startup to a BuildKit health dependency: %#v", calls[0])
+	}
+}
+
+func TestEnsureBuildKitAppArmorProfileLoadsManagedUserNSOnlyProfile(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	if err := WritePrivateFile(layout.EnvFile, "APPS_BUILDKIT_APPARMOR_PROFILE="+BuildKitAppArmorProfileName+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.Mkdir(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileDir, BuildKitAppArmorProfileName)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner, BuildKitAppArmorProfilePath: profilePath})
+	if err := engine.ensureBuildKitAppArmorProfile(context.Background(), Plan{Layout: layout}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(profilePath)
+	if err != nil || string(contents) != testBuildKitAppArmorProfileAsset() {
+		t.Fatalf("installed profile = %q, %v", contents, err)
+	}
+	calls := runner.snapshot()
+	wantName, wantArgs := expectedAppArmorParserCommand("-r", "-W", profilePath)
+	if len(calls) != 1 || calls[0].name != wantName || !equalArgs(calls[0].args, wantArgs) {
+		t.Fatalf("profile load call = %#v", calls)
+	}
+}
+
+func TestConfigurationStepLoadsRestrictedHostProfileBeforeServiceSteps(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	if err := WritePrivateFile(layout.EnvFile, "PUBLIC_APP_URL=http://127.0.0.1:8080\nAPPS_BUILDKIT_APPARMOR_PROFILE="+BuildKitAppArmorProfileName+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.Mkdir(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileDir, BuildKitAppArmorProfileName)
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	runner := &fakeRunner{}
+	engine := New(Options{
+		Runner: runner, AssetBaseURL: assetServer.URL,
+		BuildKitAppArmorProfilePath: profilePath,
+	})
+	if err := engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", Existing: true}, StepConfiguration); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	wantName, _ := expectedAppArmorParserCommand("-r", "-W", profilePath)
+	if len(calls) < 3 || calls[len(calls)-1].name != wantName {
+		t.Fatalf("configuration commands = %#v; AppArmor profile must be loaded after managed assets and Compose validation", calls)
+	}
+	if calls[len(calls)-2].name != "docker" || !contains(calls[len(calls)-2].args, "config") {
+		t.Fatalf("AppArmor profile load did not follow Compose validation: %#v", calls)
+	}
+}
+
+func TestEnsureBuildKitAppArmorProfileRejectsUnmanagedCollision(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	if err := WritePrivateFile(layout.EnvFile, "APPS_BUILDKIT_APPARMOR_PROFILE="+BuildKitAppArmorProfileName+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.Mkdir(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileDir, BuildKitAppArmorProfileName)
+	if err := os.WriteFile(profilePath, []byte("profile operator-custom { }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner, BuildKitAppArmorProfilePath: profilePath})
+	if err := engine.ensureBuildKitAppArmorProfile(context.Background(), Plan{Layout: layout}); err == nil {
+		t.Fatal("installer overwrote an unmanaged profile")
+	}
+	if calls := runner.snapshot(); len(calls) != 0 {
+		t.Fatalf("AppArmor parser ran after unmanaged profile collision: %#v", calls)
+	}
+}
+
+func TestEnsureBuildKitAppArmorProfileUsesSudoForSystemDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("sudo installation path is for an unprivileged host installer")
+	}
+	layout := writeEngineFixture(t, false)
+	if err := WritePrivateFile(layout.EnvFile, "APPS_BUILDKIT_APPARMOR_PROFILE="+BuildKitAppArmorProfileName+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.Mkdir(profileDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileDir, BuildKitAppArmorProfileName)
+	runner := &fakeRunner{}
+	engine := New(Options{Runner: runner, BuildKitAppArmorProfilePath: profilePath})
+	if err := engine.ensureBuildKitAppArmorProfile(context.Background(), Plan{Layout: layout}); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	stagingPath := buildKitAppArmorStagingPath(profilePath)
+	if len(calls) != 4 || calls[0].name != "sudo" || !equalArgs(calls[0].args, []string{"tee", stagingPath}) || string(calls[0].stdin) != testBuildKitAppArmorProfileAsset() {
+		t.Fatalf("profile installation escalation = %#v", calls)
+	}
+	if calls[1].name != "sudo" || !equalArgs(calls[1].args, []string{"chmod", "0644", stagingPath}) {
+		t.Fatalf("profile permission escalation = %#v", calls[1])
+	}
+	if calls[2].name != "sudo" || !equalArgs(calls[2].args, []string{"mv", "--", stagingPath, profilePath}) {
+		t.Fatalf("profile publication escalation = %#v", calls[2])
+	}
+	if calls[3].name != "sudo" || !equalArgs(calls[3].args, []string{"apparmor_parser", "-r", "-W", profilePath}) {
+		t.Fatalf("profile load escalation = %#v", calls[3])
+	}
+}
+
+func TestRemoveManagedBuildKitAppArmorProfileUnloadsBeforeRemovingFile(t *testing.T) {
+	directory := t.TempDir()
+	profilePath := filepath.Join(directory, BuildKitAppArmorProfileName)
+	if err := os.WriteFile(profilePath, []byte(testBuildKitAppArmorProfileAsset()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if err := removeManagedBuildKitAppArmorProfileAt(context.Background(), runner, io.Discard, io.Discard, profilePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(profilePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed profile remains after removal: %v", err)
+	}
+	calls := runner.snapshot()
+	wantName, wantArgs := expectedAppArmorParserCommand("-R", profilePath)
+	if len(calls) != 1 || calls[0].name != wantName || !equalArgs(calls[0].args, wantArgs) {
+		t.Fatalf("profile unload call = %#v", calls)
+	}
+}
+
+func TestRemoveManagedBuildKitAppArmorProfileUsesSudoForSystemDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("sudo removal path is for an unprivileged host installer")
+	}
+	directory := t.TempDir()
+	profilePath := filepath.Join(directory, BuildKitAppArmorProfileName)
+	if err := os.WriteFile(profilePath, []byte(testBuildKitAppArmorProfileAsset()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
+	runner := &fakeRunner{}
+	if err := removeManagedBuildKitAppArmorProfileAt(context.Background(), runner, io.Discard, io.Discard, profilePath); err != nil {
+		t.Fatal(err)
+	}
+	calls := runner.snapshot()
+	if len(calls) != 2 || calls[0].name != "sudo" || !equalArgs(calls[0].args, []string{"apparmor_parser", "-R", profilePath}) {
+		t.Fatalf("profile unload escalation = %#v", calls)
+	}
+	if calls[1].name != "sudo" || !equalArgs(calls[1].args, []string{"rm", "--", profilePath}) {
+		t.Fatalf("profile file removal escalation = %#v", calls[1])
+	}
+}
+
+func TestBuildKitAppArmorManagedAssetMatchesValidatedPolicy(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "buildkit", "stealth-buildkit-rootless.apparmor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBuildKitAppArmorProfileAsset(contents); err != nil {
+		t.Fatalf("release AppArmor asset: %v", err)
 	}
 }
 
@@ -395,6 +606,8 @@ func TestPrepareDownloadsVersionedSetupAssetsAtomically(t *testing.T) {
 			_, _ = io.WriteString(w, testProductionComposeAsset())
 		case "/v1.2.3/buildkit/buildkitd.toml":
 			_, _ = io.WriteString(w, testBuildKitConfigAsset())
+		case "/v1.2.3/buildkit/stealth-buildkit-rootless.apparmor":
+			_, _ = io.WriteString(w, testBuildKitAppArmorProfileAsset())
 		case "/v1.2.3/compose.setup.yaml":
 			_, _ = io.WriteString(w, "services:\n  setup:\n    image: example\n")
 		case "/v1.2.3/telemetry/otel-collector.yaml":
@@ -482,17 +695,18 @@ func TestPrepareMigratesExistingConfigWithTelemetryImages(t *testing.T) {
 func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 	const targetVersion = "v0.2.3"
 	targetAssets := map[string]string{
-		"compose.production.yaml":            testProductionComposeAsset(),
-		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
-		"compose.setup.yaml":                 "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
-		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":          "server {\n  location / { proxy_pass http://console:3000; }\n}\n",
-		"traefik/traefik.yaml":               testTraefikStaticAsset(),
-		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
-		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
+		"compose.production.yaml":                     testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":                     testBuildKitConfigAsset(),
+		"buildkit/stealth-buildkit-rootless.apparmor": testBuildKitAppArmorProfileAsset(),
+		"compose.setup.yaml":                          "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":               "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":                 "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":                  "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":                 "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":                   "server {\n  location / { proxy_pass http://console:3000; }\n}\n",
+		"traefik/traefik.yaml":                        testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":                   testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep":          "# Stealth route reconciler\n",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		contents, ok := targetAssets[strings.TrimPrefix(r.URL.Path, "/"+targetVersion+"/")]
@@ -889,17 +1103,18 @@ func TestTargetReleaseManifestCanAddFutureManagedAsset(t *testing.T) {
 	const version = "v1.2.3"
 	layout := writeEngineFixture(t, false)
 	assets := map[string]string{
-		"compose.production.yaml":            testProductionComposeAsset(),
-		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
-		"telemetry/otel-collector.yaml":      testMainCollectorAsset(),
-		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":          "server {\n}",
-		"traefik/traefik.yaml":               testTraefikStaticAsset(),
-		"traefik/dynamic/core.yaml":          testTraefikCoreAsset(),
-		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
-		"telemetry/future.yaml":              "future_receiver:\n",
+		"compose.production.yaml":                     testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":                     testBuildKitConfigAsset(),
+		"buildkit/stealth-buildkit-rootless.apparmor": testBuildKitAppArmorProfileAsset(),
+		"telemetry/otel-collector.yaml":               testMainCollectorAsset(),
+		"telemetry/host-metrics.yaml":                 "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":                  "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":                 "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":                   "server {\n}",
+		"traefik/traefik.yaml":                        testTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":                   testTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep":          "# Stealth route reconciler\n",
+		"telemetry/future.yaml":                       "future_receiver:\n",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		contents, ok := assets[strings.TrimPrefix(r.URL.Path, "/"+version+"/")]

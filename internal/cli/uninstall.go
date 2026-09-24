@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
 type uninstallMode int
@@ -623,6 +625,14 @@ func (a *App) uninstallOperations(plan uninstallPlan) []uninstallOperation {
 		operations = append(operations, uninstallOperation{
 			name:   "Verify service removal",
 			action: func(ctx context.Context) error { return a.verifyServicesRemoved(ctx, plan) },
+		})
+	}
+	if plan.mode == uninstallConfiguration || plan.mode == uninstallPurge {
+		operations = append(operations, uninstallOperation{
+			name: "Remove managed BuildKit AppArmor policy",
+			action: func(ctx context.Context) error {
+				return installengine.RemoveManagedBuildKitAppArmorProfile(ctx, a.runner, a.out, a.errOut)
+			},
 		})
 	}
 	if plan.mode == uninstallConfiguration {

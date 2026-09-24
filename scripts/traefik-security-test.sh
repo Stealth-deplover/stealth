@@ -221,13 +221,20 @@ for required in \
 	'image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef' \
 	'read_only: true' \
 	'seccomp=unconfined' \
-	'apparmor=unconfined' \
 	'systempaths=unconfined'; do
 	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
 		printf 'App BuildKit service is missing required setting: %s\n' "$required" >&2
 		exit 1
 	fi
 done
+buildkit_apparmor_profile="$(printf '%s\n' "$buildkit_block" | sed -n 's/^[[:space:]]*- apparmor=//p' | head -n 1)"
+case "$buildkit_apparmor_profile" in
+	unconfined|stealth-buildkit-rootless) ;;
+	*)
+		printf 'App BuildKit AppArmor profile is not an approved rootless setting: %s\n' "$buildkit_apparmor_profile" >&2
+		exit 1
+		;;
+esac
 if ! printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*user: "?1000:1000"?$'; then
 	printf '%s\n' 'App BuildKit must run as the dedicated non-root user' >&2
 	exit 1
@@ -332,6 +339,24 @@ done
 for forbidden in 'insecure-entitlements' 'security.insecure' 'network.host' 'gateway.v0'; do
 	if grep -Fq -- "$forbidden" "$buildkit_config"; then
 		printf 'BuildKit daemon config contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+
+buildkit_apparmor_asset="$(dirname -- "$compose_file")/buildkit/stealth-buildkit-rootless.apparmor"
+if [ ! -f "$buildkit_apparmor_asset" ]; then
+	printf 'BuildKit AppArmor profile asset is missing: %s\n' "$buildkit_apparmor_asset" >&2
+	exit 1
+fi
+for required in 'profile stealth-buildkit-rootless flags=(unconfined)' 'userns,'; do
+	if ! grep -Fq -- "$required" "$buildkit_apparmor_asset"; then
+		printf 'BuildKit AppArmor profile is missing required rule: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for forbidden in 'capability' 'network' 'mount' 'file,' ' ptrace'; do
+	if grep -Fq -- "$forbidden" "$buildkit_apparmor_asset"; then
+		printf 'BuildKit AppArmor profile contains an unexpected permission: %s\n' "$forbidden" >&2
 		exit 1
 	fi
 done

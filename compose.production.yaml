@@ -510,7 +510,7 @@ services:
       # nested user/mount namespaces. The service remains non-privileged and
       # receives no host namespace or socket access.
       - seccomp=unconfined
-      - apparmor=unconfined
+      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
       - systempaths=unconfined
     mem_limit: "${APPS_BUILDKIT_MEMORY_LIMIT:-4g}"
     pids_limit: 4096

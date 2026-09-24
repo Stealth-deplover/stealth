@@ -41,6 +41,13 @@ type CommandRunner interface {
 	Output(context.Context, string, string, ...string) ([]byte, error)
 }
 
+// InputCommandRunner extends the process boundary for fixed trusted input.
+// It is used when a narrow privileged host command must consume a validated
+// release asset without reopening a user-writable source path.
+type InputCommandRunner interface {
+	RunInput(context.Context, string, io.Reader, io.Writer, io.Writer, string, ...string) error
+}
+
 // OSCommandRunner executes the Docker Compose commands selected by a plan.
 // It is intentionally small so tests can assert the exact command surface.
 type OSCommandRunner struct{}
@@ -48,6 +55,15 @@ type OSCommandRunner struct{}
 func (OSCommandRunner) Run(ctx context.Context, dir string, stdout, stderr io.Writer, name string, args ...string) error {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
+}
+
+func (OSCommandRunner) RunInput(ctx context.Context, dir string, stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = dir
+	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
 	return command.Run()
@@ -153,7 +169,7 @@ var StepNames = []string{
 	"Release images",
 	"PostgreSQL and Redis",
 	"Database migrations",
-	"API, Worker, Console, Proxy, and Traefik",
+	"API, Worker, BuildKit, Console, Proxy, and Traefik",
 	"Health and readiness verification",
 }
 
@@ -173,6 +189,11 @@ type Options struct {
 	PollAttempts int
 	PollInterval time.Duration
 
+	// BuildKitAppArmorProfilePath is injectable for tests. Production stores
+	// the profile under AppArmor's system profile directory so it is loaded on
+	// host boot as well as during installation.
+	BuildKitAppArmorProfilePath string
+
 	// ManagedAssets is intentionally supplied by the release binary, never by
 	// CLI input. It lets the target release own its runtime asset manifest, so
 	// a future release can add an asset without teaching the previous binary
@@ -186,14 +207,15 @@ type Options struct {
 }
 
 type Engine struct {
-	runner        CommandRunner
-	httpClient    *http.Client
-	assetBaseURL  string
-	output        io.Writer
-	pollAttempts  int
-	pollInterval  time.Duration
-	managedAssets []ManagedAsset
-	migrationHook func(MigrationEvent) error
+	runner              CommandRunner
+	httpClient          *http.Client
+	assetBaseURL        string
+	output              io.Writer
+	pollAttempts        int
+	pollInterval        time.Duration
+	appArmorProfilePath string
+	managedAssets       []ManagedAsset
+	migrationHook       func(MigrationEvent) error
 }
 
 func New(options Options) *Engine {
@@ -221,13 +243,18 @@ func New(options Options) *Engine {
 	if output == nil {
 		output = io.Discard
 	}
+	appArmorProfilePath := strings.TrimSpace(options.BuildKitAppArmorProfilePath)
+	if appArmorProfilePath == "" {
+		appArmorProfilePath = BuildKitAppArmorProfilePath
+	}
 	managedAssets := options.ManagedAssets
 	if managedAssets == nil {
 		managedAssets = DefaultManagedAssets()
 	}
 	return &Engine{
 		runner: runner, httpClient: httpClient, assetBaseURL: assetBaseURL, output: output,
-		pollAttempts: attempts, pollInterval: interval, managedAssets: append([]ManagedAsset(nil), managedAssets...),
+		pollAttempts: attempts, pollInterval: interval, appArmorProfilePath: appArmorProfilePath,
+		managedAssets: append([]ManagedAsset(nil), managedAssets...),
 		migrationHook: options.MigrationHook,
 	}
 }
@@ -317,7 +344,13 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		// From COMPOSE_VALIDATED onward the new release is coherent. If the
 		// bounded backup publication is interrupted, the next lifecycle command
 		// completes it forward rather than rolling valid target assets back.
-		return prepared.finalize()
+		if err := prepared.finalize(); err != nil {
+			return err
+		}
+		if !plan.Setup {
+			return e.ensureBuildKitAppArmorProfile(ctx, plan)
+		}
+		return nil
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
@@ -362,6 +395,7 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
+			services = append(services, "buildkit")
 			services = append(services, "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker")
 		}
 		if plan.Cloudflare {
@@ -401,6 +435,7 @@ func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
 		{Path: "buildkit/buildkitd.toml", RemotePath: "buildkit/buildkitd.toml", Marker: "rootless = true", productionOnly: true, validate: validateBuildKitConfigAsset},
+		{Path: "buildkit/stealth-buildkit-rootless.apparmor", RemotePath: "buildkit/stealth-buildkit-rootless.apparmor", Marker: BuildKitAppArmorProfileName, productionOnly: true, validate: validateBuildKitAppArmorProfileAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
 		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, render: renderTraefikStaticAsset, validate: validateTraefikStaticAsset},
 		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
@@ -608,7 +643,15 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		if strings.TrimSpace(contents) == "" {
 			generatedConfig = true
 			var err error
-			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root, IngressNetworkName: plan.IngressNetworkName})
+			appArmorProfile, profileErr := DetectBuildKitAppArmorProfile()
+			if profileErr != nil {
+				return nil, fmt.Errorf("detect BuildKit AppArmor requirements: %w", profileErr)
+			}
+			contents, err = GenerateConfig(ConfigOptions{
+				Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID,
+				DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root,
+				IngressNetworkName: plan.IngressNetworkName, AppsBuildKitAppArmorProfile: appArmorProfile,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("generate configuration: %w", err)
 			}
@@ -1147,7 +1190,7 @@ func validateProductionComposeAsset(contents []byte) error {
 	for _, required := range []string{
 		"image: " + defaultBuildKitImage,
 		"user: \"1000:1000\"", "read_only: true", "seccomp=unconfined",
-		"apparmor=unconfined", "systempaths=unconfined", "buildkit_state:/home/user/.local/share/buildkit",
+		"apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}", "systempaths=unconfined", "buildkit_state:/home/user/.local/share/buildkit",
 		"networks: [app_build]", "buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro",
 	} {
 		if !strings.Contains(service, required) {

@@ -24,7 +24,7 @@ func testProductionComposeAsset() string {
     read_only: true
     security_opt:
       - seccomp=unconfined
-      - apparmor=unconfined
+      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
       - systempaths=unconfined
     volumes:
       - buildkit_state:/home/user/.local/share/buildkit
@@ -57,6 +57,14 @@ max-parallelism = 2
 [frontend."dockerfile.v0"]
 enabled = true
 `
+}
+
+func testBuildKitAppArmorProfileAsset() string {
+	return "# Managed by Stealth. Changes will be replaced by the installer.\n" +
+		"abi <abi/4.0>,\ninclude <tunables/global>\n\n" +
+		"profile stealth-buildkit-rootless flags=(unconfined) {\n" +
+		"  # Ubuntu 24.04+ requires this permission for rootlesskit user namespaces.\n" +
+		"  userns,\n}\n"
 }
 
 func testManagedTraefikStaticAsset() string {
@@ -207,6 +215,10 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 		}
 		if strings.HasSuffix(request.URL.Path, "buildkit/buildkitd.toml") {
 			_, _ = io.WriteString(writer, testBuildKitConfigAsset())
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "buildkit/stealth-buildkit-rootless.apparmor") {
+			_, _ = io.WriteString(writer, testBuildKitAppArmorProfileAsset())
 			return
 		}
 		if strings.HasSuffix(request.URL.Path, "traefik/traefik.yaml") {

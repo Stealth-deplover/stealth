@@ -184,6 +184,61 @@ func TestGenerateConfigPinsTraefikAndTrustedIngressPeer(t *testing.T) {
 	}
 }
 
+func TestBuildKitAppArmorProfileSelectionAndConfigValidation(t *testing.T) {
+	for input, expected := range map[string]string{"0": "unconfined", "1": BuildKitAppArmorProfileName} {
+		if got, err := buildKitAppArmorProfileForSetting(input); err != nil || got != expected {
+			t.Fatalf("profile for setting %q = %q, %v; want %q", input, got, err, expected)
+		}
+	}
+	if _, err := buildKitAppArmorProfileForSetting("enabled"); err == nil {
+		t.Fatal("unsupported AppArmor user namespace setting was accepted")
+	}
+	for _, profile := range []string{"unconfined", BuildKitAppArmorProfileName} {
+		config, err := GenerateConfig(ConfigOptions{
+			Version: "v1.2.3", PublicURL: "https://console.example.test",
+			GitHubAppClientID: "Iv1.test-client-id", AppsBuildKitAppArmorProfile: profile,
+		})
+		if err != nil {
+			t.Fatalf("GenerateConfig(%q): %v", profile, err)
+		}
+		values, err := ParseEnvContents(config)
+		if err != nil || values["APPS_BUILDKIT_APPARMOR_PROFILE"] != profile {
+			t.Fatalf("generated profile = %q, %v; want %q", values["APPS_BUILDKIT_APPARMOR_PROFILE"], err, profile)
+		}
+	}
+	if _, err := GenerateConfig(ConfigOptions{
+		Version: "v1.2.3", PublicURL: "https://console.example.test",
+		GitHubAppClientID: "Iv1.test-client-id", AppsBuildKitAppArmorProfile: "operator-profile",
+	}); err == nil {
+		t.Fatal("arbitrary AppArmor profile name was accepted")
+	}
+}
+
+func TestMigrateReleaseConfigAddsOrPreservesBuildKitAppArmorProfile(t *testing.T) {
+	want, err := DetectBuildKitAppArmorProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := MigrateReleaseConfig(map[string]string{"APPS_BUILDKIT_ADDRESS": "tcp://buildkit:1234"}, "v1.2.3", "v1.2.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(config)
+	if err != nil || values["APPS_BUILDKIT_APPARMOR_PROFILE"] != want {
+		t.Fatalf("migrated profile = %q, %v; want detected %q", values["APPS_BUILDKIT_APPARMOR_PROFILE"], err, want)
+	}
+	for _, profile := range []string{"unconfined", BuildKitAppArmorProfileName} {
+		config, err := MigrateReleaseConfig(map[string]string{"APPS_BUILDKIT_APPARMOR_PROFILE": profile}, "v1.2.3", "v1.2.2")
+		if err != nil {
+			t.Fatalf("migrate explicit %q: %v", profile, err)
+		}
+		values, err := ParseEnvContents(config)
+		if err != nil || values["APPS_BUILDKIT_APPARMOR_PROFILE"] != profile {
+			t.Fatalf("explicit profile = %q, %v; want %q", values["APPS_BUILDKIT_APPARMOR_PROFILE"], err, profile)
+		}
+	}
+}
+
 func TestGenerateConfigPersistsConfiguredIngressNetworkName(t *testing.T) {
 	config, err := GenerateConfig(ConfigOptions{
 		Version:            "v1.2.3",

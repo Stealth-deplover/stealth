@@ -105,6 +105,10 @@ claim a full browser/provider installation or run a full production stack.
 - [ ] Confirm the production Compose BuildKit image is pinned by version and
       digest, runs rootless without `privileged`, a Docker socket, host network,
       backend network membership, or a host port, and has bounded cache GC.
+- [ ] On Ubuntu with `apparmor_restrict_unprivileged_userns=1`, verify the
+      installer loads the Stealth-managed userns-only profile before BuildKit
+      starts, preserves it across reboot, and removes it during configuration
+      removal or purge.
 - [ ] Run the production Compose smoke's `FROM scratch` App build. Confirm
       BuildKit readiness, a verified OCI digest/archive, and that the App stays
       `not_deployed` with no App route in the Site route snapshot.

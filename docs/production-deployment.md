@@ -122,6 +122,18 @@ shell. Build logs are bounded and sanitized. This boundary executes untrusted
 Dockerfile build instructions inside rootless BuildKit; it is not an App
 runtime.
 
+On Ubuntu hosts where `apparmor_restrict_unprivileged_userns` is enabled, the
+installer installs and loads a release-managed AppArmor profile that grants the
+BuildKit container's rootlesskit process the `userns` permission. The profile
+keeps the same unconfined AppArmor mode required by the official rootless image
+and adds no capability, network, mount, or file rules. It is stored under
+`/etc/apparmor.d` so the kernel loads it after host reboot. Other hosts retain
+the existing `apparmor=unconfined` setting. Manual Compose deployments on
+restricted Ubuntu hosts must load
+`buildkit/stealth-buildkit-rootless.apparmor` with `apparmor_parser` and set
+`APPS_BUILDKIT_APPARMOR_PROFILE=stealth-buildkit-rootless` before starting
+BuildKit.
+
 When a build succeeds, its immutable digest and OCI archive are persisted.
 Selecting that deployment records the desired image and advances the App's
 desired generation. It does not advance observed generation or mark the App

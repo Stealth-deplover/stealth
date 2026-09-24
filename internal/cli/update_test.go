@@ -208,6 +208,7 @@ func TestMigrateInstalledReleaseMigratesExistingTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 	values["POSTGRES_PASSWORD"] = "operator-postgres-secret"
+	values["APPS_BUILDKIT_APPARMOR_PROFILE"] = "unconfined"
 	values["DATABASE_MODE"] = "external"
 	values["REDIS_MODE"] = "external"
 	portServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

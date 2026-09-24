@@ -22,6 +22,9 @@ api_url=""
 filelog_smoke_pid=""
 platform_archive=""
 app_archive=""
+buildkit_apparmor_profile_file=""
+buildkit_apparmor_profile_name=""
+buildkit_apparmor_profile_loaded="false"
 platform_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-platform.XXXXXX")"
 platform_project_id=""
 platform_site_id=""
@@ -162,6 +165,13 @@ cleanup() {
 	else
 		"${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
 	fi
+	if [ "$buildkit_apparmor_profile_loaded" = "true" ] && [ -n "$buildkit_apparmor_profile_file" ]; then
+		if [ "$(id -u)" -eq 0 ]; then
+			apparmor_parser -R "$buildkit_apparmor_profile_file" >/dev/null 2>&1 || true
+		else
+			sudo apparmor_parser -R "$buildkit_apparmor_profile_file" >/dev/null 2>&1 || true
+		fi
+	fi
 	if [ "$core_modified" = "true" ] && [ -n "$core_backup" ]; then
 		cp -- "$core_backup" "$core_file" || true
 	fi
@@ -169,13 +179,58 @@ cleanup() {
 		cp -- "$static_backup" "$static_file" || true
 	fi
 	restore_traefik_state_after_smoke
-	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive"
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$buildkit_apparmor_profile_file"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
 	exit "$exit_code"
 }
 trap cleanup EXIT
+
+prepare_buildkit_apparmor() {
+	local restriction profile_dir
+	if [ ! -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+		return 0
+	fi
+	restriction="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+	case "$restriction" in
+		0) return 0 ;;
+		1) ;;
+		*)
+			printf 'unsupported AppArmor unprivileged user namespace setting: %s\n' "$restriction" >&2
+			return 1
+			;;
+	esac
+	if ! command -v apparmor_parser >/dev/null 2>&1; then
+		printf '%s\n' 'AppArmor restricts unprivileged user namespaces but apparmor_parser is unavailable' >&2
+		return 1
+	fi
+	buildkit_apparmor_profile_name="stealth-buildkit-rootless-smoke-$$"
+	buildkit_apparmor_profile_file="$(mktemp "${TMPDIR:-/tmp}/stealth-buildkit-apparmor.XXXXXX")"
+	profile_dir="$(dirname -- "$compose_file")/buildkit"
+	cat >"$buildkit_apparmor_profile_file" <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+profile $buildkit_apparmor_profile_name flags=(unconfined) {
+  userns,
+}
+EOF
+	if [ "$(id -u)" -eq 0 ]; then
+		apparmor_parser -r -W "$buildkit_apparmor_profile_file"
+	else
+		sudo apparmor_parser -r -W "$buildkit_apparmor_profile_file"
+	fi
+	buildkit_apparmor_profile_loaded="true"
+	export APPS_BUILDKIT_APPARMOR_PROFILE="$buildkit_apparmor_profile_name"
+	printf 'Loaded temporary BuildKit userns-only AppArmor profile for smoke: %s\n' "$buildkit_apparmor_profile_name"
+	if [ ! -f "$profile_dir/stealth-buildkit-rootless.apparmor" ]; then
+		printf 'managed BuildKit AppArmor profile asset is missing: %s\n' "$profile_dir/stealth-buildkit-rootless.apparmor" >&2
+		return 1
+	fi
+}
+
+prepare_buildkit_apparmor
 
 case "${SMOKE_REMOVE_VOLUMES:-false}" in
 	true|false) ;;

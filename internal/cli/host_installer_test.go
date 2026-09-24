@@ -58,6 +58,7 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		"SETUP_API_HOST_PORT=" + port,
 		"BOOTSTRAP_CLI_KEY=" + encodeTestSecret([]byte("01234567890123456789012345678901")),
 		"FUNCTIONS_SECRET_KEY=" + encodeTestSecret([]byte("abcdefghijklmnopqrstuvwxyz123456")),
+		"APPS_BUILDKIT_APPARMOR_PROFILE=unconfined",
 	}, "\n")+"\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -109,17 +110,18 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":            testProductionComposeAsset(),
-		"buildkit/buildkitd.toml":            testBuildKitConfigAsset(),
-		"compose.setup.yaml":                 "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
-		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":          "server {\n}\n",
-		"traefik/traefik.yaml":               testManagedTraefikStaticAsset(),
-		"traefik/dynamic/core.yaml":          testManagedTraefikCoreAsset(),
-		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
+		"compose.production.yaml":                     testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":                     testBuildKitConfigAsset(),
+		"buildkit/stealth-buildkit-rootless.apparmor": testBuildKitAppArmorProfileAsset(),
+		"compose.setup.yaml":                          "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":               "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":                 "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":                  "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":                 "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":                   "server {\n}\n",
+		"traefik/traefik.yaml":                        testManagedTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":                   testManagedTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep":          "# Stealth route reconciler\n",
 	}
 	if contents, ok := assets[name]; ok {
 		_, _ = io.WriteString(w, contents)
