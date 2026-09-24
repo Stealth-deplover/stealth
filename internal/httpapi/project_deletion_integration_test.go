@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
@@ -124,7 +125,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, project.Project.ID).Scan(&cleanupJobs); err != nil {
 		t.Fatal(err)
 	}
-	if cleanupJobs != 4 {
+	if cleanupJobs != 6 {
 		t.Fatalf("project cleanup jobs = %d, want one job per artifact namespace", cleanupJobs)
 	}
 	userStorage, err := storage.New(storageRoot, 1<<20)
@@ -143,11 +144,17 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appArtifacts, err := appstore.New(storageRoot, 1<<20, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cleanupWorker, err := artifactcleanup.New(repository.New(pool), artifactcleanup.Stores{
 		Storage:      userStorage,
 		Functions:    functionStorage,
 		SiteArchives: siteArchiveStorage,
 		Sites:        siteStorage,
+		AppSources:   appArtifacts.Sources,
+		AppImages:    appArtifacts.Images,
 	}, "project-integration-cleanup", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +168,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 			break
 		}
 	}
-	for _, namespace := range []string{"", "functions", "sites", "site-archives"} {
+	for _, namespace := range []string{"", "functions", "sites", "site-archives", "app-sources", "app-images"} {
 		path := filepath.Join(storageRoot, namespace, project.Project.ID)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("artifact namespace %q still exists: %v", namespace, err)

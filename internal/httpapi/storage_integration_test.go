@@ -18,11 +18,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
+	"github.com/Stealth-deplover/stealth/internal/functionstore"
 	"github.com/Stealth-deplover/stealth/internal/httpapi"
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/sitestore"
 	"github.com/Stealth-deplover/stealth/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -409,7 +412,26 @@ func TestStorageBinaryQuotaPermissionsAndAPIKeyRevocationIntegration(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupWorker, err := artifactcleanup.New(repository.New(pool), artifactcleanup.Stores{Storage: cleanupStore}, "storage-integration-cleanup", logger)
+	functionCleanupStore, err := functionstore.New(filepath.Join(storageRoot, "functions"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteArchiveCleanupStore, err := functionstore.New(filepath.Join(storageRoot, "site-archives"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteCleanupStore, err := sitestore.New(filepath.Join(storageRoot, "sites"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appCleanupStores, err := appstore.New(storageRoot, 1<<20, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupWorker, err := artifactcleanup.New(repository.New(pool), artifactcleanup.Stores{
+		Storage: cleanupStore, Functions: functionCleanupStore, SiteArchives: siteArchiveCleanupStore,
+		Sites: siteCleanupStore, AppSources: appCleanupStores.Sources, AppImages: appCleanupStores.Images,
+	}, "storage-integration-cleanup", logger)
 	if err != nil {
 		t.Fatal(err)
 	}
