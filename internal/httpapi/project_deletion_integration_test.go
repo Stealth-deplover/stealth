@@ -91,7 +91,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 
 	// Seed each local artifact namespace. The API must remove only this UUID
 	// namespace through durable cleanup after the metadata transaction commits.
-	for _, namespace := range []string{"", "functions", "sites", "site-archives"} {
+	for _, namespace := range []string{"", "functions", "sites", "site-archives", "app-sources", "app-images"} {
 		path := filepath.Join(storageRoot, namespace, project.Project.ID, "sentinel")
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -159,7 +159,7 @@ func TestProjectDeletionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for attempts := 0; attempts < cleanupJobs+4; attempts++ {
+	for attempts := 0; attempts < 1024; attempts++ {
 		processed, runErr := cleanupWorker.RunOnce(ctx)
 		if runErr != nil {
 			t.Fatal(runErr)
@@ -167,6 +167,13 @@ func TestProjectDeletionIntegration(t *testing.T) {
 		if !processed {
 			break
 		}
+	}
+	var remainingCleanupJobs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM artifact_cleanup_jobs WHERE project_id=$1`, project.Project.ID).Scan(&remainingCleanupJobs); err != nil {
+		t.Fatal(err)
+	}
+	if remainingCleanupJobs != 0 {
+		t.Fatalf("project artifact cleanup jobs remaining = %d, want 0", remainingCleanupJobs)
 	}
 	for _, namespace := range []string{"", "functions", "sites", "site-archives", "app-sources", "app-images"} {
 		path := filepath.Join(storageRoot, namespace, project.Project.ID)

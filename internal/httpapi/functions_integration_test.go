@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
@@ -343,11 +344,17 @@ func TestFunctionsControlPlaneIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appArtifacts, err := appstore.New(storageRoot, 1<<20, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cleanupWorker, err := artifactcleanup.New(functionRepository, artifactcleanup.Stores{
 		Storage:      userStorage,
 		Functions:    functionStorage,
 		SiteArchives: siteArchiveStorage,
 		Sites:        siteStorage,
+		AppSources:   appArtifacts.Sources,
+		AppImages:    appArtifacts.Images,
 	}, "functions-integration-cleanup", logger)
 	if err != nil {
 		t.Fatal(err)
