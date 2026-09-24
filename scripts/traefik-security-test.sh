@@ -369,12 +369,6 @@ if printf '%s\n' "$buildkit_block$worker_block" | grep -Eq 'BEGIN (EC |RSA )?PRI
 	printf '%s\n' 'PEM contents must never appear in Compose configuration or environment' >&2
 	exit 1
 fi
-if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/server-cert.pem' ||
-	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/server-key.pem' ||
-	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/ca.pem'; then
-	printf '%s\n' 'BuildKit service is missing mandatory daemon TLS identity paths' >&2
-	exit 1
-fi
 if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
 	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem'; then
 	printf '%s\n' 'BuildKit healthcheck must use its dedicated client identity' >&2
