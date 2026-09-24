@@ -1352,10 +1352,11 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as source:
     response = json.load(source)
-for entry in response.get("logs", []):
-    message = entry.get("message", "")
-    if message.startswith("STEALTH_BUILDKIT_MTLS_PROBE:"):
-        print(message)
+for entry in response.get("logs", [])[-30:]:
+    message = str(entry.get("message", "")).replace("\r", " ").replace("\x00", " ")
+    if len(message) > 1200:
+        message = message[:1200] + "…"
+    print(f"App build log sequence={entry.get('sequence', '?')}: {message}")
 PY
 				fi
 				return 1
