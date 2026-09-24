@@ -13,3 +13,11 @@
 
 [frontend."dockerfile.v0"]
   enabled = true
+
+# TCP control clients must present a certificate signed by the installation's
+# private Stealth BuildKit CA. These are daemon credentials only; tenant build
+# containers never receive this filesystem namespace.
+[grpc.tls]
+  cert = "/run/secrets/stealth-buildkit/server-cert.pem"
+  key = "/run/secrets/stealth-buildkit/server-key.pem"
+  ca = "/run/secrets/stealth-buildkit/ca.pem"

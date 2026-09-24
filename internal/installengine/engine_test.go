@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 )
 
 type recordedCommand struct {
@@ -107,11 +109,16 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\n"
+	return "services:\n" +
+		"  buildkit-worker-credentials-init:\n    network_mode: none\n    restart: \"no\"\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE]\n    command: [\"sh\", \"-ec\", \"for stale in /output/* /output/.[!.]* /output/..?*\"]\n    volumes:\n      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro\n      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro\n      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro\n      - buildkit_worker_credentials:/output\n" +
+		"  buildkit-server-credentials-init:\n    network_mode: none\n    restart: \"no\"\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE]\n    command: [\"sh\", \"-ec\", \"for stale in /output/* /output/.[!.]* /output/..?*\"]\n    volumes:\n      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro\n      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro\n      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro\n      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro\n      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro\n      - buildkit_server_credentials:/output\n" +
+		"  worker:\n    volumes:\n      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro\n" +
+		"  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    command: [\"--addr\", \"tcp://0.0.0.0:1234\", \"--config\", \"/etc/buildkit/buildkitd.toml\"]\n    healthcheck:\n      test: [\"CMD\", \"buildctl\", \"--addr\", \"tcp://buildkit:1234\", \"--tlscacert\", \"/run/secrets/stealth-buildkit/ca.pem\", \"--tlscert\", \"/run/secrets/stealth-buildkit/health-client-cert.pem\", \"--tlskey\", \"/run/secrets/stealth-buildkit/health-client-key.pem\", \"debug\", \"workers\"]\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n" +
+		"  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\nvolumes:\n  buildkit_worker_credentials:\n  buildkit_server_credentials:\n"
 }
 
 func testBuildKitConfigAsset() string {
-	return "[worker.oci]\nrootless = true\nnoProcessSandbox = false\ngc = true\nreservedSpace = \"1GB\"\nmaxUsedSpace = \"10GB\"\nminFreeSpace = \"5GB\"\nmax-parallelism = 2\n\n[frontend.\"dockerfile.v0\"]\nenabled = true\n"
+	return "[worker.oci]\nrootless = true\nnoProcessSandbox = false\ngc = true\nreservedSpace = \"1GB\"\nmaxUsedSpace = \"10GB\"\nminFreeSpace = \"5GB\"\nmax-parallelism = 2\n\n[frontend.\"dockerfile.v0\"]\nenabled = true\n\n[grpc.tls]\ncert = \"/run/secrets/stealth-buildkit/server-cert.pem\"\nkey = \"/run/secrets/stealth-buildkit/server-key.pem\"\nca = \"/run/secrets/stealth-buildkit/ca.pem\"\n"
 }
 
 func testBuildKitAppArmorProfileAsset() string {
@@ -209,7 +216,7 @@ func TestExistingConfigurationInitializesTraefikStateBeforeAssetActivation(t *te
 	defer assetServer.Close()
 	runner := &fakeRunner{}
 	engine := New(Options{Runner: runner, AssetBaseURL: assetServer.URL})
-	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}
+	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}
 
 	if err := engine.RunStep(context.Background(), plan, StepConfiguration); err != nil {
 		t.Fatal(err)
@@ -274,7 +281,7 @@ func TestRunStepCloudflareStartsNamedTunnelProfile(t *testing.T) {
 	layout := writeEngineFixture(t, false)
 	runner := &fakeRunner{}
 	engine := New(Options{Runner: runner})
-	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true, Cloudflare: true}
+	plan := Plan{Layout: layout, Version: "v1.2.3", Cloudflare: true}
 
 	if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
 		t.Fatal(err)
@@ -295,7 +302,7 @@ func TestRunStepStartsBuildKitWithoutWorkerDependency(t *testing.T) {
 	layout := writeEngineFixture(t, false)
 	runner := &fakeRunner{}
 	engine := New(Options{Runner: runner})
-	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true}
+	plan := Plan{Layout: layout, Version: "v1.2.3"}
 	if err := engine.RunStep(context.Background(), plan, StepServices); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +358,7 @@ func TestConfigurationStepLoadsRestrictedHostProfileBeforeServiceSteps(t *testin
 		Runner: runner, AssetBaseURL: assetServer.URL,
 		BuildKitAppArmorProfilePath: profilePath,
 	})
-	if err := engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", Existing: true}, StepConfiguration); err != nil {
+	if err := engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", DockerGID: uint32(os.Getgid()), Existing: true}, StepConfiguration); err != nil {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
@@ -493,8 +500,8 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 7 {
-		t.Fatalf("recorded calls = %#v, want four state inits, telemetry dependency, migration, and services", calls)
+	if len(calls) != 10 {
+		t.Fatalf("recorded calls = %#v, want six state inits, telemetry dependency, migration, and services", calls)
 	}
 	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
 		t.Fatalf("Collector state init command = %#v", calls[0])
@@ -508,14 +515,23 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
 		t.Fatalf("Cloudflare state init command = %#v", calls[3])
 	}
-	if !equalArgs(calls[4].args[len(calls[4].args)-3:], []string{"up", "-d", "clickhouse"}) {
-		t.Fatalf("telemetry dependency command = %#v", calls[4])
+	if !equalArgs(calls[4].args[len(calls[4].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
+		t.Fatalf("worker BuildKit credentials init command = %#v", calls[4])
 	}
-	if !equalArgs(calls[5].args[len(calls[5].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[5])
+	if !equalArgs(calls[5].args[len(calls[5].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
+		t.Fatalf("BuildKit credentials init command = %#v", calls[5])
 	}
-	if !contains(calls[6].args, "--no-deps") || contains(calls[6].args, "postgres") || contains(calls[6].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[6])
+	if !equalArgs(calls[6].args[len(calls[6].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[6])
+	}
+	if !equalArgs(calls[7].args[len(calls[7].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[7])
+	}
+	if !equalArgs(calls[8].args[len(calls[8].args)-6:], []string{"up", "-d", "--no-deps", "--force-recreate", "buildkit", "worker"}) {
+		t.Fatalf("credential-refresh restart command = %#v", calls[8])
+	}
+	if !contains(calls[9].args, "--no-deps") || contains(calls[9].args, "postgres") || contains(calls[9].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[9])
 	}
 }
 
@@ -669,7 +685,7 @@ func TestPrepareMigratesExistingConfigWithTelemetryImages(t *testing.T) {
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	defer assetServer.Close()
 	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
-	plan := Plan{Layout: layout, Version: "v1.2.3", Existing: true}
+	plan := Plan{Layout: layout, Version: "v1.2.3", DockerGID: uint32(os.Getgid()), Existing: true}
 	if err := engine.Prepare(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
@@ -751,7 +767,7 @@ func TestPrepareMigratesPrePR83ManagedAssets(t *testing.T) {
 	}
 
 	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v0.2.2", Existing: true}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v0.2.2", DockerGID: uint32(os.Getgid()), Existing: true}); err != nil {
 		t.Fatal(err)
 	}
 	for asset, want := range targetAssets {
@@ -827,7 +843,7 @@ func TestPreparePreservesPersistedIngressNetwork(t *testing.T) {
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	defer assetServer.Close()
 	engine := New(Options{AssetBaseURL: assetServer.URL, Runner: &fakeRunner{}})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := ReadEnvFile(layout.EnvFile)
@@ -850,6 +866,39 @@ func TestPreparePreservesPersistedIngressNetwork(t *testing.T) {
 	}
 }
 
+func TestPreparePreservesBuildKitPKIOnUpgrade(t *testing.T) {
+	layout := writeEngineFixture(t, false)
+	assetServer := newEngineAssetServer(t, "v1.2.3")
+	defer assetServer.Close()
+	profilePath := filepath.Join(t.TempDir(), BuildKitAppArmorProfileName)
+	engine := New(Options{AssetBaseURL: assetServer.URL, Runner: &fakeRunner{}, BuildKitAppArmorProfilePath: profilePath})
+	plan := Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id", DockerGID: uint32(os.Getgid()), IngressNetworkName: "stealth_ingress"}
+	if err := engine.Prepare(context.Background(), plan); err != nil {
+		t.Fatalf("fresh installation preparation: %v", err)
+	}
+	serverCertPath := filepath.Join(layout.StateDir, buildkitpki.DirectoryName, "server", "cert.pem")
+	serverKeyPath := filepath.Join(layout.StateDir, buildkitpki.DirectoryName, "server", "key.pem")
+	issuedServerCert, err := os.ReadFile(serverCertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(serverKeyPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("host server key permissions = %v, %v; want 0600", info, err)
+	}
+	plan.Existing = true
+	plan.InstalledVersion = "v1.2.3"
+	if err := engine.Prepare(context.Background(), plan); err != nil {
+		t.Fatalf("upgrade preparation: %v", err)
+	}
+	upgradedServerCert, err := os.ReadFile(serverCertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(upgradedServerCert, issuedServerCert) {
+		t.Fatal("routine upgrade rotated the valid BuildKit server identity")
+	}
+}
+
 func TestPrepareRemovesDefaultPeerWhenAutoSelectingFreeSubnet(t *testing.T) {
 	layout, err := NewLayout(filepath.Join(t.TempDir(), "stealth"))
 	if err != nil {
@@ -866,7 +915,7 @@ func TestPrepareRemovesDefaultPeerWhenAutoSelectingFreeSubnet(t *testing.T) {
 		Runner:                      ingressNetworkTestRunner{networks: []testDockerNetwork{{name: "unrelated", subnet: defaultIngressSubnet}}},
 		BuildKitAppArmorProfilePath: profilePath,
 	})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id", IngressNetworkName: "stealth_b_ingress"}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id", DockerGID: uint32(os.Getgid()), IngressNetworkName: "stealth_b_ingress"}); err != nil {
 		t.Fatal(err)
 	}
 	values, err := ReadEnvFile(layout.EnvFile)
@@ -921,7 +970,7 @@ func TestPrepareSameVersionRepairRestoresMissingAndCorruptAssets(t *testing.T) {
 	assetServer := newEngineAssetServer(t, version)
 	defer assetServer.Close()
 	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: assetServer.URL})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: version, Existing: true}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: version, DockerGID: uint32(os.Getgid()), Existing: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(layout.ComposeFile); err != nil || string(got) != testProductionComposeAsset() {
@@ -966,7 +1015,7 @@ func TestPrepareFailureLeavesExistingInstallationRecoverable(t *testing.T) {
 	}))
 	defer server.Close()
 	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL})
-	err = engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true})
+	err = engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true})
 	if err == nil || !strings.Contains(err.Error(), "download managed asset") {
 		t.Fatalf("failed preparation error = %v", err)
 	}
@@ -1010,7 +1059,7 @@ func TestRunStepConfigurationRollsBackWhenComposeValidationFails(t *testing.T) {
 	assetServer := newEngineAssetServer(t, "v1.2.3")
 	defer assetServer.Close()
 	engine := New(Options{Runner: configFailureRunner{}, AssetBaseURL: assetServer.URL})
-	err = engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}, StepConfiguration)
+	err = engine.RunStep(context.Background(), Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}, StepConfiguration)
 	if err == nil || !strings.Contains(err.Error(), "compose config rejected") {
 		t.Fatalf("Compose validation error = %v", err)
 	}
@@ -1076,7 +1125,7 @@ func TestManagedAssetRecoveryRestoresOnlyCoherentReleaseStates(t *testing.T) {
 					return nil
 				},
 			})
-			plan := Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v1.2.2", Existing: true}
+			plan := Plan{Layout: layout, Version: targetVersion, InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}
 			err := engine.RunStep(context.Background(), plan, StepConfiguration)
 			if !errors.Is(err, errMigrationProcessInterrupted) {
 				t.Fatalf("injected interruption error = %v", err)
@@ -1139,7 +1188,7 @@ func TestTargetReleaseManifestCanAddFutureManagedAsset(t *testing.T) {
 		}
 	}
 	engine := New(Options{Runner: &fakeRunner{}, AssetBaseURL: server.URL, ManagedAssets: targetManifest})
-	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: "v1.2.2", Existing: true}); err != nil {
+	if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: version, InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(layout.TelemetryDir, "future.yaml")); err != nil || string(got) != "future_receiver:\n" {
@@ -1168,7 +1217,7 @@ func TestManagedAssetMigrationKeepsPreviousRecoverySetUntilTargetIsValidated(t *
 			return nil
 		},
 	})
-	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", Existing: true}
+	plan := Plan{Layout: layout, Version: "v1.2.3", InstalledVersion: "v1.2.2", DockerGID: uint32(os.Getgid()), Existing: true}
 	if err := engine.RunStep(context.Background(), plan, StepConfiguration); !errors.Is(err, errMigrationProcessInterrupted) {
 		t.Fatalf("injected interruption error = %v", err)
 	}

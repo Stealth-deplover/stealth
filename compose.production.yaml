@@ -450,6 +450,64 @@ services:
       telemetry_store:
       stealth_ingress:
 
+  buildkit-worker-credentials-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    volumes:
+      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
+      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro
+      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro
+      - buildkit_worker_credentials:/output
+    command:
+      - sh
+      - -ec
+      - |
+        set -eu
+        chmod 0755 /output
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$stale" ] && [ ! -L "$stale" ] || rm -rf -- "$stale"; done
+        install -m 0444 /input/ca.pem /output/ca.pem
+        install -m 0444 /input/client-cert.pem /output/client-cert.pem
+        install -m 0400 /input/client-key.pem /output/client-key.pem
+        chown 10001:10001 /output/ca.pem /output/client-cert.pem /output/client-key.pem
+
+  buildkit-server-credentials-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    volumes:
+      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
+      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro
+      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro
+      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro
+      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro
+      - buildkit_server_credentials:/output
+    command:
+      - sh
+      - -ec
+      - |
+        set -eu
+        chmod 0755 /output
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$stale" ] && [ ! -L "$stale" ] || rm -rf -- "$stale"; done
+        install -m 0444 /input/ca.pem /output/ca.pem
+        install -m 0444 /input/server-cert.pem /output/server-cert.pem
+        install -m 0400 /input/server-key.pem /output/server-key.pem
+        install -m 0444 /input/health-client-cert.pem /output/health-client-cert.pem
+        install -m 0400 /input/health-client-key.pem /output/health-client-key.pem
+        chown 1000:1000 /output/ca.pem /output/server-cert.pem /output/server-key.pem /output/health-client-cert.pem /output/health-client-key.pem
+
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
     restart: unless-stopped
@@ -457,6 +515,9 @@ services:
     environment:
       <<: *backend-environment
       CLOUDFLARE_IMPORT_FILE: /var/lib/stealth/cloudflare-import/cloudflare-import.enc
+      APPS_BUILDKIT_CA_CERT: "${APPS_BUILDKIT_CA_CERT:-/run/secrets/stealth-buildkit/ca.pem}"
+      APPS_BUILDKIT_CLIENT_CERT: "${APPS_BUILDKIT_CLIENT_CERT:-/run/secrets/stealth-buildkit/client-cert.pem}"
+      APPS_BUILDKIT_CLIENT_KEY: "${APPS_BUILDKIT_CLIENT_KEY:-/run/secrets/stealth-buildkit/client-key.pem}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
       - function_runner_staging:/var/lib/stealth/runner-staging
@@ -468,6 +529,7 @@ services:
       - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
       - ./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro
+      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
@@ -479,6 +541,8 @@ services:
       traefik-state-init:
         condition: service_completed_successfully
       cloudflare-state-init:
+        condition: service_completed_successfully
+      buildkit-worker-credentials-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1"]
@@ -516,9 +580,13 @@ services:
     pids_limit: 4096
     volumes:
       - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro
       - buildkit_state:/home/user/.local/share/buildkit
+    depends_on:
+      buildkit-server-credentials-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "buildctl", "--addr", "tcp://127.0.0.1:1234", "debug", "workers"]
+      test: ["CMD", "buildctl", "--addr", "tcp://buildkit:1234", "--tlscacert", "/run/secrets/stealth-buildkit/ca.pem", "--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem", "--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -643,6 +711,10 @@ volumes:
     name: "${APPS_BUILD_STAGING_VOLUME:-stealth_app_build_staging}"
   buildkit_state:
     name: "${APPS_BUILDKIT_STATE_VOLUME:-stealth_app_buildkit_state}"
+  buildkit_worker_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_worker_credentials"
+  buildkit_server_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
   clickhouse_data:
     name: "${CLICKHOUSE_VOLUME_NAME:-stealth_clickhouse_data}"
   otelcol_state:

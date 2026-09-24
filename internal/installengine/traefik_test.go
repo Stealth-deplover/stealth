@@ -239,6 +239,35 @@ func TestMigrateReleaseConfigAddsOrPreservesBuildKitAppArmorProfile(t *testing.T
 	}
 }
 
+func TestBuildKitTLSPathsAreAddedAndOperatorPathsPreserved(t *testing.T) {
+	contents, err := MigrateReleaseConfig(map[string]string{}, "v1.2.3", "v1.2.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"APPS_BUILDKIT_CA_CERT":     "/run/secrets/stealth-buildkit/ca.pem",
+		"APPS_BUILDKIT_CLIENT_CERT": "/run/secrets/stealth-buildkit/client-cert.pem",
+		"APPS_BUILDKIT_CLIENT_KEY":  "/run/secrets/stealth-buildkit/client-key.pem",
+	}
+	for name, path := range want {
+		if values[name] != path {
+			t.Fatalf("migrated %s = %q, want %q", name, values[name], path)
+		}
+	}
+	contents, err = MigrateReleaseConfig(map[string]string{"APPS_BUILDKIT_CLIENT_KEY": "/operator/keys/buildkit-worker.pem"}, "v1.2.3", "v1.2.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err = ParseEnvContents(contents)
+	if err != nil || values["APPS_BUILDKIT_CLIENT_KEY"] != "/operator/keys/buildkit-worker.pem" {
+		t.Fatalf("operator client key path = %q, %v", values["APPS_BUILDKIT_CLIENT_KEY"], err)
+	}
+}
+
 func TestGenerateConfigPersistsConfiguredIngressNetworkName(t *testing.T) {
 	config, err := GenerateConfig(ConfigOptions{
 		Version:            "v1.2.3",
@@ -414,7 +443,7 @@ func TestTraefikManagedAssetsInstallAndRepair(t *testing.T) {
 			t.Fatal(err)
 		}
 		engine := New(Options{AssetBaseURL: assetServer.URL, Runner: &fakeRunner{}})
-		if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", ConfigContents: config}); err != nil {
+		if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", PublicURL: "https://console.example.test", DockerGID: uint32(os.Getgid()), ConfigContents: config}); err != nil {
 			t.Fatal(err)
 		}
 		assertInstalledTraefikAssets(t, layout, "console.example.test")
@@ -426,7 +455,7 @@ func TestTraefikManagedAssetsInstallAndRepair(t *testing.T) {
 			t.Fatal(err)
 		}
 		engine := New(Options{AssetBaseURL: assetServer.URL, Runner: &fakeRunner{}})
-		if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", Existing: true}); err != nil {
+		if err := engine.Prepare(context.Background(), Plan{Layout: layout, Version: "v1.2.3", DockerGID: uint32(os.Getgid()), Existing: true}); err != nil {
 			t.Fatal(err)
 		}
 		assertInstalledTraefikAssets(t, layout, "127.0.0.1")

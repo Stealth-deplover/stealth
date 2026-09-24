@@ -89,6 +89,21 @@ func (p *fakePersistence) AppendAppBuildLog(_ context.Context, _, _, _ uuid.UUID
 	return domain.AppBuildLog{}, nil
 }
 
+func TestProgressWriterRedactsBuildKitTLSCredentialPaths(t *testing.T) {
+	store := &fakePersistence{}
+	writer := &progressWriter{
+		ctx: context.Background(), store: store, workerID: "worker-test",
+		projectID: uuid.New(), appID: uuid.New(), deploymentID: uuid.New(),
+	}
+	if _, err := writer.Write([]byte("tls: failed to load /run/secrets/stealth-buildkit/client-key.pem\n")); err != nil {
+		t.Fatal(err)
+	}
+	writer.Flush()
+	if len(store.logs) != 1 || strings.Contains(store.logs[0], "/run/secrets/stealth-buildkit") || strings.Contains(store.logs[0], "client-key.pem") {
+		t.Fatalf("BuildKit TLS path leaked into public build logs: %#v", store.logs)
+	}
+}
+
 type fakeCommandRunner struct {
 	mode           string
 	args           []string
@@ -334,7 +349,7 @@ func newTestWorker(t *testing.T, mode string) (*Worker, *fakePersistence, *fakeC
 	}
 	persistence := &fakePersistence{job: job}
 	runner := &fakeCommandRunner{mode: mode}
-	client := &BuildKitClient{Address: "tcp://buildkit:1234", Runner: runner}
+	client := testBuildKitClient(runner)
 	staging := filepath.Join(t.TempDir(), "staging")
 	worker, err := New(persistence, artifacts, client, "worker-1", staging, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {

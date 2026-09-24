@@ -19,16 +19,47 @@ const testGitHubAppClientID = "Iv1.test-client-id"
 
 func testProductionComposeAsset() string {
 	return `services:
+  buildkit-worker-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*"]
+    volumes:
+      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
+      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro
+      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro
+      - buildkit_worker_credentials:/output
+  buildkit-server-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*"]
+    volumes:
+      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
+      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro
+      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro
+      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro
+      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro
+      - buildkit_server_credentials:/output
+  worker:
+    volumes:
+      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
   buildkit:
     image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
     user: "1000:1000"
     read_only: true
+    command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+    healthcheck:
+      test: ["CMD", "buildctl", "--addr", "tcp://buildkit:1234", "--tlscacert", "/run/secrets/stealth-buildkit/ca.pem", "--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem", "--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers"]
     security_opt:
       - seccomp=unconfined
       - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
       - systempaths=unconfined
     volumes:
       - buildkit_state:/home/user/.local/share/buildkit
+      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro
       - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
     networks: [app_build]
   ingress-control:
@@ -43,6 +74,9 @@ func testProductionComposeAsset() string {
 networks:
   telemetry_ingest:
   app_build:
+volumes:
+  buildkit_worker_credentials:
+  buildkit_server_credentials:
 `
 }
 
@@ -57,6 +91,11 @@ max-parallelism = 2
 
 [frontend."dockerfile.v0"]
 enabled = true
+
+[grpc.tls]
+cert = "/run/secrets/stealth-buildkit/server-cert.pem"
+key = "/run/secrets/stealth-buildkit/server-key.pem"
+ca = "/run/secrets/stealth-buildkit/ca.pem"
 `
 }
 

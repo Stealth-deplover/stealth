@@ -10,6 +10,8 @@ func validateBuildKitConfigAsset(contents []byte) error {
 		"[worker.oci]", "rootless = true", "noProcessSandbox = false",
 		"gc = true", "maxUsedSpace = \"10GB\"", "max-parallelism = 2",
 		"[frontend.\"dockerfile.v0\"]", "enabled = true",
+		"[grpc.tls]", "cert = \"/run/secrets/stealth-buildkit/server-cert.pem\"",
+		"key = \"/run/secrets/stealth-buildkit/server-key.pem\"", "ca = \"/run/secrets/stealth-buildkit/ca.pem\"",
 	} {
 		if !bytes.Contains(contents, []byte(marker)) {
 			return fmt.Errorf("BuildKit configuration is missing required setting %q", marker)

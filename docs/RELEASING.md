@@ -105,6 +105,16 @@ claim a full browser/provider installation or run a full production stack.
 - [ ] Confirm the production Compose BuildKit image is pinned by version and
       digest, runs rootless without `privileged`, a Docker socket, host network,
       backend network membership, or a host port, and has bounded cache GC.
+- [ ] Confirm `tcp://buildkit:1234` requires mTLS, the worker and healthcheck
+      use separate client identities, and unauthenticated, untrusted-client,
+      and wrong-CA probes fail in the real production Compose smoke.
+- [ ] Confirm host PKI keys are mode `0600`, runtime role volumes are
+      read-only with mode-`0400` private keys, BuildKit never receives the
+      worker key, and the API and tenant build do not receive BuildKit keys.
+- [ ] Verify install, upgrade, and repair preserve a valid BuildKit CA and
+      renew leaves before expiry; include `state/buildkit-mtls` in installation
+      backups. Completed OCI artifacts must remain valid if the BuildKit PKI is
+      lost.
 - [ ] On Ubuntu with `apparmor_restrict_unprivileged_userns=1`, verify the
       installer loads the Stealth-managed userns-only profile before BuildKit
       starts, preserves it across reboot, and removes it during configuration

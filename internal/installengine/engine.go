@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 )
 
 const (
@@ -314,6 +316,12 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if err != nil {
 			return err
 		}
+		if !plan.Setup {
+			_, err := buildkitpki.Ensure(plan.Layout.StateDir)
+			if err != nil {
+				return prepared.failCommit(fmt.Errorf("prepare BuildKit mutual TLS identity: %w", err))
+			}
+		}
 		// Existing installations from the previous release may still have the
 		// dynamic directory owned by the fixed worker UID. Run the target
 		// release's narrow init service against the staged Compose file before
@@ -370,6 +378,12 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "cloudflare-state-init"); err != nil {
 				return err
 			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "buildkit-worker-credentials-init"); err != nil {
+				return fmt.Errorf("prepare worker BuildKit client credentials: %w", err)
+			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "buildkit-server-credentials-init"); err != nil {
+				return fmt.Errorf("prepare BuildKit server credentials: %w", err)
+			}
 		}
 		services := make([]string, 0, 3)
 		if !plan.ExternalDatabase {
@@ -395,6 +409,15 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
+			if plan.Existing {
+				// Compose does not notice file content changes inside named
+				// credential volumes. Recreate both consumers after the
+				// one-shot initializers refresh them, including repair after an
+				// interrupted rotation.
+				if err := e.runCompose(ctx, plan, "up", "-d", "--no-deps", "--force-recreate", "buildkit", "worker"); err != nil {
+					return fmt.Errorf("restart BuildKit and worker after refreshing mutual TLS credentials: %w", err)
+				}
+			}
 			services = append(services, "buildkit")
 			services = append(services, "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker")
 		}
@@ -1162,6 +1185,8 @@ func syncDirectory(path string) error {
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
 		"  traefik:",
+		"  buildkit-worker-credentials-init:",
+		"  buildkit-server-credentials-init:",
 		"  buildkit:",
 		"  traefik-state-init:",
 		"  cloudflare-state-init:",
@@ -1172,26 +1197,28 @@ func validateProductionComposeAsset(contents []byte) error {
 		"  telemetry-docker-proxy:",
 		"  telemetry_ingest:",
 		"  app_build:",
+		"  buildkit_worker_credentials:",
+		"  buildkit_server_credentials:",
 	} {
 		if !bytes.Contains(contents, []byte(marker)) {
 			return fmt.Errorf("missing current production Compose marker %q", marker)
 		}
 	}
 	text := string(contents)
-	serviceStart := strings.Index(text, "\n  buildkit:")
-	if serviceStart < 0 {
+	service := productionServiceBlock(text, "buildkit")
+	if service == "" {
 		return errors.New("missing dedicated App BuildKit service")
 	}
-	serviceEnd := strings.Index(text[serviceStart+1:], "\n  ingress-control:")
-	if serviceEnd < 0 {
-		return errors.New("could not delimit App BuildKit service")
-	}
-	service := text[serviceStart : serviceStart+1+serviceEnd]
 	for _, required := range []string{
 		"image: " + defaultBuildKitImage,
 		"user: \"1000:1000\"", "read_only: true", "seccomp=unconfined",
 		"apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}", "systempaths=unconfined", "buildkit_state:/home/user/.local/share/buildkit",
 		"networks: [app_build]", "buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro",
+		"buildkit_server_credentials:/run/secrets/stealth-buildkit:ro",
+		"tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml",
+		"--tlscacert", "/run/secrets/stealth-buildkit/ca.pem",
+		"--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem",
+		"--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers",
 	} {
 		if !strings.Contains(service, required) {
 			return fmt.Errorf("App BuildKit service is missing required setting %q", required)
@@ -1200,12 +1227,98 @@ func validateProductionComposeAsset(contents []byte) error {
 	for _, forbidden := range []string{
 		"privileged:", "network_mode: host", "pid: host", "ipc: host", "/var/run/docker.sock",
 		"ports:", "stealth:", "telemetry_store:", "ingress_control_db:", "stealth_storage:", "app_build_staging:",
+		"./state/buildkit-mtls", "buildkit_worker_credentials:",
 	} {
 		if strings.Contains(service, forbidden) {
 			return fmt.Errorf("App BuildKit service contains forbidden setting %q", forbidden)
 		}
 	}
+	worker := productionServiceBlock(text, "worker")
+	if worker == "" || !strings.Contains(worker, "buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro") {
+		return errors.New("worker must mount only its read-only BuildKit client credentials volume")
+	}
+	if strings.Contains(worker, "./state/buildkit-mtls") || strings.Contains(worker, "buildkit_server_credentials:") {
+		return errors.New("worker must not mount host PKI files or BuildKit server credentials")
+	}
+	workerInit := productionServiceBlock(text, "buildkit-worker-credentials-init")
+	serverInit := productionServiceBlock(text, "buildkit-server-credentials-init")
+	for name, block := range map[string]string{"worker": workerInit, "BuildKit": serverInit} {
+		if block == "" || !strings.Contains(block, "network_mode: none") || !strings.Contains(block, "restart: \"no\"") ||
+			!strings.Contains(block, "cap_drop: [ALL]") || !strings.Contains(block, "cap_add: [CHOWN, DAC_OVERRIDE]") {
+			return fmt.Errorf("%s BuildKit credential initializer must be a networkless one-shot with only copy and ownership capabilities", name)
+		}
+	}
+	for _, required := range []string{
+		"./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro",
+		"./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro",
+		"./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro",
+		"buildkit_worker_credentials:/output",
+	} {
+		if !strings.Contains(workerInit, required) {
+			return fmt.Errorf("worker BuildKit credential initializer is missing %q", required)
+		}
+	}
+	if !strings.Contains(workerInit, "for stale in /output/* /output/.[!.]* /output/..?*") {
+		return errors.New("worker BuildKit credential initializer must clear stale volume contents before copying its identity")
+	}
+	if strings.Contains(workerInit, "/server/") || strings.Contains(workerInit, "/health/") || strings.Contains(workerInit, "ca-key.pem") {
+		return errors.New("worker BuildKit credential initializer has access to a non-worker private key")
+	}
+	for _, required := range []string{
+		"./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro",
+		"./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro",
+		"./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro",
+		"./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro",
+		"./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro",
+		"buildkit_server_credentials:/output",
+	} {
+		if !strings.Contains(serverInit, required) {
+			return fmt.Errorf("BuildKit credential initializer is missing %q", required)
+		}
+	}
+	if !strings.Contains(serverInit, "for stale in /output/* /output/.[!.]* /output/..?*") {
+		return errors.New("BuildKit credential initializer must clear stale volume contents before copying its identities")
+	}
+	if strings.Contains(serverInit, "/worker/") || strings.Contains(serverInit, "ca-key.pem") {
+		return errors.New("BuildKit credential initializer has access to the worker private key or CA private key")
+	}
 	return nil
+}
+
+func productionServiceBlock(contents, wanted string) string {
+	lines := strings.Split(contents, "\n")
+	inServices := false
+	active := false
+	var block []string
+	for _, line := range lines {
+		if line == "services:" {
+			inServices = true
+			continue
+		}
+		if !inServices {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		isService := strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(trimmed, ":")
+		if isService {
+			name := strings.TrimSuffix(trimmed, ":")
+			if active {
+				return strings.Join(block, "\n")
+			}
+			if name == wanted {
+				active = true
+				block = append(block, line)
+			}
+			continue
+		}
+		if active {
+			block = append(block, line)
+		}
+	}
+	if active {
+		return strings.Join(block, "\n")
+	}
+	return ""
 }
 
 func validateMainCollectorAsset(contents []byte) error {

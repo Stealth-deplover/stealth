@@ -24,6 +24,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Set up Go for BuildKit mTLS smoke helpers
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache-dependency-path: go.sum
+
       - name: Build local API, setup, worker, ingress control, isolated Collectors, proxy, and Console images
         shell: bash
         run: |
@@ -150,12 +156,6 @@ jobs:
           ENV_FILE: ${{ runner.temp }}/stealth-production-smoke.env
           SMOKE_REMOVE_VOLUMES: "true"
         run: ./scripts/compose-production-smoke.sh
-
-      - name: Set up Go for Real v0.2.5 Upgrade Smoke
-        uses: actions/setup-go@v7
-        with:
-          go-version: 1.26.x
-          cache-dependency-path: go.sum
 
       # This starts from the checked-in, tag-derived v0.2.5 installation and
       # exercises both the released CLI-only bridge boundary and the current

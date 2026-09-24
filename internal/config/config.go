@@ -100,6 +100,9 @@ type Config struct {
 	AppsMaxImageArchiveBytes      int64
 	AppsDefaultArtifactQuotaBytes int64
 	AppsBuildkitAddress           string
+	AppsBuildkitCACert            string
+	AppsBuildkitClientCert        string
+	AppsBuildkitClientKey         string
 	AppsBuildTimeout              time.Duration
 	AppsBuildLeaseAge             time.Duration
 	AppsBuildPollInterval         time.Duration
@@ -351,6 +354,9 @@ func (c Config) ValidateApps() error {
 	}
 	if !validBuildkitAddress(c.AppsBuildkitAddress) {
 		return fmt.Errorf("APPS_BUILDKIT_ADDRESS must be a private TCP host:port address")
+	}
+	if !validBuildKitPath(c.AppsBuildkitCACert) || !validBuildKitPath(c.AppsBuildkitClientCert) || !validBuildKitPath(c.AppsBuildkitClientKey) {
+		return fmt.Errorf("App BuildKit TLS certificate paths must be absolute, clean, non-root paths")
 	}
 	if c.AppsBuildTimeout < time.Minute || c.AppsBuildTimeout > 24*time.Hour || c.AppsBuildLeaseAge < c.AppsBuildTimeout || c.AppsBuildLeaseAge > 48*time.Hour || c.AppsBuildPollInterval < 100*time.Millisecond || c.AppsBuildPollInterval > time.Minute {
 		return fmt.Errorf("App build timeout, lease, or polling settings are invalid")

@@ -17,6 +17,9 @@ type appBuildSettings struct {
 	maxImageArchiveBytes      int64
 	defaultArtifactQuotaBytes int64
 	buildkitAddress           string
+	buildkitCACert            string
+	buildkitClientCert        string
+	buildkitClientKey         string
 	buildTimeout              time.Duration
 	buildLeaseAge             time.Duration
 	buildPollInterval         time.Duration
@@ -63,6 +66,17 @@ func loadAppBuildSettings() (appBuildSettings, error) {
 	if !validBuildkitAddress(settings.buildkitAddress) {
 		return appBuildSettings{}, fmt.Errorf("APPS_BUILDKIT_ADDRESS must be a private TCP host:port address")
 	}
+	for key, target := range map[string]*string{
+		"APPS_BUILDKIT_CA_CERT":     &settings.buildkitCACert,
+		"APPS_BUILDKIT_CLIENT_CERT": &settings.buildkitClientCert,
+		"APPS_BUILDKIT_CLIENT_KEY":  &settings.buildkitClientKey,
+	} {
+		path := value(key, defaultBuildKitPath(key))
+		if !validBuildKitPath(path) {
+			return appBuildSettings{}, fmt.Errorf("%s must be an absolute, clean, non-root path", key)
+		}
+		*target = path
+	}
 	settings.buildStagingRoot = filepath.Clean(value("APPS_BUILD_STAGING_ROOT", "/var/lib/stealth/app-build-staging"))
 	if !filepath.IsAbs(settings.buildStagingRoot) || settings.buildStagingRoot == string(filepath.Separator) {
 		return appBuildSettings{}, fmt.Errorf("APPS_BUILD_STAGING_ROOT must be an absolute non-root path")
@@ -106,10 +120,28 @@ func (s appBuildSettings) apply(config *Config) {
 	config.AppsMaxImageArchiveBytes = s.maxImageArchiveBytes
 	config.AppsDefaultArtifactQuotaBytes = s.defaultArtifactQuotaBytes
 	config.AppsBuildkitAddress = s.buildkitAddress
+	config.AppsBuildkitCACert = s.buildkitCACert
+	config.AppsBuildkitClientCert = s.buildkitClientCert
+	config.AppsBuildkitClientKey = s.buildkitClientKey
 	config.AppsBuildTimeout = s.buildTimeout
 	config.AppsBuildLeaseAge = s.buildLeaseAge
 	config.AppsBuildPollInterval = s.buildPollInterval
 	config.AppsBuildStagingRoot = s.buildStagingRoot
 	config.AppsBuildStagingVolume = s.buildStagingVolume
 	config.AppsBuildkitStateVolume = s.buildkitStateVolume
+}
+
+func defaultBuildKitPath(key string) string {
+	switch key {
+	case "APPS_BUILDKIT_CA_CERT":
+		return "/run/secrets/stealth-buildkit/ca.pem"
+	case "APPS_BUILDKIT_CLIENT_CERT":
+		return "/run/secrets/stealth-buildkit/client-cert.pem"
+	default:
+		return "/run/secrets/stealth-buildkit/client-key.pem"
+	}
+}
+
+func validBuildKitPath(path string) bool {
+	return path != "" && filepath.IsAbs(path) && filepath.Clean(path) == path && path != string(filepath.Separator) && !strings.ContainsAny(path, "\x00\r\n")
 }

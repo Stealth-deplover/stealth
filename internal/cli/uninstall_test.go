@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -162,6 +165,63 @@ func TestSafeUninstallPreservesDataAndNeverUsesVolumeDeletion(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "\x1b[") {
 		t.Fatalf("non-TTY output contains ANSI escape sequences: %q", out.String())
+	}
+}
+
+func TestKeepDataUninstallPreservesBuildKitPKI(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	if _, err := buildkitpki.Ensure(layout.StateDir); err != nil {
+		t.Fatal(err)
+	}
+	paths := buildkitpki.PathsAt(layout.StateDir)
+	before, err := os.ReadFile(paths.CACert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &uninstallTestRunner{}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--keep-data", "--yes"}); got != 0 {
+		t.Fatalf("keep-data uninstall exit = %d", got)
+	}
+	after, err := os.ReadFile(paths.CACert)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("keep-data uninstall changed or removed the BuildKit CA: %v", err)
+	}
+}
+
+func TestAppBuildKitVolumesAreIncludedInPurgeScope(t *testing.T) {
+	volumes := configuredUninstallVolumes(map[string]string{
+		"COMPOSE_PROJECT_NAME":       "stealth",
+		"APPS_BUILD_STAGING_VOLUME":  "stealth_app_build_staging",
+		"APPS_BUILDKIT_STATE_VOLUME": "stealth_app_buildkit_state",
+	})
+	want := map[string]string{
+		"stealth_app_build_staging":               "app_build_staging",
+		"stealth_app_buildkit_state":              "buildkit_state",
+		"stealth_app_buildkit_worker_credentials": "buildkit_worker_credentials",
+		"stealth_app_buildkit_server_credentials": "buildkit_server_credentials",
+	}
+	for _, volume := range volumes {
+		if expected, ok := want[volume.name]; ok {
+			if volume.composeName != expected {
+				t.Errorf("volume %q Compose name = %q, want %q", volume.name, volume.composeName, expected)
+			}
+			delete(want, volume.name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("App build volumes are missing from uninstall scope: %#v", want)
+	}
+	custom := configuredUninstallVolumes(map[string]string{"COMPOSE_PROJECT_NAME": "tenant-b"})
+	for _, volume := range custom {
+		if volume.composeName == "buildkit_worker_credentials" && volume.name != "tenant-b_app_buildkit_worker_credentials" {
+			t.Fatalf("worker credentials volume is shared across Compose projects: %q", volume.name)
+		}
+		if volume.composeName == "buildkit_server_credentials" && volume.name != "tenant-b_app_buildkit_server_credentials" {
+			t.Fatalf("server credentials volume is shared across Compose projects: %q", volume.name)
+		}
 	}
 }
 

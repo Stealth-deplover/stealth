@@ -226,7 +226,10 @@ func main() {
 	}
 	messagingWorker.PollInterval = cfg.FunctionsRunnerPoll
 	messagingWorker.LeaseAge = cfg.FunctionsRunnerLeaseAge
-	appBuildWorker, err := appbuilder.New(repo, appArtifactStore, &appbuilder.BuildKitClient{Address: cfg.AppsBuildkitAddress}, cfg.FunctionsWorkerID, cfg.AppsBuildStagingRoot, logger)
+	appBuildWorker, err := appbuilder.New(repo, appArtifactStore, &appbuilder.BuildKitClient{
+		Address: cfg.AppsBuildkitAddress, CACertPath: cfg.AppsBuildkitCACert,
+		ClientCertPath: cfg.AppsBuildkitClientCert, ClientKeyPath: cfg.AppsBuildkitClientKey,
+	}, cfg.FunctionsWorkerID, cfg.AppsBuildStagingRoot, logger)
 	if err != nil {
 		logger.Error("App build worker configuration error", "error", err)
 		os.Exit(1)

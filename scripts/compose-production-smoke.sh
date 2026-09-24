@@ -22,6 +22,9 @@ api_url=""
 filelog_smoke_pid=""
 platform_archive=""
 app_archive=""
+app_probe_binary=""
+buildkit_wrong_identity_dir=""
+buildkit_pki_smoke_created="false"
 buildkit_apparmor_profile_file=""
 buildkit_apparmor_profile_name=""
 buildkit_apparmor_profile_loaded="false"
@@ -118,7 +121,7 @@ restore_traefik_state_after_smoke() {
 }
 
 cleanup() {
-	local exit_code=$?
+	local exit_code=$? worker_container
 	if [ -n "$forwarded_echo_container_id" ]; then
 		docker rm -f "$forwarded_echo_container_id" >/dev/null 2>&1 || true
 		forwarded_echo_container_id=""
@@ -179,13 +182,116 @@ cleanup() {
 		cp -- "$static_backup" "$static_file" || true
 	fi
 	restore_traefik_state_after_smoke
-	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$buildkit_apparmor_profile_file"
+	if [ -n "$buildkit_wrong_identity_dir" ]; then
+		worker_container="$("${compose[@]}" ps -q worker 2>/dev/null || true)"
+		if [ -n "$worker_container" ]; then
+			docker exec --user 0 "$worker_container" rm -rf /tmp/stealth-buildkit-mtls-negative-test >/dev/null 2>&1 || true
+		fi
+		rm -rf -- "$buildkit_wrong_identity_dir"
+	fi
+	if [ "$buildkit_pki_smoke_created" = "true" ]; then
+		pki_path="$(dirname -- "$compose_file")/state/buildkit-mtls"
+		if [ -d "$pki_path" ] && [ ! -L "$pki_path" ]; then
+			rm -rf -- "$pki_path"
+		fi
+		docker volume rm stealth_app_buildkit_worker_credentials stealth_app_buildkit_server_credentials >/dev/null 2>&1 || true
+	fi
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$app_probe_binary" "$buildkit_apparmor_profile_file"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
 	exit "$exit_code"
 }
 trap cleanup EXIT
+
+prepare_buildkit_pki_for_smoke() {
+	local state_dir pki_path
+	state_dir="$(dirname -- "$compose_file")/state"
+	pki_path="$state_dir/buildkit-mtls"
+	if [ ! -e "$pki_path" ] && [ ! -L "$pki_path" ] &&
+		[ ! -e "$pki_path.pending" ] && [ ! -L "$pki_path.pending" ] &&
+		[ ! -e "$pki_path.previous" ] && [ ! -L "$pki_path.previous" ]; then
+		buildkit_pki_smoke_created="true"
+	fi
+	STEALTH_BUILDKIT_PKI_SMOKE_STATE_DIR="$state_dir" \
+		go test ./internal/buildkitpki -run '^TestProductionComposeSmokePreparePKI$' -count=1
+	for key in "$pki_path/ca-key.pem" "$pki_path/server/key.pem" "$pki_path/worker/key.pem" "$pki_path/health/key.pem"; do
+		if [ -L "$key" ] || [ ! -f "$key" ]; then
+			printf 'BuildKit mTLS smoke key was not created as a regular file: %s\n' "$key" >&2
+			return 1
+		fi
+		if [ "$(stat -c '%a' "$key")" != '600' ]; then
+			printf 'BuildKit mTLS host private key mode is not 0600: %s\n' "$key" >&2
+			return 1
+		fi
+	done
+}
+
+expect_buildkit_auth_rejection() {
+	local label="$1" output
+	shift
+	if output="$("${compose[@]}" exec -T worker "$@" 2>&1)"; then
+		printf 'BuildKit accepted %s\n' "$label" >&2
+		return 1
+	fi
+	if ! printf '%s\n' "$output" | grep -Eiq 'tls|certificate|authentication'; then
+		printf 'BuildKit did not report a TLS rejection for %s\n' "$label" >&2
+		return 1
+	fi
+	printf 'BuildKit rejected %s during TLS authentication\n' "$label"
+}
+
+verify_buildkit_mtls_smoke() {
+	local worker_container
+	if ! command -v openssl >/dev/null 2>&1; then
+		printf '%s\n' 'BuildKit mTLS smoke requires OpenSSL for an untrusted test identity' >&2
+		return 1
+	fi
+	worker_container="$("${compose[@]}" ps -q worker)"
+	if [ -z "$worker_container" ]; then
+		printf '%s\n' 'worker container is unavailable for BuildKit mTLS smoke' >&2
+		return 1
+	fi
+	buildkit_wrong_identity_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-buildkit-untrusted.XXXXXX")"
+	chmod 0700 "$buildkit_wrong_identity_dir"
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$buildkit_wrong_identity_dir/wrong-ca-key.pem" >/dev/null 2>&1
+	openssl req -x509 -new -key "$buildkit_wrong_identity_dir/wrong-ca-key.pem" -sha256 -days 2 \
+		-subj '/CN=Untrusted Stealth BuildKit smoke CA' \
+		-addext 'basicConstraints=critical,CA:TRUE' \
+		-addext 'keyUsage=critical,keyCertSign,cRLSign' \
+		-out "$buildkit_wrong_identity_dir/wrong-ca.pem" >/dev/null 2>&1
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$buildkit_wrong_identity_dir/wrong-client-key.pem" >/dev/null 2>&1
+	openssl req -new -key "$buildkit_wrong_identity_dir/wrong-client-key.pem" \
+		-subj '/CN=Untrusted Stealth BuildKit smoke client' \
+		-out "$buildkit_wrong_identity_dir/wrong-client.csr" >/dev/null 2>&1
+	cat >"$buildkit_wrong_identity_dir/client-ext.cnf" <<'EOF'
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=clientAuth
+EOF
+	openssl x509 -req -in "$buildkit_wrong_identity_dir/wrong-client.csr" \
+		-CA "$buildkit_wrong_identity_dir/wrong-ca.pem" -CAkey "$buildkit_wrong_identity_dir/wrong-ca-key.pem" \
+		-CAcreateserial -days 2 -sha256 -extfile "$buildkit_wrong_identity_dir/client-ext.cnf" \
+		-out "$buildkit_wrong_identity_dir/wrong-client-cert.pem" >/dev/null 2>&1
+	docker exec --user 0 "$worker_container" mkdir -p /tmp/stealth-buildkit-mtls-negative-test
+	docker cp "$buildkit_wrong_identity_dir/wrong-ca.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-ca.pem"
+	docker cp "$buildkit_wrong_identity_dir/wrong-client-cert.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-client-cert.pem"
+	docker cp "$buildkit_wrong_identity_dir/wrong-client-key.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem"
+	docker exec --user 0 "$worker_container" sh -ec \
+		'chown -R 10001:10001 /tmp/stealth-buildkit-mtls-negative-test && chmod 0700 /tmp/stealth-buildkit-mtls-negative-test && chmod 0444 /tmp/stealth-buildkit-mtls-negative-test/*.pem && chmod 0400 /tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem'
+
+	local -a base_args=(buildctl --addr tcp://buildkit:1234)
+	local -a proper_ca=(--tlscacert /run/secrets/stealth-buildkit/ca.pem)
+	local -a valid_client=(--tlscert /run/secrets/stealth-buildkit/client-cert.pem --tlskey /run/secrets/stealth-buildkit/client-key.pem)
+	expect_buildkit_auth_rejection 'a client with no certificate' "${base_args[@]}" "${proper_ca[@]}" debug workers
+	expect_buildkit_auth_rejection 'a client certificate signed by an untrusted CA' "${base_args[@]}" "${proper_ca[@]}" \
+		--tlscert /tmp/stealth-buildkit-mtls-negative-test/wrong-client-cert.pem \
+		--tlskey /tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem debug workers
+	expect_buildkit_auth_rejection 'an untrusted server CA' "${base_args[@]}" \
+		--tlscacert /tmp/stealth-buildkit-mtls-negative-test/wrong-ca.pem "${valid_client[@]}" debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
+	printf '%s\n' 'worker certificate authenticated BuildKit debug workers successfully'
+}
 
 prepare_buildkit_apparmor() {
 	local restriction profile_dir
@@ -231,6 +337,7 @@ EOF
 }
 
 prepare_buildkit_apparmor
+prepare_buildkit_pki_for_smoke
 
 case "${SMOKE_REMOVE_VOLUMES:-false}" in
 	true|false) ;;
@@ -1054,7 +1161,7 @@ PY
 }
 
 prepare_platform_route_smoke() {
-	local account_id organization_id project_status site_status site_status_after_upload app_status
+	local account_id organization_id project_status site_status site_status_after_upload app_status app_architecture
 	local upload_body
 	account_id="$(platform_json_field "$register_response" account.id)"
 	organization_id="$(platform_json_field "$register_response" organization.id)"
@@ -1144,14 +1251,23 @@ PY
 	fi
 
 	app_archive="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke.XXXXXX.zip")"
-	python3 - "$app_archive" "$smoke_marker" <<'PY'
+	case "$(uname -m)" in
+		x86_64|amd64) app_architecture='amd64' ;;
+		aarch64|arm64) app_architecture='arm64' ;;
+		*) printf 'unsupported BuildKit smoke host architecture: %s\n' "$(uname -m)" >&2; return 1 ;;
+	esac
+	app_probe_binary="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-secret-probe.XXXXXX")"
+	(cd -- "$repo_root" && GOOS=linux GOARCH="$app_architecture" CGO_ENABLED=0 go build -trimpath -o "$app_probe_binary" ./scripts/fixtures/app-buildkit-secret-probe)
+	chmod 0755 "$app_probe_binary"
+	python3 - "$app_archive" "$smoke_marker" "$app_probe_binary" <<'PY'
 import sys
 import zipfile
 
-archive, marker = sys.argv[1:]
+archive, marker, probe = sys.argv[1:]
 with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\n")
+    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\nCOPY buildkit-secret-probe /buildkit-secret-probe\nRUN [\"/buildkit-secret-probe\"]\n")
     output.writestr("payload.txt", marker + "\n")
+    output.write(probe, "buildkit-secret-probe")
 PY
 	local deployment_response="$platform_response"
 	local deployment_status
@@ -1557,6 +1673,7 @@ wait_for_healthy buildkit
 "${compose[@]}" up -d api worker console proxy traefik
 wait_for_healthy api
 wait_for_healthy worker
+verify_buildkit_mtls_smoke
 wait_for_healthy console
 wait_for_healthy proxy
 wait_for_healthy traefik

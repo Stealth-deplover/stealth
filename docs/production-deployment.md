@@ -27,6 +27,44 @@ worker → app_build network → dedicated rootless BuildKit → OCI archive in 
 OTLP / Prometheus → otel-collector → ClickHouse
 ```
 
+The worker and BuildKit authenticate the private TCP control endpoint with
+mutual TLS. The BuildKit certificate is valid for the `buildkit` DNS name; the
+daemon verifies client certificates against the installation's BuildKit CA.
+Private Docker networking is not treated as authentication.
+
+```text
+                  Stealth BuildKit CA
+                   /              \
+         server identity       worker identity
+                │                    │
+                ▼                    ▼
+            BuildKit  ◀── mTLS ─── worker
+                │
+                ▼
+         untrusted Dockerfile build
+                └── no BuildKit client key
+```
+
+The installer creates and validates `state/buildkit-mtls` during install,
+repair, and upgrade. The CA key stays on the host at mode `0600` and is not
+mounted into any container. A networkless, one-shot initializer copies only
+the server and dedicated health-client identities into BuildKit's private
+credential volume; a separate initializer copies only the worker identity
+into the worker's private volume. Runtime volumes are mounted read-only and
+private keys are owned by their single service user at mode `0400`. The API
+receives no BuildKit key. Tenant build contexts and `RUN` steps receive none
+of these control credentials.
+
+The CA key remains in the installation state so the installer can renew the
+CA and issue a new leaf set before the CA's final year. Leaf identities renew
+when fewer than 30 days remain; renewal uses the same CA, updates role-specific
+volumes, and recreates the worker and BuildKit together. Complete valid state
+is preserved across routine updates. A partial or corrupt bundle fails closed
+with repair guidance instead of replacing one member independently. Backup
+and restore of the same installation should include `state/buildkit-mtls`;
+loss of that identity requires a new trust set for future builds but does not
+invalidate already persisted OCI artifacts.
+
 The BuildKit service joins only the private `app_build` network with the
 worker. It has no PostgreSQL/Redis/control-plane network, Docker socket, host
 port, Stealth artifact storage mount, or platform credentials. The worker
@@ -40,6 +78,17 @@ ownership is required because those mounts hide the image's pre-owned paths.
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
+Use `stealth install` for fresh installations and the managed repair/update
+commands for existing installations so host PKI issuance and role-volume
+refresh complete before BuildKit starts. The one-shot credential initializers
+do not generate or rotate certificates; they only copy the validated,
+installer-owned identities into separate runtime volumes.
+
+`stealth uninstall --keep-data` preserves the host PKI, runtime credential
+volumes, and BuildKit cache for a restorable installation. `--purge` removes
+the generated identities and these Compose-owned volumes. Losing the BuildKit
+PKI requires issuing a new trust set for future builds but does not invalidate
+completed OCI artifacts.
 
 Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
 route. The Console/API hostname defaults to Nginx and can be switched to
@@ -73,6 +122,8 @@ docker compose --env-file .env.production -f compose.production.yaml up -d postg
 docker compose --env-file .env.production -f compose.production.yaml up migrate
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-state-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-worker-credentials-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-server-credentials-init
 docker compose --env-file .env.production -f compose.production.yaml up -d api worker buildkit console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
@@ -118,7 +169,10 @@ BuildKit receives no tenant-selected frontend, insecure entitlement, SSH
 forwarding, build secret, build argument, or platform credential. The Dockerfile
 frontend is the enabled `dockerfile.v0` frontend from the pinned daemon. The
 worker process invokes `buildctl` with an explicit minimal environment and no
-shell. Build logs are bounded and sanitized. This boundary executes untrusted
+shell. Every readiness and build invocation supplies the configured CA,
+worker certificate, and worker private key; missing TLS configuration makes
+the builder unavailable and there is no plaintext fallback. Build logs are
+bounded and sanitized. This boundary executes untrusted
 Dockerfile build instructions inside rootless BuildKit; it is not an App
 runtime.
 

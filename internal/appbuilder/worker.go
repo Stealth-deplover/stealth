@@ -632,6 +632,7 @@ func (w *progressWriter) writeLine(raw []byte) {
 	}
 	line := strings.ToValidUTF8(string(raw), "�")
 	line = strings.ReplaceAll(line, w.redactRoot, "<worker-staging>")
+	line = strings.ReplaceAll(line, "/run/secrets/stealth-buildkit", "<BuildKit TLS credential directory>")
 	line = strings.ReplaceAll(line, "\r", " ")
 	line = strings.ReplaceAll(line, "\x00", " ")
 	line = strings.TrimSpace(line)

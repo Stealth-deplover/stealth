@@ -70,6 +70,17 @@ if [ -z "$buildkit_block" ]; then
 	printf '%s\n' 'dedicated App BuildKit service is missing from rendered production Compose' >&2
 	exit 1
 fi
+worker_mtls_init_block="$(service_block buildkit-worker-credentials-init)"
+server_mtls_init_block="$(service_block buildkit-server-credentials-init)"
+if [ -z "$worker_mtls_init_block" ] || [ -z "$server_mtls_init_block" ]; then
+	printf '%s\n' 'one-shot role-specific BuildKit credential initializers are missing' >&2
+	exit 1
+fi
+api_block="$(service_block api)"
+if [ -z "$api_block" ]; then
+	printf '%s\n' 'API service is missing from rendered production Compose' >&2
+	exit 1
+fi
 state_init_block="$(service_block traefik-state-init)"
 if [ -z "$state_init_block" ]; then
 	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
@@ -285,6 +296,108 @@ END { check_mount(); exit(found ? 0 : 1) }
 	printf '%s\n' 'App BuildKit daemon configuration must be mounted read-only' >&2
 	exit 1
 fi
+
+buildkit_config="$(dirname -- "$compose_file")/buildkit/buildkitd.toml"
+if [ ! -f "$buildkit_config" ]; then
+	printf 'BuildKit daemon configuration is missing: %s\n' "$buildkit_config" >&2
+	exit 1
+fi
+
+assert_read_only_mount() {
+	local block="$1" source_pattern="$2" target="$3" label="$4"
+	if ! printf '%s\n' "$block" | awk -v pattern="$source_pattern" -v wanted="$target" '
+function check_mount() {
+  if (source ~ pattern && mount_target == wanted && read_only) found=1
+}
+/^    volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_volumes && /^      - type:/ { check_mount(); source=""; mount_target=""; read_only=0; next }
+in_volumes && /source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); source=$0 }
+in_volumes && /target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); mount_target=$0 }
+in_volumes && /read_only:[[:space:]]*true/ { read_only=1 }
+END { check_mount(); exit(found ? 0 : 1) }
+'; then
+		printf 'BuildKit mTLS mount is missing or writable (%s)\n' "$label" >&2
+		exit 1
+	fi
+}
+
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/ca-cert\.pem$' '/input/ca.pem' 'worker initializer CA source'
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/cert\.pem$' '/input/client-cert.pem' 'worker initializer client certificate source'
+assert_read_only_mount "$worker_mtls_init_block" '/state/buildkit-mtls/worker/key\.pem$' '/input/client-key.pem' 'worker initializer client key source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/ca-cert\.pem$' '/input/ca.pem' 'BuildKit initializer CA source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/cert\.pem$' '/input/server-cert.pem' 'BuildKit initializer server certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/server/key\.pem$' '/input/server-key.pem' 'BuildKit initializer server key source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/cert\.pem$' '/input/health-client-cert.pem' 'BuildKit initializer health certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/state/buildkit-mtls/health/key\.pem$' '/input/health-client-key.pem' 'BuildKit initializer health key source'
+assert_read_only_mount "$worker_block" '^buildkit_worker_credentials$' '/run/secrets/stealth-buildkit' 'worker client credential volume'
+assert_read_only_mount "$buildkit_block" '^buildkit_server_credentials$' '/run/secrets/stealth-buildkit' 'BuildKit server credential volume'
+
+if printf '%s\n' "$buildkit_block" | grep -Eq 'buildkit-mtls|/client-key\.pem|worker'; then
+	printf '%s\n' 'BuildKit must not receive the worker identity or host PKI bind mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_block" | grep -Eq 'buildkit-mtls|server-key\.pem|health-client-key\.pem'; then
+	printf '%s\n' 'worker must not receive BuildKit server or health identity material or host PKI bind mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_mtls_init_block" | grep -Eq '/server/|/health/|ca-key\.pem|buildkit_server_credentials'; then
+	printf '%s\n' 'worker credential initializer has access to another BuildKit identity' >&2
+	exit 1
+fi
+if printf '%s\n' "$server_mtls_init_block" | grep -Eq '/worker/|client-key\.pem|ca-key\.pem|buildkit_worker_credentials'; then
+	printf '%s\n' 'BuildKit credential initializer has access to worker or CA private key material' >&2
+	exit 1
+fi
+for initializer in "$worker_mtls_init_block" "$server_mtls_init_block"; do
+	for required in 'network_mode: none' 'read_only: true' 'cap_drop:' 'cap_add:' 'CHOWN' 'DAC_OVERRIDE'; do
+		if ! printf '%s\n' "$initializer" | grep -Fq -- "$required"; then
+			printf 'BuildKit credential initializer is missing required isolation: %s\n' "$required" >&2
+			exit 1
+		fi
+	done
+	if ! printf '%s\n' "$initializer" | grep -Eq 'restart: "?no"?'; then
+		printf '%s\n' 'BuildKit credential initializers must be one-shot' >&2
+		exit 1
+	fi
+done
+if printf '%s\n' "$api_block" | grep -Eq '/state/buildkit-mtls|/run/secrets/stealth-buildkit'; then
+	printf '%s\n' 'API must not receive BuildKit PKI files or mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$buildkit_block$worker_block" | grep -Eq 'BEGIN (EC |RSA )?PRIVATE KEY|APPS_BUILDKIT_.*PEM'; then
+	printf '%s\n' 'PEM contents must never appear in Compose configuration or environment' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/server-cert.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/server-key.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/ca.pem'; then
+	printf '%s\n' 'BuildKit service is missing mandatory daemon TLS identity paths' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem'; then
+	printf '%s\n' 'BuildKit healthcheck must use its dedicated client identity' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$worker_block" | grep -Fq '/run/secrets/stealth-buildkit/client-cert.pem' ||
+	! printf '%s\n' "$worker_block" | grep -Fq '/run/secrets/stealth-buildkit/client-key.pem'; then
+	printf '%s\n' 'worker is missing its dedicated mTLS client identity' >&2
+	exit 1
+fi
+if ! grep -Fq '[grpc.tls]' "$buildkit_config" ||
+	! grep -Fq 'cert = "/run/secrets/stealth-buildkit/server-cert.pem"' "$buildkit_config" ||
+	! grep -Fq 'key = "/run/secrets/stealth-buildkit/server-key.pem"' "$buildkit_config" ||
+	! grep -Fq 'ca = "/run/secrets/stealth-buildkit/ca.pem"' "$buildkit_config"; then
+	printf '%s\n' 'BuildKit daemon config must require its server identity and client CA' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'debug workers'; then
+	printf '%s\n' 'BuildKit healthcheck does not authenticate with the health-only identity' >&2
+	exit 1
+fi
 for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
 	if printf '%s\n' "$buildkit_block" | grep -Fqi -- "$forbidden"; then
 		printf 'App BuildKit service contains forbidden setting: %s\n' "$forbidden" >&2
@@ -325,11 +438,6 @@ while IFS= read -r service; do
 	fi
 done < <("${compose[@]}" config --services)
 
-buildkit_config="$(dirname -- "$compose_file")/buildkit/buildkitd.toml"
-if [ ! -f "$buildkit_config" ]; then
-	printf 'BuildKit daemon configuration is missing: %s\n' "$buildkit_config" >&2
-	exit 1
-fi
 for required in 'rootless = true' 'noProcessSandbox = false' 'gc = true' 'maxUsedSpace = "10GB"' 'max-parallelism = 2' '[frontend."dockerfile.v0"]'; do
 	if ! grep -Fq -- "$required" "$buildkit_config"; then
 		printf 'BuildKit daemon configuration is missing setting: %s\n' "$required" >&2

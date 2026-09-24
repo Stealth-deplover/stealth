@@ -89,6 +89,27 @@ volume is bounded, disposable BuildKit cache. Dockerfile execution can fetch
 ordinary base images and dependencies over outbound Internet, but cannot
 resolve backend services by Compose network name.
 
+The TCP control API at `tcp://buildkit:1234` requires mutual TLS. BuildKit
+requires a client certificate signed by the installation CA, and the worker
+verifies the `buildkit` server SAN using that CA. The daemon uses a dedicated
+server identity; the worker and BuildKit healthcheck use separate client-only
+identities. `Ready()` and `Build()` both pass all three `buildctl` TLS file
+flags and fail closed when any path is missing. The healthcheck also
+authenticates; it does not use a plaintext local endpoint.
+
+The host installer generates an installation-local P-256 PKI atomically and
+preserves a valid bundle on routine updates. Host private keys are mode `0600`
+under mode-`0700` directories. Networkless, one-shot Compose initializers
+receive only the source files for one role and copy the identity into a
+service-specific read-only volume with a mode-`0400` key. The worker volume
+contains the CA certificate and worker identity. The BuildKit volume contains
+the CA certificate, server identity, and healthcheck identity. The API and
+tenant build steps receive no private key, and the BuildKit daemon never gets
+the worker key. CA private material remains host-only; the retained CA key
+allows controlled renewal, while leaf certificates renew 30 days before
+expiry. Back up this PKI with installation state. Completed OCI artifacts
+remain valid if the BuildKit identity is lost.
+
 The worker sends only a validated source context and explicit build request to
 BuildKit. It does not forward SSH agents, secrets, arbitrary build arguments,
 tenant-selected Dockerfile frontends, or insecure entitlements. The process

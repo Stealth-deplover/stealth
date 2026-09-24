@@ -39,6 +39,15 @@ func (c *Config) applyAppBuildDefaults() {
 	if c.AppsBuildkitAddress == "" {
 		c.AppsBuildkitAddress = "tcp://buildkit:1234"
 	}
+	if c.AppsBuildkitCACert == "" {
+		c.AppsBuildkitCACert = "/run/secrets/stealth-buildkit/ca.pem"
+	}
+	if c.AppsBuildkitClientCert == "" {
+		c.AppsBuildkitClientCert = "/run/secrets/stealth-buildkit/client-cert.pem"
+	}
+	if c.AppsBuildkitClientKey == "" {
+		c.AppsBuildkitClientKey = "/run/secrets/stealth-buildkit/client-key.pem"
+	}
 	if c.AppsBuildTimeout <= 0 {
 		c.AppsBuildTimeout = 20 * time.Minute
 	}

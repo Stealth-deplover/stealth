@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -192,6 +193,9 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"APPS_MAX_IMAGE_ARCHIVE_BYTES":          "2GiB",
 		"APPS_DEFAULT_ARTIFACT_QUOTA_BYTES":     "5GiB",
 		"APPS_BUILDKIT_ADDRESS":                 "tcp://buildkit:1234",
+		"APPS_BUILDKIT_CA_CERT":                 "/run/secrets/stealth-buildkit/ca.pem",
+		"APPS_BUILDKIT_CLIENT_CERT":             "/run/secrets/stealth-buildkit/client-cert.pem",
+		"APPS_BUILDKIT_CLIENT_KEY":              "/run/secrets/stealth-buildkit/client-key.pem",
 		"APPS_BUILDKIT_APPARMOR_PROFILE":        appArmorProfile,
 		"APPS_BUILD_TIMEOUT":                    "20m",
 		"APPS_BUILD_LEASE_AGE":                  "25m",
@@ -289,6 +293,9 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 		"APPS_MAX_IMAGE_ARCHIVE_BYTES":          "2GiB",
 		"APPS_DEFAULT_ARTIFACT_QUOTA_BYTES":     "5GiB",
 		"APPS_BUILDKIT_ADDRESS":                 "tcp://buildkit:1234",
+		"APPS_BUILDKIT_CA_CERT":                 "/run/secrets/stealth-buildkit/ca.pem",
+		"APPS_BUILDKIT_CLIENT_CERT":             "/run/secrets/stealth-buildkit/client-cert.pem",
+		"APPS_BUILDKIT_CLIENT_KEY":              "/run/secrets/stealth-buildkit/client-key.pem",
 		"APPS_BUILD_TIMEOUT":                    "20m",
 		"APPS_BUILD_LEASE_AGE":                  "25m",
 		"APPS_BUILD_POLL_INTERVAL":              "500ms",
@@ -375,6 +382,12 @@ func validateConfigValues(values map[string]string) error {
 	}
 	if profile := strings.TrimSpace(values["APPS_BUILDKIT_APPARMOR_PROFILE"]); profile != "" && !validBuildKitAppArmorProfile(profile) {
 		return errorsf("APPS_BUILDKIT_APPARMOR_PROFILE must be unconfined or " + BuildKitAppArmorProfileName)
+	}
+	for _, key := range []string{"APPS_BUILDKIT_CA_CERT", "APPS_BUILDKIT_CLIENT_CERT", "APPS_BUILDKIT_CLIENT_KEY"} {
+		path := values[key]
+		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) || strings.ContainsAny(path, "\x00\r\n") {
+			return fmt.Errorf("generated configuration value for %s must be an absolute clean non-root path", key)
+		}
 	}
 	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_INGRESS_CONTROL_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE", "TRAEFIK_IMAGE"} {
 		if !validImageReference(values[key]) {

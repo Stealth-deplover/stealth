@@ -220,6 +220,9 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 	postgres := configuredVolumeName(values, "POSTGRES_VOLUME_NAME", "stealth_postgres_data")
 	storage := configuredVolumeName(values, "STORAGE_VOLUME_NAME", "stealth_storage")
 	staging := configuredVolumeName(values, "FUNCTIONS_RUNNER_STAGING_VOLUME", "stealth_function_runner_staging")
+	appStaging := configuredVolumeName(values, "APPS_BUILD_STAGING_VOLUME", "stealth_app_build_staging")
+	buildkitState := configuredVolumeName(values, "APPS_BUILDKIT_STATE_VOLUME", "stealth_app_buildkit_state")
+	composeProject := configuredVolumeName(values, "COMPOSE_PROJECT_NAME", "stealth")
 	clickhouse := configuredVolumeName(values, "CLICKHOUSE_VOLUME_NAME", "stealth_clickhouse_data")
 	otelCollector := configuredVolumeName(values, "OTELCOL_VOLUME_NAME", "stealth_otelcol_state")
 	otelDockerLogs := configuredVolumeName(values, "OTEL_DOCKER_LOGS_VOLUME_NAME", "stealth_otel_docker_logs_state")
@@ -233,6 +236,10 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 	}
 	volumes = append(volumes, uninstallVolume{label: "Function runner staging volume", name: staging, composeName: "function_runner_staging"})
 	volumes = append(volumes,
+		uninstallVolume{label: "App build staging volume", name: appStaging, composeName: "app_build_staging"},
+		uninstallVolume{label: "App BuildKit cache volume", name: buildkitState, composeName: "buildkit_state"},
+		uninstallVolume{label: "App BuildKit worker credential volume", name: composeProject + "_app_buildkit_worker_credentials", composeName: "buildkit_worker_credentials"},
+		uninstallVolume{label: "App BuildKit server credential volume", name: composeProject + "_app_buildkit_server_credentials", composeName: "buildkit_server_credentials"},
 		uninstallVolume{label: "ClickHouse telemetry volume", name: clickhouse, composeName: "clickhouse_data"},
 		uninstallVolume{label: "OTel Collector state volume", name: otelCollector, composeName: "otelcol_state"},
 		uninstallVolume{label: "Docker log Collector state volume", name: otelDockerLogs, composeName: "otel_docker_logs_state"},

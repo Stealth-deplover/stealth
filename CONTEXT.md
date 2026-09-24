@@ -194,6 +194,24 @@ secrets, build arguments, or tenant-selected frontend/entitlements. The OCI
 artifact is the only durable output of the build boundary; BuildKit cache loss
 may slow a future build but cannot remove a completed deployment artifact.
 
+The BuildKit TCP control API requires mutual TLS even on the private
+`app_build` network. An installation-local CA signs distinct server, worker,
+and healthcheck identities. The worker verifies the server's `buildkit` DNS
+SAN; BuildKit requires a trusted client certificate for every control request.
+The host CA key is kept mode `0600` and is never mounted into a container.
+One-shot networkless initializers populate separate read-only runtime volumes:
+BuildKit receives its server and healthcheck identities, while the worker
+receives its client identity. The API and tenant build steps receive no
+BuildKit private keys. Host identity state is preserved on routine upgrades;
+leaf certificates renew before expiry. Restoring an installation should
+restore this PKI, but its loss does not affect completed OCI artifacts.
+
+BuildKit cache identifiers are never durable application identity. The
+persisted `image_digest` and verified OCI archive are authoritative. Future
+runtime reconciliation consumes the selected immutable image and current App
+desired state; it remains a separate capability from the BuildKit control
+connection.
+
 ## Backend authentication email delivery
 
 The mailer transport keeps a generic `Message`/`Sender` seam for explicit
