@@ -2652,8 +2652,10 @@ emit_otlp_signal logs "$log_payload"
 emit_otlp_signal traces "$trace_payload"
 emit_otlp_signal metrics "$metric_payload"
 
-from="$(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ)"
-to="$(date -u -d '1 minute' +%Y-%m-%dT%H:%M:%SZ)"
+# Keep Admin API filtering anchored to the emitted event even when the App
+# lifecycle checks above take longer than the previous five-minute window.
+from="$(date -u -d "@$((timestamp_seconds - 60))" +%Y-%m-%dT%H:%M:%SZ)"
+to="$(date -u -d "@$((timestamp_seconds + 60))" +%Y-%m-%dT%H:%M:%SZ)"
 wait_for_telemetry_rows "smoke metric" "SELECT count() FROM otel_metrics_gauge WHERE TimeUnix >= now() - INTERVAL 10 MINUTE AND MetricName = '${metric_name}' AND ResourceAttributes['smoke.marker'] = '${smoke_marker}'"
 wait_for_telemetry_rows "smoke log" "SELECT count() FROM otel_logs WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND positionCaseInsensitiveUTF8(Body, '${smoke_marker}') > 0"
 wait_for_telemetry_rows "smoke trace" "SELECT count() FROM otel_traces WHERE Timestamp >= now() - INTERVAL 10 MINUTE AND TraceId = '${trace_id}'"
