@@ -23,7 +23,12 @@ func main() {
 		logger.Error("Cloudflare setup-state handoff accepts no arguments")
 		os.Exit(2)
 	}
-	published, err := cloudflareimport.PublishLegacySetupSnapshot(context.Background(), sourcePath, inputDirectory)
+	owner, err := cloudflareimport.OwnerForSourceDirectory("/source")
+	if err != nil {
+		logger.Error("Cloudflare setup-state source directory is unavailable or unsafe")
+		os.Exit(1)
+	}
+	published, err := cloudflareimport.PublishLegacySetupSnapshot(context.Background(), sourcePath, inputDirectory, owner)
 	if err != nil {
 		logger.Error("Cloudflare setup-state handoff rejected unsafe or unavailable source state", "reason", safeReason(err))
 		os.Exit(1)

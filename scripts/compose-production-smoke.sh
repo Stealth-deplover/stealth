@@ -253,19 +253,65 @@ prepare_buildkit_pki_for_smoke() {
 }
 
 verify_cloudflare_handoff_smoke() {
-	local fixture_state fixture_import test_key
+	local fixture_state fixture_import expected_uid
 	cloudflare_handoff_fixture="$(mktemp -d "${TMPDIR:-/tmp}/stealth-cloudflare-handoff.XXXXXX")"
 	chmod 0700 "$cloudflare_handoff_fixture"
 	fixture_state="$cloudflare_handoff_fixture/state"
 	fixture_import="$fixture_state/.cloudflare-import/cloudflare-import.enc"
 	mkdir -m 0700 -- "$fixture_state"
+	expected_uid="$(stat -c '%u' "$fixture_state")"
+	if [ "$expected_uid" -eq 0 ]; then
+		expected_uid="$(awk -F: '$1 == "nobody" { print $3; exit }' /etc/passwd)"
+		if [ -z "$expected_uid" ] || [ "$expected_uid" -eq 0 ]; then
+			expected_uid=65534
+		fi
+		chown "$expected_uid" "$fixture_state"
+	fi
+
+	reset_handoff_volume() {
+		# Model a named volume reused from an earlier root-owned run, with stale
+		# input that the next real source initializer must remove.
+		STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps -T \
+			--entrypoint /bin/sh cloudflare-setup-state-init -ec \
+			'chown 0:0 /output && chmod 0700 /output && printf stale > /output/setup-state.enc && chmod 0400 /output/setup-state.enc'
+	}
+	verify_handoff_owner() {
+		local source_expected="$1" expected_snapshot actual
+		if [ "$source_expected" = "present" ]; then
+			# The encrypted source file remains owner-only and is created by the
+			# root-run copy helper; ownership of the handoff directory carries
+			# the installation UID through to the importer.
+			expected_snapshot=400
+		else
+			expected_snapshot=absent
+		fi
+		actual="$(STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps -T \
+			--entrypoint /bin/sh cloudflare-state-init -ec \
+			'stat -c "%u:%g:%a" /input; if [ -e /input/setup-state.enc ] || [ -L /input/setup-state.enc ]; then stat -c "%a" /input/setup-state.enc; else printf absent; fi')"
+		if [ "$actual" != "$(printf '%s:%s:770\n%s' "$expected_uid" 10001 "$expected_snapshot")" ]; then
+			printf 'Cloudflare handoff owner or source state is wrong: expected UID:GID %s:10001 with source %s, got %s\n' \
+				"$expected_uid" "$source_expected" "$actual" >&2
+			return 1
+		fi
+	}
+	assert_host_import_owner() {
+		local path="$1" expected_mode="$2" actual
+		actual="$(stat -c '%u:%g:%a' "$path")"
+		if [ "$actual" != "$expected_uid:10001:$expected_mode" ]; then
+			printf 'Cloudflare import path has owner/mode %s; want %s:10001:%s (%s)\n' \
+				"$actual" "$expected_uid" "$expected_mode" "$path" >&2
+			return 1
+		fi
+	}
 	cloudflare_smoke_key="$(openssl rand -base64 32)"
 	STEALTH_CLOUDFLARE_SMOKE_ACTION=write \
 	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
 	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
 	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$fixture_import" \
 		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	reset_handoff_volume
 	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	verify_handoff_owner present
 	cloudflare_handoff_artifact_copy="$(mktemp "${TMPDIR:-/tmp}/stealth-cloudflare-import-smoke.XXXXXX")"
 	rm -f -- "$cloudflare_handoff_artifact_copy"
 	cloudflare_handoff_container="stealth-cloudflare-import-smoke-$$"
@@ -274,13 +320,17 @@ verify_cloudflare_handoff_smoke() {
 	docker cp "$cloudflare_handoff_container:/output/cloudflare-import.enc" "$cloudflare_handoff_artifact_copy"
 	docker rm "$cloudflare_handoff_container" >/dev/null
 	cloudflare_handoff_container=""
+	assert_host_import_owner "$(dirname -- "$fixture_import")" 770
+	assert_host_import_owner "$fixture_import" 640
 	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify \
 	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
 	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
 	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$cloudflare_handoff_artifact_copy" \
 		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
 	rm -f -- "$fixture_state/setup-state.enc"
+	reset_handoff_volume
 	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	verify_handoff_owner absent
 	cloudflare_handoff_container="stealth-cloudflare-import-missing-smoke-$$"
 	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --name "$cloudflare_handoff_container" --no-deps \
 		-e "FUNCTIONS_SECRET_KEY=$cloudflare_smoke_key" cloudflare-state-init
@@ -288,6 +338,11 @@ verify_cloudflare_handoff_smoke() {
 	docker cp "$cloudflare_handoff_container:/output" "$cloudflare_handoff_listing"
 	docker rm "$cloudflare_handoff_container" >/dev/null
 	cloudflare_handoff_container=""
+	if [ -e "$fixture_import" ] || [ -L "$fixture_import" ]; then
+		printf '%s\n' 'Cloudflare missing-source handoff left a host import artifact' >&2
+		return 1
+	fi
+	assert_host_import_owner "$(dirname -- "$fixture_import")" 770
 	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify-absent \
 	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
 	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \

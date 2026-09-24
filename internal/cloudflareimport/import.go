@@ -133,8 +133,10 @@ func Prepare(ctx context.Context, sourcePath, destinationPath string, cipher *fu
 // PublishLegacySetupSnapshot copies only the bounded encrypted legacy setup
 // snapshot into the narrow Compose handoff directory. It never follows the
 // source symlink, accepts no other file type, and leaves the input directory
-// empty when the optional source is absent.
-func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory string, owners ...*FileOwner) (bool, error) {
+// empty when the optional source is absent. When an owner is supplied, a
+// root-run initializer resets a reused volume before cleanup and then assigns
+// the handoff directory to the installation UID and fixed worker group.
+func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory string, owners ...*FileOwner) (published bool, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -165,13 +167,20 @@ func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory 
 		return false, errArtifactIO
 	}
 	if os.Geteuid() == 0 {
-		// This named volume may retain host-state ownership from an earlier
-		// version. Keep it root-owned for the isolated importer, regardless of
-		// whether a caller requested a later ownership transfer. The optional
-		// source owner is never needed by the Cloudflare importer.
+		// This named volume may retain ownership from an earlier run. Return it
+		// to root temporarily so stale entries can be removed, then restore the
+		// trusted installation UID and fixed worker group before returning.
 		if err := os.Chown(inputDirectory, 0, 0); err != nil {
 			return false, errArtifactIO
 		}
+	}
+	if owner != nil {
+		defer func() {
+			if err := restoreLegacySetupInputOwner(inputDirectory, owner); err != nil {
+				published = false
+				resultErr = err
+			}
+		}()
 	}
 	if err := os.Chmod(inputDirectory, 0o700); err != nil {
 		return false, errArtifactIO
@@ -182,9 +191,6 @@ func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory 
 
 	fd, err := syscall.Open(sourcePath, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ENOENT) {
-		if err := restoreLegacySetupInputOwner(inputDirectory, owner); err != nil {
-			return false, err
-		}
 		return false, nil
 	}
 	if err != nil {
@@ -204,9 +210,6 @@ func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory 
 		return false, err
 	}
 	if err := writeLegacySetupInput(inputDirectory, contents); err != nil {
-		return false, err
-	}
-	if err := restoreLegacySetupInputOwner(inputDirectory, owner); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -595,8 +598,10 @@ func cleanWorkerImportDirectory(directory, artifactName string) error {
 	return nil
 }
 
-// OwnerForSourceDirectory returns the host UID paired with the worker's fixed
-// group so the non-root worker can read the encrypted import artifact.
+// OwnerForSourceDirectory returns the source directory's host UID paired with
+// the worker's fixed group. Carrying this owner through the narrow handoff
+// keeps the derived host artifact manageable by the installation user while
+// remaining readable by the non-root worker.
 func OwnerForSourceDirectory(path string) (*FileOwner, error) {
 	if !validFilePath(path) {
 		return nil, errInvalidPath

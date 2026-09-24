@@ -144,6 +144,14 @@ docker compose --env-file .env.production -f compose.production.yaml up -d api w
 ./scripts/production-smoke.sh
 ```
 
+The Cloudflare setup-state handoff preserves the host `state/` directory UID
+and uses group `10001` for the narrow named-volume input. The importer applies
+that same UID/group to `state/.cloudflare-import` (directory mode `0770`,
+artifact mode `0640`), keeping the generated state manageable by the normal
+installation user while readable by the non-root worker. A missing legacy
+`setup-state.enc` still clears stale handoff data and produces no import
+artifact.
+
 The migration service is a one-shot container. API and worker startup retain
 the same idempotent migration check as a safety net, but the release procedure
 is explicit: migrate first, then start the application processes. The embedded
