@@ -1344,12 +1344,24 @@ func validateProductionComposeAsset(contents []byte) error {
 		}
 	}
 	telemetryHost := productionServiceBlock(text, "telemetry-host")
+	if !strings.Contains(telemetryHost, "- /:/hostfs:ro") {
+		return errors.New("telemetry-host is missing its read-only host filesystem view")
+	}
+	maskStart := strings.Index(telemetryHost, "      - type: tmpfs\n")
+	if maskStart < 0 {
+		return errors.New("telemetry-host must mask the installation private directory with a tmpfs")
+	}
+	maskEnd := len(telemetryHost)
+	if next := strings.Index(telemetryHost[maskStart+1:], "\n      - "); next >= 0 {
+		maskEnd = maskStart + 1 + next
+	}
+	privateMask := telemetryHost[maskStart:maskEnd]
 	for _, required := range []string{
-		"- /:/hostfs:ro", "type: tmpfs", "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private",
+		"type: tmpfs", "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private",
 		"read_only: true", "size: 1048576",
 	} {
-		if !strings.Contains(telemetryHost, required) {
-			return fmt.Errorf("telemetry-host must mask the installation private directory from its host filesystem view: missing %q", required)
+		if !strings.Contains(privateMask, required) {
+			return fmt.Errorf("telemetry-host private-directory tmpfs is missing %q", required)
 		}
 	}
 	for _, name := range productionServiceNames(text) {

@@ -195,8 +195,7 @@ if [ -n "$telemetry_private_target" ]; then
 	telemetry_private_target="$(realpath -m "$telemetry_private_target")"
 fi
 telemetry_private_mask=no
-if [ "$telemetry_private_target" = "$expected_telemetry_private_target" ] &&
-	printf '%s\n' "$telemetry_host_block" | grep -F 'size: 1048576' >/dev/null 2>&1; then
+if [ "$telemetry_private_target" = "$expected_telemetry_private_target" ]; then
 	telemetry_private_mask=yes
 else
 	printf 'telemetry-host must mask %s with a read-only tmpfs; rendered target was %s\n' "$expected_telemetry_private_target" "${telemetry_private_target:-missing}" >&2
