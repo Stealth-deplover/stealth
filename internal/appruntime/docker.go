@@ -789,7 +789,7 @@ func ContainerMatchesDesired(container Container, job repository.AppRuntimeJob, 
 		container.HostConfig.NetworkMode == "host" || container.HostConfig.PidMode == "host" || container.HostConfig.IpcMode == "host" ||
 		container.HostConfig.UTSMode == "host" || container.HostConfig.UsernsMode == "host" || len(container.HostConfig.Binds) != 0 ||
 		len(container.HostConfig.VolumesFrom) != 0 || len(container.HostConfig.PortBindings) != 0 || len(container.HostConfig.Devices) != 0 ||
-		!exactTmpfs(container.HostConfig.Tmpfs) || !exactMounts(container.Mounts) || !hasUlimits(container.HostConfig.Ulimits) || container.HostConfig.Init == nil || !*container.HostConfig.Init {
+		!exactTmpfs(container.HostConfig.Tmpfs) || !noUnexpectedMounts(container.Mounts) || !hasUlimits(container.HostConfig.Ulimits) || container.HostConfig.Init == nil || !*container.HostConfig.Init {
 		return false
 	}
 	if len(container.Networks) != 1 {
@@ -882,8 +882,11 @@ func exactTmpfs(value map[string]string) bool {
 	return len(value) == 1 && value["/tmp"] == "rw,nosuid,nodev,noexec,size=67108864"
 }
 
-func exactMounts(mounts []containerMount) bool {
-	return len(mounts) == 1 && mounts[0].Type == "tmpfs" && mounts[0].Destination == "/tmp" && mounts[0].Source == ""
+func noUnexpectedMounts(mounts []containerMount) bool {
+	// Docker reports explicit volumes and bind mounts here. Tmpfs mounts are
+	// configured separately through HostConfig.Tmpfs and do not appear in this
+	// list on Moby.
+	return len(mounts) == 0
 }
 
 func hasUlimits(values []struct {

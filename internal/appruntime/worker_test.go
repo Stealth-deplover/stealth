@@ -524,7 +524,6 @@ func runtimeTestContainer(job repository.AppRuntimeJob, image Image, running boo
 			Init: &initEnabled,
 		},
 		Networks: map[string]struct{}{defaultRuntimeNetwork: {}},
-		Mounts:   []containerMount{{Type: "tmpfs", Destination: "/tmp"}},
 	}
 }
 

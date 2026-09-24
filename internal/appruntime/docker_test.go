@@ -505,7 +505,6 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 			Init: &initEnabled,
 		},
 		Networks: map[string]struct{}{"stealth_app_runtime": {}},
-		Mounts:   []containerMount{{Type: "tmpfs", Destination: "/tmp"}},
 	}
 	if !ContainerMatchesDesired(container, job, image, "stealth_app_runtime") {
 		t.Fatal("complete isolated container did not match desired state")
@@ -519,6 +518,7 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 			value.HostConfig.PortBindings = map[string][]any{"8080/tcp": {map[string]any{"HostPort": "8080"}}}
 		}},
 		{name: "host mount", change: func(value *Container) { value.HostConfig.Binds = []string{"/var/run/docker.sock:/var/run/docker.sock"} }},
+		{name: "unexpected Docker mount", change: func(value *Container) { value.Mounts = []containerMount{{Type: "bind", Destination: "/data"}} }},
 		{name: "wrong network", change: func(value *Container) { value.Networks = map[string]struct{}{"bridge": {}} }},
 		{name: "writable root", change: func(value *Container) { value.HostConfig.ReadonlyRootfs = false }},
 	}

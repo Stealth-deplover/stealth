@@ -1592,8 +1592,8 @@ if host.get("PidMode") == "host" or host.get("IpcMode") == "host" or host.get("U
     errors.append("host namespace")
 if host.get("Binds") or host.get("VolumesFrom") or host.get("Devices"):
     errors.append("host mount or device")
-if len(mounts) != 1 or mounts[0].get("Type") != "tmpfs" or mounts[0].get("Destination") != "/tmp":
-    errors.append("unexpected container mounts")
+if mounts:
+	errors.append("unexpected Docker volume or bind mounts")
 if host.get("Tmpfs") != {"/tmp": "rw,nosuid,nodev,noexec,size=67108864"}:
     errors.append("unexpected tmpfs configuration")
 if host.get("Init") is not True:
