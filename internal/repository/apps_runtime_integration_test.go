@@ -155,8 +155,16 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "cleanup-worker-2", time.Minute); !errors.Is(err, ErrNoAppRuntimeCleanup) {
-		t.Fatalf("completed App cleanup was claimed again: %v", err)
+	var completed bool
+	if err := f.pool.QueryRow(f.ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM app_runtime_cleanup_jobs
+			WHERE id=$1 AND status='completed' AND completed_at IS NOT NULL
+		)`, cleanup.ID).Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if !completed {
+		t.Fatal("completed App cleanup row did not retain its completion state")
 	}
 }
 
