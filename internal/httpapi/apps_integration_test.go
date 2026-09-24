@@ -2,12 +2,14 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,9 +56,15 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := httptest.NewServer(httpapi.NewWithDependencies(config.Config{
-		SessionCookieName: "stealth_session",
-		SessionTTL:        time.Hour,
-		AppSessionTTL:     2 * time.Hour,
+		StorageRoot:                   t.TempDir(),
+		AppsMaxSourceArchiveBytes:     128 << 20,
+		AppsMaxExpandedSourceBytes:    1 << 30,
+		AppsMaxSourceFiles:            8192,
+		AppsMaxImageArchiveBytes:      2 << 30,
+		AppsDefaultArtifactQuotaBytes: 5 << 30,
+		SessionCookieName:             "stealth_session",
+		SessionTTL:                    time.Hour,
+		AppSessionTTL:                 2 * time.Hour,
 	}, repository.New(pool), logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewMemoryLimiter()}))
 	t.Cleanup(server.Close)
 
@@ -199,9 +207,42 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, projectURL+"/apps", map[string]any{"name": "read-key-write"}, http.StatusForbidden, readHeaders)
-	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, projectURL+"/apps", map[string]any{"name": "write-key-app"}, http.StatusCreated, writeHeaders)
+	var writeKeyApp struct {
+		App domain.App `json:"app"`
+	}
+	writeKeyAppBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodPost, projectURL+"/apps", map[string]any{"name": "write-key-app"}, http.StatusCreated, writeHeaders)
+	if err := json.Unmarshal(writeKeyAppBody, &writeKeyApp); err != nil {
+		t.Fatal(err)
+	}
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusForbidden, writeHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusUnauthorized, wrongProjectHeaders)
+
+	deploymentURL := projectURL + "/apps/" + writeKeyApp.App.ID + "/deployments"
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL, nil, http.StatusForbidden, writeHeaders)
+	queuedBody := uploadFunctionMultipart(t, newIntegrationClient(t), deploymentURL, "source.tgz", gitArchiveBytes(t), writeHeaders, http.StatusAccepted)
+	var queued struct {
+		Deployment domain.AppDeployment `json:"deployment"`
+	}
+	if err := json.Unmarshal(queuedBody, &queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued.Deployment.Status != "queued" || queued.Deployment.BuildStatus != "queued" || queued.Deployment.SourceChecksumSHA256 == "" || queued.Deployment.ImageDigest != nil || queued.Deployment.Selected {
+		t.Fatalf("deployment upload did not return truthful queued state: %+v", queued.Deployment)
+	}
+	encodedDeployment, err := json.Marshal(queued.Deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedDeployment), "source_path") || strings.Contains(string(encodedDeployment), "image_path") || strings.Contains(string(encodedDeployment), "build_worker_id") {
+		t.Fatalf("deployment API exposed private artifact or lease data: %s", encodedDeployment)
+	}
+	deploymentID := queued.Deployment.ID
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL, nil, http.StatusOK, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL+"/"+deploymentID, nil, http.StatusOK, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL+"/"+deploymentID+"/logs", nil, http.StatusOK, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL, nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/select", nil, http.StatusConflict, writeHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodDelete, deploymentURL+"/"+deploymentID, nil, http.StatusNoContent, writeHeaders)
 
 	for _, field := range []string{
 		"platform_label",

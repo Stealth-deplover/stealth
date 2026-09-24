@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/config"
 	"github.com/Stealth-deplover/stealth/internal/functionstore"
@@ -343,16 +344,26 @@ func TestFunctionsControlPlaneIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appArtifacts, err := appstore.New(storageRoot, 1<<20, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cleanupWorker, err := artifactcleanup.New(functionRepository, artifactcleanup.Stores{
 		Storage:      userStorage,
 		Functions:    functionStorage,
 		SiteArchives: siteArchiveStorage,
 		Sites:        siteStorage,
+		AppSources:   appArtifacts.Sources,
+		AppImages:    appArtifacts.Images,
 	}, "functions-integration-cleanup", logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for attempts := 0; attempts < cleanupJobs+8; attempts++ {
+	// The cleanup queue is shared by all integration tests in this database.
+	// App source and image deletions add more store kinds to that queue, so
+	// local project job counts cannot bound how many earlier jobs a worker may
+	// need to drain before reaching this function's artifacts.
+	for attempts := 0; attempts < 1024; attempts++ {
 		processed, runErr := cleanupWorker.RunOnce(ctx)
 		if runErr != nil {
 			t.Fatal(runErr)

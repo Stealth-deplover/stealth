@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
@@ -105,6 +106,330 @@ func TestPreparationPublishesOnlyCloudflareConnectionSecrets(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != filepath.Base(output) {
 		t.Fatalf("worker-visible directory contains full setup copies or unexpected files: %#v", entries)
+	}
+}
+
+func TestPublishLegacySetupSnapshotBeforeCloudflarePreparation(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "state")
+	inputDir := filepath.Join(root, "cloudflare-setup-state-input")
+	source := filepath.Join(sourceDir, legacySetupSnapshotName)
+	output := filepath.Join(root, "worker-import", "cloudflare-import.enc")
+	if err := os.Mkdir(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cipher := importTestCipher(t)
+	store, err := setupstate.NewFileStore(source, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Phase = setupstate.PhaseComplete
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-unique", ZoneID: "zone-unique", Hostname: "cloud.example.com",
+		TunnelID: "tunnel-unique", TunnelName: "stealth-prod", RecordID: "console-record-unique",
+	}
+	state.SetSecret("cloudflare_access_token", "SECRET-CLOUDFLARE-API")
+	state.SetSecret("github_private_key", "SECRET-GITHUB-PRIVATE-KEY")
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+	if err != nil || !published {
+		t.Fatalf("PublishLegacySetupSnapshot(valid) = %v, %v", published, err)
+	}
+	inputPath := filepath.Join(inputDir, legacySetupSnapshotName)
+	if mode := fileMode(t, inputPath).Perm(); mode != 0o400 {
+		t.Fatalf("handoff source mode = %o; want 400", mode)
+	}
+	if copied, err := os.ReadFile(inputPath); err != nil {
+		t.Fatal(err)
+	} else if original, err := os.ReadFile(source); err != nil || !bytes.Equal(copied, original) {
+		t.Fatalf("handoff changed the encrypted setup snapshot: read error=%v", err)
+	}
+
+	outcome, err := Prepare(context.Background(), inputPath, output, cipher, nil)
+	if err != nil || outcome != OutcomeConnection {
+		t.Fatalf("Prepare(handoff) = %q, %v; want connection", outcome, err)
+	}
+	envelope, err := Read(output, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.State != StateConnection || envelope.AccountID != "account-unique" || envelope.APIToken != "SECRET-CLOUDFLARE-API" {
+		t.Fatalf("narrow handoff envelope = %#v", envelope)
+	}
+	artifact, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := cipher.Decrypt(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(plaintext, []byte("SECRET-GITHUB-PRIVATE-KEY")) || bytes.Contains(plaintext, []byte("setup-state.enc")) {
+		t.Fatal("narrow import artifact contains unrelated setup state")
+	}
+}
+
+func TestOwnerForSourceDirectoryUsesHostUIDAndWorkerGroup(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expectedUID := os.Geteuid()
+	if expectedUID == 0 {
+		expectedUID = 65534
+		if err := os.Chown(stateDir, expectedUID, os.Getegid()); err != nil {
+			t.Skipf("cannot create a non-root-owned state directory: %v", err)
+		}
+	}
+	owner, err := OwnerForSourceDirectory(stateDir)
+	if err != nil {
+		t.Fatalf("OwnerForSourceDirectory(directory) = %v", err)
+	}
+	if owner.UID != expectedUID || owner.GID != workerGroupID {
+		t.Fatalf("source owner = %#v; want UID %d and worker GID %d", owner, expectedUID, workerGroupID)
+	}
+
+	link := filepath.Join(root, "state-link")
+	if err := os.Symlink(stateDir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OwnerForSourceDirectory(link); err == nil {
+		t.Fatal("OwnerForSourceDirectory accepted a symlink")
+	}
+	if _, err := OwnerForSourceDirectory(filepath.Join(root, "missing")); err == nil {
+		t.Fatal("OwnerForSourceDirectory accepted a missing path")
+	}
+	regularFile := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(regularFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OwnerForSourceDirectory(regularFile); err == nil {
+		t.Fatal("OwnerForSourceDirectory accepted a regular file")
+	}
+}
+
+func TestPublishLegacySetupSnapshotPreservesOwnerForValidAndMissingSources(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("owner propagation requires the root capability used by the Compose initializer")
+	}
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	inputDir := filepath.Join(root, "handoff")
+	output := filepath.Join(root, ".cloudflare-import", "cloudflare-import.enc")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(inputDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const installationUID = 65534
+	if err := os.Chown(stateDir, installationUID, os.Getegid()); err != nil {
+		t.Skipf("cannot create a non-root installation owner: %v", err)
+	}
+	if err := os.Chown(inputDir, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(inputDir, legacySetupSnapshotName)
+	if err := os.WriteFile(stale, []byte("stale"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := OwnerForSourceDirectory(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.UID != installationUID || owner.GID != workerGroupID {
+		t.Fatalf("OwnerForSourceDirectory() = %#v; want UID %d:GID %d", owner, installationUID, workerGroupID)
+	}
+
+	cipher := importTestCipher(t)
+	source := filepath.Join(stateDir, legacySetupSnapshotName)
+	store, err := setupstate.NewFileStore(source, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Phase = setupstate.PhaseComplete
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-owner", ZoneID: "zone-owner", Hostname: "owner.example.com",
+		TunnelID: "tunnel-owner", TunnelName: "stealth-owner", RecordID: "record-owner",
+	}
+	state.SetSecret("cloudflare_access_token", "owner-api-token")
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir, owner)
+	if err != nil || !published {
+		t.Fatalf("PublishLegacySetupSnapshot(valid) = %v, %v", published, err)
+	}
+	assertOwnerAndMode(t, inputDir, installationUID, workerGroupID, 0o770)
+	inputPath := filepath.Join(inputDir, legacySetupSnapshotName)
+	if mode := fileMode(t, inputPath).Perm(); mode != 0o400 {
+		t.Fatalf("handoff snapshot mode = %o; want 400", mode)
+	}
+	if outcome, err := Prepare(context.Background(), inputPath, output, cipher, owner); err != nil || outcome != OutcomeConnection {
+		t.Fatalf("Prepare(valid handoff) = %q, %v", outcome, err)
+	}
+	assertOwnerAndMode(t, filepath.Dir(output), installationUID, workerGroupID, 0o770)
+	assertOwnerAndMode(t, output, installationUID, workerGroupID, 0o640)
+
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	published, err = PublishLegacySetupSnapshot(context.Background(), source, inputDir, owner)
+	if err != nil || published {
+		t.Fatalf("PublishLegacySetupSnapshot(missing) = %v, %v", published, err)
+	}
+	assertOwnerAndMode(t, inputDir, installationUID, workerGroupID, 0o770)
+	if _, err := os.Lstat(inputPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing source left stale handoff: %v", err)
+	}
+	if outcome, err := Prepare(context.Background(), inputPath, output, cipher, owner); err != nil || outcome != OutcomeNoImport {
+		t.Fatalf("Prepare(missing handoff) = %q, %v", outcome, err)
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing handoff produced an artifact: %v", err)
+	}
+	assertOwnerAndMode(t, filepath.Dir(output), installationUID, workerGroupID, 0o770)
+
+	invalidOwner := &FileOwner{UID: -1, GID: workerGroupID}
+	if _, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir, invalidOwner); err == nil {
+		t.Fatal("PublishLegacySetupSnapshot accepted an invalid owner")
+	}
+	if err := os.WriteFile(inputPath, []byte("stale"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "outside.enc"), source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir, owner); err == nil {
+		t.Fatal("PublishLegacySetupSnapshot accepted a symlink source")
+	}
+	assertOwnerAndMode(t, inputDir, installationUID, workerGroupID, 0o770)
+	if _, err := os.Lstat(inputPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsafe source left stale handoff: %v", err)
+	}
+}
+
+func TestPublishLegacySetupSnapshotMissingAndUnsafeSources(t *testing.T) {
+	t.Run("missing source clears stale handoff and remains no import", func(t *testing.T) {
+		root := t.TempDir()
+		sourceDir := filepath.Join(root, "state")
+		if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source := filepath.Join(sourceDir, legacySetupSnapshotName)
+		inputDir := filepath.Join(root, "input")
+		if err := os.MkdirAll(inputDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		stale := filepath.Join(inputDir, legacySetupSnapshotName)
+		if err := os.WriteFile(stale, []byte("stale"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		if os.Geteuid() == 0 {
+			// A prior release transferred this persistent volume to the host
+			// state owner. Exercise recovery from that ownership without making
+			// the test depend on arbitrary UID mapping support.
+			if err := os.Chown(inputDir, 1000, 1000); err != nil {
+				t.Skipf("cannot simulate prior host-owned volume: %v", err)
+			}
+		}
+		published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+		if err != nil || published {
+			t.Fatalf("PublishLegacySetupSnapshot(missing) = %v, %v", published, err)
+		}
+		if os.Geteuid() == 0 {
+			info, err := os.Stat(inputDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Sys().(*syscall.Stat_t).Uid; got != 0 {
+				t.Fatalf("reused handoff directory owner = %d; want root", got)
+			}
+		}
+		if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing source left stale handoff: %v", err)
+		}
+		output := filepath.Join(root, "output", "cloudflare-import.enc")
+		outcome, err := Prepare(context.Background(), stale, output, importTestCipher(t), nil)
+		if err != nil || outcome != OutcomeNoImport {
+			t.Fatalf("Prepare(missing handoff) = %q, %v", outcome, err)
+		}
+		if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing handoff produced a Cloudflare artifact: %v", err)
+		}
+	})
+
+	tests := map[string]func(string) error{
+		"symlink": func(path string) error {
+			return os.Symlink(filepath.Join(filepath.Dir(path), "outside.enc"), path)
+		},
+		"directory": func(path string) error { return os.Mkdir(path, 0o700) },
+		"oversized": func(path string) error { return os.WriteFile(path, make([]byte, maxSetupSnapshotBytes+1), 0o600) },
+		"fifo":      func(path string) error { return syscall.Mkfifo(path, 0o600) },
+	}
+	for name, create := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sourceDir := filepath.Join(root, "state")
+			inputDir := filepath.Join(root, "input")
+			if err := os.Mkdir(sourceDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(inputDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			source := filepath.Join(sourceDir, legacySetupSnapshotName)
+			if err := create(source); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(inputDir, legacySetupSnapshotName), []byte("stale"), 0o400); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir); err == nil {
+				t.Fatal("unsafe legacy setup source was accepted")
+			}
+			if _, err := os.Lstat(filepath.Join(inputDir, legacySetupSnapshotName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unsafe source left a stale handoff file: %v", err)
+			}
+		})
+	}
+}
+
+func TestMalformedEncryptedSetupSnapshotRemainsSafeNoImport(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "state")
+	inputDir := filepath.Join(root, "input")
+	output := filepath.Join(root, "output", "cloudflare-import.enc")
+	if err := os.Mkdir(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(inputDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDir, legacySetupSnapshotName)
+	if err := os.WriteFile(source, []byte("not-an-encrypted-setup-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+	if err != nil || !published {
+		t.Fatalf("bounded opaque snapshot handoff = %v, %v", published, err)
+	}
+	if outcome, err := Prepare(context.Background(), filepath.Join(inputDir, legacySetupSnapshotName), output, importTestCipher(t), nil); err == nil || outcome != "" {
+		t.Fatalf("malformed encrypted snapshot Prepare() = %q, %v; expected safe recovery failure", outcome, err)
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed setup snapshot produced a Cloudflare artifact: %v", err)
 	}
 }
 
@@ -250,4 +575,19 @@ func fileMode(t *testing.T, path string) os.FileMode {
 		t.Fatal(err)
 	}
 	return info.Mode()
+}
+
+func assertOwnerAndMode(t *testing.T, path string, uid, gid int, mode os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("stat data for %q does not include Unix ownership", path)
+	}
+	if int(stat.Uid) != uid || int(stat.Gid) != gid || info.Mode().Perm() != mode {
+		t.Fatalf("%s has owner %d:%d mode %04o; want %d:%d mode %04o", path, stat.Uid, stat.Gid, info.Mode().Perm(), uid, gid, mode)
+	}
 }

@@ -4,8 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,29 +25,38 @@ var (
 // installs and upgrades converge on the same immutable image.
 const defaultTraefikImage = "traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c"
 
+const defaultBuildKitImage = "moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef"
+
+const (
+	BuildKitAppArmorProfileName = "stealth-buildkit-rootless"
+	BuildKitAppArmorProfilePath = "/etc/apparmor.d/stealth-buildkit-rootless"
+	appArmorProfileManagedMark  = "# Managed by Stealth. Changes will be replaced by the installer."
+)
+
 // ConfigOptions describes the non-secret choices made before the production
 // stack is started. The engine creates all initial credentials in one place so
 // a retry never needs to invent a second secret set.
 type ConfigOptions struct {
-	Version              string
-	PublicURL            string
-	GitHubAppClientID    string
-	DockerGID            uint32
-	Setup                bool
-	InstallRoot          string
-	ComposeProject       string
-	NetworkSubnet        string
-	TrustedProxyCIDRs    string
-	IngressNetworkName   string
-	IngressNetworkSubnet string
-	IngressIPRange       string
-	TraefikIngressIP     string
-	CloudflaredIngressIP string
-	APIImage             string
-	SetupImage           string
-	StorageDriver        string
-	DatabaseURL          string
-	RedisURL             string
+	Version                     string
+	PublicURL                   string
+	GitHubAppClientID           string
+	DockerGID                   uint32
+	Setup                       bool
+	InstallRoot                 string
+	ComposeProject              string
+	NetworkSubnet               string
+	TrustedProxyCIDRs           string
+	IngressNetworkName          string
+	IngressNetworkSubnet        string
+	IngressIPRange              string
+	TraefikIngressIP            string
+	CloudflaredIngressIP        string
+	APIImage                    string
+	SetupImage                  string
+	StorageDriver               string
+	DatabaseURL                 string
+	RedisURL                    string
+	AppsBuildKitAppArmorProfile string
 }
 
 func GenerateConfig(options ConfigOptions) (string, error) {
@@ -74,6 +86,13 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	storageDriver := strings.ToLower(firstNonEmpty(options.StorageDriver, "local"))
 	if storageDriver != "local" && storageDriver != "s3" {
 		return "", errorsf("storage driver must be local or s3")
+	}
+	appArmorProfile := strings.TrimSpace(options.AppsBuildKitAppArmorProfile)
+	if appArmorProfile == "" {
+		appArmorProfile = "unconfined"
+	}
+	if !validBuildKitAppArmorProfile(appArmorProfile) {
+		return "", errorsf("App BuildKit AppArmor profile must be unconfined or " + BuildKitAppArmorProfileName)
 	}
 	postgresPassword, err := randomHex(24)
 	if err != nil {
@@ -168,6 +187,21 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"FUNCTIONS_RUNNER_ENABLED":              "true",
 		"FUNCTIONS_WORKER_ID":                   "stealth-worker",
 		"FUNCTIONS_RUNNER_STAGING_VOLUME":       "stealth_function_runner_staging",
+		"APPS_MAX_SOURCE_ARCHIVE_BYTES":         "128MiB",
+		"APPS_MAX_EXPANDED_SOURCE_BYTES":        "1GiB",
+		"APPS_MAX_SOURCE_FILES":                 "8192",
+		"APPS_MAX_IMAGE_ARCHIVE_BYTES":          "2GiB",
+		"APPS_DEFAULT_ARTIFACT_QUOTA_BYTES":     "5GiB",
+		"APPS_BUILDKIT_ADDRESS":                 "tcp://buildkit:1234",
+		"APPS_BUILDKIT_CA_CERT":                 "/run/secrets/stealth-buildkit/ca.pem",
+		"APPS_BUILDKIT_CLIENT_CERT":             "/run/secrets/stealth-buildkit/client-cert.pem",
+		"APPS_BUILDKIT_CLIENT_KEY":              "/run/secrets/stealth-buildkit/client-key.pem",
+		"APPS_BUILDKIT_APPARMOR_PROFILE":        appArmorProfile,
+		"APPS_BUILD_TIMEOUT":                    "20m",
+		"APPS_BUILD_LEASE_AGE":                  "25m",
+		"APPS_BUILD_POLL_INTERVAL":              "500ms",
+		"APPS_BUILD_STAGING_VOLUME":             "stealth_app_build_staging",
+		"APPS_BUILDKIT_STATE_VOLUME":            "stealth_app_buildkit_state",
 		"STORAGE_DRIVER":                        storageDriver,
 		"STORAGE_MAX_FILE_SIZE":                 "50MiB",
 		"STORAGE_DEFAULT_QUOTA_BYTES":           "1GiB",
@@ -185,8 +219,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"SETUP_MODE":                            strconv.FormatBool(options.Setup),
 	}
 	values["STEALTH_TELEMETRY_INGEST_NETWORK_NAME"] = "stealth_telemetry_ingest"
-	if options.Setup {
+	if strings.TrimSpace(options.InstallRoot) != "" {
 		values["STEALTH_INSTALL_ROOT"] = options.InstallRoot
+	}
+	if options.Setup {
 		root := strings.TrimRight(options.InstallRoot, "/")
 		values["STEALTH_SETUP_STATE_FILE"] = root + "/state/setup-state.enc"
 		values["STEALTH_PRODUCTION_COMPOSE_FILE"] = root + "/compose.production.yaml"
@@ -253,10 +289,36 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 		"STEALTH_TELEMETRY_DOCKER_NETWORK_NAME": "stealth_telemetry_docker",
 		"TRAEFIK_IMAGE":                         defaultTraefikImage,
 		"STEALTH_INGRESS_NETWORK_NAME":          "stealth_ingress",
+		"APPS_MAX_SOURCE_ARCHIVE_BYTES":         "128MiB",
+		"APPS_MAX_EXPANDED_SOURCE_BYTES":        "1GiB",
+		"APPS_MAX_SOURCE_FILES":                 "8192",
+		"APPS_MAX_IMAGE_ARCHIVE_BYTES":          "2GiB",
+		"APPS_DEFAULT_ARTIFACT_QUOTA_BYTES":     "5GiB",
+		"APPS_BUILDKIT_ADDRESS":                 "tcp://buildkit:1234",
+		"APPS_BUILDKIT_CA_CERT":                 "/run/secrets/stealth-buildkit/ca.pem",
+		"APPS_BUILDKIT_CLIENT_CERT":             "/run/secrets/stealth-buildkit/client-cert.pem",
+		"APPS_BUILDKIT_CLIENT_KEY":              "/run/secrets/stealth-buildkit/client-key.pem",
+		"APPS_BUILD_TIMEOUT":                    "20m",
+		"APPS_BUILD_LEASE_AGE":                  "25m",
+		"APPS_BUILD_POLL_INTERVAL":              "500ms",
+		"APPS_BUILD_STAGING_VOLUME":             "stealth_app_build_staging",
+		"APPS_BUILDKIT_STATE_VOLUME":            "stealth_app_buildkit_state",
 	} {
 		if strings.TrimSpace(result[key]) == "" {
 			updates[key] = value
 		}
+	}
+	currentAppArmorProfile := strings.TrimSpace(result["APPS_BUILDKIT_APPARMOR_PROFILE"])
+	if currentAppArmorProfile == "" {
+		appArmorProfile, err := DetectBuildKitAppArmorProfile()
+		if err != nil {
+			return "", err
+		}
+		updates["APPS_BUILDKIT_APPARMOR_PROFILE"] = appArmorProfile
+	} else if !validBuildKitAppArmorProfile(currentAppArmorProfile) {
+		return "", errorsf("existing APPS_BUILDKIT_APPARMOR_PROFILE must be unconfined or " + BuildKitAppArmorProfileName)
+	} else if result["APPS_BUILDKIT_APPARMOR_PROFILE"] != currentAppArmorProfile {
+		updates["APPS_BUILDKIT_APPARMOR_PROFILE"] = currentAppArmorProfile
 	}
 	if strings.TrimSpace(result["STEALTH_INGRESS_NETWORK_SUBNET"]) == "" {
 		updates["STEALTH_INGRESS_NETWORK_SUBNET"] = defaultIngressSubnet
@@ -320,12 +382,52 @@ func validateConfigValues(values map[string]string) error {
 			return fmt.Errorf("generated configuration value for %s is empty", key)
 		}
 	}
+	if profile := strings.TrimSpace(values["APPS_BUILDKIT_APPARMOR_PROFILE"]); profile != "" && !validBuildKitAppArmorProfile(profile) {
+		return errorsf("APPS_BUILDKIT_APPARMOR_PROFILE must be unconfined or " + BuildKitAppArmorProfileName)
+	}
+	for _, key := range []string{"APPS_BUILDKIT_CA_CERT", "APPS_BUILDKIT_CLIENT_CERT", "APPS_BUILDKIT_CLIENT_KEY"} {
+		path := values[key]
+		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) || strings.ContainsAny(path, "\x00\r\n") {
+			return fmt.Errorf("generated configuration value for %s must be an absolute clean non-root path", key)
+		}
+	}
 	for _, key := range []string{"STEALTH_API_IMAGE", "STEALTH_SETUP_IMAGE", "STEALTH_WORKER_IMAGE", "STEALTH_INGRESS_CONTROL_IMAGE", "STEALTH_MIGRATE_IMAGE", "STEALTH_CONSOLE_IMAGE", "STEALTH_TELEMETRY_DOCKER_PROXY_IMAGE", "OTEL_COLLECTOR_IMAGE", "OTEL_HOST_COLLECTOR_IMAGE", "OTEL_DOCKER_COLLECTOR_IMAGE", "OTEL_DOCKER_LOGS_COLLECTOR_IMAGE", "TRAEFIK_IMAGE"} {
 		if !validImageReference(values[key]) {
 			return fmt.Errorf("generated image reference for %s is invalid", key)
 		}
 	}
 	return nil
+}
+
+func validBuildKitAppArmorProfile(value string) bool {
+	return value == "unconfined" || value == BuildKitAppArmorProfileName
+}
+
+// DetectBuildKitAppArmorProfile selects the narrow profile required by Ubuntu
+// hosts that restrict unprivileged user namespaces. Other hosts keep Docker's
+// existing unconfined AppArmor setting for the official rootless BuildKit
+// image. Failure to read an existing kernel setting is not treated as an
+// unrestricted host.
+func DetectBuildKitAppArmorProfile() (string, error) {
+	contents, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+	if errors.Is(err, os.ErrNotExist) {
+		return "unconfined", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read AppArmor unprivileged user namespace setting: %w", err)
+	}
+	return buildKitAppArmorProfileForSetting(string(contents))
+}
+
+func buildKitAppArmorProfileForSetting(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "0":
+		return "unconfined", nil
+	case "1":
+		return BuildKitAppArmorProfileName, nil
+	default:
+		return "", errorsf("AppArmor unprivileged user namespace setting has an unsupported value")
+	}
 }
 
 func validImageReference(value string) bool {

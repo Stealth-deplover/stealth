@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -165,6 +168,70 @@ func TestSafeUninstallPreservesDataAndNeverUsesVolumeDeletion(t *testing.T) {
 	}
 }
 
+func TestKeepDataUninstallPreservesBuildKitPKI(t *testing.T) {
+	layout := writeUninstallFixture(t)
+	if _, err := buildkitpki.Ensure(layout.BuildKitPKIDir); err != nil {
+		t.Fatal(err)
+	}
+	paths := buildkitpki.PathsAt(layout.BuildKitPKIDir)
+	before, err := os.ReadFile(paths.CACert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &uninstallTestRunner{}
+	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
+	app.homeDir = filepath.Dir(layout.Root)
+	app.runner = runner
+	if got := app.run([]string{"uninstall", "--keep-data", "--yes"}); got != 0 {
+		t.Fatalf("keep-data uninstall exit = %d", got)
+	}
+	after, err := os.ReadFile(paths.CACert)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("keep-data uninstall changed or removed the BuildKit CA: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(layout.StateDir, buildkitpki.DirectoryName)); !os.IsNotExist(err) {
+		t.Fatalf("keep-data uninstall left the legacy PKI in setup state: %v", err)
+	}
+}
+
+func TestAppBuildKitVolumesAreIncludedInPurgeScope(t *testing.T) {
+	volumes := configuredUninstallVolumes(map[string]string{
+		"COMPOSE_PROJECT_NAME":       "stealth",
+		"APPS_BUILD_STAGING_VOLUME":  "stealth_app_build_staging",
+		"APPS_BUILDKIT_STATE_VOLUME": "stealth_app_buildkit_state",
+	})
+	want := map[string]string{
+		"stealth_app_build_staging":               "app_build_staging",
+		"stealth_app_buildkit_state":              "buildkit_state",
+		"stealth_app_buildkit_worker_credentials": "buildkit_worker_credentials",
+		"stealth_app_buildkit_server_credentials": "buildkit_server_credentials",
+		"stealth_cloudflare_setup_state_input":    "cloudflare_setup_state_input",
+	}
+	for _, volume := range volumes {
+		if expected, ok := want[volume.name]; ok {
+			if volume.composeName != expected {
+				t.Errorf("volume %q Compose name = %q, want %q", volume.name, volume.composeName, expected)
+			}
+			delete(want, volume.name)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("App build volumes are missing from uninstall scope: %#v", want)
+	}
+	custom := configuredUninstallVolumes(map[string]string{"COMPOSE_PROJECT_NAME": "tenant-b"})
+	for _, volume := range custom {
+		if volume.composeName == "buildkit_worker_credentials" && volume.name != "tenant-b_app_buildkit_worker_credentials" {
+			t.Fatalf("worker credentials volume is shared across Compose projects: %q", volume.name)
+		}
+		if volume.composeName == "buildkit_server_credentials" && volume.name != "tenant-b_app_buildkit_server_credentials" {
+			t.Fatalf("server credentials volume is shared across Compose projects: %q", volume.name)
+		}
+		if volume.composeName == "cloudflare_setup_state_input" && volume.name != "tenant-b_cloudflare_setup_state_input" {
+			t.Fatalf("Cloudflare legacy-state handoff volume is shared across Compose projects: %q", volume.name)
+		}
+	}
+}
+
 func TestYesAloneSelectsSafeMode(t *testing.T) {
 	layout := writeUninstallFixture(t)
 	runner := &uninstallTestRunner{}
@@ -187,6 +254,14 @@ func TestYesAloneSelectsSafeMode(t *testing.T) {
 
 func TestConfigurationUninstallPreservesRecoveryConfig(t *testing.T) {
 	layout := writeUninstallFixture(t)
+	if _, err := buildkitpki.Ensure(layout.BuildKitPKIDir); err != nil {
+		t.Fatal(err)
+	}
+	caPath := buildkitpki.PathsAt(layout.BuildKitPKIDir).CACert
+	caBefore, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner := &uninstallTestRunner{}
 	app := NewApp(strings.NewReader(""), io.Discard, io.Discard)
 	app.homeDir = filepath.Dir(layout.Root)
@@ -203,6 +278,13 @@ func TestConfigurationUninstallPreservesRecoveryConfig(t *testing.T) {
 			t.Fatalf("configuration mode preserved local runtime path %s", path)
 		}
 	}
+	caAfter, err := os.ReadFile(caPath)
+	if err != nil || !bytes.Equal(caBefore, caAfter) {
+		t.Fatalf("data-preserving configuration mode changed or removed BuildKit PKI: %v", err)
+	}
+	if !strings.Contains(strings.Join(plan.preservedItems(), "\n"), "private/ (BuildKit control-plane credentials)") {
+		t.Fatal("configuration mode did not report preserved BuildKit control-plane credentials")
+	}
 	if !strings.Contains(strings.Join(plan.warnings(), "\n"), "FUNCTIONS_SECRET_KEY") {
 		t.Fatal("plan did not explain recovery-secret preservation")
 	}
@@ -210,6 +292,9 @@ func TestConfigurationUninstallPreservesRecoveryConfig(t *testing.T) {
 
 func TestPurgeRemovesProjectOwnedDataAfterExactValidation(t *testing.T) {
 	layout := writeUninstallFixture(t)
+	if _, err := buildkitpki.Ensure(layout.BuildKitPKIDir); err != nil {
+		t.Fatal(err)
+	}
 	runner := &uninstallTestRunner{}
 	var out, errOut strings.Builder
 	app := NewApp(strings.NewReader(""), &out, &errOut)
@@ -220,6 +305,9 @@ func TestPurgeRemovesProjectOwnedDataAfterExactValidation(t *testing.T) {
 	}
 	if pathPresent(layout.Root) {
 		t.Fatal("purge left the installation directory behind")
+	}
+	if pathPresent(layout.PrivateDir) {
+		t.Fatal("destructive purge left BuildKit private credentials behind")
 	}
 	var sawPurge bool
 	for _, call := range runner.calls {

@@ -1,6 +1,7 @@
 import { api, unwrap } from "@/api/client";
 import type {
   AgentRunLog,
+  AppBuildLog,
   FunctionBuildLog,
   FunctionExecutionLog,
   SiteBuildLog,
@@ -39,6 +40,12 @@ export type LogSourceContext =
       deploymentId: string;
     }
   | {
+      kind: "app-build";
+      projectId: string;
+      appId: string;
+      deploymentId: string;
+    }
+  | {
       kind: "agent-run";
       agentId: string;
       runId: string;
@@ -51,7 +58,7 @@ export type LogSource = {
 };
 
 type ApiLogLine = Pick<
-  FunctionBuildLog | FunctionExecutionLog | SiteBuildLog | AgentRunLog,
+  FunctionBuildLog | FunctionExecutionLog | SiteBuildLog | AppBuildLog | AgentRunLog,
   "sequence" | "level" | "message" | "created_at"
 >;
 
@@ -80,6 +87,8 @@ function sourceKey(context: LogSourceContext) {
       return `${context.kind}:${context.projectId}:${context.functionId}:${context.executionId}`;
     case "site-build":
       return `${context.kind}:${context.projectId}:${context.siteId}:${context.deploymentId}`;
+    case "app-build":
+      return `${context.kind}:${context.projectId}:${context.appId}:${context.deploymentId}`;
     case "agent-run":
       return `${context.kind}:${context.agentId}:${context.runId}`;
   }
@@ -143,6 +152,26 @@ export function createLogSource(context: LogSourceContext): LogSource {
               path: {
                 projectID: context.projectId,
                 siteID: context.siteId,
+                deploymentID: context.deploymentId,
+              },
+              query: queryFor(after),
+            },
+            signal,
+          },
+        );
+        const data = await unwrap(result);
+        return mapLogLines(data?.logs ?? []);
+      });
+
+    case "app-build":
+      return createSource(context, async (after, signal) => {
+        const result = await api.GET(
+          "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/logs",
+          {
+            params: {
+              path: {
+                projectID: context.projectId,
+                appID: context.appId,
                 deploymentID: context.deploymentId,
               },
               query: queryFor(after),

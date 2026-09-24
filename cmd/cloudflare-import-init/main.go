@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	sourcePath      = "/state/setup-state.enc"
-	sourceDirectory = "/state"
+	sourcePath      = "/input/setup-state.enc"
+	sourceDirectory = "/input"
 	destinationPath = "/output/cloudflare-import.enc"
 )
 

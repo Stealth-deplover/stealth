@@ -28,3 +28,9 @@ func TestServiceStatusDisplayAndMissingState(t *testing.T) {
 		t.Fatal("missing services reported healthy")
 	}
 }
+
+func TestBuildKitServiceNameIsExplicit(t *testing.T) {
+	if got := displayServiceName("buildkit"); got != "App BuildKit" {
+		t.Fatalf("displayServiceName(buildkit) = %q", got)
+	}
+}

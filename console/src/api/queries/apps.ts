@@ -55,3 +55,35 @@ export function useApp(projectId: string | undefined, appId: string | undefined)
     ),
   });
 }
+
+export function useAppDeployments(
+  projectId: string | undefined,
+  appId: string | undefined,
+  query?: CursorQuery,
+) {
+  const params = withCursorPage(query);
+  return useQuery({
+    queryKey: [...queryKeys.appDeployments(projectId ?? "", appId ?? ""), params],
+    enabled: Boolean(projectId && appId),
+    queryFn: async ({ signal }) => {
+      const response = await api.GET("/v1/projects/{projectID}/apps/{appID}/deployments", {
+        params: {
+          path: { projectID: projectId!, appID: appId! },
+          query: params,
+        },
+        signal,
+      });
+      const page = await unwrap(response);
+      if (!page) throw new Error("The App deployment response was empty.");
+      return page;
+    },
+    placeholderData: keepPreviousData,
+    refetchInterval: (current) =>
+      current.state.data?.deployments.some(
+        (deployment) =>
+          deployment.status === "queued" || deployment.status === "building",
+      )
+        ? 2_000
+        : false,
+  });
+}

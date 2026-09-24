@@ -456,13 +456,16 @@ func (s *Server) limitRequestBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		limit := int64(maxBodyBytes)
 		contentType := strings.ToLower(r.Header.Get("Content-Type"))
-		if strings.HasPrefix(contentType, "multipart/form-data") && (strings.Contains(r.URL.Path, "/storage/") || strings.Contains(r.URL.Path, "/functions/") && strings.Contains(r.URL.Path, "/deployments") || strings.Contains(r.URL.Path, "/sites/") && strings.Contains(r.URL.Path, "/deployments")) {
+		if strings.HasPrefix(contentType, "multipart/form-data") && (strings.Contains(r.URL.Path, "/storage/") || strings.Contains(r.URL.Path, "/functions/") && strings.Contains(r.URL.Path, "/deployments") || strings.Contains(r.URL.Path, "/sites/") && strings.Contains(r.URL.Path, "/deployments") || strings.Contains(r.URL.Path, "/apps/") && strings.Contains(r.URL.Path, "/deployments")) {
 			configured := s.config.StorageMaxFileSize
 			if strings.Contains(r.URL.Path, "/functions/") {
 				configured = s.config.FunctionsMaxArtifactSize
 			}
 			if strings.Contains(r.URL.Path, "/sites/") {
 				configured = s.config.SitesMaxArtifactSize
+			}
+			if strings.Contains(r.URL.Path, "/apps/") {
+				configured = s.config.AppsMaxSourceArchiveBytes
 			}
 			limit = configured + maxMultipartOverhead
 			if limit < configured || limit <= 0 {

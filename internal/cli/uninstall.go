@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
 type uninstallMode int
@@ -50,6 +52,7 @@ type uninstallPlan struct {
 	telemetryPresent bool
 	versionPresent   bool
 	statePresent     bool
+	privatePresent   bool
 	partial          bool
 	unsafeReason     string
 	unknownEntries   []string
@@ -169,6 +172,7 @@ func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan 
 		telemetryPresent: safeDirectory(layout.TelemetryDir),
 		versionPresent:   safeRegularFile(layout.VersionFile),
 		statePresent:     safeDirectory(layout.StateDir),
+		privatePresent:   safeDirectory(layout.PrivateDir),
 	}
 
 	if pathPresent(layout.Root) && !safeDirectory(layout.Root) {
@@ -188,6 +192,7 @@ func buildUninstallPlan(layout InstallLayout, mode uninstallMode) uninstallPlan 
 		layout.TelemetryDir,
 		layout.VersionFile,
 		layout.StateDir,
+		layout.PrivateDir,
 		filepath.Dir(layout.ProxyFile),
 		filepath.Dir(filepath.Dir(layout.ProxyFile)),
 	} {
@@ -218,6 +223,9 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 	postgres := configuredVolumeName(values, "POSTGRES_VOLUME_NAME", "stealth_postgres_data")
 	storage := configuredVolumeName(values, "STORAGE_VOLUME_NAME", "stealth_storage")
 	staging := configuredVolumeName(values, "FUNCTIONS_RUNNER_STAGING_VOLUME", "stealth_function_runner_staging")
+	appStaging := configuredVolumeName(values, "APPS_BUILD_STAGING_VOLUME", "stealth_app_build_staging")
+	buildkitState := configuredVolumeName(values, "APPS_BUILDKIT_STATE_VOLUME", "stealth_app_buildkit_state")
+	composeProject := configuredVolumeName(values, "COMPOSE_PROJECT_NAME", "stealth")
 	clickhouse := configuredVolumeName(values, "CLICKHOUSE_VOLUME_NAME", "stealth_clickhouse_data")
 	otelCollector := configuredVolumeName(values, "OTELCOL_VOLUME_NAME", "stealth_otelcol_state")
 	otelDockerLogs := configuredVolumeName(values, "OTEL_DOCKER_LOGS_VOLUME_NAME", "stealth_otel_docker_logs_state")
@@ -231,6 +239,11 @@ func configuredUninstallVolumes(values map[string]string) []uninstallVolume {
 	}
 	volumes = append(volumes, uninstallVolume{label: "Function runner staging volume", name: staging, composeName: "function_runner_staging"})
 	volumes = append(volumes,
+		uninstallVolume{label: "App build staging volume", name: appStaging, composeName: "app_build_staging"},
+		uninstallVolume{label: "App BuildKit cache volume", name: buildkitState, composeName: "buildkit_state"},
+		uninstallVolume{label: "App BuildKit worker credential volume", name: composeProject + "_app_buildkit_worker_credentials", composeName: "buildkit_worker_credentials"},
+		uninstallVolume{label: "App BuildKit server credential volume", name: composeProject + "_app_buildkit_server_credentials", composeName: "buildkit_server_credentials"},
+		uninstallVolume{label: "Cloudflare legacy-state handoff volume", name: composeProject + "_cloudflare_setup_state_input", composeName: "cloudflare_setup_state_input"},
 		uninstallVolume{label: "ClickHouse telemetry volume", name: clickhouse, composeName: "clickhouse_data"},
 		uninstallVolume{label: "OTel Collector state volume", name: otelCollector, composeName: "otelcol_state"},
 		uninstallVolume{label: "Docker log Collector state volume", name: otelDockerLogs, composeName: "otel_docker_logs_state"},
@@ -294,6 +307,7 @@ func unknownLayoutEntries(layout InstallLayout) []string {
 		telemetryName:                     true,
 		filepath.Base(layout.VersionFile): true,
 		filepath.Base(layout.StateDir):    true,
+		filepath.Base(layout.PrivateDir):  true,
 		consoleName:                       true,
 		filepath.Base(layout.TraefikDir):  true,
 	}
@@ -480,6 +494,9 @@ func (p uninstallPlan) preservedItems() []string {
 			items = append(items, "config.env (secrets and recovery configuration)")
 		}
 	}
+	if p.mode != uninstallPurge && p.privatePresent {
+		items = append(items, "private/ (BuildKit control-plane credentials)")
+	}
 	if p.mode == uninstallConfiguration && p.configPresent {
 		items = append(items, "config.env (recovery secrets and encryption key)")
 	}
@@ -510,6 +527,7 @@ func (p uninstallPlan) localAssets(includeConfig bool) []uninstallAsset {
 	}
 	if includeConfig {
 		assets = append(assets, uninstallAsset{label: "config.env and local secrets", path: p.layout.EnvFile, present: p.configPresent})
+		assets = append(assets, uninstallAsset{label: "private/ (BuildKit control-plane credentials)", path: p.layout.PrivateDir, present: p.privatePresent})
 	}
 	return assets
 }
@@ -623,6 +641,14 @@ func (a *App) uninstallOperations(plan uninstallPlan) []uninstallOperation {
 		operations = append(operations, uninstallOperation{
 			name:   "Verify service removal",
 			action: func(ctx context.Context) error { return a.verifyServicesRemoved(ctx, plan) },
+		})
+	}
+	if plan.mode == uninstallConfiguration || plan.mode == uninstallPurge {
+		operations = append(operations, uninstallOperation{
+			name: "Remove managed BuildKit AppArmor policy",
+			action: func(ctx context.Context) error {
+				return installengine.RemoveManagedBuildKitAppArmorProfile(ctx, a.runner, a.out, a.errOut)
+			},
 		})
 	}
 	if plan.mode == uninstallConfiguration {
@@ -839,6 +865,11 @@ func removeAllLocalFiles(plan uninstallPlan) error {
 			return fmt.Errorf("remove config.env and local secrets: %w", err)
 		}
 	}
+	if plan.privatePresent {
+		if err := removeSafePath(plan.layout.PrivateDir); err != nil {
+			return fmt.Errorf("remove private BuildKit control-plane credentials: %w", err)
+		}
+	}
 	for _, path := range []string{filepath.Dir(plan.layout.ProxyFile), filepath.Dir(filepath.Dir(plan.layout.ProxyFile)), plan.layout.TraefikGenerated, plan.layout.TraefikDynamic, plan.layout.TraefikDir} {
 		if err := removeEmptyDirectory(path); err != nil {
 			return err
@@ -887,6 +918,9 @@ func verifyLocalUninstall(plan uninstallPlan) error {
 		}
 		if plan.configPresent && !safeRegularFile(plan.layout.EnvFile) {
 			return fmt.Errorf("config.env was not preserved")
+		}
+		if plan.privatePresent && !safeDirectory(plan.layout.PrivateDir) {
+			return fmt.Errorf("private BuildKit control-plane credentials were not preserved")
 		}
 		return nil
 	case uninstallPurge:

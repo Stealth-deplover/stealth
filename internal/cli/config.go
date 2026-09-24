@@ -40,14 +40,19 @@ func validatePublicURL(raw string) (string, error) {
 }
 
 func generateConfig(plan InstallPlan) (string, error) {
+	appArmorProfile, err := installengine.DetectBuildKitAppArmorProfile()
+	if err != nil {
+		return "", err
+	}
 	return installengine.GenerateConfig(installengine.ConfigOptions{
-		Version:            plan.Version,
-		PublicURL:          plan.PublicURL,
-		GitHubAppClientID:  plan.GitHubAppClientID,
-		DockerGID:          plan.DockerGID,
-		Setup:              plan.Setup,
-		InstallRoot:        plan.Layout.Root,
-		IngressNetworkName: plan.IngressNetworkName,
+		Version:                     plan.Version,
+		PublicURL:                   plan.PublicURL,
+		GitHubAppClientID:           plan.GitHubAppClientID,
+		DockerGID:                   plan.DockerGID,
+		Setup:                       plan.Setup,
+		InstallRoot:                 plan.Layout.Root,
+		IngressNetworkName:          plan.IngressNetworkName,
+		AppsBuildKitAppArmorProfile: appArmorProfile,
 	})
 }
 

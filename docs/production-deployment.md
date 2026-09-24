@@ -7,8 +7,9 @@ plane, Redis backs distributed rate limits, and the worker is a separate Go
 process.
 
 The control plane models persistent Apps and their normalized runtime intent.
-OCI image builds and App execution remain subsequent runtime capabilities;
-an App record does not create a container or a public route.
+Uploaded App source can be built by a dedicated rootless BuildKit service into
+a durable OCI archive. App execution remains a subsequent runtime capability:
+building or selecting an image does not create a container or a public route.
 
 ```text
 TLS terminator / Nginx
@@ -22,12 +23,87 @@ TLS terminator / Nginx
                                       │   └── telemetry-docker → otel-collector
                                       ├── telemetry-host → otel-collector
                                       └── telemetry-docker-logs → otel-collector
+worker → app_build network → dedicated rootless BuildKit → OCI archive in Stealth storage
 OTLP / Prometheus → otel-collector → ClickHouse
 ```
+
+The worker and BuildKit authenticate the private TCP control endpoint with
+mutual TLS. The BuildKit certificate is valid for the `buildkit` DNS name; the
+daemon verifies client certificates against the installation's BuildKit CA.
+Private Docker networking is not treated as authentication.
+
+```text
+                  Stealth BuildKit CA
+                   /              \
+         server identity       worker identity
+                │                    │
+                ▼                    ▼
+            BuildKit  ◀── mTLS ─── worker
+                │
+                ▼
+         untrusted Dockerfile build
+                └── no BuildKit client key
+```
+
+The installer creates and validates `private/buildkit-mtls`, outside the
+legacy setup-state directory, during install,
+repair, and upgrade. The CA key stays on the host at mode `0600` and is not
+mounted into any container. A networkless, one-shot initializer copies only
+the server and dedicated health-client identities into BuildKit's private
+credential volume; a separate initializer copies only the worker identity
+into the worker's private volume. Runtime volumes are mounted read-only and
+private keys are owned by their single service user at mode `0400`. The API
+receives no BuildKit key. Tenant build contexts and `RUN` steps receive none
+of these control credentials.
+
+The host-metrics Collector retains its read-only host filesystem view, but a
+read-only tmpfs masks `<install-root>/private` inside that view. The masking
+target is derived from the generated `STEALTH_INSTALL_ROOT`, so the Collector
+cannot read BuildKit CA, server, worker, or health-client private keys even
+though it can inspect other host filesystem paths.
+
+The CA key remains in the installation state so the installer can renew the
+CA and issue a new leaf set before the CA's final year. Leaf identities renew
+when fewer than 30 days remain; renewal uses the same CA, updates role-specific
+volumes, and recreates the worker and BuildKit together. Complete valid state
+is preserved across routine updates. A partial or corrupt bundle fails closed
+with repair guidance instead of replacing one member independently. Backup
+and restore of the same installation should include `private/buildkit-mtls`
+as internal control-plane credential state. It is not tenant data, BuildKit
+cache, or a release asset. A data-preserving uninstall keeps it; destructive
+purge removes it. Earlier development installs may have a complete bundle at
+`state/buildkit-mtls`; the installer validates and atomically relocates that
+bundle without changing its CA or leaf identities. Corrupt bundles or
+simultaneous old and new bundles stop installation rather than silently
+creating another CA. If the old and new paths are on different filesystems,
+installation stops rather than copying private keys nonatomically. Loss of the
+private identity requires a new trust set for future builds but does not
+invalidate persisted OCI artifacts.
+
+The BuildKit service joins only the private `app_build` network with the
+worker. It has no PostgreSQL/Redis/control-plane network, Docker socket, host
+port, Stealth artifact storage mount, or platform credentials. The worker
+transfers a private source context through BuildKit's client protocol. Cache
+state is a separate bounded disposable volume; completed OCI archives in
+Stealth storage are authoritative and survive cache loss or a BuildKit
+container replacement. RootlessKit's transient state and user runtime
+directory use small memory-backed tmpfs mounts owned by UID 1000; explicit
+ownership is required because those mounts hide the image's pre-owned paths.
 
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file
 uses versioned images; it does not build from a mutable `latest` tag.
+Use `stealth install` for fresh installations and the managed repair/update
+commands for existing installations so host PKI issuance and role-volume
+refresh complete before BuildKit starts. The one-shot credential initializers
+do not generate or rotate certificates; they only copy the validated,
+installer-owned identities into separate runtime volumes.
+
+`stealth uninstall --keep-data` preserves the host PKI, runtime credential
+volumes, and BuildKit cache for a restorable installation. `--purge` removes
+the generated identities and these Compose-owned volumes. Losing the BuildKit
+PKI requires issuing a new trust set for future builds but does not invalidate
+completed OCI artifacts.
 
 Traefik serves platform Site hostnames through the Cloudflare Tunnel wildcard
 route. The Console/API hostname defaults to Nginx and can be switched to
@@ -60,10 +136,21 @@ docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-setup-state-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-state-init
-docker compose --env-file .env.production -f compose.production.yaml up -d api worker console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-worker-credentials-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-server-credentials-init
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker buildkit console proxy traefik otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker
 ./scripts/production-smoke.sh
 ```
+
+The Cloudflare setup-state handoff preserves the host `state/` directory UID
+and uses group `10001` for the narrow named-volume input. The importer applies
+that same UID/group to `state/.cloudflare-import` (directory mode `0770`,
+artifact mode `0640`), keeping the generated state manageable by the normal
+installation user while readable by the non-root worker. A missing legacy
+`setup-state.enc` still clears stale handoff data and produces no import
+artifact.
 
 The migration service is a one-shot container. API and worker startup retain
 the same idempotent migration check as a safety net, but the release procedure
@@ -77,7 +164,59 @@ required storage implementation, function/site stores, and Redis. API `/healthz`
 is liveness only. The worker exposes `/healthz` on its private metrics
 listener; a failed worker loop exits so the container supervisor can restart
 it. Build metadata is available at API `/version` and in structured startup
-logs.
+logs. `stealth doctor` reports App BuildKit readiness separately; a BuildKit
+outage leaves queued App builds available for later retry and does not couple
+the Function, Site, webhook, or messaging workers to that service.
+
+## App builds
+
+An AppDeployment captures immutable uploaded source bytes, Dockerfile build
+options, and the App's normalized WorkloadSpec snapshot before it enters the
+PostgreSQL build queue. The trusted worker verifies the source checksum,
+extracts it in a private bounded workspace, and invokes the pinned `buildctl`
+client against the dedicated rootless BuildKit daemon. Only an OCI archive is
+exported; the worker verifies BuildKit's metadata digest and the OCI layout
+before publishing the archive through the durable artifact cleanup-reservation
+flow. The metadata image digest and the checksum of the persisted tar archive
+are separate identities.
+
+The `buildkit_state` volume holds bounded disposable cache only. Removing it
+may make a later build slower, but it does not remove completed AppDeployment
+artifacts. App source and successful OCI archives use separate private
+`app-sources/` and `app-images/` namespaces in Stealth artifact storage. The
+default source archive limit is 128 MiB, expanded source is limited to 1 GiB
+and 8,192 files, OCI archives are limited to 2 GiB, and each App has a default
+5 GiB source-plus-image artifact quota. Operators can adjust the corresponding
+`APPS_*` settings within validated bounds.
+
+BuildKit receives no tenant-selected frontend, insecure entitlement, SSH
+forwarding, build secret, build argument, or platform credential. The Dockerfile
+frontend is the enabled `dockerfile.v0` frontend from the pinned daemon. The
+worker process invokes `buildctl` with an explicit minimal environment and no
+shell. Every readiness and build invocation supplies the configured CA,
+worker certificate, and worker private key; missing TLS configuration makes
+the builder unavailable and there is no plaintext fallback. Build logs are
+bounded and sanitized. This boundary executes untrusted
+Dockerfile build instructions inside rootless BuildKit; it is not an App
+runtime.
+
+On Ubuntu hosts where `apparmor_restrict_unprivileged_userns` is enabled, the
+installer installs and loads a release-managed AppArmor profile that grants the
+BuildKit container's rootlesskit process the `userns` permission. The profile
+keeps the same unconfined AppArmor mode required by the official rootless image
+and adds no capability, network, mount, or file rules. It is stored under
+`/etc/apparmor.d` so the kernel loads it after host reboot. Other hosts retain
+the existing `apparmor=unconfined` setting. Manual Compose deployments on
+restricted Ubuntu hosts must load
+`buildkit/stealth-buildkit-rootless.apparmor` with `apparmor_parser` and set
+`APPS_BUILDKIT_APPARMOR_PROFILE=stealth-buildkit-rootless` before starting
+BuildKit.
+
+When a build succeeds, its immutable digest and OCI archive are persisted.
+Selecting that deployment records the desired image and advances the App's
+desired generation. It does not advance observed generation or mark the App
+running. Apps remain `not_deployed`, no App container is created or loaded into
+Moby, and App hostnames are still absent from the platform Site routes.
 
 ## Configuration
 
@@ -316,7 +455,9 @@ configures the named tunnel with the Console route to `http://proxy:80`, the
 catch-all 404, and its proxied DNS record. The host CLI starts the production
 tunnel, verifies tunnel health and the production hostname, and removes the
 Quick Tunnel only after those checks pass. Before the worker starts, the
-network-isolated `cloudflare-state-init` helper decrypts the legacy setup
+networkless `cloudflare-setup-state-init` copies the optional encrypted
+setup snapshot into a dedicated named volume; `cloudflare-state-init` reads
+only that volume and decrypts the legacy setup
 snapshot and atomically creates a versioned, Cloudflare-only encrypted import
 artifact. It contains the existing Cloudflare connection identity and API
 token required for migration. The worker mounts only this narrow artifact;

@@ -173,6 +173,62 @@ grants no host access, host mounts, host networking, host PID/IPC, Linux
 capabilities, privileged mode, or Docker API access. Secret values have a
 separate future encrypted lifecycle and never belong in WorkloadSpec.
 
+An `AppDeployment` is an immutable build input snapshot and durable result.
+Uploaded source bytes, the Dockerfile build definition, and the current
+WorkloadSpec snapshot are recorded before queueing. A dedicated rootless
+BuildKit service builds that source into an OCI archive; BuildKit cache is
+disposable and never defines application identity. The durable image identity
+is the verified BuildKit `image_digest` together with Stealth's persisted OCI
+archive and its separate archive checksum. Deployment selection changes the
+App's desired image and desired generation only. The App remains
+`not_deployed`; no App container, runtime health state, or App route exists yet.
+Future runtime reconciliation consumes `App.enabled`,
+`App.desired_deployment_id`, the current WorkloadSpec, and
+`App.desired_generation`; only a worker that proves convergence may advance
+`observed_generation`.
+
+The App build worker transfers untrusted source to a dedicated rootless
+BuildKit daemon on an isolated build network. Build execution receives no
+Docker socket, backend network, platform credentials, SSH forwarding, build
+secrets, build arguments, or tenant-selected frontend/entitlements. The OCI
+artifact is the only durable output of the build boundary; BuildKit cache loss
+may slow a future build but cannot remove a completed deployment artifact.
+
+The BuildKit TCP control API requires mutual TLS even on the private
+`app_build` network. An installation-local CA signs distinct server, worker,
+and healthcheck identities. The worker verifies the server's `buildkit` DNS
+SAN; BuildKit requires a trusted client certificate for every control request.
+The host CA key is kept mode `0600` and is never mounted into a container.
+Its installation path is `private/buildkit-mtls`, outside the legacy
+`state/` directory used by the setup API and Cloudflare migration. Before
+the Cloudflare importer runs, a networkless copy-only initializer transfers
+only the optional encrypted `setup-state.enc` file into a dedicated named
+volume; the importer reads that narrow input and publishes its Cloudflare-only
+artifact. The handoff retains the host state directory UID with worker group
+`10001`, so the derived `.cloudflare-import` directory remains manageable by
+the installation user and readable by the worker. Missing legacy setup state
+remains a valid no-import case without changing ownership.
+Host metrics retain a read-only host filesystem view, with a read-only tmpfs
+mask over the installation's `private/` subtree inside that view.
+One-shot networkless initializers populate separate read-only runtime volumes:
+BuildKit receives its server and healthcheck identities, while the worker
+receives its client identity. The API and tenant build steps receive no
+BuildKit private keys. Host identity state is preserved on routine upgrades;
+leaf certificates renew before expiry. Restoring an installation should
+restore `private/buildkit-mtls` with mode-0600 host keys. The CA key remains
+host-only for controlled leaf issuance and renewal. A valid pre-release bundle
+under `state/buildkit-mtls` is atomically relocated without changing
+identity; corrupt or ambiguous duplicate state fails closed. Loss of this PKI
+does not affect completed OCI artifacts. Relocation across different
+filesystems stops safely instead of copying private keys. A data-preserving
+uninstall keeps the PKI, while a destructive purge removes it.
+
+BuildKit cache identifiers are never durable application identity. The
+persisted `image_digest` and verified OCI archive are authoritative. Future
+runtime reconciliation consumes the selected immutable image and current App
+desired state; it remains a separate capability from the BuildKit control
+connection.
+
 ## Backend authentication email delivery
 
 The mailer transport keeps a generic `Message`/`Sender` seam for explicit

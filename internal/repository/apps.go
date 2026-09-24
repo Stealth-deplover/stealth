@@ -29,9 +29,10 @@ const (
 )
 
 type AppInput struct {
-	Name     string
-	Enabled  bool
-	Workload workloadspec.Spec
+	Name               string
+	Enabled            bool
+	Workload           workloadspec.Spec
+	ArtifactQuotaBytes int64
 }
 
 type AppPatch struct {
@@ -40,7 +41,7 @@ type AppPatch struct {
 	Workload *workloadspec.Spec
 }
 
-const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain`
+const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id`
 
 type appScanner interface{ Scan(...any) error }
 
@@ -49,6 +50,7 @@ func scanApp(row appScanner) (domain.App, error) {
 	var rawSpec []byte
 	var platformLabel string
 	var workloadBaseDomain *string
+	var desiredDeploymentID *uuid.UUID
 	if err := row.Scan(
 		&item.ID,
 		&item.ProjectID,
@@ -64,6 +66,7 @@ func scanApp(row appScanner) (domain.App, error) {
 		&item.UpdatedAt,
 		&platformLabel,
 		&workloadBaseDomain,
+		&desiredDeploymentID,
 	); err != nil {
 		return domain.App{}, err
 	}
@@ -79,6 +82,10 @@ func scanApp(row appScanner) (domain.App, error) {
 		return domain.App{}, fmt.Errorf("stored App WorkloadSpec digest does not match its canonical content")
 	}
 	item.Workload = spec
+	if desiredDeploymentID != nil {
+		value := desiredDeploymentID.String()
+		item.DesiredDeploymentID = &value
+	}
 	if workloadBaseDomain != nil {
 		hostname, hostnameErr := platformhostname.Hostname(platformLabel, *workloadBaseDomain)
 		if hostnameErr != nil {
@@ -193,6 +200,24 @@ func (r *Repository) GetApp(ctx context.Context, projectID, appID uuid.UUID, act
 	return appByID(ctx, r.pool, projectID, appID, false)
 }
 
+// AuthorizeAppWrite verifies a mutation actor before a large multipart upload
+// consumes disk or network capacity. The mutation transaction repeats this
+// check when it persists the deployment.
+func (r *Repository) AuthorizeAppWrite(ctx context.Context, projectID, appID uuid.UUID, actor AppActor) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := r.requireAppWriteTx(ctx, tx, projectID, actor); err != nil {
+		return err
+	}
+	if _, err := appByID(ctx, tx, projectID, appID, false); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *Repository) CreateApp(ctx context.Context, id, projectID uuid.UUID, actor AppActor, input AppInput) (domain.App, error) {
 	name, err := validate.Slug(input.Name, "name")
 	if err != nil {
@@ -225,6 +250,10 @@ func (r *Repository) CreateApp(ctx context.Context, id, projectID uuid.UUID, act
 	if err := r.enforceOrganizationLimitTx(ctx, tx, organizationID, "apps"); err != nil {
 		return domain.App{}, err
 	}
+	quotaBytes := input.ArtifactQuotaBytes
+	if quotaBytes <= 0 {
+		quotaBytes = DefaultAppArtifactQuotaBytes
+	}
 
 	allocated := false
 	for _, platformLabel := range platformhostname.AppCandidates(name, id) {
@@ -239,8 +268,8 @@ func (r *Repository) CreateApp(ctx context.Context, id, projectID uuid.UUID, act
 			continue
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO project_apps (id,project_id,name,platform_label,enabled,workload_spec,workload_spec_sha256)
-			VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`, id, projectID, name, platformLabel, input.Enabled, canonical, digest); err != nil {
+			INSERT INTO project_apps (id,project_id,name,platform_label,enabled,workload_spec,workload_spec_sha256,artifact_quota_bytes)
+			VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)`, id, projectID, name, platformLabel, input.Enabled, canonical, digest, quotaBytes); err != nil {
 			return domain.App{}, mapError(err)
 		}
 		allocated = true
@@ -357,6 +386,16 @@ func (r *Repository) DeleteApp(ctx context.Context, projectID, appID uuid.UUID, 
 	if err != nil {
 		return err
 	}
+	var reservedBytes int64
+	if err := tx.QueryRow(ctx, `SELECT artifact_reserved_bytes FROM project_apps WHERE project_id=$1 AND id=$2`, projectID, appID).Scan(&reservedBytes); err != nil {
+		return err
+	}
+	if reservedBytes > 0 {
+		return ErrAppArtifactPublishInProgress
+	}
+	if err := queueAppDeploymentArtifactsForDeletionTx(ctx, tx, projectID, appID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM project_service_layouts WHERE project_id=$1 AND resource_type='app' AND resource_id=$2`, projectID, appID); err != nil {
 		return err
 	}
@@ -374,10 +413,11 @@ func (r *Repository) DeleteApp(ctx context.Context, projectID, appID uuid.UUID, 
 
 func appAuditMetadata(item domain.App) map[string]any {
 	return map[string]any{
-		"name":                 item.Name,
-		"enabled":              item.Enabled,
-		"desired_generation":   item.DesiredGeneration,
-		"workload_spec_sha256": item.WorkloadSpecSHA256,
+		"name":                  item.Name,
+		"enabled":               item.Enabled,
+		"desired_generation":    item.DesiredGeneration,
+		"desired_deployment_id": item.DesiredDeploymentID,
+		"workload_spec_sha256":  item.WorkloadSpecSHA256,
 	}
 }
 

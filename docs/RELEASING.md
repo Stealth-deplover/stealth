@@ -102,6 +102,32 @@ claim a full browser/provider installation or run a full production stack.
   persistent volumes on failure.
 - [ ] Verify API `/healthz` and `/readyz`, Console availability, proxy routing,
   and the reported version metadata.
+- [ ] Confirm the production Compose BuildKit image is pinned by version and
+      digest, runs rootless without `privileged`, a Docker socket, host network,
+      backend network membership, or a host port, and has bounded cache GC.
+- [ ] Confirm `tcp://buildkit:1234` requires mTLS, the worker and healthcheck
+      use separate client identities, and unauthenticated, untrusted-client,
+      and wrong-CA probes fail in the real production Compose smoke.
+- [ ] Confirm host PKI keys are mode `0600`, runtime role volumes are
+      read-only with mode-`0400` private keys, BuildKit never receives the
+      worker key, and the API and tenant build do not receive BuildKit keys.
+- [ ] Verify install, upgrade, and repair preserve a valid BuildKit CA and
+      renew leaves before expiry; include `private/buildkit-mtls` in
+      installation backups. Confirm a legacy `state/buildkit-mtls` is
+      relocated intact and no runtime service sees the CA key. Completed OCI
+      artifacts must remain valid if the BuildKit PKI is lost.
+- [ ] Confirm `cloudflare-state-init` receives only the narrow named-volume
+      setup input and the Cloudflare import output. It must not mount the
+      complete `state/` directory or any part of `private/`.
+- [ ] On Ubuntu with `apparmor_restrict_unprivileged_userns=1`, verify the
+      installer loads the Stealth-managed userns-only profile before BuildKit
+      starts, preserves it across reboot, and removes it during configuration
+      removal or purge.
+- [ ] Run the production Compose smoke's `FROM scratch` App build. Confirm
+      BuildKit readiness, a verified OCI digest/archive, and that the App stays
+      `not_deployed` with no App route in the Site route snapshot.
+- [ ] Verify BuildKit cache can be removed without affecting completed App
+      deployment metadata or persisted OCI archives.
 - [ ] Restart the API, worker, Console, and proxy containers, then rerun
   `stealth status` and `stealth doctor`.
 - [ ] Exercise `stealth install --repair` on a test installation and confirm

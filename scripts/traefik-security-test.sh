@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Validate the production Traefik boundary against the rendered Compose model
-# and the release-managed static/dynamic files. This is intentionally separate
-# from the running smoke: a topology violation must fail before containers
-# start, while the smoke proves the read-only runtime boundary in Docker.
+# Validate the production Traefik and App BuildKit boundaries against the
+# rendered Compose model and release-managed files. Topology violations fail
+# before containers start; the running smoke exercises the read-only boundary.
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${COMPOSE_FILE:-$repo_root/compose.production.yaml}"
 env_file="${ENV_FILE:-$repo_root/.env.production.example}"
+compose_root="$(cd -- "$(dirname -- "$compose_file")" && pwd)"
+export STEALTH_INSTALL_ROOT="$compose_root"
 
 if ! command -v docker >/dev/null 2>&1; then
 	printf '%s\n' 'Traefik security test requires Docker Compose' >&2
@@ -35,11 +36,15 @@ fi
 compose=(docker compose --env-file "$env_file" -f "$compose_file" --profile cloudflare --profile maintenance)
 "${compose[@]}" config --quiet
 rendered="$(mktemp "${TMPDIR:-/tmp}/stealth-traefik-compose.XXXXXX")"
+setup_rendered="$(mktemp "${TMPDIR:-/tmp}/stealth-setup-compose.XXXXXX")"
 cleanup() {
-	rm -f "$rendered"
+	rm -f "$rendered" "$setup_rendered"
 }
 trap cleanup EXIT
 "${compose[@]}" config >"$rendered"
+setup_compose=(docker compose --env-file "$env_file" -f "$(dirname -- "$compose_file")/compose.setup.yaml")
+STEALTH_ENV_FILE="$env_file" "${setup_compose[@]}" config --quiet
+STEALTH_ENV_FILE="$env_file" "${setup_compose[@]}" config >"$setup_rendered"
 
 service_block() {
 	local service="$1"
@@ -66,6 +71,22 @@ if [ -z "$worker_block" ]; then
 	printf '%s\n' 'worker service is missing from rendered production Compose' >&2
 	exit 1
 fi
+buildkit_block="$(service_block buildkit)"
+if [ -z "$buildkit_block" ]; then
+	printf '%s\n' 'dedicated App BuildKit service is missing from rendered production Compose' >&2
+	exit 1
+fi
+worker_mtls_init_block="$(service_block buildkit-worker-credentials-init)"
+server_mtls_init_block="$(service_block buildkit-server-credentials-init)"
+if [ -z "$worker_mtls_init_block" ] || [ -z "$server_mtls_init_block" ]; then
+	printf '%s\n' 'one-shot role-specific BuildKit credential initializers are missing' >&2
+	exit 1
+fi
+api_block="$(service_block api)"
+if [ -z "$api_block" ]; then
+	printf '%s\n' 'API service is missing from rendered production Compose' >&2
+	exit 1
+fi
 state_init_block="$(service_block traefik-state-init)"
 if [ -z "$state_init_block" ]; then
 	printf '%s\n' 'Traefik state initializer is missing from rendered production Compose' >&2
@@ -74,6 +95,11 @@ fi
 cloudflare_state_init_block="$(service_block cloudflare-state-init)"
 if [ -z "$cloudflare_state_init_block" ]; then
 	printf '%s\n' 'Cloudflare setup-state initializer is missing from rendered production Compose' >&2
+	exit 1
+fi
+cloudflare_source_init_block="$(service_block cloudflare-setup-state-init)"
+if [ -z "$cloudflare_source_init_block" ]; then
+	printf '%s\n' 'narrow Cloudflare legacy-state source initializer is missing from rendered production Compose' >&2
 	exit 1
 fi
 ingress_control_block="$(service_block ingress-control)"
@@ -91,6 +117,170 @@ for required in \
 		exit 1
 	fi
 done
+for required in 'network_mode: none' 'read_only: true' 'restart: "no"' 'user: "0:0"' 'cap_drop:' 'CHOWN' 'DAC_READ_SEARCH' '/usr/local/bin/stealth-cloudflare-state-init' 'target: /source' 'target: /output'; do
+	if ! printf '%s\n' "$cloudflare_source_init_block" | grep -Fq -- "$required"; then
+		printf 'Cloudflare source handoff is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+if ! printf '%s\n' "$cloudflare_source_init_block" | grep -Eq 'source: .*/state([[:space:]]|$)' || ! printf '%s\n' "$cloudflare_source_init_block" | grep -Eq 'source: [^/]*cloudflare_setup_state_input([[:space:]]|$)'; then
+	printf '%s\n' 'Cloudflare source handoff must read the state domain and write only to its named input volume' >&2
+	exit 1
+fi
+source_capabilities="$(printf '%s\n' "$cloudflare_source_init_block" | awk '
+/^    cap_add:[[:space:]]*$/ { in_caps=1; next }
+in_caps && /^    [^[:space:]][^:]*:/ { exit }
+in_caps && /^      - / { sub(/^[[:space:]]*- /, ""); print }
+' | sort -u)"
+if [ "$source_capabilities" != "$(printf '%s\n' CHOWN DAC_READ_SEARCH)" ]; then
+	printf 'Cloudflare source handoff capabilities are broader than expected: %s\n' "$(printf '%s\n' "$source_capabilities" | paste -sd, -)" >&2
+	exit 1
+fi
+source_cap_drops="$(printf '%s\n' "$cloudflare_source_init_block" | awk '
+/^    cap_drop:[[:space:]]*$/ { in_caps=1; next }
+in_caps && /^    [^[:space:]][^:]*:/ { exit }
+in_caps && /^      - / { sub(/^[[:space:]]*- /, ""); print }
+' | sort -u)"
+if [ "$source_cap_drops" != 'ALL' ] && ! printf '%s\n' "$cloudflare_source_init_block" | grep -Eq '^    cap_drop:[[:space:]]*\[ALL\][[:space:]]*$'; then
+	printf 'Cloudflare source handoff must drop all capabilities; found: %s\n' "$(printf '%s\n' "$source_cap_drops" | paste -sd, -)" >&2
+	exit 1
+fi
+if printf '%s\n' "$cloudflare_source_init_block" | grep -Eqi 'environment:|FUNCTIONS_SECRET_KEY|DATABASE_URL|REDIS_URL|CLOUDFLARE_API_TOKEN|/var/run/docker.sock|private|buildkit-mtls|ca-key[.]pem|networks:|privileged:|cap_add:.*(ALL|DAC_OVERRIDE|SYS_ADMIN)'; then
+	printf '%s\n' 'Cloudflare source handoff can see credentials or has broader authority than read-only copy access' >&2
+	exit 1
+fi
+if printf '%s\n' "$cloudflare_state_init_block" | grep -Eq 'target: /state([[:space:]]|$)|source: .*/state([[:space:]]|$)|source: .*/private([[:space:]]|$)|/buildkit-mtls|ca-key[.]pem|server/key[.]pem|worker/key[.]pem|health/key[.]pem'; then
+	printf '%s\n' 'Cloudflare importer sees broad installation state or BuildKit PKI' >&2
+	exit 1
+fi
+production_rendered="$rendered"
+rendered="$setup_rendered"
+setup_service_block="$(service_block setup)"
+rendered="$production_rendered"
+if [ -z "$setup_service_block" ] || printf '%s\n' "$setup_service_block" | grep -Eqi 'source: .*(/private($|/)|/buildkit-mtls)|target: /private|ca-key[.]pem'; then
+	printf '%s\n' 'setup service can see BuildKit PKI through a direct or parent mount' >&2
+	exit 1
+fi
+if printf '%s\n' "$api_block" | grep -Eqi 'source: .*(/private($|/)|/buildkit-mtls)|target: /private|ca-key[.]pem'; then
+	printf '%s\n' 'API can see BuildKit PKI through a direct or parent mount' >&2
+	exit 1
+fi
+wide_mount_services="$(awk -v root="$compose_root" '
+/^services:[[:space:]]*$/ { in_services=1; next }
+in_services && /^  [^[:space:]][^:]*:[[:space:]]*$/ { service=$1; sub(/:$/, "", service); next }
+in_services && /^      source:/ {
+  source=$0; sub(/^[[:space:]]*source:[[:space:]]*/, "")
+  if (source == root || source == root "/private") print service "=" source
+}
+' "$rendered" "$setup_rendered")"
+if [ -n "$wide_mount_services" ]; then
+	printf 'production services bind the installation root or private parent: %s\n' "$(printf '%s\n' "$wide_mount_services" | paste -sd, -)" >&2
+	exit 1
+fi
+telemetry_host_block="$(service_block telemetry-host)"
+telemetry_private_target="$(printf '%s\n' "$telemetry_host_block" | awk '
+/^[[:space:]]*-[[:space:]]+type: tmpfs[[:space:]]*$/ { in_tmpfs=1; target=""; read_only=0; next }
+in_tmpfs && /^[[:space:]]*-[[:space:]]+type:/ {
+  if (target != "" && read_only) print target
+  in_tmpfs=($0 ~ /type: tmpfs[[:space:]]*$/)
+  target=""; read_only=0
+  next
+}
+in_tmpfs && /^[[:space:]]*target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); target=$0 }
+in_tmpfs && /^[[:space:]]*read_only:[[:space:]]*true[[:space:]]*$/ { read_only=1 }
+END { if (in_tmpfs && target != "" && read_only) print target }
+')"
+expected_telemetry_private_target="$(realpath -m "/hostfs$compose_root/private")"
+if [ -n "$telemetry_private_target" ]; then
+	telemetry_private_target="$(realpath -m "$telemetry_private_target")"
+fi
+telemetry_private_mask=no
+if [ "$telemetry_private_target" = "$expected_telemetry_private_target" ]; then
+	telemetry_private_mask=yes
+else
+	printf 'telemetry-host must mask %s with a read-only tmpfs; rendered target was %s\n' "$expected_telemetry_private_target" "${telemetry_private_target:-missing}" >&2
+	exit 1
+fi
+pki_mount_exposures="$(awk -v root="$compose_root" -v telemetry_mask="$telemetry_private_mask" '
+function trim(value) {
+  sub(/^[[:space:]]+/, "", value)
+  sub(/[[:space:]]+$/, "", value)
+  sub(/^\"/, "", value)
+  sub(/\"$/, "", value)
+  return value
+}
+function exposes_private(path, private_root) {
+  if (path !~ /^\//) return 0
+  private_root=root "/private"
+  if (path == private_root || index(path, private_root "/") == 1) return 1
+  if (path == "/" || path == root || index(root, path "/") == 1) return 1
+  return 0
+}
+function allowed_identity_file(path, private_root) {
+  private_root=root "/private/buildkit-mtls/"
+  if (service == "buildkit-worker-credentials-init") {
+    return path == private_root "ca-cert.pem" || path == private_root "worker/cert.pem" || path == private_root "worker/key.pem"
+  }
+  if (service == "buildkit-server-credentials-init") {
+    return path == private_root "ca-cert.pem" || path == private_root "server/cert.pem" || path == private_root "server/key.pem" ||
+      path == private_root "health/cert.pem" || path == private_root "health/key.pem"
+  }
+  return 0
+}
+function check_mount() {
+  if (mount_type == "bind" && exposes_private(source) && !allowed_identity_file(source) &&
+      !(service == "telemetry-host" && source == "/" && target == "/hostfs" && telemetry_mask == "yes")) {
+    print service "=" source
+  }
+}
+/^services:[[:space:]]*$/ { in_services=1; next }
+in_services && /^  [^[:space:]][^:]*:[[:space:]]*$/ {
+  check_mount()
+  service=$1
+  sub(/:$/, "", service)
+  in_volumes=0; mount_type=""; source=""; target=""
+  next
+}
+in_services && /^    volumes:[[:space:]]*$/ { check_mount(); in_volumes=1; mount_type=""; source=""; target=""; next }
+in_volumes && /^    [^[:space:]][^:]*:[[:space:]]*$/ { check_mount(); in_volumes=0; next }
+in_volumes && /^      - type:/ { check_mount(); mount_type=$3; source=""; target=""; next }
+in_volumes && /source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); source=trim($0) }
+in_volumes && /target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); target=trim($0) }
+END { check_mount() }
+' "$rendered" "$setup_rendered")"
+if [ -n "$pki_mount_exposures" ]; then
+	printf 'services have a bind mount that contains BuildKit PKI outside the role-specific files: %s\n' "$(printf '%s\n' "$pki_mount_exposures" | paste -sd, -)" >&2
+	exit 1
+fi
+cloudflare_input_volume_block="$(awk '
+/^volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^  cloudflare_setup_state_input:[[:space:]]*$/ { found=1; print; next }
+found && /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+found { print }
+' "$rendered")"
+compose_project_name="$(env_value COMPOSE_PROJECT_NAME)"
+if [ -z "$compose_project_name" ]; then
+	compose_project_name='stealth'
+fi
+expected_cloudflare_input_volume_name="${compose_project_name}_cloudflare_setup_state_input"
+if [ -z "$cloudflare_input_volume_block" ] || ! printf '%s\n' "$cloudflare_input_volume_block" | grep -Fq "name: $expected_cloudflare_input_volume_name"; then
+	printf '%s\n' 'Cloudflare setup-state handoff must use its own named volume' >&2
+	exit 1
+fi
+buildkit_server_volume_block="$(awk '
+/^volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^  buildkit_server_credentials:[[:space:]]*$/ { found=1; print; next }
+found && /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+found { print }
+' "$rendered")"
+if [ -z "$buildkit_server_volume_block" ] || ! printf '%s\n' "$buildkit_server_volume_block" | grep -Fq "name: ${compose_project_name}_app_buildkit_server_credentials"; then
+	printf '%s\n' 'BuildKit server credentials must retain their dedicated named volume' >&2
+	exit 1
+fi
+if grep -Fq 'ca-key.pem' "$rendered"; then
+	printf '%s\n' 'CA private key must never be part of rendered production Compose' >&2
+	exit 1
+fi
 if ! printf '%s\n' "$traefik_block" | grep -Fq 'stealth_ingress:' || ! printf '%s\n' "$cloudflared_block" | grep -Fq 'stealth_ingress:'; then
 	printf '%s\n' 'Cloudflared and Traefik must share the private stealth_ingress network' >&2
 	exit 1
@@ -110,8 +300,8 @@ fi
 for required in \
 	'network_mode: none' \
 	'read_only: true' \
-	'target: /state' \
-	'source: .*/state([[:space:]]|$)' \
+	'target: /input' \
+	'source: cloudflare_setup_state_input([[:space:]]|$)' \
 	'target: /output' \
 	'source: .*/state/\.cloudflare-import([[:space:]]|$)' \
 	'/usr/local/bin/stealth-cloudflare-import-init' \
@@ -125,23 +315,16 @@ if ! printf '%s\n' "$cloudflare_state_init_block" | grep -Eq 'restart: "?no"?'; 
 	printf '%s\n' 'Cloudflare state initializer must be one-shot' >&2
 	exit 1
 fi
-if ! printf '%s\n' "$cloudflare_state_init_block" | awk '
-/source: .*\/state([[:space:]]|$)/ { source=1 }
-/target: \/state$/ { target=1 }
-/read_only: true/ && source && target { readonly=1 }
-END { exit(readonly ? 0 : 1) }'; then
-	printf '%s\n' 'Cloudflare preparation source mount is not read-only' >&2
-	exit 1
-fi
-if ! printf '%s\n' "$cloudflare_state_init_block" | grep -Eq 'user: "?0:0"?'; then
-	printf '%s\n' 'Cloudflare setup-state initializer must run as container root' >&2
-	exit 1
-fi
 for forbidden in \
 	'/var/run/docker.sock' \
 	'privileged:' \
 	'network_mode: host' \
 	'cap_add:' \
+	'/state/setup-state.enc' \
+	'source: .*/state([[:space:]]|$)' \
+	'/private' \
+	'buildkit-mtls' \
+	'ca-key.pem' \
 	'hostfs' \
 	'CLOUDFLARE_API_TOKEN' \
 	'DATABASE_URL' \
@@ -211,6 +394,245 @@ if [ "$(printf '%s\n' "$control_networks" | sed '/^$/d' | sort -u | paste -sd, -
 	printf 'ingress-control must join only the database and local Traefik networks; rendered networks=%s\n' "$control_networks" >&2
 	exit 1
 fi
+
+
+for required in \
+	'image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef' \
+	'read_only: true' \
+	'seccomp=unconfined' \
+	'systempaths=unconfined'; do
+	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
+		printf 'App BuildKit service is missing required setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+buildkit_apparmor_profile="$(printf '%s\n' "$buildkit_block" | sed -n 's/^[[:space:]]*- apparmor=//p' | head -n 1)"
+case "$buildkit_apparmor_profile" in
+	unconfined|stealth-buildkit-rootless) ;;
+	*)
+		printf 'App BuildKit AppArmor profile is not an approved rootless setting: %s\n' "$buildkit_apparmor_profile" >&2
+		exit 1
+		;;
+esac
+if ! printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*user: "?1000:1000"?$'; then
+	printf '%s\n' 'App BuildKit must run as the dedicated non-root user' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/home/user/.local/tmp'; then
+	printf '%s\n' 'App BuildKit rootless state directory must use ephemeral tmpfs storage' >&2
+	exit 1
+fi
+for required in \
+	'/home/user/.local/tmp:mode=0700,uid=1000,gid=1000,size=64m' \
+	'/run/user/1000:mode=0700,uid=1000,gid=1000,size=16m'; do
+	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
+		printf 'App BuildKit tmpfs must grant bounded writable state to UID 1000: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+buildkit_state_volume="$(env_value APPS_BUILDKIT_STATE_VOLUME)"
+if [ -z "$buildkit_state_volume" ]; then
+	buildkit_state_volume='stealth_app_buildkit_state'
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq 'source: buildkit_state' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'target: /home/user/.local/share/buildkit'; then
+	printf '%s\n' 'App BuildKit must mount only its dedicated persistent cache volume' >&2
+	exit 1
+fi
+buildkit_volume_block="$(awk '
+/^volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^  buildkit_state:[[:space:]]*$/ { found=1; print; next }
+found && /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+found { print }
+' "$rendered")"
+if [ -z "$buildkit_volume_block" ] || ! printf '%s\n' "$buildkit_volume_block" | grep -Fq "name: $buildkit_state_volume"; then
+	printf '%s\n' 'App BuildKit cache must use its configured persistent volume name' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | awk '
+function check_mount() {
+  if (mount_type == "bind" && source ~ /\/buildkit\/buildkitd\.toml$/ && target == "/etc/buildkit/buildkitd.toml" && read_only) found=1
+}
+/^    volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_volumes && /^      - type:/ { check_mount(); mount_type=$3; source=""; target=""; read_only=0; next }
+in_volumes && /source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); source=$0 }
+in_volumes && /target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); target=$0 }
+in_volumes && /read_only:[[:space:]]*true/ { read_only=1 }
+END { check_mount(); exit(found ? 0 : 1) }
+'; then
+	printf '%s\n' 'App BuildKit daemon configuration must be mounted read-only' >&2
+	exit 1
+fi
+
+buildkit_config="$(dirname -- "$compose_file")/buildkit/buildkitd.toml"
+if [ ! -f "$buildkit_config" ]; then
+	printf 'BuildKit daemon configuration is missing: %s\n' "$buildkit_config" >&2
+	exit 1
+fi
+
+assert_read_only_mount() {
+	local block="$1" source_pattern="$2" target="$3" label="$4"
+	if ! printf '%s\n' "$block" | awk -v pattern="$source_pattern" -v wanted="$target" '
+function check_mount() {
+  if (source ~ pattern && mount_target == wanted && read_only) found=1
+}
+/^    volumes:[[:space:]]*$/ { in_volumes=1; next }
+in_volumes && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_volumes && /^      - type:/ { check_mount(); source=""; mount_target=""; read_only=0; next }
+in_volumes && /source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); source=$0 }
+in_volumes && /target:/ { sub(/^[[:space:]]*target:[[:space:]]*/, ""); mount_target=$0 }
+in_volumes && /read_only:[[:space:]]*true/ { read_only=1 }
+END { check_mount(); exit(found ? 0 : 1) }
+'; then
+		printf 'BuildKit mTLS mount is missing or writable (%s)\n' "$label" >&2
+		exit 1
+	fi
+}
+
+assert_read_only_mount "$cloudflare_source_init_block" '/state$' '/source' 'Cloudflare source initializer legacy state input'
+assert_read_only_mount "$cloudflare_state_init_block" 'cloudflare_setup_state_input$' '/input' 'Cloudflare importer narrow setup input'
+assert_read_only_mount "$worker_mtls_init_block" '/private/buildkit-mtls/ca-cert[.]pem$' '/input/ca.pem' 'worker initializer CA source'
+assert_read_only_mount "$worker_mtls_init_block" '/private/buildkit-mtls/worker/cert[.]pem$' '/input/client-cert.pem' 'worker initializer client certificate source'
+assert_read_only_mount "$worker_mtls_init_block" '/private/buildkit-mtls/worker/key[.]pem$' '/input/client-key.pem' 'worker initializer client key source'
+assert_read_only_mount "$server_mtls_init_block" '/private/buildkit-mtls/ca-cert[.]pem$' '/input/ca.pem' 'BuildKit initializer CA source'
+assert_read_only_mount "$server_mtls_init_block" '/private/buildkit-mtls/server/cert[.]pem$' '/input/server-cert.pem' 'BuildKit initializer server certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/private/buildkit-mtls/server/key[.]pem$' '/input/server-key.pem' 'BuildKit initializer server key source'
+assert_read_only_mount "$server_mtls_init_block" '/private/buildkit-mtls/health/cert[.]pem$' '/input/health-client-cert.pem' 'BuildKit initializer health certificate source'
+assert_read_only_mount "$server_mtls_init_block" '/private/buildkit-mtls/health/key[.]pem$' '/input/health-client-key.pem' 'BuildKit initializer health key source'
+assert_read_only_mount "$worker_block" '^buildkit_worker_credentials$' '/run/secrets/stealth-buildkit' 'worker client credential volume'
+assert_read_only_mount "$buildkit_block" '^buildkit_server_credentials$' '/run/secrets/stealth-buildkit' 'BuildKit server credential volume'
+
+if printf '%s\n' "$buildkit_block" | grep -Eq 'buildkit-mtls|/client-key\.pem|buildkit_worker_credentials'; then
+	printf '%s\n' 'BuildKit must not receive the worker identity or host PKI bind mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_block" | grep -Eq 'buildkit-mtls|server-key\.pem|health-client-key\.pem'; then
+	printf '%s\n' 'worker must not receive BuildKit server or health identity material or host PKI bind mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$worker_mtls_init_block" | grep -Eq '/server/|/health/|ca-key\.pem|buildkit_server_credentials'; then
+	printf '%s\n' 'worker credential initializer has access to another BuildKit identity' >&2
+	exit 1
+fi
+if printf '%s\n' "$server_mtls_init_block" | grep -Eq '/worker/|/client-key\.pem|ca-key\.pem|buildkit_worker_credentials'; then
+	printf '%s\n' 'BuildKit credential initializer has access to worker or CA private key material' >&2
+	exit 1
+fi
+for initializer in "$worker_mtls_init_block" "$server_mtls_init_block"; do
+	for required in 'network_mode: none' 'read_only: true' 'cap_drop:' 'cap_add:' 'CHOWN' 'DAC_OVERRIDE'; do
+		if ! printf '%s\n' "$initializer" | grep -Fq -- "$required"; then
+			printf 'BuildKit credential initializer is missing required isolation: %s\n' "$required" >&2
+			exit 1
+		fi
+	done
+	if ! printf '%s\n' "$initializer" | grep -Eq 'restart: "?no"?'; then
+		printf '%s\n' 'BuildKit credential initializers must be one-shot' >&2
+		exit 1
+	fi
+done
+if printf '%s\n' "$api_block" | grep -Eq '/private/buildkit-mtls|/run/secrets/stealth-buildkit'; then
+	printf '%s\n' 'API must not receive BuildKit PKI files or mounts' >&2
+	exit 1
+fi
+if printf '%s\n' "$buildkit_block$worker_block" | grep -Eq 'BEGIN (EC |RSA )?PRIVATE KEY|APPS_BUILDKIT_.*PEM'; then
+	printf '%s\n' 'PEM contents must never appear in Compose configuration or environment' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem'; then
+	printf '%s\n' 'BuildKit healthcheck must use its dedicated client identity' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$worker_block" | grep -Fq '/run/secrets/stealth-buildkit/client-cert.pem' ||
+	! printf '%s\n' "$worker_block" | grep -Fq '/run/secrets/stealth-buildkit/client-key.pem'; then
+	printf '%s\n' 'worker is missing its dedicated mTLS client identity' >&2
+	exit 1
+fi
+if ! grep -Fq '[grpc.tls]' "$buildkit_config" ||
+	! grep -Fq 'cert = "/run/secrets/stealth-buildkit/server-cert.pem"' "$buildkit_config" ||
+	! grep -Fq 'key = "/run/secrets/stealth-buildkit/server-key.pem"' "$buildkit_config" ||
+	! grep -Fq 'ca = "/run/secrets/stealth-buildkit/ca.pem"' "$buildkit_config"; then
+	printf '%s\n' 'BuildKit daemon config must require its server identity and client CA' >&2
+	exit 1
+fi
+if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-cert.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/health-client-key.pem' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'debug' ||
+	! printf '%s\n' "$buildkit_block" | grep -Fq 'workers'; then
+	printf '%s\n' 'BuildKit healthcheck does not authenticate with the health-only identity' >&2
+	exit 1
+fi
+for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
+	if printf '%s\n' "$buildkit_block" | grep -Fqi -- "$forbidden"; then
+		printf 'App BuildKit service contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+if printf '%s\n' "$buildkit_block" | grep -Eq '^[[:space:]]*privileged:[[:space:]]*true|^[[:space:]]*ports:'; then
+	printf '%s\n' 'App BuildKit must not be privileged or publish a host port' >&2
+	exit 1
+fi
+
+service_networks() {
+	local block="$1"
+	printf '%s\n' "$block" | awk '
+/^    networks:[[:space:]]*$/ { in_networks=1; next }
+in_networks && /^    [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+in_networks && /^      [^[:space:]][^:]*:/ { sub(/^[[:space:]]+/, ""); sub(/:.*/, ""); print }
+'
+}
+buildkit_networks="$(service_networks "$buildkit_block" | sort -u | paste -sd, -)"
+worker_networks="$(service_networks "$worker_block" | sort -u | paste -sd, -)"
+if [ "$buildkit_networks" != 'app_build' ]; then
+	printf 'App BuildKit must join only app_build; rendered networks=%s\n' "$buildkit_networks" >&2
+	exit 1
+fi
+if ! printf '%s\n' "$worker_networks" | tr ',' '\n' | grep -Fxq app_build; then
+	printf 'worker must join app_build for private BuildKit access; rendered networks=%s\n' "$worker_networks" >&2
+	exit 1
+fi
+while IFS= read -r service; do
+	case "$service" in
+		worker|buildkit) continue ;;
+	esac
+	block="$(service_block "$service")"
+	if printf '%s\n' "$(service_networks "$block")" | grep -Fxq app_build; then
+		printf 'App build network must not include service %s\n' "$service" >&2
+		exit 1
+	fi
+done < <("${compose[@]}" config --services)
+
+for required in 'rootless = true' 'noProcessSandbox = false' 'gc = true' 'maxUsedSpace = "10GB"' 'max-parallelism = 2' '[frontend."dockerfile.v0"]'; do
+	if ! grep -Fq -- "$required" "$buildkit_config"; then
+		printf 'BuildKit daemon configuration is missing setting: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for forbidden in 'insecure-entitlements' 'security.insecure' 'network.host' 'gateway.v0'; do
+	if grep -Fq -- "$forbidden" "$buildkit_config"; then
+		printf 'BuildKit daemon config contains forbidden setting: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
+
+buildkit_apparmor_asset="$(dirname -- "$compose_file")/buildkit/stealth-buildkit-rootless.apparmor"
+if [ ! -f "$buildkit_apparmor_asset" ]; then
+	printf 'BuildKit AppArmor profile asset is missing: %s\n' "$buildkit_apparmor_asset" >&2
+	exit 1
+fi
+for required in 'profile stealth-buildkit-rootless flags=(unconfined)' 'userns,'; do
+	if ! grep -Fq -- "$required" "$buildkit_apparmor_asset"; then
+		printf 'BuildKit AppArmor profile is missing required rule: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+for forbidden in 'capability' 'network' 'mount' 'file,' ' ptrace'; do
+	if grep -Fq -- "$forbidden" "$buildkit_apparmor_asset"; then
+		printf 'BuildKit AppArmor profile contains an unexpected permission: %s\n' "$forbidden" >&2
+		exit 1
+	fi
+done
 
 if ! grep -Fq 'TRAEFIK_RELOAD_FILE: /var/lib/stealth/traefik/.reload.yaml' "$compose_file"; then
 	printf '%s\n' 'Compose does not keep the reload sentinel at the top-level dynamic path' >&2

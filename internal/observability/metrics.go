@@ -126,6 +126,12 @@ type WorkerMetrics struct {
 	BuildDuration         *prometheus.HistogramVec
 	BuildRequeued         prometheus.Counter
 	BuildInFlight         prometheus.Gauge
+	AppBuildsClaimed      prometheus.Counter
+	AppBuildsCompleted    *prometheus.CounterVec
+	AppBuildDuration      *prometheus.HistogramVec
+	AppBuildRequeued      prometheus.Counter
+	AppBuildInFlight      prometheus.Gauge
+	AppBuildErrors        *prometheus.CounterVec
 	AgentPolls            prometheus.Counter
 	AgentJobsClaimed      prometheus.Counter
 	AgentJobsCompleted    *prometheus.CounterVec
@@ -222,6 +228,43 @@ func NewWorkerMetrics() *WorkerMetrics {
 			Name:      "builds_in_flight",
 			Help:      "Function deployment builds currently being processed by this worker.",
 		}),
+		AppBuildsClaimed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "builds_claimed_total",
+			Help:      "App deployment builds claimed by the dedicated BuildKit worker.",
+		}),
+		AppBuildsCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "builds_completed_total",
+			Help:      "App deployment builds transitioned to a terminal result.",
+		}, []string{"result"}),
+		AppBuildDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "build_duration_seconds",
+			Help:      "Time spent building one immutable App OCI artifact.",
+			Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600, 1200, 3600},
+		}, []string{"result"}),
+		AppBuildRequeued: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "builds_requeued_total",
+			Help:      "Stale App build leases returned to the durable queue.",
+		}),
+		AppBuildInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "builds_in_flight",
+			Help:      "App deployment builds currently being processed.",
+		}),
+		AppBuildErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "stealth",
+			Subsystem: "apps_worker",
+			Name:      "errors_total",
+			Help:      "App build worker errors grouped by a fixed internal operation.",
+		}, []string{"operation"}),
 		AgentPolls: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "stealth",
 			Subsystem: "agent_worker",
@@ -291,7 +334,7 @@ func NewWorkerMetrics() *WorkerMetrics {
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 		}),
 	}
-	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, metrics.OutboxPublishAttempts, metrics.OutboxPending, metrics.OutboxSkipped, metrics.OutboxPublished, metrics.OutboxFailed, metrics.OutboxPublishDuration, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AppBuildsClaimed, metrics.AppBuildsCompleted, metrics.AppBuildDuration, metrics.AppBuildRequeued, metrics.AppBuildInFlight, metrics.AppBuildErrors, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, metrics.OutboxPublishAttempts, metrics.OutboxPending, metrics.OutboxSkipped, metrics.OutboxPublished, metrics.OutboxFailed, metrics.OutboxPublishDuration, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	return metrics
 }
 

@@ -208,6 +208,7 @@ func TestMigrateInstalledReleaseMigratesExistingTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 	values["POSTGRES_PASSWORD"] = "operator-postgres-secret"
+	values["APPS_BUILDKIT_APPARMOR_PROFILE"] = "unconfined"
 	values["DATABASE_MODE"] = "external"
 	values["REDIS_MODE"] = "external"
 	portServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +258,9 @@ func TestMigrateInstalledReleaseMigratesExistingTopology(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(compose), "telemetry-docker-logs:") || strings.Contains(string(compose), "/:/hostfs:ro") {
+	if !strings.Contains(string(compose), "telemetry-docker-logs:") ||
+		!strings.Contains(string(compose), "/:/hostfs:ro") ||
+		!strings.Contains(string(compose), "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private") {
 		t.Fatalf("migrated Compose topology = %q", compose)
 	}
 	version, err := os.ReadFile(layout.VersionFile)
@@ -358,13 +361,16 @@ func TestV025BridgeTransitionLeavesStackUntilBridgeReconciliation(t *testing.T) 
 	bridge.assetBase = assetServer.URL
 	bridge.httpClient = releaseServer.Client()
 	bridge.runner = &setupRunner{}
+	bridge.buildKitAppArmorProfilePath = isolatedBuildKitAppArmorProfilePath(t)
 	bridge.releaseAPIBase = releaseServer.URL
 	bridge.releaseDownloadBase = releaseServer.URL
 	bridge.currentVersion = func() string { return bridgeVersion }
 	if code := bridge.run([]string{"update"}); code != 0 {
 		t.Fatalf("explicit bridge reconciliation exit code = %d, stderr=%s", code, bridgeErrors.String())
 	}
-	if got, err := os.ReadFile(layout.ComposeFile); err != nil || !strings.Contains(string(got), "telemetry-docker-logs:") || strings.Contains(string(got), "/:/hostfs:ro") {
+	if got, err := os.ReadFile(layout.ComposeFile); err != nil || !strings.Contains(string(got), "telemetry-docker-logs:") ||
+		!strings.Contains(string(got), "/:/hostfs:ro") ||
+		!strings.Contains(string(got), "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private") {
 		t.Fatalf("bridge reconciliation Compose = %q, %v", got, err)
 	}
 	if got, err := os.ReadFile(layout.EnvFile); err != nil || !bytes.Contains(got, []byte("POSTGRES_PASSWORD=bridge-preserved-secret")) {

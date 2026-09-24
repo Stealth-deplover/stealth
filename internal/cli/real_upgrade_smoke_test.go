@@ -246,6 +246,10 @@ func runRealV025BridgeReconciliation(t *testing.T, fixtureRoot, assetBase, bridg
 	var output, errorsOutput bytes.Buffer
 	app := NewApp(strings.NewReader(""), &output, &errorsOutput)
 	app.assetBase = assetBase
+	app.buildKitAppArmorProfilePath = filepath.Join(reconciliationRoot, "apparmor.d", installengine.BuildKitAppArmorProfileName)
+	if err := os.MkdirAll(filepath.Dir(app.buildKitAppArmorProfilePath), 0o700); err != nil {
+		t.Fatalf("create isolated AppArmor profile directory: %v", err)
+	}
 	releaseClient := releaseServer.server.Client()
 	app.httpClient = &http.Client{
 		Timeout: 20 * time.Second,
@@ -475,7 +479,7 @@ func assertMigratedV025State(t *testing.T, layout installengine.Layout, targetVe
 		t.Fatal(err)
 	}
 	compose := string(composeBytes)
-	for _, marker := range []string{"  traefik:", "  traefik-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
+	for _, marker := range []string{"  buildkit:", "  traefik:", "  traefik-state-init:", "  cloudflare-setup-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:", "  app_build:"} {
 		if !strings.Contains(compose, marker) {
 			t.Fatalf("target Compose is missing %q", marker)
 		}

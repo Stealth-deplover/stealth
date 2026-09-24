@@ -45,6 +45,10 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "site services are not ready")
 		return
 	}
+	if !s.appsReady || s.apps == nil || s.apps.Sources == nil || s.apps.Images == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "App artifact storage is not ready")
+		return
+	}
 	if err := s.limiter.Ping(r.Context()); err != nil {
 		s.logger.Error("rate limiter is not ready", "error", err)
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "rate limiter is not ready")

@@ -16,6 +16,15 @@ func (execCommandRunner) Run(ctx context.Context, dir string, stdout, stderr io.
 	return command.Run()
 }
 
+func (execCommandRunner) RunInput(ctx context.Context, dir string, stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = dir
+	command.Stdin = stdin
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
+}
+
 func (execCommandRunner) Output(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir

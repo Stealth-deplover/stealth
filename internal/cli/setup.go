@@ -150,12 +150,18 @@ func (a *App) runWebBootstrap(ctx context.Context, checks []SystemCheck, layout 
 		}
 	}
 	if !existing {
+		appArmorProfile, profileErr := installengine.DetectBuildKitAppArmorProfile()
+		if profileErr != nil {
+			fmt.Fprintf(a.errOut, "could not detect BuildKit AppArmor requirements: %v\n", profileErr)
+			return 1
+		}
 		configContents, err = installengine.GenerateConfig(installengine.ConfigOptions{
-			Version:     version,
-			PublicURL:   "http://localhost:8081",
-			DockerGID:   gid,
-			Setup:       true,
-			InstallRoot: layout.Root,
+			Version:                     version,
+			PublicURL:                   "http://localhost:8081",
+			DockerGID:                   gid,
+			Setup:                       true,
+			InstallRoot:                 layout.Root,
+			AppsBuildKitAppArmorProfile: appArmorProfile,
 		})
 		if err != nil {
 			fmt.Fprintf(a.errOut, "could not prepare setup configuration: %v\n", err)

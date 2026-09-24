@@ -36,6 +36,8 @@ type Stores struct {
 	Functions    Cleaner
 	SiteArchives Cleaner
 	Sites        Cleaner
+	AppSources   Cleaner
+	AppImages    Cleaner
 }
 
 type Worker struct {
@@ -176,6 +178,10 @@ func (w *Worker) cleaner(kind repository.ArtifactCleanupStoreKind) Cleaner {
 		return w.Cleaners.SiteArchives
 	case repository.ArtifactCleanupSites:
 		return w.Cleaners.Sites
+	case repository.ArtifactCleanupAppSources:
+		return w.Cleaners.AppSources
+	case repository.ArtifactCleanupAppImages:
+		return w.Cleaners.AppImages
 	default:
 		return nil
 	}

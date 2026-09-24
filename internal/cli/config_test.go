@@ -12,9 +12,142 @@ import (
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
+	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
 const testGitHubAppClientID = "Iv1.test-client-id"
+
+func testProductionComposeAsset() string {
+	return `services:
+  buildkit-worker-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro"
+      - buildkit_worker_credentials:/output
+  buildkit-server-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro"
+      - buildkit_server_credentials:/output
+  worker:
+    volumes:
+      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
+  buildkit:
+    image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+    user: "1000:1000"
+    read_only: true
+    command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+    healthcheck:
+      test: ["CMD", "buildctl", "--addr", "tcp://buildkit:1234", "--tlscacert", "/run/secrets/stealth-buildkit/ca.pem", "--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem", "--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers"]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
+      - systempaths=unconfined
+    volumes:
+      - buildkit_state:/home/user/.local/share/buildkit
+      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro
+      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+    networks: [app_build]
+  ingress-control:
+  traefik:
+  traefik-state-init:
+  cloudflare-setup-state-init:
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-state-init"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/state:/source:ro"
+      - cloudflare_setup_state_input:/output:rw
+  cloudflare-state-init:
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    depends_on:
+      cloudflare-setup-state-init:
+        condition: service_completed_successfully
+    environment:
+      FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+    volumes:
+      - cloudflare_setup_state_input:/input:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
+  otel-collector:
+  telemetry-host:
+    volumes:
+      - /:/hostfs:ro
+      - type: tmpfs
+        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private
+        read_only: true
+        tmpfs:
+          size: 1048576
+  telemetry-docker-logs:
+  telemetry-docker:
+  telemetry-docker-proxy:
+networks:
+  telemetry_ingest:
+  app_build:
+volumes:
+  buildkit_worker_credentials:
+  buildkit_server_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
+  cloudflare_setup_state_input:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input"
+`
+}
+
+func testBuildKitConfigAsset() string {
+	return `[worker.oci]
+enabled = true
+rootless = true
+noProcessSandbox = false
+gc = true
+maxUsedSpace = "10GB"
+max-parallelism = 2
+
+[frontend."dockerfile.v0"]
+enabled = true
+
+[grpc.tls]
+cert = "/run/secrets/stealth-buildkit/server-cert.pem"
+key = "/run/secrets/stealth-buildkit/server-key.pem"
+ca = "/run/secrets/stealth-buildkit/ca.pem"
+`
+}
+
+func testBuildKitAppArmorProfileAsset() string {
+	return "# Managed by Stealth. Changes will be replaced by the installer.\n" +
+		"abi <abi/4.0>,\ninclude <tunables/global>\n\n" +
+		"profile stealth-buildkit-rootless flags=(unconfined) {\n" +
+		"  # Ubuntu 24.04+ requires this permission for rootlesskit user namespaces.\n" +
+		"  userns,\n}\n"
+}
+
+func isolatedBuildKitAppArmorProfilePath(t *testing.T) string {
+	t.Helper()
+	profileDir := filepath.Join(t.TempDir(), "apparmor.d")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(profileDir, installengine.BuildKitAppArmorProfileName)
+}
 
 func testManagedTraefikStaticAsset() string {
 	return `entryPoints:
@@ -159,7 +292,15 @@ func TestGenerateConfigGeneratesUsedStrongSecrets(t *testing.T) {
 func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(request.URL.Path, "compose.production.yaml") {
-			_, _ = writer.Write([]byte("services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n"))
+			_, _ = io.WriteString(writer, testProductionComposeAsset())
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "buildkit/buildkitd.toml") {
+			_, _ = io.WriteString(writer, testBuildKitConfigAsset())
+			return
+		}
+		if strings.HasSuffix(request.URL.Path, "buildkit/stealth-buildkit-rootless.apparmor") {
+			_, _ = io.WriteString(writer, testBuildKitAppArmorProfileAsset())
 			return
 		}
 		if strings.HasSuffix(request.URL.Path, "traefik/traefik.yaml") {
@@ -198,6 +339,7 @@ func TestPrepareInstallationPreservesExistingConfig(t *testing.T) {
 	app := NewApp(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
 	app.assetBase = server.URL
 	app.runner = &setupRunner{}
+	app.buildKitAppArmorProfilePath = isolatedBuildKitAppArmorProfilePath(t)
 	plan := InstallPlan{Layout: layout, Version: "v1.2.3", PublicURL: "http://localhost:8080", GitHubAppClientID: testGitHubAppClientID, DockerGID: 42}
 	if err := app.prepareInstallation(context.Background(), plan); err != nil {
 		t.Fatal(err)

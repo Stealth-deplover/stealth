@@ -1,0 +1,8 @@
+# Managed by Stealth. Changes will be replaced by the installer.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile stealth-buildkit-rootless flags=(unconfined) {
+  # Ubuntu 24.04+ requires this permission for rootlesskit user namespaces.
+  userns,
+}

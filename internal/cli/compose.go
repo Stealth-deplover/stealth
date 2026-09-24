@@ -136,6 +136,8 @@ func displayServiceName(service string) string {
 		return "API"
 	case "worker":
 		return "Worker"
+	case "buildkit":
+		return "App BuildKit"
 	case "console":
 		return "Console"
 	case "postgres":
@@ -223,11 +225,12 @@ func (a *App) installEngine() *installengine.Engine {
 		output = a.errOut
 	}
 	return installengine.New(installengine.Options{
-		Runner:       a.runner,
-		HTTPClient:   a.httpClient,
-		AssetBaseURL: a.assetBase,
-		Output:       output,
-		PollAttempts: a.pollAttempts,
-		PollInterval: a.pollInterval,
+		Runner:                      a.runner,
+		HTTPClient:                  a.httpClient,
+		AssetBaseURL:                a.assetBase,
+		Output:                      output,
+		PollAttempts:                a.pollAttempts,
+		PollInterval:                a.pollInterval,
+		BuildKitAppArmorProfilePath: a.buildKitAppArmorProfilePath,
 	})
 }

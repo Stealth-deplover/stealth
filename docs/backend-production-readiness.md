@@ -12,6 +12,7 @@ providers.
 | Function deployment build | Deployment row is created with `build_status=queued` in the resource transaction. | `ClaimNextFunctionDeployment` uses a PostgreSQL transaction and `FOR UPDATE OF d SKIP LOCKED`; the worker builds with a deadline and records `succeeded` or `failed`. | Build validation and configuration errors are terminal. | `running` builds older than the configured lease become `deferred`; the worker ID fences completion writes. |
 | Function execution | Execution row is created with `status=accepted`. | `ClaimNextFunctionExecution` uses `FOR UPDATE OF e SKIP LOCKED`; the runtime receives a context timeout and terminal writes are fenced by worker ID. | Runtime failures are terminal rather than blindly retried because user code may have side effects. | Stale `running` executions return to `accepted`; a replacement worker can claim them. |
 | Site build | Site deployment row is created with `build_status=queued`. | `ClaimNextSiteDeployment` uses `FOR UPDATE OF d SKIP LOCKED`; archive extraction and build have bounded limits and a deadline. | Invalid archives, build errors, and quota failures are terminal. | Stale `running` builds become `deferred`; completion checks the build worker ID. |
+| App build | AppDeployment and a reserved immutable source artifact are recorded before the queued row is committed. | `ClaimNextAppDeployment` uses PostgreSQL `FOR UPDATE SKIP LOCKED`; a dedicated worker verifies and extracts the archive, then invokes `buildctl` against the isolated BuildKit service under a deadline. | BuildKit output must include a valid metadata digest and a verified OCI layout before publication; failures have bounded messages and release artifact/quota reservations. | Stale leases become reclaimable, and every completion is fenced by a unique per-claim worker token. BuildKit unavailability leaves the queue deferred/available and does not stop unrelated worker loops. |
 | Agent run | Run row is created with `status=queued`. | Provider workers claim with `FOR UPDATE OF r SKIP LOCKED`; provider calls use a context timeout and terminal writes require the claiming worker ID. | Provider failures are terminal. Unknown providers remain queued. | Stale `running` runs return to `queued`; the agent status is refreshed transactionally. |
 | Webhook delivery | Mutation transaction writes an outbox event and its delivery rows. | Delivery claim is transactional and `SKIP LOCKED`; outbound HTTP has SSRF checks, a response limit, and a timeout. | HTTP 408/425/429/5xx and network failures retry up to 12 attempts with bounded exponential jitter (or a bounded `Retry-After`); permanent 4xx and expiry are terminal. | Stale leases return to `pending`; expired events are marked failed. `X-Stealth-Delivery` is stable for consumer idempotency. |
 | Messaging delivery | Message and delivery rows are created transactionally with message idempotency constraints. | Delivery claim is transactional and `SKIP LOCKED`; provider calls have a timeout and bounded response handling. | Provider adapters classify retryable failures; attempts are capped at 12 and use bounded exponential jitter. | Stale leases return to `pending`; worker ownership fences terminal updates. |
@@ -63,7 +64,60 @@ limits, reject absolute and traversal paths, reject unsafe archive entries, and
 clean temporary files. Secrets are kept out of structured logs, audit
 metadata, client error messages, and Prometheus labels.
 
+App builds have a dedicated `apps.build` trace and bounded, low-cardinality
+claim, completion, duration, retry, and error metrics. The worker probes the
+BuildKit daemon before it claims an App job. BuildKit readiness is reported by
+the actual `buildctl debug workers` operation; it is not inferred from the
+daemon process existing. `stealth doctor` includes that service as a separate
+diagnostic so an App build outage is visible without coupling its recovery to
+other queues.
+
 ## Security assumptions
+
+The BuildKit service is pinned to an exact rootless release and an immutable
+image digest. It joins only the dedicated `app_build` network shared with the
+worker. The official rootless image requires the Compose `seccomp=unconfined`,
+`apparmor=unconfined`, and `systempaths=unconfined` exceptions for nested user
+and mount namespaces. On Ubuntu hosts with
+`apparmor_restrict_unprivileged_userns=1`, Stealth installs and loads a named
+AppArmor profile in the same unconfined mode with only the `userns` permission
+added. The service remains non-privileged and runs as UID/GID 1000, with no
+host namespaces, Docker socket, backend networks, host ports, or Stealth
+storage/staging mounts. A private tmpfs holds rootlesskit's transient state
+while the container root filesystem stays read-only. Its only persistent
+volume is bounded, disposable BuildKit cache. Dockerfile execution can fetch
+ordinary base images and dependencies over outbound Internet, but cannot
+resolve backend services by Compose network name.
+
+The TCP control API at `tcp://buildkit:1234` requires mutual TLS. BuildKit
+requires a client certificate signed by the installation CA, and the worker
+verifies the `buildkit` server SAN using that CA. The daemon uses a dedicated
+server identity; the worker and BuildKit healthcheck use separate client-only
+identities. `Ready()` and `Build()` both pass all three `buildctl` TLS file
+flags and fail closed when any path is missing. The healthcheck also
+authenticates; it does not use a plaintext local endpoint.
+
+The host installer generates an installation-local P-256 PKI atomically and
+preserves a valid bundle on routine updates. Host private keys are mode `0600`
+under mode-`0700` directories. Networkless, one-shot Compose initializers
+receive only the source files for one role and copy the identity into a
+service-specific read-only volume with a mode-`0400` key. The worker volume
+contains the CA certificate and worker identity. The BuildKit volume contains
+the CA certificate, server identity, and healthcheck identity. The API and
+tenant build steps receive no private key, and the BuildKit daemon never gets
+the worker key. CA private material remains host-only; the retained CA key
+allows controlled renewal, while leaf certificates renew 30 days before
+expiry. Back up `private/buildkit-mtls` with installation control-plane
+state. Completed OCI artifacts remain valid if the BuildKit identity is lost.
+
+The worker sends only a validated source context and explicit build request to
+BuildKit. It does not forward SSH agents, secrets, arbitrary build arguments,
+tenant-selected Dockerfile frontends, or insecure entitlements. The process
+uses a minimal environment; platform/database/provider credentials are not
+passed to BuildKit. Output becomes authoritative only after BuildKit metadata
+and the exported OCI layout are verified and the archive is durably published.
+The Dockerfile build is not promised to be bit-for-bit reproducible; the
+immutable result is the exact digest and archive captured for that deployment.
 
 The Go API owns sessions and uses HttpOnly cookies with `Secure` and
 `SameSite=None` for explicitly configured cross-origin HTTPS console requests;
@@ -84,6 +138,13 @@ network policy boundary.
 ## Remaining production gaps
 
 These are intentional boundaries, not hidden reliability claims:
+
+- Persistent App containers are not created yet. AppDeployment builds can
+  produce and preserve an immutable OCI artifact, but selecting that artifact
+  changes desired state only; Apps remain `not_deployed` and have no App
+  Traefik route. Moby import/lifecycle, `observed_generation` convergence,
+  gVisor, App health, routing, runtime logs, and encrypted App secrets are
+  subsequent capabilities.
 
 - External provider side effects cannot be made exactly-once by PostgreSQL.
   Webhook consumers have a stable delivery ID, and messaging has database

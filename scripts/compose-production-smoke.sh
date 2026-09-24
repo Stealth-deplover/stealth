@@ -15,16 +15,33 @@ if [ ! -f "$compose_file" ]; then
 fi
 
 compose=(docker compose --env-file "$env_file" -f "$compose_file")
+compose_root="$(cd -- "$(dirname -- "$compose_file")" && pwd)"
+export STEALTH_INSTALL_ROOT="$compose_root"
+cloudflare_handoff_fixture=""
+cloudflare_smoke_key=""
+cloudflare_handoff_artifact_copy=""
+cloudflare_handoff_listing=""
+cloudflare_handoff_container=""
 cookie_file="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-cookie.XXXXXX")"
 register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.XXXXXX")"
 auth_cookie_header=""
 api_url=""
 filelog_smoke_pid=""
 platform_archive=""
+app_archive=""
+app_probe_binary=""
+buildkit_wrong_identity_dir=""
+buildkit_pki_smoke_created="false"
+buildkit_apparmor_profile_file=""
+buildkit_apparmor_profile_name=""
+buildkit_apparmor_profile_loaded="false"
 platform_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-platform.XXXXXX")"
 platform_project_id=""
 platform_site_id=""
+platform_app_id=""
+platform_app_deployment_id=""
 platform_host=""
+platform_app_host=""
 platform_base_domain=""
 platform_previous_base_domain=""
 platform_domain_changed="false"
@@ -32,8 +49,8 @@ core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
 core_backup=""
 core_modified="false"
 static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
-cloudflare_state_source="$(dirname -- "$compose_file")/state/setup-state.enc"
-cloudflare_import_dir="$(dirname -- "$compose_file")/state/.cloudflare-import"
+cloudflare_state_source="$compose_root/state/setup-state.enc"
+cloudflare_import_dir="$compose_root/state/.cloudflare-import"
 cloudflare_import_artifact="$cloudflare_import_dir/cloudflare-import.enc"
 cloudflare_setup_state_available="false"
 if [ -s "$cloudflare_state_source" ]; then
@@ -111,7 +128,7 @@ restore_traefik_state_after_smoke() {
 }
 
 cleanup() {
-	local exit_code=$?
+	local exit_code=$? worker_container
 	if [ -n "$forwarded_echo_container_id" ]; then
 		docker rm -f "$forwarded_echo_container_id" >/dev/null 2>&1 || true
 		forwarded_echo_container_id=""
@@ -135,6 +152,9 @@ cleanup() {
 	if [ -n "$platform_site_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/sites/${platform_site_id}" >/dev/null 2>&1 || true
 	fi
+	if [ -n "$platform_app_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
+		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --request DELETE "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}" >/dev/null 2>&1 || true
+	fi
 	if [ -n "$platform_project_id" ] && [ -n "$api_url" ] && [ -n "$auth_cookie_header" ]; then
 		curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --header 'Content-Type: application/json' --request DELETE --data '{"confirm_name":"platform-route-smoke"}' "${api_url%/}/v1/projects/${platform_project_id}" >/dev/null 2>&1 || true
 	fi
@@ -148,12 +168,19 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse buildkit otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-setup-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 	else
 		"${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+	fi
+	if [ "$buildkit_apparmor_profile_loaded" = "true" ] && [ -n "$buildkit_apparmor_profile_file" ]; then
+		if [ "$(id -u)" -eq 0 ]; then
+			apparmor_parser -R "$buildkit_apparmor_profile_file" >/dev/null 2>&1 || true
+		else
+			sudo apparmor_parser -R "$buildkit_apparmor_profile_file" >/dev/null 2>&1 || true
+		fi
 	fi
 	if [ "$core_modified" = "true" ] && [ -n "$core_backup" ]; then
 		cp -- "$core_backup" "$core_file" || true
@@ -162,13 +189,288 @@ cleanup() {
 		cp -- "$static_backup" "$static_file" || true
 	fi
 	restore_traefik_state_after_smoke
-	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive"
+	if [ -n "$buildkit_wrong_identity_dir" ]; then
+		worker_container="$("${compose[@]}" ps -q worker 2>/dev/null || true)"
+		if [ -n "$worker_container" ]; then
+			docker exec --user 0 "$worker_container" rm -rf /tmp/stealth-buildkit-mtls-negative-test >/dev/null 2>&1 || true
+		fi
+		rm -rf -- "$buildkit_wrong_identity_dir"
+	fi
+	if [ "$buildkit_pki_smoke_created" = "true" ]; then
+		pki_path="$compose_root/private/buildkit-mtls"
+		if [ -d "$pki_path" ] && [ ! -L "$pki_path" ]; then
+			rm -rf -- "$pki_path"
+		fi
+		if [ -d "$compose_root/private" ] && [ ! -L "$compose_root/private" ] && [ -z "$(find "$compose_root/private" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+			rmdir -- "$compose_root/private" || true
+		fi
+		docker volume rm stealth_app_buildkit_worker_credentials stealth_app_buildkit_server_credentials >/dev/null 2>&1 || true
+	fi
+	if [ -n "$cloudflare_handoff_fixture" ]; then
+		rm -rf -- "$cloudflare_handoff_fixture"
+	fi
+	if [ -n "$cloudflare_handoff_container" ]; then
+		docker rm -f "$cloudflare_handoff_container" >/dev/null 2>&1 || true
+	fi
+	if [ -n "$cloudflare_handoff_artifact_copy" ]; then
+		rm -f -- "$cloudflare_handoff_artifact_copy"
+	fi
+	if [ -n "$cloudflare_handoff_listing" ]; then
+		rm -rf -- "$cloudflare_handoff_listing"
+	fi
+	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$app_probe_binary" "$buildkit_apparmor_profile_file"
 	if [ -n "$core_backup" ]; then
 		rm -f "$core_backup"
 	fi
 	exit "$exit_code"
 }
 trap cleanup EXIT
+
+prepare_buildkit_pki_for_smoke() {
+	local pki_path old_pki_path
+	pki_path="$compose_root/private/buildkit-mtls"
+	old_pki_path="$compose_root/state/buildkit-mtls"
+	if [ ! -e "$pki_path" ] && [ ! -L "$pki_path" ] &&
+		[ ! -e "$old_pki_path" ] && [ ! -L "$old_pki_path" ] &&
+		[ ! -e "$pki_path.pending" ] && [ ! -L "$pki_path.pending" ] &&
+		[ ! -e "$pki_path.previous" ] && [ ! -L "$pki_path.previous" ] &&
+		[ ! -e "$old_pki_path.pending" ] && [ ! -L "$old_pki_path.pending" ] &&
+		[ ! -e "$old_pki_path.previous" ] && [ ! -L "$old_pki_path.previous" ]; then
+		buildkit_pki_smoke_created="true"
+	fi
+	STEALTH_BUILDKIT_PKI_SMOKE_ROOT="$compose_root" \
+		go test ./internal/installengine -run '^TestProductionComposeSmokeEnsureBuildKitPKI$' -count=1
+	for key in "$pki_path/ca-key.pem" "$pki_path/server/key.pem" "$pki_path/worker/key.pem" "$pki_path/health/key.pem"; do
+		if [ -L "$key" ] || [ ! -f "$key" ]; then
+			printf 'BuildKit mTLS smoke key was not created as a regular file: %s\n' "$key" >&2
+			return 1
+		fi
+		if [ "$(stat -c '%a' "$key")" != '600' ]; then
+			printf 'BuildKit mTLS host private key mode is not 0600: %s\n' "$key" >&2
+			return 1
+		fi
+	done
+}
+
+verify_cloudflare_handoff_smoke() {
+	local fixture_state fixture_import expected_uid
+	cloudflare_handoff_fixture="$(mktemp -d "${TMPDIR:-/tmp}/stealth-cloudflare-handoff.XXXXXX")"
+	chmod 0700 "$cloudflare_handoff_fixture"
+	fixture_state="$cloudflare_handoff_fixture/state"
+	fixture_import="$fixture_state/.cloudflare-import/cloudflare-import.enc"
+	mkdir -m 0700 -- "$fixture_state"
+	expected_uid="$(stat -c '%u' "$fixture_state")"
+	if [ "$expected_uid" -eq 0 ]; then
+		expected_uid="$(awk -F: '$1 == "nobody" { print $3; exit }' /etc/passwd)"
+		if [ -z "$expected_uid" ] || [ "$expected_uid" -eq 0 ]; then
+			expected_uid=65534
+		fi
+		chown "$expected_uid" "$fixture_state"
+	fi
+
+	reset_handoff_volume() {
+		# Model a named volume reused from an earlier root-owned run, with stale
+		# input that the next real source initializer must remove.
+		STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps -T \
+			--entrypoint /bin/sh cloudflare-setup-state-init -ec \
+			'chown 0:0 /output && chmod 0700 /output && rm -f /output/setup-state.enc && printf stale > /output/setup-state.enc && chmod 0400 /output/setup-state.enc'
+	}
+	verify_handoff_owner() {
+		local source_expected="$1" expected_snapshot actual
+		if [ "$source_expected" = "present" ]; then
+			# The encrypted source file remains owner-only and is created by the
+			# root-run copy helper; ownership of the handoff directory carries
+			# the installation UID through to the importer.
+			expected_snapshot=400
+		else
+			expected_snapshot=absent
+		fi
+		actual="$(STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps -T \
+			--entrypoint /bin/sh cloudflare-state-init -ec \
+			'stat -c "%u:%g:%a" /input; if [ -e /input/setup-state.enc ] || [ -L /input/setup-state.enc ]; then stat -c "%a" /input/setup-state.enc; else printf absent; fi')"
+		if [ "$actual" != "$(printf '%s:%s:770\n%s' "$expected_uid" 10001 "$expected_snapshot")" ]; then
+			printf 'Cloudflare handoff owner or source state is wrong: expected UID:GID %s:10001 with source %s, got %s\n' \
+				"$expected_uid" "$source_expected" "$actual" >&2
+			return 1
+		fi
+	}
+	assert_host_import_owner() {
+		local path="$1" expected_mode="$2" actual
+		actual="$(stat -c '%u:%g:%a' "$path")"
+		if [ "$actual" != "$expected_uid:10001:$expected_mode" ]; then
+			printf 'Cloudflare import path has owner/mode %s; want %s:10001:%s (%s)\n' \
+				"$actual" "$expected_uid" "$expected_mode" "$path" >&2
+			return 1
+		fi
+	}
+	cloudflare_smoke_key="$(openssl rand -base64 32)"
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=write \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$fixture_import" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	reset_handoff_volume
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	verify_handoff_owner present
+	cloudflare_handoff_artifact_copy="$(mktemp "${TMPDIR:-/tmp}/stealth-cloudflare-import-smoke.XXXXXX")"
+	rm -f -- "$cloudflare_handoff_artifact_copy"
+	cloudflare_handoff_container="stealth-cloudflare-import-smoke-$$"
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --name "$cloudflare_handoff_container" --no-deps \
+		-e "FUNCTIONS_SECRET_KEY=$cloudflare_smoke_key" cloudflare-state-init
+	docker cp "$cloudflare_handoff_container:/output/cloudflare-import.enc" "$cloudflare_handoff_artifact_copy"
+	docker rm "$cloudflare_handoff_container" >/dev/null
+	cloudflare_handoff_container=""
+	assert_host_import_owner "$(dirname -- "$fixture_import")" 770
+	assert_host_import_owner "$fixture_import" 640
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$cloudflare_handoff_artifact_copy" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	rm -f -- "$fixture_state/setup-state.enc"
+	reset_handoff_volume
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	verify_handoff_owner absent
+	cloudflare_handoff_container="stealth-cloudflare-import-missing-smoke-$$"
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --name "$cloudflare_handoff_container" --no-deps \
+		-e "FUNCTIONS_SECRET_KEY=$cloudflare_smoke_key" cloudflare-state-init
+	cloudflare_handoff_listing="$(mktemp -d "${TMPDIR:-/tmp}/stealth-cloudflare-import-listing.XXXXXX")"
+	docker cp "$cloudflare_handoff_container:/output" "$cloudflare_handoff_listing"
+	docker rm "$cloudflare_handoff_container" >/dev/null
+	cloudflare_handoff_container=""
+	if [ -e "$fixture_import" ] || [ -L "$fixture_import" ]; then
+		printf '%s\n' 'Cloudflare missing-source handoff left a host import artifact' >&2
+		return 1
+	fi
+	assert_host_import_owner "$(dirname -- "$fixture_import")" 770
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify-absent \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$cloudflare_handoff_listing/output/cloudflare-import.enc" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	rm -rf -- "$cloudflare_handoff_fixture"
+	cloudflare_handoff_fixture=""
+	rm -f -- "$cloudflare_handoff_artifact_copy"
+	cloudflare_handoff_artifact_copy=""
+	rm -rf -- "$cloudflare_handoff_listing"
+	cloudflare_handoff_listing=""
+	printf '%s\n' 'Cloudflare encrypted setup-state handoff accepts valid input and preserves the missing-source no-import path'
+}
+
+expect_buildkit_auth_rejection() {
+	local label="$1" output
+	shift
+	if output="$("${compose[@]}" exec -T worker "$@" 2>&1)"; then
+		printf 'BuildKit accepted %s\n' "$label" >&2
+		return 1
+	fi
+	# BuildKit v0.33.0 may surface a required-client-certificate handshake
+	# rejection through gRPC as a generic EOF. Prove the endpoint remains
+	# reachable with the valid identity immediately before and after this
+	# request instead of depending on unstable error wording.
+	printf 'BuildKit rejected %s while the authenticated control probe is available\n' "$label"
+}
+
+verify_buildkit_mtls_smoke() {
+	local worker_container
+	if ! command -v openssl >/dev/null 2>&1; then
+		printf '%s\n' 'BuildKit mTLS smoke requires OpenSSL for an untrusted test identity' >&2
+		return 1
+	fi
+	worker_container="$("${compose[@]}" ps -q worker)"
+	if [ -z "$worker_container" ]; then
+		printf '%s\n' 'worker container is unavailable for BuildKit mTLS smoke' >&2
+		return 1
+	fi
+	buildkit_wrong_identity_dir="$(mktemp -d "${TMPDIR:-/tmp}/stealth-buildkit-untrusted.XXXXXX")"
+	chmod 0700 "$buildkit_wrong_identity_dir"
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$buildkit_wrong_identity_dir/wrong-ca-key.pem" >/dev/null 2>&1
+	openssl req -x509 -new -key "$buildkit_wrong_identity_dir/wrong-ca-key.pem" -sha256 -days 2 \
+		-subj '/CN=Untrusted Stealth BuildKit smoke CA' \
+		-addext 'basicConstraints=critical,CA:TRUE' \
+		-addext 'keyUsage=critical,keyCertSign,cRLSign' \
+		-out "$buildkit_wrong_identity_dir/wrong-ca.pem" >/dev/null 2>&1
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$buildkit_wrong_identity_dir/wrong-client-key.pem" >/dev/null 2>&1
+	openssl req -new -key "$buildkit_wrong_identity_dir/wrong-client-key.pem" \
+		-subj '/CN=Untrusted Stealth BuildKit smoke client' \
+		-out "$buildkit_wrong_identity_dir/wrong-client.csr" >/dev/null 2>&1
+	cat >"$buildkit_wrong_identity_dir/client-ext.cnf" <<'EOF'
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=clientAuth
+EOF
+	openssl x509 -req -in "$buildkit_wrong_identity_dir/wrong-client.csr" \
+		-CA "$buildkit_wrong_identity_dir/wrong-ca.pem" -CAkey "$buildkit_wrong_identity_dir/wrong-ca-key.pem" \
+		-CAcreateserial -days 2 -sha256 -extfile "$buildkit_wrong_identity_dir/client-ext.cnf" \
+		-out "$buildkit_wrong_identity_dir/wrong-client-cert.pem" >/dev/null 2>&1
+	docker exec --user 0 "$worker_container" mkdir -p /tmp/stealth-buildkit-mtls-negative-test
+	docker cp "$buildkit_wrong_identity_dir/wrong-ca.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-ca.pem"
+	docker cp "$buildkit_wrong_identity_dir/wrong-client-cert.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-client-cert.pem"
+	docker cp "$buildkit_wrong_identity_dir/wrong-client-key.pem" "$worker_container:/tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem"
+	docker exec --user 0 "$worker_container" sh -ec \
+		'chown -R 10001:10001 /tmp/stealth-buildkit-mtls-negative-test && chmod 0700 /tmp/stealth-buildkit-mtls-negative-test && chmod 0444 /tmp/stealth-buildkit-mtls-negative-test/*.pem && chmod 0400 /tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem'
+
+	local -a base_args=(buildctl --addr tcp://buildkit:1234)
+	local -a proper_ca=(--tlscacert /run/secrets/stealth-buildkit/ca.pem)
+	local -a valid_client=(--tlscert /run/secrets/stealth-buildkit/client-cert.pem --tlskey /run/secrets/stealth-buildkit/client-key.pem)
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
+	expect_buildkit_auth_rejection 'a client with no certificate' "${base_args[@]}" "${proper_ca[@]}" debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
+	expect_buildkit_auth_rejection 'a client certificate signed by an untrusted CA' "${base_args[@]}" "${proper_ca[@]}" \
+		--tlscert /tmp/stealth-buildkit-mtls-negative-test/wrong-client-cert.pem \
+		--tlskey /tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
+	expect_buildkit_auth_rejection 'an untrusted server CA' "${base_args[@]}" \
+		--tlscacert /tmp/stealth-buildkit-mtls-negative-test/wrong-ca.pem "${valid_client[@]}" debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
+	printf '%s\n' 'worker certificate authenticated BuildKit debug workers successfully'
+}
+
+prepare_buildkit_apparmor() {
+	local restriction profile_dir
+	if [ ! -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+		return 0
+	fi
+	restriction="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+	case "$restriction" in
+		0) return 0 ;;
+		1) ;;
+		*)
+			printf 'unsupported AppArmor unprivileged user namespace setting: %s\n' "$restriction" >&2
+			return 1
+			;;
+	esac
+	if ! command -v apparmor_parser >/dev/null 2>&1; then
+		printf '%s\n' 'AppArmor restricts unprivileged user namespaces but apparmor_parser is unavailable' >&2
+		return 1
+	fi
+	buildkit_apparmor_profile_name="stealth-buildkit-rootless-smoke-$$"
+	buildkit_apparmor_profile_file="$(mktemp "${TMPDIR:-/tmp}/stealth-buildkit-apparmor.XXXXXX")"
+	profile_dir="$(dirname -- "$compose_file")/buildkit"
+	cat >"$buildkit_apparmor_profile_file" <<EOF
+abi <abi/4.0>,
+include <tunables/global>
+
+profile $buildkit_apparmor_profile_name flags=(unconfined) {
+  userns,
+}
+EOF
+	if [ "$(id -u)" -eq 0 ]; then
+		apparmor_parser -r -W "$buildkit_apparmor_profile_file"
+	else
+		sudo apparmor_parser -r -W "$buildkit_apparmor_profile_file"
+	fi
+	buildkit_apparmor_profile_loaded="true"
+	export APPS_BUILDKIT_APPARMOR_PROFILE="$buildkit_apparmor_profile_name"
+	printf 'Loaded temporary BuildKit userns-only AppArmor profile for smoke: %s\n' "$buildkit_apparmor_profile_name"
+	if [ ! -f "$profile_dir/stealth-buildkit-rootless.apparmor" ]; then
+		printf 'managed BuildKit AppArmor profile asset is missing: %s\n' "$profile_dir/stealth-buildkit-rootless.apparmor" >&2
+		return 1
+	fi
+}
+
+prepare_buildkit_apparmor
+prepare_buildkit_pki_for_smoke
 
 case "${SMOKE_REMOVE_VOLUMES:-false}" in
 	true|false) ;;
@@ -244,6 +546,8 @@ prepare_traefik_state_for_smoke
 	-e "STEALTH_TRAEFIK_HOST_UID=$(id -u)" \
 	traefik-state-init
 verify_traefik_state_init
+verify_cloudflare_handoff_smoke
+"${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
 "${compose[@]}" run --rm --no-deps cloudflare-state-init
 if [ "$cloudflare_setup_state_available" = "false" ] && { [ -e "$cloudflare_import_artifact" ] || [ -L "$cloudflare_import_artifact" ]; }; then
 	printf '%s\n' 'Cloudflare initializer fabricated an artifact without source state' >&2
@@ -627,7 +931,7 @@ verify_traefik_network_address_model() {
 		return 1
 	fi
 	compose_config="$("${compose[@]}" --profile cloudflare config)"
-	if ! printf '%s\n' "$compose_config" | grep -Fq "ipv4_address: $cloudflared_ip"; then
+	if ! grep -Fq -- "ipv4_address: $cloudflared_ip" <<<"$compose_config"; then
 		printf 'rendered Cloudflared profile does not reserve persisted IP %s\n' "$cloudflared_ip" >&2
 		return 1
 	fi
@@ -992,7 +1296,7 @@ PY
 }
 
 prepare_platform_route_smoke() {
-	local account_id organization_id project_status site_status site_status_after_upload
+	local account_id organization_id project_status site_status site_status_after_upload app_status app_architecture
 	local upload_body
 	account_id="$(platform_json_field "$register_response" account.id)"
 	organization_id="$(platform_json_field "$register_response" organization.id)"
@@ -1068,6 +1372,56 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
+		sed -n '1,80p' "$platform_response" >&2
+		return 1
+	fi
+	platform_app_id="$(platform_json_field "$platform_response" app.id)"
+	platform_app_host="$(platform_json_field "$platform_response" app.platform_hostname)"
+	if [ -z "$platform_app_id" ] || [ -z "$platform_app_host" ]; then
+		printf '%s\n' 'platform smoke App response did not contain its id and reserved hostname' >&2
+		return 1
+	fi
+
+	app_archive="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke.XXXXXX.zip")"
+	case "$(uname -m)" in
+		x86_64|amd64) app_architecture='amd64' ;;
+		aarch64|arm64) app_architecture='arm64' ;;
+		*) printf 'unsupported BuildKit smoke host architecture: %s\n' "$(uname -m)" >&2; return 1 ;;
+	esac
+	app_probe_binary="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-secret-probe.XXXXXX")"
+	(cd -- "$repo_root" && GOOS=linux GOARCH="$app_architecture" CGO_ENABLED=0 go build -trimpath -o "$app_probe_binary" ./scripts/fixtures/app-buildkit-secret-probe)
+	chmod 0755 "$app_probe_binary"
+	python3 - "$app_archive" "$smoke_marker" "$app_probe_binary" <<'PY'
+import sys
+import zipfile
+
+archive, marker, probe = sys.argv[1:]
+with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    output.writestr("Dockerfile", "FROM scratch\nCOPY payload.txt /payload.txt\nCOPY --chmod=0755 buildkit-secret-probe /buildkit-secret-probe\nRUN [\"/buildkit-secret-probe\"]\n")
+    output.writestr("payload.txt", marker + "\n")
+    output.write(probe, "buildkit-secret-probe")
+PY
+	local deployment_response="$platform_response"
+	local deployment_status
+	deployment_status="$(curl --silent --show-error --max-time 30 \
+		--header "Cookie: $auth_cookie_header" \
+		--form "source=@${app_archive};type=application/zip" \
+		--form 'select=true' \
+		--output "$deployment_response" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments")"
+	if [ "$deployment_status" != '202' ]; then
+		printf 'platform smoke App source upload returned HTTP %s\n' "$deployment_status" >&2
+		sed -n '1,80p' "$deployment_response" >&2
+		return 1
+	fi
+	platform_app_deployment_id="$(platform_json_field "$deployment_response" deployment.id)"
+	if [ -z "$platform_app_deployment_id" ]; then
+		printf '%s\n' 'platform smoke App deployment response did not contain an id' >&2
+		return 1
+	fi
 	printf 'platform smoke state prepared: host=%s\n' "$platform_host"
 }
 
@@ -1101,6 +1455,106 @@ verify_platform_route_smoke() {
 		return 1
 	fi
 	printf 'platform hostname Traefik route served the Site and isolated control-plane paths\n'
+}
+
+verify_app_build_smoke() {
+	local deployment_url status image_row image_path image_archive_sha256 image_digest image_size actual_sha
+	local app_runtime app_desired_generation app_observed_generation app_desired_deployment build_status selected
+	deployment_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_deployment_id}"
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "$deployment_url")"
+		if [ "$status" != '200' ]; then
+			printf 'App deployment smoke read returned HTTP %s\n' "$status" >&2
+			return 1
+		fi
+		build_status="$(platform_json_field "$platform_response" deployment.build_status)"
+		case "$build_status" in
+			succeeded) break ;;
+			failed)
+				printf 'real BuildKit smoke deployment failed: %s\n' "$(platform_json_field "$platform_response" deployment.error_message)" >&2
+				local logs_status
+				logs_status="$(curl --silent --show-error --max-time 10 \
+					--header "Cookie: $auth_cookie_header" \
+					--output "$platform_response" --write-out '%{http_code}' \
+					"${deployment_url}/logs?limit=100" || true)"
+				if [ "$logs_status" = '200' ]; then
+					python3 - "$platform_response" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    response = json.load(source)
+for entry in response.get("logs", [])[-30:]:
+    message = str(entry.get("message", "")).replace("\r", " ").replace("\x00", " ")
+    if len(message) > 1200:
+        message = message[:1200] + "…"
+    print(f"App build log sequence={entry.get('sequence', '?')}: {message}")
+PY
+				fi
+				return 1
+			;;
+			queued|running|deferred) ;;
+			*) printf 'unexpected App build status: %s\n' "$build_status" >&2; return 1 ;;
+		esac
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'real BuildKit App deployment did not finish: %s\n' "$build_status" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	selected="$(platform_json_field "$platform_response" deployment.selected)"
+	if [ "$(platform_json_field "$platform_response" deployment.status)" != 'ready' ] || [ "$selected" != 'True' ]; then
+		printf '%s\n' 'successful App build was not ready and selected as requested' >&2
+		return 1
+	fi
+	image_digest="$(platform_json_field "$platform_response" deployment.image_digest)"
+	image_archive_sha256="$(platform_json_field "$platform_response" deployment.image_archive_sha256)"
+	if ! [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || ! [[ "$image_archive_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+		printf 'BuildKit returned malformed durable image identities: digest=%s archive_sha256=%s\n' "$image_digest" "$image_archive_sha256" >&2
+		return 1
+	fi
+	image_row="$("${compose[@]}" exec -T postgres sh -ec \
+		'id="$1"; case "$id" in *[!0-9a-f-]*) exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT image_path,image_archive_sha256,image_digest,image_size_bytes FROM app_deployments WHERE id = '\''$id'\''"' \
+		sh "$platform_app_deployment_id" | tr -d '\r')"
+	IFS='|' read -r image_path stored_archive_sha256 stored_digest image_size <<<"$image_row"
+	if [ -z "$image_path" ] || [ "$stored_archive_sha256" != "$image_archive_sha256" ] || [ "$stored_digest" != "$image_digest" ] || ! [[ "$image_size" =~ ^[1-9][0-9]*$ ]]; then
+		printf 'persisted App OCI metadata is incomplete or disagrees with the API: %s\n' "$image_row" >&2
+		return 1
+	fi
+	if ! [[ "$image_path" =~ ^[0-9a-f-]+/[0-9a-f-]+/[0-9a-f-]+$ ]]; then
+		printf 'persisted App image locator is not UUID-derived: %s\n' "$image_path" >&2
+		return 1
+	fi
+	actual_sha="$("${compose[@]}" exec -T worker sh -ec \
+		'path="$1"; expected="$2"; file="/var/lib/stealth/storage/app-images/$path"; test -s "$file"; actual="$(sha256sum "$file" | cut -d " " -f 1)"; test "$actual" = "$expected"; printf "%s" "$actual"' \
+		sh "$image_path" "$image_archive_sha256")"
+	if [ "$actual_sha" != "$image_archive_sha256" ]; then
+		printf '%s\n' 'persisted OCI archive checksum does not match its bytes' >&2
+		return 1
+	fi
+	status="$(curl --silent --show-error --max-time 10 --header "Cookie: $auth_cookie_header" --output "$platform_response" --write-out '%{http_code}' "${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}")"
+	if [ "$status" != '200' ]; then
+		printf 'App runtime truth smoke read returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	app_runtime="$(platform_json_field "$platform_response" app.runtime_status)"
+	app_desired_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	app_observed_generation="$(platform_json_field "$platform_response" app.observed_generation)"
+	app_desired_deployment="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	if [ "$app_runtime" != 'not_deployed' ] || [ "$app_desired_generation" != '2' ] || [ "$app_observed_generation" != '0' ] || [ "$app_desired_deployment" != "$platform_app_deployment_id" ]; then
+		printf 'App runtime truth changed after build: status=%s desired=%s observed=%s deployment=%s\n' "$app_runtime" "$app_desired_generation" "$app_observed_generation" "$app_desired_deployment" >&2
+		return 1
+	fi
+	if [ ! -f "$generated_state_dir/platform-sites.yaml" ] || ! grep -Fq -- "$platform_host" "$generated_state_dir/platform-sites.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
+		printf '%s\n' 'App hostname appeared in the current Site-only Traefik route snapshot' >&2
+		return 1
+	fi
+	status="$(traefik_http_status / "$platform_app_host")"
+	if [ "$status" != '404' ]; then
+		printf 'built App hostname returned HTTP %s, want fail-closed 404\n' "$status" >&2
+		return 1
+	fi
+	printf 'real BuildKit App build passed: digest=%s archive_sha256=%s runtime=%s route=absent\n' "$image_digest" "$image_archive_sha256" "$app_runtime"
 }
 
 clear_platform_route_smoke() {
@@ -1368,9 +1822,12 @@ wait_for_healthy telemetry-host
 wait_for_healthy telemetry-docker-logs
 wait_for_healthy telemetry-docker-proxy
 wait_for_healthy telemetry-docker
+"${compose[@]}" up -d buildkit
+wait_for_healthy buildkit
 "${compose[@]}" up -d api worker console proxy traefik
 wait_for_healthy api
 wait_for_healthy worker
+verify_buildkit_mtls_smoke
 wait_for_healthy console
 wait_for_healthy proxy
 wait_for_healthy traefik
@@ -1457,6 +1914,7 @@ fi
 verify_traefik_routing
 prepare_platform_route_smoke
 verify_platform_route_smoke
+verify_app_build_smoke
 clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"

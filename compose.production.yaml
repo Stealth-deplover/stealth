@@ -62,6 +62,18 @@ x-backend-environment: &backend-environment
   SITES_MAX_EXPANDED_BYTES: "${SITES_MAX_EXPANDED_BYTES:-256MiB}"
   SITES_MAX_FILES: "${SITES_MAX_FILES:-4096}"
   SITES_GIT_FETCH_CONCURRENCY: "${SITES_GIT_FETCH_CONCURRENCY:-4}"
+  APPS_MAX_SOURCE_ARCHIVE_BYTES: "${APPS_MAX_SOURCE_ARCHIVE_BYTES:-128MiB}"
+  APPS_MAX_EXPANDED_SOURCE_BYTES: "${APPS_MAX_EXPANDED_SOURCE_BYTES:-1GiB}"
+  APPS_MAX_SOURCE_FILES: "${APPS_MAX_SOURCE_FILES:-8192}"
+  APPS_MAX_IMAGE_ARCHIVE_BYTES: "${APPS_MAX_IMAGE_ARCHIVE_BYTES:-2GiB}"
+  APPS_DEFAULT_ARTIFACT_QUOTA_BYTES: "${APPS_DEFAULT_ARTIFACT_QUOTA_BYTES:-5GiB}"
+  APPS_BUILDKIT_ADDRESS: "${APPS_BUILDKIT_ADDRESS:-tcp://buildkit:1234}"
+  APPS_BUILD_TIMEOUT: "${APPS_BUILD_TIMEOUT:-20m}"
+  APPS_BUILD_LEASE_AGE: "${APPS_BUILD_LEASE_AGE:-25m}"
+  APPS_BUILD_POLL_INTERVAL: "${APPS_BUILD_POLL_INTERVAL:-500ms}"
+  APPS_BUILD_STAGING_ROOT: /var/lib/stealth/app-build-staging
+  APPS_BUILD_STAGING_VOLUME: "${APPS_BUILD_STAGING_VOLUME:-stealth_app_build_staging}"
+  APPS_BUILDKIT_STATE_VOLUME: "${APPS_BUILDKIT_STATE_VOLUME:-stealth_app_buildkit_state}"
   PLATFORM_ROUTE_RECONCILE_INTERVAL: "${PLATFORM_ROUTE_RECONCILE_INTERVAL:-5s}"
   # Keep these targets fixed so the worker's writable Compose mounts remain a
   # narrow, auditable boundary. Standalone deployments may override the
@@ -186,6 +198,14 @@ services:
     volumes:
       - ./telemetry/host-metrics.yaml:/etc/otelcol-contrib/config.yaml:ro
       - /:/hostfs:ro
+      # Host metrics need a read-only view of the host filesystem. Mask the
+      # installation-private tree inside that view so telemetry cannot read
+      # control-plane credentials such as the BuildKit CA key.
+      - type: tmpfs
+        target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private
+        read_only: true
+        tmpfs:
+          size: 1048576
     user: "10001:10001"
     read_only: true
     tmpfs:
@@ -311,6 +331,23 @@ services:
         chmod 0775 "$${state}" "$${generated}"
         chmod 0664 "$${reload}"
 
+  cloudflare-setup-state-init:
+    # Copy only the optional encrypted setup snapshot into a narrow handoff
+    # volume. BuildKit PKI is outside ./state, and this helper has no key that
+    # can decrypt setup data. DAC_READ_SEARCH reads restored 0600 snapshots;
+    # CHOWN resets a reused handoff volume to root ownership before cleanup.
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-state-init"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/state:/source:ro"
+      - cloudflare_setup_state_input:/output:rw
+
   cloudflare-state-init:
     # Decrypt legacy state only in this isolated one-shot process, then publish
     # a typed Cloudflare-only encrypted artifact for the production worker.
@@ -320,11 +357,14 @@ services:
     network_mode: none
     read_only: true
     entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    depends_on:
+      cloudflare-setup-state-init:
+        condition: service_completed_successfully
     environment:
       FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
     volumes:
-      - ./state:/state:ro
-      - ./state/.cloudflare-import:/output:rw
+      - cloudflare_setup_state_input:/input:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
 
   telemetry-docker-logs-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
@@ -438,6 +478,64 @@ services:
       telemetry_store:
       stealth_ingress:
 
+  buildkit-worker-credentials-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro"
+      - buildkit_worker_credentials:/output
+    command:
+      - sh
+      - -ec
+      - |
+        set -eu
+        chmod 0755 /output
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$$stale" ] && [ ! -L "$$stale" ] || rm -rf -- "$$stale"; done
+        install -m 0444 /input/ca.pem /output/ca.pem
+        install -m 0444 /input/client-cert.pem /output/client-cert.pem
+        install -m 0400 /input/client-key.pem /output/client-key.pem
+        chown 10001:10001 /output/ca.pem /output/client-cert.pem /output/client-key.pem
+
+  buildkit-server-credentials-init:
+    image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro"
+      - buildkit_server_credentials:/output
+    command:
+      - sh
+      - -ec
+      - |
+        set -eu
+        chmod 0755 /output
+        for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e "$$stale" ] && [ ! -L "$$stale" ] || rm -rf -- "$$stale"; done
+        install -m 0444 /input/ca.pem /output/ca.pem
+        install -m 0444 /input/server-cert.pem /output/server-cert.pem
+        install -m 0400 /input/server-key.pem /output/server-key.pem
+        install -m 0444 /input/health-client-cert.pem /output/health-client-cert.pem
+        install -m 0400 /input/health-client-key.pem /output/health-client-key.pem
+        chown 1000:1000 /output/ca.pem /output/server-cert.pem /output/server-key.pem /output/health-client-cert.pem /output/health-client-key.pem
+
   worker:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
     restart: unless-stopped
@@ -445,16 +543,21 @@ services:
     environment:
       <<: *backend-environment
       CLOUDFLARE_IMPORT_FILE: /var/lib/stealth/cloudflare-import/cloudflare-import.enc
+      APPS_BUILDKIT_CA_CERT: "${APPS_BUILDKIT_CA_CERT:-/run/secrets/stealth-buildkit/ca.pem}"
+      APPS_BUILDKIT_CLIENT_CERT: "${APPS_BUILDKIT_CLIENT_CERT:-/run/secrets/stealth-buildkit/client-cert.pem}"
+      APPS_BUILDKIT_CLIENT_KEY: "${APPS_BUILDKIT_CLIENT_KEY:-/run/secrets/stealth-buildkit/client-key.pem}"
     volumes:
       - stealth_storage:/var/lib/stealth/storage
       - function_runner_staging:/var/lib/stealth/runner-staging
+      - app_build_staging:/var/lib/stealth/app-build-staging
       # The parent directory is required for atomic replacement of the
       # top-level reload sentinel. The release-managed core file is overlaid
       # read-only at the same path, so the worker cannot modify or replace it;
       # the static Traefik file and installation root are not mounted.
       - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
-      - ./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro"
+      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group ID of /var/run/docker.sock}"
@@ -467,6 +570,8 @@ services:
         condition: service_completed_successfully
       cloudflare-state-init:
         condition: service_completed_successfully
+      buildkit-worker-credentials-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9091/healthz >/dev/null || exit 1"]
       interval: 10s
@@ -476,6 +581,45 @@ services:
     networks:
       stealth:
       telemetry_store:
+      app_build:
+
+  buildkit:
+    # v0.33.0 multi-architecture manifest digest, matching buildctl copied
+    # into the worker image. This service is isolated to app_build.
+    image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+    restart: unless-stopped
+    user: "1000:1000"
+    command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+      - /run/user/1000:mode=0700,uid=1000,gid=1000,size=16m
+      # Mounts hide the image's pre-owned paths, so assign the rootless user
+      # explicitly for its transient rootlesskit namespace state.
+      - /home/user/.local/tmp:mode=0700,uid=1000,gid=1000,size=64m
+    security_opt:
+      # Required by the official rootless BuildKit image to establish its
+      # nested user/mount namespaces. The service remains non-privileged and
+      # receives no host namespace or socket access.
+      - seccomp=unconfined
+      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
+      - systempaths=unconfined
+    mem_limit: "${APPS_BUILDKIT_MEMORY_LIMIT:-4g}"
+    pids_limit: 4096
+    volumes:
+      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro
+      - buildkit_state:/home/user/.local/share/buildkit
+    depends_on:
+      buildkit-server-credentials-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "buildctl", "--addr", "tcp://buildkit:1234", "--tlscacert", "/run/secrets/stealth-buildkit/ca.pem", "--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem", "--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    networks: [app_build]
 
   ingress-control:
     image: "${STEALTH_INGRESS_CONTROL_IMAGE:?set STEALTH_INGRESS_CONTROL_IMAGE to a versioned image}"
@@ -591,6 +735,16 @@ volumes:
     name: "${STORAGE_VOLUME_NAME:-stealth_storage}"
   function_runner_staging:
     name: "${FUNCTIONS_RUNNER_STAGING_VOLUME:-stealth_function_runner_staging}"
+  app_build_staging:
+    name: "${APPS_BUILD_STAGING_VOLUME:-stealth_app_build_staging}"
+  buildkit_state:
+    name: "${APPS_BUILDKIT_STATE_VOLUME:-stealth_app_buildkit_state}"
+  buildkit_worker_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_worker_credentials"
+  buildkit_server_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
+  cloudflare_setup_state_input:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input"
   clickhouse_data:
     name: "${CLICKHOUSE_VOLUME_NAME:-stealth_clickhouse_data}"
   otelcol_state:
@@ -625,3 +779,5 @@ networks:
         # allocation cannot consume trusted addresses.
         - subnet: "${STEALTH_INGRESS_NETWORK_SUBNET:?set STEALTH_INGRESS_NETWORK_SUBNET}"
           ip_range: "${STEALTH_INGRESS_IP_RANGE:?set STEALTH_INGRESS_IP_RANGE}"
+  app_build:
+    name: "${APPS_BUILD_NETWORK_NAME:-stealth_app_build}"

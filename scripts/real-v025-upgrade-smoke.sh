@@ -46,9 +46,12 @@ trap cleanup EXIT
 cp -a "$fixture_root"/. "$smoke_root"/
 for asset_version in "$bridge_version" "$target_version"; do
 	mkdir -p "$asset_root/$asset_version/telemetry" "$asset_root/$asset_version/console/deploy"
+	mkdir -p "$asset_root/$asset_version/buildkit"
 	mkdir -p "$asset_root/$asset_version/traefik/dynamic/generated"
 	cp "$repo_root/compose.production.yaml" "$asset_root/$asset_version/compose.production.yaml"
 	cp "$repo_root/compose.setup.yaml" "$asset_root/$asset_version/compose.setup.yaml"
+	cp "$repo_root/buildkit/buildkitd.toml" "$asset_root/$asset_version/buildkit/buildkitd.toml"
+	cp "$repo_root/buildkit/stealth-buildkit-rootless.apparmor" "$asset_root/$asset_version/buildkit/stealth-buildkit-rootless.apparmor"
 	cp "$repo_root/telemetry/otel-collector.yaml" "$asset_root/$asset_version/telemetry/otel-collector.yaml"
 	cp "$repo_root/telemetry/host-metrics.yaml" "$asset_root/$asset_version/telemetry/host-metrics.yaml"
 	cp "$repo_root/telemetry/docker-logs.yaml" "$asset_root/$asset_version/telemetry/docker-logs.yaml"
@@ -143,6 +146,8 @@ export STEALTH_REAL_V025_UPGRADE_ROOT="$smoke_root"
 export STEALTH_REAL_V025_ASSET_BASE="http://127.0.0.1:$asset_port"
 export STEALTH_REAL_V025_BRIDGE_VERSION="$bridge_version"
 export STEALTH_REAL_V025_TARGET_VERSION="$target_version"
+mkdir -p "$smoke_root/apparmor.d"
+export STEALTH_REAL_V025_APPARMOR_PROFILE_PATH="$smoke_root/apparmor.d/stealth-buildkit-rootless"
 go test ./internal/cli -run '^TestRealV025UpgradeSmoke$' -count=1
 
 # The Go handoff uses a temporary loopback listener for the target binary's

@@ -80,6 +80,7 @@ describe("App configuration form", () => {
       name: "backend",
       enabled: false,
       platform_hostname: "backend.apps.example.com",
+      desired_deployment_id: null,
       workload: {
         schema_version: "v1",
         port: 9000,

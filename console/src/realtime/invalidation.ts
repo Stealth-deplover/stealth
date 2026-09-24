@@ -53,6 +53,10 @@ const projectRealtimeEventTypes = [
   "site_deployment.activate",
   "site_deployment.updated",
   "site_deployment.delete",
+  "app_deployment.create",
+  "app_deployment.select",
+  "app_deployment.delete",
+  "app_deployment.updated",
   "site_domain.create",
   "site_domain.delete",
   "site_domain.verify",
@@ -187,6 +191,19 @@ export function realtimeCacheChanges(
         kind: "site-deployment",
         projectId,
         siteId,
+        deploymentId: resourceId(event),
+      },
+    ];
+  }
+
+  if (type.startsWith("app_deployment.")) {
+    const appId = stringValue(data.app_id);
+    if (!appId) return [];
+    return [
+      {
+        kind: "app-deployment",
+        projectId,
+        appId,
         deploymentId: resourceId(event),
       },
     ];

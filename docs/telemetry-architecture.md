@@ -48,10 +48,11 @@ The production Compose topology contains separate Collector roles:
   host filesystem mount, Docker log mount, Docker socket, or
   `CAP_DAC_READ_SEARCH`. It joins the application network, private ClickHouse
   network, and a dedicated private telemetry-ingest network.
-- `telemetry-host` runs only `hostmetrics` with `/:/hostfs:ro`. It has no
-  Docker socket, Docker log mount, DAC bypass capability, or OTLP receiver,
-  and joins only the telemetry-ingest network to forward metrics to the main
-  Collector.
+- `telemetry-host` runs only `hostmetrics` with a read-only host-root mount.
+  A read-only tmpfs overlays `<install-root>/private` within `/hostfs`, so the
+  Collector cannot see BuildKit control-plane private keys. It has no Docker
+  socket, Docker log mount, DAC bypass capability, or OTLP receiver, and joins
+  only the telemetry-ingest network to forward metrics to the main Collector.
 - `telemetry-docker-logs` runs only the Docker `file_log` receiver. It sees
   only `/var/lib/docker/containers` through a read-only mount and uses the
   narrow `CAP_DAC_READ_SEARCH` capability required by root-owned Docker JSON

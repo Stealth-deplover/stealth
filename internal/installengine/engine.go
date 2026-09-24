@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 )
 
 const (
@@ -41,6 +43,13 @@ type CommandRunner interface {
 	Output(context.Context, string, string, ...string) ([]byte, error)
 }
 
+// InputCommandRunner extends the process boundary for fixed trusted input.
+// It is used when a narrow privileged host command must consume a validated
+// release asset without reopening a user-writable source path.
+type InputCommandRunner interface {
+	RunInput(context.Context, string, io.Reader, io.Writer, io.Writer, string, ...string) error
+}
+
 // OSCommandRunner executes the Docker Compose commands selected by a plan.
 // It is intentionally small so tests can assert the exact command surface.
 type OSCommandRunner struct{}
@@ -48,6 +57,15 @@ type OSCommandRunner struct{}
 func (OSCommandRunner) Run(ctx context.Context, dir string, stdout, stderr io.Writer, name string, args ...string) error {
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
+	command.Stdout = stdout
+	command.Stderr = stderr
+	return command.Run()
+}
+
+func (OSCommandRunner) RunInput(ctx context.Context, dir string, stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) error {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Dir = dir
+	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
 	return command.Run()
@@ -77,6 +95,8 @@ type Layout struct {
 	TraefikReloadMarker string
 	VersionFile         string
 	StateDir            string
+	PrivateDir          string
+	BuildKitPKIDir      string
 }
 
 func NewLayout(root string) (Layout, error) {
@@ -107,6 +127,8 @@ func NewLayout(root string) (Layout, error) {
 		TraefikReloadMarker: filepath.Join(clean, "traefik", "dynamic", ".reload.yaml"),
 		VersionFile:         filepath.Join(clean, "VERSION"),
 		StateDir:            filepath.Join(clean, "state"),
+		PrivateDir:          filepath.Join(clean, "private"),
+		BuildKitPKIDir:      filepath.Join(clean, "private", buildkitpki.DirectoryName),
 	}, nil
 }
 
@@ -153,7 +175,7 @@ var StepNames = []string{
 	"Release images",
 	"PostgreSQL and Redis",
 	"Database migrations",
-	"API, Worker, Console, Proxy, and Traefik",
+	"API, Worker, BuildKit, Console, Proxy, and Traefik",
 	"Health and readiness verification",
 }
 
@@ -173,6 +195,11 @@ type Options struct {
 	PollAttempts int
 	PollInterval time.Duration
 
+	// BuildKitAppArmorProfilePath is injectable for tests. Production stores
+	// the profile under AppArmor's system profile directory so it is loaded on
+	// host boot as well as during installation.
+	BuildKitAppArmorProfilePath string
+
 	// ManagedAssets is intentionally supplied by the release binary, never by
 	// CLI input. It lets the target release own its runtime asset manifest, so
 	// a future release can add an asset without teaching the previous binary
@@ -186,14 +213,15 @@ type Options struct {
 }
 
 type Engine struct {
-	runner        CommandRunner
-	httpClient    *http.Client
-	assetBaseURL  string
-	output        io.Writer
-	pollAttempts  int
-	pollInterval  time.Duration
-	managedAssets []ManagedAsset
-	migrationHook func(MigrationEvent) error
+	runner              CommandRunner
+	httpClient          *http.Client
+	assetBaseURL        string
+	output              io.Writer
+	pollAttempts        int
+	pollInterval        time.Duration
+	appArmorProfilePath string
+	managedAssets       []ManagedAsset
+	migrationHook       func(MigrationEvent) error
 }
 
 func New(options Options) *Engine {
@@ -221,13 +249,18 @@ func New(options Options) *Engine {
 	if output == nil {
 		output = io.Discard
 	}
+	appArmorProfilePath := strings.TrimSpace(options.BuildKitAppArmorProfilePath)
+	if appArmorProfilePath == "" {
+		appArmorProfilePath = BuildKitAppArmorProfilePath
+	}
 	managedAssets := options.ManagedAssets
 	if managedAssets == nil {
 		managedAssets = DefaultManagedAssets()
 	}
 	return &Engine{
 		runner: runner, httpClient: httpClient, assetBaseURL: assetBaseURL, output: output,
-		pollAttempts: attempts, pollInterval: interval, managedAssets: append([]ManagedAsset(nil), managedAssets...),
+		pollAttempts: attempts, pollInterval: interval, appArmorProfilePath: appArmorProfilePath,
+		managedAssets: append([]ManagedAsset(nil), managedAssets...),
 		migrationHook: options.MigrationHook,
 	}
 }
@@ -317,7 +350,16 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		// From COMPOSE_VALIDATED onward the new release is coherent. If the
 		// bounded backup publication is interrupted, the next lifecycle command
 		// completes it forward rather than rolling valid target assets back.
-		return prepared.finalize()
+		if err := prepared.finalize(); err != nil {
+			return err
+		}
+		if !plan.Setup {
+			if _, err := ensureBuildKitPKI(plan.Layout); err != nil {
+				return fmt.Errorf("prepare BuildKit mutual TLS identity: %w", err)
+			}
+			return e.ensureBuildKitAppArmorProfile(ctx, plan)
+		}
+		return nil
 	case StepPull:
 		return e.runCompose(ctx, plan, "pull")
 	case StepDependencies:
@@ -334,8 +376,17 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 			if err := e.runTraefikStateInit(ctx, plan, plan.Layout.ComposeFile, ""); err != nil {
 				return err
 			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "cloudflare-setup-state-init"); err != nil {
+				return fmt.Errorf("prepare Cloudflare legacy-state input: %w", err)
+			}
 			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "cloudflare-state-init"); err != nil {
 				return err
+			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "buildkit-worker-credentials-init"); err != nil {
+				return fmt.Errorf("prepare worker BuildKit client credentials: %w", err)
+			}
+			if err := e.runCompose(ctx, plan, "run", "--rm", "--no-deps", "buildkit-server-credentials-init"); err != nil {
+				return fmt.Errorf("prepare BuildKit server credentials: %w", err)
 			}
 		}
 		services := make([]string, 0, 3)
@@ -362,6 +413,16 @@ func (e *Engine) RunStep(ctx context.Context, plan Plan, step Step) error {
 		if plan.Setup {
 			services = []string{"setup", "setup-console", "setup-proxy"}
 		} else {
+			if plan.Existing {
+				// Compose does not notice file content changes inside named
+				// credential volumes. Recreate both consumers after the
+				// one-shot initializers refresh them, including repair after an
+				// interrupted rotation.
+				if err := e.runCompose(ctx, plan, "up", "-d", "--no-deps", "--force-recreate", "buildkit", "worker"); err != nil {
+					return fmt.Errorf("restart BuildKit and worker after refreshing mutual TLS credentials: %w", err)
+				}
+			}
+			services = append(services, "buildkit")
 			services = append(services, "otel-collector", "telemetry-host", "telemetry-docker-logs", "telemetry-docker-proxy", "telemetry-docker")
 		}
 		if plan.Cloudflare {
@@ -400,6 +461,8 @@ type ManagedAsset struct {
 func DefaultManagedAssets() []ManagedAsset {
 	return []ManagedAsset{
 		{Path: "compose.production.yaml", RemotePath: "compose.production.yaml", Marker: "services:", validate: validateProductionComposeAsset},
+		{Path: "buildkit/buildkitd.toml", RemotePath: "buildkit/buildkitd.toml", Marker: "rootless = true", productionOnly: true, validate: validateBuildKitConfigAsset},
+		{Path: "buildkit/stealth-buildkit-rootless.apparmor", RemotePath: "buildkit/stealth-buildkit-rootless.apparmor", Marker: BuildKitAppArmorProfileName, productionOnly: true, validate: validateBuildKitAppArmorProfileAsset},
 		{Path: "console/deploy/nginx.conf", RemotePath: "console/deploy/nginx.conf", Marker: "server {"},
 		{Path: "traefik/traefik.yaml", RemotePath: "traefik/traefik.yaml", Marker: "entryPoints:", productionOnly: true, render: renderTraefikStaticAsset, validate: validateTraefikStaticAsset},
 		{Path: "traefik/dynamic/core.yaml", RemotePath: "traefik/dynamic/core.yaml", Marker: "__STEALTH_PUBLIC_HOST__", productionOnly: true, render: renderTraefikCoreAsset, validate: validateTraefikCoreAsset},
@@ -607,18 +670,31 @@ func (e *Engine) prepareInstallation(ctx context.Context, plan Plan) (*preparedI
 		if strings.TrimSpace(contents) == "" {
 			generatedConfig = true
 			var err error
-			contents, err = GenerateConfig(ConfigOptions{Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID, DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root, IngressNetworkName: plan.IngressNetworkName})
+			appArmorProfile, profileErr := DetectBuildKitAppArmorProfile()
+			if profileErr != nil {
+				return nil, fmt.Errorf("detect BuildKit AppArmor requirements: %w", profileErr)
+			}
+			contents, err = GenerateConfig(ConfigOptions{
+				Version: plan.Version, PublicURL: plan.PublicURL, GitHubAppClientID: plan.GitHubAppClientID,
+				DockerGID: plan.DockerGID, Setup: plan.Setup, InstallRoot: plan.Layout.Root,
+				IngressNetworkName: plan.IngressNetworkName, AppsBuildKitAppArmorProfile: appArmorProfile,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("generate configuration: %w", err)
 			}
 		}
 		prepared.newEnv = []byte(contents)
 	}
+	values, err := ParseEnvContents(string(prepared.newEnv))
+	if err != nil {
+		return nil, fmt.Errorf("parse prepared configuration: %w", err)
+	}
+	// Compose uses this generated absolute root to mask the installation-private
+	// directory from telemetry-host's otherwise read-only host filesystem view.
+	// Keep it current on both fresh installs and upgrades from older configs.
+	values["STEALTH_INSTALL_ROOT"] = plan.Layout.Root
+	prepared.newEnv = []byte(FormatEnvFile(values))
 	if !plan.Setup {
-		values, err := ParseEnvContents(string(prepared.newEnv))
-		if err != nil {
-			return nil, fmt.Errorf("parse prepared configuration: %w", err)
-		}
 		if generatedConfig {
 			// GenerateConfig writes complete defaults so it can also be used as a
 			// standalone config generator. For a fresh install, however, those
@@ -1118,7 +1194,11 @@ func syncDirectory(path string) error {
 func validateProductionComposeAsset(contents []byte) error {
 	for _, marker := range []string{
 		"  traefik:",
+		"  buildkit-worker-credentials-init:",
+		"  buildkit-server-credentials-init:",
+		"  buildkit:",
 		"  traefik-state-init:",
+		"  cloudflare-setup-state-init:",
 		"  cloudflare-state-init:",
 		"  otel-collector:",
 		"  telemetry-host:",
@@ -1126,12 +1206,235 @@ func validateProductionComposeAsset(contents []byte) error {
 		"  telemetry-docker:",
 		"  telemetry-docker-proxy:",
 		"  telemetry_ingest:",
+		"  app_build:",
+		"  buildkit_worker_credentials:",
+		"  buildkit_server_credentials:",
+		"  cloudflare_setup_state_input:",
+		"  buildkit_server_credentials:\n    name: \"${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials\"\n  cloudflare_setup_state_input:\n    name: \"${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input\"",
 	} {
 		if !bytes.Contains(contents, []byte(marker)) {
 			return fmt.Errorf("missing current production Compose marker %q", marker)
 		}
 	}
+	text := string(contents)
+	service := productionServiceBlock(text, "buildkit")
+	if service == "" {
+		return errors.New("missing dedicated App BuildKit service")
+	}
+	for _, required := range []string{
+		"image: " + defaultBuildKitImage,
+		"user: \"1000:1000\"", "read_only: true", "seccomp=unconfined",
+		"apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}", "systempaths=unconfined", "buildkit_state:/home/user/.local/share/buildkit",
+		"networks: [app_build]", "buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro",
+		"buildkit_server_credentials:/run/secrets/stealth-buildkit:ro",
+		"tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml",
+		"--tlscacert", "/run/secrets/stealth-buildkit/ca.pem",
+		"--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem",
+		"--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers",
+	} {
+		if !strings.Contains(service, required) {
+			return fmt.Errorf("App BuildKit service is missing required setting %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"privileged:", "network_mode: host", "pid: host", "ipc: host", "/var/run/docker.sock",
+		"ports:", "stealth:", "telemetry_store:", "ingress_control_db:", "stealth_storage:", "app_build_staging:",
+		"state/buildkit-mtls", "buildkit_worker_credentials:",
+	} {
+		if strings.Contains(service, forbidden) {
+			return fmt.Errorf("App BuildKit service contains forbidden setting %q", forbidden)
+		}
+	}
+	worker := productionServiceBlock(text, "worker")
+	if worker == "" || !strings.Contains(worker, "buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro") {
+		return errors.New("worker must mount only its read-only BuildKit client credentials volume")
+	}
+	if strings.Contains(worker, "buildkit-mtls") || strings.Contains(worker, "buildkit_server_credentials:") || strings.Contains(worker, "ca-key.pem") {
+		return errors.New("worker must not mount host PKI files or BuildKit server credentials")
+	}
+	workerInit := productionServiceBlock(text, "buildkit-worker-credentials-init")
+	serverInit := productionServiceBlock(text, "buildkit-server-credentials-init")
+	for name, block := range map[string]string{"worker": workerInit, "BuildKit": serverInit} {
+		if block == "" || !strings.Contains(block, "network_mode: none") || !strings.Contains(block, "restart: \"no\"") ||
+			!strings.Contains(block, "cap_drop: [ALL]") || !strings.Contains(block, "cap_add: [CHOWN, DAC_OVERRIDE]") {
+			return fmt.Errorf("%s BuildKit credential initializer must be a networkless one-shot with only copy and ownership capabilities", name)
+		}
+	}
+	for _, required := range []string{
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro",
+		"buildkit_worker_credentials:/output",
+	} {
+		if !strings.Contains(workerInit, required) {
+			return fmt.Errorf("worker BuildKit credential initializer is missing %q", required)
+		}
+	}
+	if !strings.Contains(workerInit, "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e ") || !strings.Contains(workerInit, "$$stale") {
+		return errors.New("worker BuildKit credential initializer must clear stale volume contents before copying its identity")
+	}
+	if strings.Contains(workerInit, "/server/") || strings.Contains(workerInit, "/health/") || strings.Contains(workerInit, "ca-key.pem") {
+		return errors.New("worker BuildKit credential initializer has access to a non-worker private key")
+	}
+	for _, required := range []string{
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro",
+		"${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro",
+		"buildkit_server_credentials:/output",
+	} {
+		if !strings.Contains(serverInit, required) {
+			return fmt.Errorf("BuildKit credential initializer is missing %q", required)
+		}
+	}
+	if !strings.Contains(serverInit, "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e ") || !strings.Contains(serverInit, "$$stale") {
+		return errors.New("BuildKit credential initializer must clear stale volume contents before copying its identities")
+	}
+	if strings.Contains(serverInit, "/worker/") || strings.Contains(serverInit, "ca-key.pem") {
+		return errors.New("BuildKit credential initializer has access to the worker private key or CA private key")
+	}
+
+	sourceInit := productionServiceBlock(text, "cloudflare-setup-state-init")
+	for _, required := range []string{
+		"network_mode: none", "restart: \"no\"", "read_only: true", "cap_drop: [ALL]", "user: \"0:0\"",
+		"cap_add: [CHOWN, DAC_READ_SEARCH]",
+		"entrypoint: [\"/usr/local/bin/stealth-cloudflare-state-init\"]",
+		"${STEALTH_INSTALL_ROOT:-.}/state:/source:ro", "cloudflare_setup_state_input:/output:rw",
+	} {
+		if !strings.Contains(sourceInit, required) {
+			return fmt.Errorf("Cloudflare source initializer is missing required setting %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"./state:/state", "private", "buildkit-mtls", "ca-key.pem", "server/key.pem", "worker/key.pem", "health/key.pem",
+		"FUNCTIONS_SECRET_KEY", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE_API_TOKEN", "/var/run/docker.sock", "networks:", "environment:",
+	} {
+		if strings.Contains(sourceInit, forbidden) {
+			return fmt.Errorf("Cloudflare source initializer contains forbidden setting %q", forbidden)
+		}
+	}
+	if strings.Count(sourceInit, "cap_add:") != 1 || !strings.Contains(sourceInit, "cap_add: [CHOWN, DAC_READ_SEARCH]") {
+		return errors.New("Cloudflare source initializer may add only CHOWN and DAC_READ_SEARCH")
+	}
+
+	cloudflareInit := productionServiceBlock(text, "cloudflare-state-init")
+	for _, required := range []string{
+		"network_mode: none", "read_only: true", "entrypoint: [\"/usr/local/bin/stealth-cloudflare-import-init\"]",
+		"cloudflare_setup_state_input:/input:ro", "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw",
+		"condition: service_completed_successfully", "FUNCTIONS_SECRET_KEY:",
+	} {
+		if !strings.Contains(cloudflareInit, required) {
+			return fmt.Errorf("Cloudflare state initializer is missing required setting %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"./state:/", "${STEALTH_INSTALL_ROOT:-.}/state:/", "private", "buildkit-mtls", "ca-key.pem", "server/key.pem", "worker/key.pem", "health/key.pem",
+		"/source", "setup-state.enc:ro", "/var/run/docker.sock",
+	} {
+		if strings.Contains(cloudflareInit, forbidden) {
+			return fmt.Errorf("Cloudflare state initializer contains forbidden setting %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		"./private:", "${STEALTH_INSTALL_ROOT:-.}/private:", "./:/", ".:/", "${STEALTH_INSTALL_ROOT:-.}:/", "state/buildkit-mtls", "ca-key.pem",
+	} {
+		if strings.Contains(text, forbidden) {
+			return fmt.Errorf("production Compose contains a broad or legacy private-state bind %q", forbidden)
+		}
+	}
+	telemetryHost := productionServiceBlock(text, "telemetry-host")
+	if !strings.Contains(telemetryHost, "- /:/hostfs:ro") {
+		return errors.New("telemetry-host is missing its read-only host filesystem view")
+	}
+	maskStart := strings.Index(telemetryHost, "      - type: tmpfs\n")
+	if maskStart < 0 {
+		return errors.New("telemetry-host must mask the installation private directory with a tmpfs")
+	}
+	maskEnd := len(telemetryHost)
+	if next := strings.Index(telemetryHost[maskStart+1:], "\n      - "); next >= 0 {
+		maskEnd = maskStart + 1 + next
+	}
+	privateMask := telemetryHost[maskStart:maskEnd]
+	for _, required := range []string{
+		"type: tmpfs", "target: /hostfs/${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/private",
+		"read_only: true", "size: 1048576",
+	} {
+		if !strings.Contains(privateMask, required) {
+			return fmt.Errorf("telemetry-host private-directory tmpfs is missing %q", required)
+		}
+	}
+	for _, name := range productionServiceNames(text) {
+		block := productionServiceBlock(text, name)
+		if name != "buildkit-worker-credentials-init" && name != "buildkit-server-credentials-init" &&
+			(strings.Contains(block, "private/buildkit-mtls") || strings.Contains(block, "ca-key.pem") || strings.Contains(block, "/private:/")) {
+			return fmt.Errorf("service %q can see private BuildKit PKI", name)
+		}
+	}
+	for name, block := range map[string]string{"worker": workerInit, "BuildKit": serverInit} {
+		for _, broadMount := range []string{"./private:", "${STEALTH_INSTALL_ROOT:-.}/private:", "./:/", ".:/", "${STEALTH_INSTALL_ROOT:-.}:/", "./private/buildkit-mtls:", "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls:"} {
+			if strings.Contains(block, broadMount) {
+				return fmt.Errorf("%s credential initializer has a broad BuildKit PKI mount %q", name, broadMount)
+			}
+		}
+	}
 	return nil
+}
+
+func productionServiceNames(contents string) []string {
+	lines := strings.Split(contents, "\n")
+	inServices := false
+	var names []string
+	for _, line := range lines {
+		if line == "services:" {
+			inServices = true
+			continue
+		}
+		if !inServices {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(trimmed, ":") {
+			names = append(names, strings.TrimSuffix(trimmed, ":"))
+		}
+	}
+	return names
+}
+
+func productionServiceBlock(contents, wanted string) string {
+	lines := strings.Split(contents, "\n")
+	inServices := false
+	active := false
+	var block []string
+	for _, line := range lines {
+		if line == "services:" {
+			inServices = true
+			continue
+		}
+		if !inServices {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		isService := strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && strings.HasSuffix(trimmed, ":")
+		if isService {
+			name := strings.TrimSuffix(trimmed, ":")
+			if active {
+				return strings.Join(block, "\n")
+			}
+			if name == wanted {
+				active = true
+				block = append(block, line)
+			}
+			continue
+		}
+		if active {
+			block = append(block, line)
+		}
+	}
+	if active {
+		return strings.Join(block, "\n")
+	}
+	return ""
 }
 
 func validateMainCollectorAsset(contents []byte) error {

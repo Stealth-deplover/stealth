@@ -127,6 +127,7 @@ func (s *Server) createApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	input.ArtifactQuotaBytes = s.config.AppsDefaultArtifactQuotaBytes
 	item, err := s.repo.CreateApp(r.Context(), uuid.Must(uuid.NewV7()), projectID, appActorFrom(r), input)
 	if planLimitError(w, err) {
 		return
@@ -224,6 +225,8 @@ func appResourceError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusNotFound, "not_found", "project or App was not found")
 	case errors.Is(err, repository.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "you do not have permission to manage Apps in this project")
+	case errors.Is(err, repository.ErrAppArtifactPublishInProgress):
+		writeError(w, http.StatusConflict, "conflict", "wait for in-flight App artifact uploads or builds to finish before deleting this App")
 	case errors.Is(err, repository.ErrInvalidAppSettings), errors.Is(err, workloadspec.ErrInvalidSpec):
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", err.Error())
 	default:

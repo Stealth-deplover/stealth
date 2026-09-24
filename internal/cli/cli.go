@@ -40,31 +40,33 @@ type CommandRunner interface {
 type execCommandRunner struct{}
 
 type cliTestOverrides struct {
-	assetBase    string
-	runner       CommandRunner
-	pollAttempts int
-	pollInterval time.Duration
+	assetBase                   string
+	runner                      CommandRunner
+	pollAttempts                int
+	pollInterval                time.Duration
+	buildKitAppArmorProfilePath string
 }
 
 // App owns process dependencies and CLI configuration. A single App is used
 // for one invocation, so it is safe for command implementations to keep small
 // amounts of invocation state here.
 type App struct {
-	in                  io.Reader
-	out                 io.Writer
-	errOut              io.Writer
-	runner              CommandRunner
-	httpClient          *http.Client
-	homeDir             string
-	assetBase           string
-	releaseAPIBase      string
-	releaseDownloadBase string
-	executablePath      func() (string, error)
-	renameFile          func(string, string) error
-	currentVersion      func() string
-	runTargetMigration  func(context.Context, string, string) error
-	cloudflareFactory   cloudflareClientFactory
-	verbose             bool
+	in                          io.Reader
+	out                         io.Writer
+	errOut                      io.Writer
+	runner                      CommandRunner
+	httpClient                  *http.Client
+	homeDir                     string
+	assetBase                   string
+	releaseAPIBase              string
+	releaseDownloadBase         string
+	executablePath              func() (string, error)
+	renameFile                  func(string, string) error
+	currentVersion              func() string
+	runTargetMigration          func(context.Context, string, string) error
+	cloudflareFactory           cloudflareClientFactory
+	verbose                     bool
+	buildKitAppArmorProfilePath string
 
 	// These are intentionally configurable for deterministic tests. Production
 	// defaults remain bounded and conservative.
@@ -80,7 +82,8 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 	assetBase := defaultRawBaseURL
 	pollAttempts := 60
 	pollInterval := 2 * time.Second
-	if overrides := compiledCLITestOverrides(); overrides != nil {
+	overrides := compiledCLITestOverrides()
+	if overrides != nil {
 		if overrides.assetBase != "" {
 			assetBase = overrides.assetBase
 		}
@@ -94,7 +97,7 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 			pollInterval = overrides.pollInterval
 		}
 	}
-	return &App{
+	app := &App{
 		in:                  in,
 		out:                 out,
 		errOut:              errOut,
@@ -110,6 +113,10 @@ func NewApp(in io.Reader, out, errOut io.Writer) *App {
 		pollAttempts:        pollAttempts,
 		pollInterval:        pollInterval,
 	}
+	if overrides != nil {
+		app.buildKitAppArmorProfilePath = overrides.buildKitAppArmorProfilePath
+	}
+	return app
 }
 
 // Run dispatches one CLI invocation and returns a shell-friendly exit code.
@@ -392,7 +399,7 @@ func (a *App) runDoctor(args []string) int {
 	if statusErr != nil {
 		check("Docker services", false, "could not query Compose")
 	} else {
-		services := []string{"postgres", "redis", "api", "worker", "console", "proxy"}
+		services := []string{"postgres", "redis", "api", "worker", "console", "proxy", "buildkit"}
 		if setupMode {
 			services = []string{"postgres", "redis", "setup", "setup-console", "setup-proxy"}
 		}

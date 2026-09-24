@@ -306,6 +306,34 @@ func TestLoadWorkerBuildTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadAppsBuildKitMutualTLSPaths(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
+	t.Setenv("FUNCTIONS_SECRET_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppsBuildkitCACert != "/run/secrets/stealth-buildkit/ca.pem" || cfg.AppsBuildkitClientCert != "/run/secrets/stealth-buildkit/client-cert.pem" || cfg.AppsBuildkitClientKey != "/run/secrets/stealth-buildkit/client-key.pem" {
+		t.Fatalf("unexpected default BuildKit mTLS paths: CA=%q cert=%q key=%q", cfg.AppsBuildkitCACert, cfg.AppsBuildkitClientCert, cfg.AppsBuildkitClientKey)
+	}
+	t.Setenv("APPS_BUILDKIT_CA_CERT", "/operator/secrets/ca.pem")
+	t.Setenv("APPS_BUILDKIT_CLIENT_CERT", "/operator/secrets/worker.pem")
+	t.Setenv("APPS_BUILDKIT_CLIENT_KEY", "/operator/secrets/worker-key.pem")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppsBuildkitCACert != "/operator/secrets/ca.pem" || cfg.AppsBuildkitClientCert != "/operator/secrets/worker.pem" || cfg.AppsBuildkitClientKey != "/operator/secrets/worker-key.pem" {
+		t.Fatalf("operator BuildKit mTLS paths were not loaded: %+v", cfg)
+	}
+	for _, invalid := range []string{"relative.pem", "/", "/run/secrets/../worker-key.pem", "/tmp/worker\nkey.pem"} {
+		t.Setenv("APPS_BUILDKIT_CLIENT_KEY", invalid)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "APPS_BUILDKIT_CLIENT_KEY") {
+			t.Fatalf("invalid client key path %q returned %v", invalid, err)
+		}
+	}
+}
+
 func TestLoadTelemetryConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example.invalid/stealth")
 	t.Setenv("FUNCTIONS_SECRET_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("t", 32))))

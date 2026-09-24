@@ -1,0 +1,23 @@
+# Dedicated cache policy for the App build service. BuildKit state is
+# disposable cache; completed AppDeployment OCI archives live in Stealth
+# artifact storage and do not depend on this volume.
+[worker.oci]
+  enabled = true
+  rootless = true
+  noProcessSandbox = false
+  gc = true
+  reservedSpace = "1GB"
+  maxUsedSpace = "10GB"
+  minFreeSpace = "5GB"
+  max-parallelism = 2
+
+[frontend."dockerfile.v0"]
+  enabled = true
+
+# TCP control clients must present a certificate signed by the installation's
+# private Stealth BuildKit CA. These are daemon credentials only; tenant build
+# containers never receive this filesystem namespace.
+[grpc.tls]
+  cert = "/run/secrets/stealth-buildkit/server-cert.pem"
+  key = "/run/secrets/stealth-buildkit/server-key.pem"
+  ca = "/run/secrets/stealth-buildkit/ca.pem"

@@ -58,6 +58,7 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 		"SETUP_API_HOST_PORT=" + port,
 		"BOOTSTRAP_CLI_KEY=" + encodeTestSecret([]byte("01234567890123456789012345678901")),
 		"FUNCTIONS_SECRET_KEY=" + encodeTestSecret([]byte("abcdefghijklmnopqrstuvwxyz123456")),
+		"APPS_BUILDKIT_APPARMOR_PROFILE=unconfined",
 	}, "\n")+"\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -109,16 +110,18 @@ func newHostInstallFixture(t *testing.T) *hostInstallFixture {
 
 func writeHostManagedAsset(w http.ResponseWriter, name string) {
 	assets := map[string]string{
-		"compose.production.yaml":            "services:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n",
-		"compose.setup.yaml":                 "services:\n  setup:\n",
-		"telemetry/otel-collector.yaml":      "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
-		"telemetry/host-metrics.yaml":        "receivers:\n  hostmetrics:\n",
-		"telemetry/docker-logs.yaml":         "receivers:\n  file_log/docker:\n",
-		"telemetry/docker-stats.yaml":        "receivers:\n  docker_stats:\n",
-		"console/deploy/nginx.conf":          "server {\n}\n",
-		"traefik/traefik.yaml":               testManagedTraefikStaticAsset(),
-		"traefik/dynamic/core.yaml":          testManagedTraefikCoreAsset(),
-		"traefik/dynamic/generated/.gitkeep": "# Stealth route reconciler\n",
+		"compose.production.yaml":                     testProductionComposeAsset(),
+		"buildkit/buildkitd.toml":                     testBuildKitConfigAsset(),
+		"buildkit/stealth-buildkit-rootless.apparmor": testBuildKitAppArmorProfileAsset(),
+		"compose.setup.yaml":                          "services:\n  setup:\n",
+		"telemetry/otel-collector.yaml":               "receivers:\n  otlp:\nexporters:\n  clickhouse:\n",
+		"telemetry/host-metrics.yaml":                 "receivers:\n  hostmetrics:\n",
+		"telemetry/docker-logs.yaml":                  "receivers:\n  file_log/docker:\n",
+		"telemetry/docker-stats.yaml":                 "receivers:\n  docker_stats:\n",
+		"console/deploy/nginx.conf":                   "server {\n}\n",
+		"traefik/traefik.yaml":                        testManagedTraefikStaticAsset(),
+		"traefik/dynamic/core.yaml":                   testManagedTraefikCoreAsset(),
+		"traefik/dynamic/generated/.gitkeep":          "# Stealth route reconciler\n",
 	}
 	if contents, ok := assets[name]; ok {
 		_, _ = io.WriteString(w, contents)
@@ -143,11 +146,23 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 12 {
-		t.Fatalf("host Docker calls = %#v, want preflight, four state inits, production steps, and setup cleanup", runner.calls)
+	if len(runner.calls) != 16 {
+		t.Fatalf("host Docker calls = %#v, want preflight, seven state inits, production steps, and setup cleanup", runner.calls)
 	}
 	if got := runner.command(5).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", got)
+	}
+	if got := runner.command(7).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-setup-state-init"}) {
+		t.Fatalf("Cloudflare source state init command = %#v", got)
+	}
+	if got := runner.command(8).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
+		t.Fatalf("Cloudflare state init command = %#v", got)
+	}
+	if got := runner.command(9).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
+		t.Fatalf("worker BuildKit credential init command = %#v", got)
+	}
+	if got := runner.command(10).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
+		t.Fatalf("BuildKit credential init command = %#v", got)
 	}
 	if got := runner.command(len(runner.calls) - 1).args; !equalStrings(got, []string{"compose", "--env-file", fixture.layout.EnvFile, "-f", fixture.layout.SetupComposeFile, "rm", "-sf", "setup", "setup-console", "setup-proxy"}) {
 		t.Fatalf("setup cleanup command = %#v", got)
