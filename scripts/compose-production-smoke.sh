@@ -1340,6 +1340,24 @@ verify_app_build_smoke() {
 			succeeded) break ;;
 			failed)
 				printf 'real BuildKit smoke deployment failed: %s\n' "$(platform_json_field "$platform_response" deployment.error_message)" >&2
+				local logs_status
+				logs_status="$(curl --silent --show-error --max-time 10 \
+					--header "Cookie: $auth_cookie_header" \
+					--output "$platform_response" --write-out '%{http_code}' \
+					"${deployment_url}/logs?limit=100" || true)"
+				if [ "$logs_status" = '200' ]; then
+					python3 - "$platform_response" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    response = json.load(source)
+for entry in response.get("logs", []):
+    message = entry.get("message", "")
+    if message.startswith("STEALTH_BUILDKIT_MTLS_PROBE:"):
+        print(message)
+PY
+				fi
 				return 1
 			;;
 			queued|running|deferred) ;;
