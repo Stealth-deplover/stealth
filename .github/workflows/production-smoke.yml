@@ -96,6 +96,7 @@ jobs:
           docker_gid="$(stat -c '%g' /var/run/docker.sock)"
           cat >"$SMOKE_ENV" <<EOF
           COMPOSE_PROJECT_NAME=stealth-pr-smoke-${GITHUB_RUN_ID}
+          STEALTH_INSTALL_ROOT=${GITHUB_WORKSPACE}
           STEALTH_API_IMAGE=stealth-api:smoke-${GITHUB_RUN_ID}
           STEALTH_WORKER_IMAGE=stealth-worker:smoke-${GITHUB_RUN_ID}
           STEALTH_INGRESS_CONTROL_IMAGE=stealth-ingress-control:smoke-${GITHUB_RUN_ID}
