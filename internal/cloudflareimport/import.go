@@ -161,13 +161,14 @@ func PublishLegacySetupSnapshot(ctx context.Context, sourcePath, inputDirectory 
 	if err != nil || inputInfo.Mode()&os.ModeSymlink != 0 || !inputInfo.IsDir() {
 		return false, errArtifactIO
 	}
-	if owner != nil {
-		if owner.UID < 0 || owner.GID < 0 || os.Geteuid() != 0 {
-			return false, errArtifactIO
-		}
-		// The named volume may retain the host state directory's ownership
-		// from an earlier run. Temporarily return it to this root one-shot so
-		// stale contents can be removed without broad DAC override authority.
+	if owner != nil && (owner.UID < 0 || owner.GID < 0 || os.Geteuid() != 0) {
+		return false, errArtifactIO
+	}
+	if os.Geteuid() == 0 {
+		// This named volume may retain host-state ownership from an earlier
+		// version. Keep it root-owned for the isolated importer, regardless of
+		// whether a caller requested a later ownership transfer. The optional
+		// source owner is never needed by the Cloudflare importer.
 		if err := os.Chown(inputDirectory, 0, 0); err != nil {
 			return false, errArtifactIO
 		}

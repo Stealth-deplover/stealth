@@ -334,8 +334,8 @@ services:
   cloudflare-setup-state-init:
     # Copy only the optional encrypted setup snapshot into a narrow handoff
     # volume. BuildKit PKI is outside ./state, and this helper has no key that
-    # can decrypt setup data. CHOWN normalizes the named-volume owner to the
-    # host state owner; DAC_READ_SEARCH is needed for restored 0600 snapshots.
+    # can decrypt setup data. DAC_READ_SEARCH reads restored 0600 snapshots;
+    # CHOWN resets a reused handoff volume to root ownership before cleanup.
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
     restart: "no"
     user: "0:0"

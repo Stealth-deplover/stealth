@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Stealth-deplover/stealth/internal/functionsecret"
@@ -190,9 +191,26 @@ func TestPublishLegacySetupSnapshotMissingAndUnsafeSources(t *testing.T) {
 		if err := os.WriteFile(stale, []byte("stale"), 0o400); err != nil {
 			t.Fatal(err)
 		}
+		if os.Geteuid() == 0 {
+			// A prior release transferred this persistent volume to the host
+			// state owner. Exercise recovery from that ownership without making
+			// the test depend on arbitrary UID mapping support.
+			if err := os.Chown(inputDir, 1000, 1000); err != nil {
+				t.Skipf("cannot simulate prior host-owned volume: %v", err)
+			}
+		}
 		published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
 		if err != nil || published {
 			t.Fatalf("PublishLegacySetupSnapshot(missing) = %v, %v", published, err)
+		}
+		if os.Geteuid() == 0 {
+			info, err := os.Stat(inputDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Sys().(*syscall.Stat_t).Uid; got != 0 {
+				t.Fatalf("reused handoff directory owner = %d; want root", got)
+			}
 		}
 		if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing source left stale handoff: %v", err)
