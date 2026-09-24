@@ -122,9 +122,13 @@ written to `config.env`, logged, included in audit metadata, or written to
 Traefik files.
 
 During onboarding, the setup service already holds the token in memory while
-it provisions the Console tunnel and DNS. Before worker startup, the isolated,
-network-free `cloudflare-state-init` helper decrypts the legacy
-`state/setup-state.enc` snapshot and atomically writes a versioned,
+it provisions the Console tunnel and DNS. Before worker startup, a separate
+networkless, read-only source initializer copies only the optional encrypted
+`state/setup-state.enc` into the dedicated `cloudflare_setup_state_input`
+named volume. It cannot decrypt the snapshot and cannot see BuildKit PKI,
+which lives under `private/buildkit-mtls`. The isolated, network-free
+`cloudflare-state-init` helper reads only that handoff volume, decrypts the
+legacy snapshot, and atomically writes a versioned,
 Cloudflare-only encrypted import artifact. That artifact contains only the
 existing account, Console zone/hostname, tunnel identity, Console DNS record
 ID, and Cloudflare API token required for migration. It excludes the

@@ -27,6 +27,31 @@ func TestRenderTraefikCoreAssetUsesConfiguredHostname(t *testing.T) {
 	}
 }
 
+func TestSetupComposeCannotSeeBuildKitPrivateState(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(repoRootForTraefikTest(t), "compose.setup.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	start := strings.Index(text, "\n  setup:")
+	if start < 0 {
+		t.Fatal("setup service is missing")
+	}
+	end := strings.Index(text[start+1:], "\n  setup-console:")
+	if end < 0 {
+		t.Fatal("could not delimit setup service")
+	}
+	setupBlock := text[start : start+1+end]
+	if !strings.Contains(setupBlock, "${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}/state:/var/lib/stealth/setup-state") {
+		t.Fatal("setup service lost its established narrow encrypted state mount")
+	}
+	for _, forbidden := range []string{"private", "buildkit-mtls", "ca-key.pem", "server/key.pem", "worker/key.pem", "health/key.pem", "./:/", "../:/", "${STEALTH_INSTALL_ROOT:?set STEALTH_INSTALL_ROOT}:/"} {
+		if strings.Contains(setupBlock, forbidden) {
+			t.Fatalf("setup service has a BuildKit private-state exposure through %q", forbidden)
+		}
+	}
+}
+
 func TestRenderTraefikCoreAssetReadsExistingConfig(t *testing.T) {
 	root := t.TempDir()
 	layout, err := NewLayout(root)
@@ -76,6 +101,7 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	for _, required := range []string{
 		"  traefik:",
 		"  traefik-state-init:",
+		"  cloudflare-setup-state-init:",
 		"  cloudflare-state-init:",
 		"./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro",
 		"./traefik/dynamic:/etc/traefik/dynamic:ro",
@@ -104,6 +130,29 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 			t.Fatalf("Traefik state initializer contains forbidden %q", forbidden)
 		}
 	}
+	cloudflareSourceStart := strings.Index(composeText, "\n  cloudflare-setup-state-init:")
+	if cloudflareSourceStart < 0 {
+		t.Fatal("Cloudflare source initializer is missing")
+	}
+	cloudflareSourceEnd := strings.Index(composeText[cloudflareSourceStart+1:], "\n  cloudflare-state-init:")
+	if cloudflareSourceEnd < 0 {
+		t.Fatal("could not delimit Cloudflare source initializer")
+	}
+	cloudflareSourceBlock := composeText[cloudflareSourceStart : cloudflareSourceStart+1+cloudflareSourceEnd]
+	for _, required := range []string{
+		"network_mode: none", "read_only: true", "cap_drop: [ALL]", "cap_add: [CHOWN, DAC_READ_SEARCH]", "restart: \"no\"",
+		"entrypoint: [\"/usr/local/bin/stealth-cloudflare-state-init\"]",
+		"${STEALTH_INSTALL_ROOT:-.}/state:/source:ro", "cloudflare_setup_state_input:/output:rw",
+	} {
+		if !strings.Contains(cloudflareSourceBlock, required) {
+			t.Fatalf("Cloudflare source initializer is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"private", "buildkit-mtls", "ca-key.pem", "FUNCTIONS_SECRET_KEY", "DATABASE_URL", "REDIS_URL", "networks:"} {
+		if strings.Contains(cloudflareSourceBlock, forbidden) {
+			t.Fatalf("Cloudflare source initializer contains forbidden %q", forbidden)
+		}
+	}
 	cloudflareInitStart := strings.Index(composeText, "\n  cloudflare-state-init:")
 	if cloudflareInitStart < 0 {
 		t.Fatal("Cloudflare state initializer is missing")
@@ -118,18 +167,18 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 		"image: \"${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}\"",
 		"entrypoint: [\"/usr/local/bin/stealth-cloudflare-import-init\"]",
 		"FUNCTIONS_SECRET_KEY: \"${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}\"",
-		"./state:/state:ro", "./state/.cloudflare-import:/output:rw",
+		"cloudflare_setup_state_input:/input:ro", "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw",
 	} {
 		if !strings.Contains(cloudflareInitBlock, required) {
 			t.Fatalf("Cloudflare setup-state initializer is missing %q", required)
 		}
 	}
-	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "cap_add:", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE_API_TOKEN", "cloudflare_tunnel_token", "setup-state.enc:rw"} {
+	for _, forbidden := range []string{"/var/run/docker.sock", "privileged:", "network_mode: host", "cap_add:", "DATABASE_URL", "REDIS_URL", "CLOUDFLARE_API_TOKEN", "cloudflare_tunnel_token", "setup-state.enc:rw", "./state:/", "private", "buildkit-mtls", "ca-key.pem"} {
 		if strings.Contains(cloudflareInitBlock, forbidden) {
 			t.Fatalf("Cloudflare setup-state initializer contains forbidden %q", forbidden)
 		}
 	}
-	if !strings.Contains(composeText, "./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro") {
+	if !strings.Contains(composeText, "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro") {
 		t.Fatal("worker must mount only the Cloudflare-specific encrypted import directory read-only")
 	}
 	workerStart := strings.Index(composeText, "\n  worker:")

@@ -77,7 +77,7 @@ func assertUpgradeSmokeTopology(t *testing.T, layout Layout) {
 		t.Fatal(err)
 	}
 	text := string(compose)
-	for _, marker := range []string{"  traefik:", "  traefik-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
+	for _, marker := range []string{"  traefik:", "  traefik-state-init:", "  cloudflare-setup-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:"} {
 		if !strings.Contains(text, marker) {
 			t.Fatalf("migrated Compose misses %q", marker)
 		}

@@ -112,9 +112,13 @@ claim a full browser/provider installation or run a full production stack.
       read-only with mode-`0400` private keys, BuildKit never receives the
       worker key, and the API and tenant build do not receive BuildKit keys.
 - [ ] Verify install, upgrade, and repair preserve a valid BuildKit CA and
-      renew leaves before expiry; include `state/buildkit-mtls` in installation
-      backups. Completed OCI artifacts must remain valid if the BuildKit PKI is
-      lost.
+      renew leaves before expiry; include `private/buildkit-mtls` in
+      installation backups. Confirm a legacy `state/buildkit-mtls` is
+      relocated intact and no runtime service sees the CA key. Completed OCI
+      artifacts must remain valid if the BuildKit PKI is lost.
+- [ ] Confirm `cloudflare-state-init` receives only the narrow named-volume
+      setup input and the Cloudflare import output. It must not mount the
+      complete `state/` directory or any part of `private/`.
 - [ ] On Ubuntu with `apparmor_restrict_unprivileged_userns=1`, verify the
       installer loads the Stealth-managed userns-only profile before BuildKit
       starts, preserves it across reboot, and removes it during configuration

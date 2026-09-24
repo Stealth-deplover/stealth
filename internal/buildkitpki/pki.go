@@ -48,19 +48,8 @@ type Paths struct {
 	HealthKey  string
 }
 
-func PathsAt(stateDir string) Paths {
-	root := filepath.Join(stateDir, DirectoryName)
-	return Paths{
-		Root:       root,
-		CACert:     filepath.Join(root, "ca-cert.pem"),
-		CAKey:      filepath.Join(root, "ca-key.pem"),
-		ServerCert: filepath.Join(root, "server", "cert.pem"),
-		ServerKey:  filepath.Join(root, "server", "key.pem"),
-		WorkerCert: filepath.Join(root, "worker", "cert.pem"),
-		WorkerKey:  filepath.Join(root, "worker", "key.pem"),
-		HealthCert: filepath.Join(root, "health", "cert.pem"),
-		HealthKey:  filepath.Join(root, "health", "key.pem"),
-	}
+func PathsAt(pkiDir string) Paths {
+	return pathsAtRoot(filepath.Clean(pkiDir))
 }
 
 // Ensure creates an initial PKI, preserves a complete valid PKI, renews leaf
@@ -68,14 +57,19 @@ func PathsAt(stateDir string) Paths {
 // Host private keys remain mode 0600 under installation-private directories.
 // One-shot Compose initializers copy only their assigned identity into
 // service-specific volumes with service-owned read-only keys.
-func Ensure(stateDir string) (bool, error) {
-	if stateDir == "" || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) == string(filepath.Separator) {
-		return false, fmt.Errorf("%w: invalid installation state directory", ErrInvalidState)
+func Ensure(pkiDir string) (bool, error) {
+	if pkiDir == "" || !filepath.IsAbs(pkiDir) || filepath.Clean(pkiDir) == string(filepath.Separator) {
+		return false, fmt.Errorf("%w: invalid BuildKit PKI directory", ErrInvalidState)
 	}
-	if err := ensureRealDirectory(stateDir, 0o700, false); err != nil {
-		return false, fmt.Errorf("inspect BuildKit mTLS state directory: %w", err)
+	pkiDir = filepath.Clean(pkiDir)
+	parent := filepath.Dir(pkiDir)
+	if err := ensureRealDirectory(parent, directoryMode, false); err != nil {
+		return false, fmt.Errorf("inspect BuildKit PKI parent directory: %w", err)
 	}
-	paths := PathsAt(stateDir)
+	if err := os.Chmod(parent, directoryMode); err != nil {
+		return false, fmt.Errorf("protect BuildKit PKI parent directory: %w", err)
+	}
+	paths := PathsAt(pkiDir)
 	pending := paths.Root + ".pending"
 	previous := paths.Root + ".previous"
 
@@ -91,12 +85,12 @@ func Ensure(stateDir string) (bool, error) {
 			if err := os.Rename(pending, paths.Root); err != nil {
 				return false, fmt.Errorf("recover complete BuildKit mTLS issuance: %w", err)
 			}
-			if err := syncDirectory(stateDir); err != nil {
-				return false, fmt.Errorf("sync recovered BuildKit mTLS state: %w", err)
+			if err := syncDirectory(parent); err != nil {
+				return false, fmt.Errorf("sync recovered BuildKit PKI: %w", err)
 			}
 			return true, nil
 		} else if !errors.Is(pendingErr, os.ErrNotExist) {
-			return false, fmt.Errorf("inspect interrupted BuildKit mTLS issuance: %w", pendingErr)
+			return false, fmt.Errorf("inspect interrupted BuildKit PKI issuance: %w", pendingErr)
 		}
 		if err := writeBundleAtomic(paths, pending); err != nil {
 			_ = os.RemoveAll(pending)
@@ -105,8 +99,8 @@ func Ensure(stateDir string) (bool, error) {
 		if err := os.Rename(pending, paths.Root); err != nil {
 			return false, fmt.Errorf("publish BuildKit mTLS identity: %w", err)
 		}
-		if err := syncDirectory(stateDir); err != nil {
-			return false, fmt.Errorf("sync BuildKit mTLS identity: %w", err)
+		if err := syncDirectory(parent); err != nil {
+			return false, fmt.Errorf("sync BuildKit PKI: %w", err)
 		}
 		return true, nil
 	}
@@ -132,10 +126,30 @@ func Ensure(stateDir string) (bool, error) {
 		_ = os.RemoveAll(pending)
 		return false, err
 	}
-	if err := replaceBundle(paths.Root, pending, previous, stateDir); err != nil {
+	if err := replaceBundle(paths.Root, pending, previous, parent); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// ValidateExisting checks a complete installed bundle without creating or
+// rotating any identity. The installer uses it before atomically relocating a
+// development bundle from the legacy state directory.
+func ValidateExisting(pkiDir string) error {
+	if pkiDir == "" || !filepath.IsAbs(pkiDir) || filepath.Clean(pkiDir) == string(filepath.Separator) {
+		return fmt.Errorf("%w: invalid BuildKit PKI directory", ErrInvalidState)
+	}
+	return validateBundleOnly(PathsAt(pkiDir), false)
+}
+
+// ValidateForRelocation validates a complete bundle while permitting expired
+// leaves that Ensure can renew after the bundle has moved to its new location.
+func ValidateForRelocation(pkiDir string) error {
+	if pkiDir == "" || !filepath.IsAbs(pkiDir) || filepath.Clean(pkiDir) == string(filepath.Separator) {
+		return fmt.Errorf("%w: invalid BuildKit PKI directory", ErrInvalidState)
+	}
+	_, _, err := validateBundle(PathsAt(pkiDir), true)
+	return err
 }
 
 func recoverBundle(paths Paths, pending, previous string) error {

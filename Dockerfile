@@ -15,6 +15,7 @@ ENV BUILD_LDFLAGS="-s -w -X github.com/Stealth-deplover/stealth/internal/buildin
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-api ./cmd/api
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-worker ./cmd/worker
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-cloudflare-import-init ./cmd/cloudflare-import-init
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-cloudflare-state-init ./cmd/cloudflare-state-init
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-ingress-control ./cmd/ingress-control
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/stealth-migrate ./cmd/migrate
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o /out/telemetry-docker-proxy ./cmd/telemetry-docker-proxy
@@ -63,6 +64,7 @@ FROM runtime-base AS worker
 RUN apk add --no-cache docker-cli
 COPY --from=build /out/stealth-worker /usr/local/bin/stealth-worker
 COPY --from=build /out/stealth-cloudflare-import-init /usr/local/bin/stealth-cloudflare-import-init
+COPY --from=build /out/stealth-cloudflare-state-init /usr/local/bin/stealth-cloudflare-state-init
 COPY --from=buildkit-client /usr/bin/buildctl /usr/local/bin/buildctl
 USER stealth
 EXPOSE 9091

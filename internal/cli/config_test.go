@@ -26,9 +26,9 @@ func testProductionComposeAsset() string {
     cap_add: [CHOWN, DAC_OVERRIDE]
     command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
     volumes:
-      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
-      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro
-      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro"
       - buildkit_worker_credentials:/output
   buildkit-server-credentials-init:
     network_mode: none
@@ -37,11 +37,11 @@ func testProductionComposeAsset() string {
     cap_add: [CHOWN, DAC_OVERRIDE]
     command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
     volumes:
-      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
-      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro
-      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro
-      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro
-      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro"
       - buildkit_server_credentials:/output
   worker:
     volumes:
@@ -65,7 +65,30 @@ func testProductionComposeAsset() string {
   ingress-control:
   traefik:
   traefik-state-init:
+  cloudflare-setup-state-init:
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-state-init"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/state:/source:ro"
+      - cloudflare_setup_state_input:/output:rw
   cloudflare-state-init:
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    depends_on:
+      cloudflare-setup-state-init:
+        condition: service_completed_successfully
+    environment:
+      FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+    volumes:
+      - cloudflare_setup_state_input:/input:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
   otel-collector:
   telemetry-host:
   telemetry-docker-logs:
@@ -77,6 +100,9 @@ networks:
 volumes:
   buildkit_worker_credentials:
   buildkit_server_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
+  cloudflare_setup_state_input:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input"
 `
 }
 

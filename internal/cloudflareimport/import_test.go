@@ -108,6 +108,167 @@ func TestPreparationPublishesOnlyCloudflareConnectionSecrets(t *testing.T) {
 	}
 }
 
+func TestPublishLegacySetupSnapshotBeforeCloudflarePreparation(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "state")
+	inputDir := filepath.Join(root, "cloudflare-setup-state-input")
+	source := filepath.Join(sourceDir, legacySetupSnapshotName)
+	output := filepath.Join(root, "worker-import", "cloudflare-import.enc")
+	if err := os.Mkdir(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cipher := importTestCipher(t)
+	store, err := setupstate.NewFileStore(source, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := setupstate.NewState()
+	state.Phase = setupstate.PhaseComplete
+	state.Cloudflare.Mode = "api_token"
+	state.Cloudflare.Connected = true
+	state.Cloudflare.Binding = setupstate.CloudflareBinding{
+		AccountID: "account-unique", ZoneID: "zone-unique", Hostname: "cloud.example.com",
+		TunnelID: "tunnel-unique", TunnelName: "stealth-prod", RecordID: "console-record-unique",
+	}
+	state.SetSecret("cloudflare_access_token", "SECRET-CLOUDFLARE-API")
+	state.SetSecret("github_private_key", "SECRET-GITHUB-PRIVATE-KEY")
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+	if err != nil || !published {
+		t.Fatalf("PublishLegacySetupSnapshot(valid) = %v, %v", published, err)
+	}
+	inputPath := filepath.Join(inputDir, legacySetupSnapshotName)
+	if mode := fileMode(t, inputPath).Perm(); mode != 0o400 {
+		t.Fatalf("handoff source mode = %o; want 400", mode)
+	}
+	if copied, err := os.ReadFile(inputPath); err != nil {
+		t.Fatal(err)
+	} else if original, err := os.ReadFile(source); err != nil || !bytes.Equal(copied, original) {
+		t.Fatalf("handoff changed the encrypted setup snapshot: read error=%v", err)
+	}
+
+	outcome, err := Prepare(context.Background(), inputPath, output, cipher, nil)
+	if err != nil || outcome != OutcomeConnection {
+		t.Fatalf("Prepare(handoff) = %q, %v; want connection", outcome, err)
+	}
+	envelope, err := Read(output, cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.State != StateConnection || envelope.AccountID != "account-unique" || envelope.APIToken != "SECRET-CLOUDFLARE-API" {
+		t.Fatalf("narrow handoff envelope = %#v", envelope)
+	}
+	artifact, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, err := cipher.Decrypt(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(plaintext, []byte("SECRET-GITHUB-PRIVATE-KEY")) || bytes.Contains(plaintext, []byte("setup-state.enc")) {
+		t.Fatal("narrow import artifact contains unrelated setup state")
+	}
+}
+
+func TestPublishLegacySetupSnapshotMissingAndUnsafeSources(t *testing.T) {
+	t.Run("missing source clears stale handoff and remains no import", func(t *testing.T) {
+		root := t.TempDir()
+		sourceDir := filepath.Join(root, "state")
+		if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source := filepath.Join(sourceDir, legacySetupSnapshotName)
+		inputDir := filepath.Join(root, "input")
+		if err := os.MkdirAll(inputDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		stale := filepath.Join(inputDir, legacySetupSnapshotName)
+		if err := os.WriteFile(stale, []byte("stale"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+		if err != nil || published {
+			t.Fatalf("PublishLegacySetupSnapshot(missing) = %v, %v", published, err)
+		}
+		if _, err := os.Lstat(stale); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing source left stale handoff: %v", err)
+		}
+		output := filepath.Join(root, "output", "cloudflare-import.enc")
+		outcome, err := Prepare(context.Background(), stale, output, importTestCipher(t), nil)
+		if err != nil || outcome != OutcomeNoImport {
+			t.Fatalf("Prepare(missing handoff) = %q, %v", outcome, err)
+		}
+		if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing handoff produced a Cloudflare artifact: %v", err)
+		}
+	})
+
+	tests := map[string]func(string) error{
+		"symlink": func(path string) error {
+			return os.Symlink(filepath.Join(filepath.Dir(path), "outside.enc"), path)
+		},
+		"directory": func(path string) error { return os.Mkdir(path, 0o700) },
+		"oversized": func(path string) error { return os.WriteFile(path, make([]byte, maxSetupSnapshotBytes+1), 0o600) },
+	}
+	for name, create := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sourceDir := filepath.Join(root, "state")
+			inputDir := filepath.Join(root, "input")
+			if err := os.Mkdir(sourceDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(inputDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			source := filepath.Join(sourceDir, legacySetupSnapshotName)
+			if err := create(source); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(inputDir, legacySetupSnapshotName), []byte("stale"), 0o400); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir); err == nil {
+				t.Fatal("unsafe legacy setup source was accepted")
+			}
+			if _, err := os.Lstat(filepath.Join(inputDir, legacySetupSnapshotName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unsafe source left a stale handoff file: %v", err)
+			}
+		})
+	}
+}
+
+func TestMalformedEncryptedSetupSnapshotRemainsSafeNoImport(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "state")
+	inputDir := filepath.Join(root, "input")
+	output := filepath.Join(root, "output", "cloudflare-import.enc")
+	if err := os.Mkdir(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(inputDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(sourceDir, legacySetupSnapshotName)
+	if err := os.WriteFile(source, []byte("not-an-encrypted-setup-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	published, err := PublishLegacySetupSnapshot(context.Background(), source, inputDir)
+	if err != nil || !published {
+		t.Fatalf("bounded opaque snapshot handoff = %v, %v", published, err)
+	}
+	if outcome, err := Prepare(context.Background(), filepath.Join(inputDir, legacySetupSnapshotName), output, importTestCipher(t), nil); err == nil || outcome != "" {
+		t.Fatalf("malformed encrypted snapshot Prepare() = %q, %v; expected safe recovery failure", outcome, err)
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed setup snapshot produced a Cloudflare artifact: %v", err)
+	}
+}
+
 func TestPreparationFailsClosedOnUnexpectedWorkerVisibleFile(t *testing.T) {
 	directory := t.TempDir()
 	source := filepath.Join(directory, "setup-state.enc")

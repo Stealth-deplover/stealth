@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 	"github.com/Stealth-deplover/stealth/internal/installengine"
 )
 
@@ -32,6 +33,8 @@ func newInstallLayout(root string) InstallLayout {
 		TraefikReloadMarker: filepath.Join(root, "traefik", "dynamic", ".reload.yaml"),
 		VersionFile:         filepath.Join(root, "VERSION"),
 		StateDir:            filepath.Join(root, "state"),
+		PrivateDir:          filepath.Join(root, "private"),
+		BuildKitPKIDir:      filepath.Join(root, "private", buildkitpki.DirectoryName),
 	}
 }
 
@@ -60,15 +63,21 @@ func installationExists(layout InstallLayout) bool {
 		regularFile(layout.TraefikStatic) ||
 		regularFile(layout.TraefikCore) ||
 		regularFile(layout.VersionFile) ||
-		directoryExists(layout.StateDir)
+		directoryExists(layout.StateDir) ||
+		directoryExists(layout.PrivateDir)
 }
 
 func partialInstallationExists(layout InstallLayout) bool {
 	if regularFile(layout.ComposeFile) || regularFile(layout.ProxyFile) || regularFile(layout.TraefikStatic) || regularFile(layout.TraefikCore) {
 		return true
 	}
-	info, err := os.Stat(layout.StateDir)
-	return err == nil && info.IsDir()
+	for _, path := range []string{layout.StateDir, layout.PrivateDir} {
+		info, err := os.Stat(path)
+		if err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func regularFile(path string) bool {

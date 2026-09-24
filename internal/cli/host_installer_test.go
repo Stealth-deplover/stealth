@@ -146,16 +146,22 @@ func TestHostInstallerOwnsRequestAndCompletesHandoff(t *testing.T) {
 		t.Fatalf("host progress did not advance durable event ID: %d", state.LastEventID)
 	}
 	runner := fixture.app.runner.(*setupRunner)
-	if len(runner.calls) != 15 {
-		t.Fatalf("host Docker calls = %#v, want preflight, six state inits, production steps, and setup cleanup", runner.calls)
+	if len(runner.calls) != 16 {
+		t.Fatalf("host Docker calls = %#v, want preflight, seven state inits, production steps, and setup cleanup", runner.calls)
 	}
 	if got := runner.command(5).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "telemetry-docker-logs-state-init"}) {
 		t.Fatalf("Docker log Collector state init command = %#v", got)
 	}
-	if got := runner.command(8).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
+	if got := runner.command(7).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-setup-state-init"}) {
+		t.Fatalf("Cloudflare source state init command = %#v", got)
+	}
+	if got := runner.command(8).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
+		t.Fatalf("Cloudflare state init command = %#v", got)
+	}
+	if got := runner.command(9).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
 		t.Fatalf("worker BuildKit credential init command = %#v", got)
 	}
-	if got := runner.command(9).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
+	if got := runner.command(10).args; !equalStrings(got[len(got)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
 		t.Fatalf("BuildKit credential init command = %#v", got)
 	}
 	if got := runner.command(len(runner.calls) - 1).args; !equalStrings(got, []string{"compose", "--env-file", fixture.layout.EnvFile, "-f", fixture.layout.SetupComposeFile, "rm", "-sf", "setup", "setup-console", "setup-proxy"}) {

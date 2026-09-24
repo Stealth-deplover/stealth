@@ -479,7 +479,7 @@ func assertMigratedV025State(t *testing.T, layout installengine.Layout, targetVe
 		t.Fatal(err)
 	}
 	compose := string(composeBytes)
-	for _, marker := range []string{"  buildkit:", "  traefik:", "  traefik-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:", "  app_build:"} {
+	for _, marker := range []string{"  buildkit:", "  traefik:", "  traefik-state-init:", "  cloudflare-setup-state-init:", "  cloudflare-state-init:", "  telemetry-host:", "  telemetry-docker-logs:", "  telemetry-docker:", "  telemetry-docker-proxy:", "  telemetry_ingest:", "  app_build:"} {
 		if !strings.Contains(compose, marker) {
 			t.Fatalf("target Compose is missing %q", marker)
 		}

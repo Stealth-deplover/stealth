@@ -107,8 +107,8 @@ the CA certificate, server identity, and healthcheck identity. The API and
 tenant build steps receive no private key, and the BuildKit daemon never gets
 the worker key. CA private material remains host-only; the retained CA key
 allows controlled renewal, while leaf certificates renew 30 days before
-expiry. Back up this PKI with installation state. Completed OCI artifacts
-remain valid if the BuildKit identity is lost.
+expiry. Back up `private/buildkit-mtls` with installation control-plane
+state. Completed OCI artifacts remain valid if the BuildKit identity is lost.
 
 The worker sends only a validated source context and explicit build request to
 BuildKit. It does not forward SSH agents, secrets, arbitrary build arguments,

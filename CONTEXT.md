@@ -199,12 +199,24 @@ The BuildKit TCP control API requires mutual TLS even on the private
 and healthcheck identities. The worker verifies the server's `buildkit` DNS
 SAN; BuildKit requires a trusted client certificate for every control request.
 The host CA key is kept mode `0600` and is never mounted into a container.
+Its installation path is `private/buildkit-mtls`, outside the legacy
+`state/` directory used by the setup API and Cloudflare migration. Before
+the Cloudflare importer runs, a networkless copy-only initializer transfers
+only the optional encrypted `setup-state.enc` file into a dedicated named
+volume; the importer reads that narrow input and publishes its Cloudflare-only
+artifact. Missing legacy setup state remains a valid no-import case.
 One-shot networkless initializers populate separate read-only runtime volumes:
 BuildKit receives its server and healthcheck identities, while the worker
 receives its client identity. The API and tenant build steps receive no
 BuildKit private keys. Host identity state is preserved on routine upgrades;
 leaf certificates renew before expiry. Restoring an installation should
-restore this PKI, but its loss does not affect completed OCI artifacts.
+restore `private/buildkit-mtls` with mode-0600 host keys. The CA key remains
+host-only for controlled leaf issuance and renewal. A valid pre-release bundle
+under `state/buildkit-mtls` is atomically relocated without changing
+identity; corrupt or ambiguous duplicate state fails closed. Loss of this PKI
+does not affect completed OCI artifacts. Relocation across different
+filesystems stops safely instead of copying private keys. A data-preserving
+uninstall keeps the PKI, while a destructive purge removes it.
 
 BuildKit cache identifiers are never durable application identity. The
 persisted `image_digest` and verified OCI archive are authoritative. Future

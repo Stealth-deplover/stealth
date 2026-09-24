@@ -15,6 +15,13 @@ if [ ! -f "$compose_file" ]; then
 fi
 
 compose=(docker compose --env-file "$env_file" -f "$compose_file")
+compose_root="$(cd -- "$(dirname -- "$compose_file")" && pwd)"
+export STEALTH_INSTALL_ROOT="$compose_root"
+cloudflare_handoff_fixture=""
+cloudflare_smoke_key=""
+cloudflare_handoff_artifact_copy=""
+cloudflare_handoff_listing=""
+cloudflare_handoff_container=""
 cookie_file="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-cookie.XXXXXX")"
 register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.XXXXXX")"
 auth_cookie_header=""
@@ -42,8 +49,8 @@ core_file="$(dirname -- "$compose_file")/traefik/dynamic/core.yaml"
 core_backup=""
 core_modified="false"
 static_file="$(dirname -- "$compose_file")/traefik/traefik.yaml"
-cloudflare_state_source="$(dirname -- "$compose_file")/state/setup-state.enc"
-cloudflare_import_dir="$(dirname -- "$compose_file")/state/.cloudflare-import"
+cloudflare_state_source="$compose_root/state/setup-state.enc"
+cloudflare_import_dir="$compose_root/state/.cloudflare-import"
 cloudflare_import_artifact="$cloudflare_import_dir/cloudflare-import.enc"
 cloudflare_setup_state_available="false"
 if [ -s "$cloudflare_state_source" ]; then
@@ -161,7 +168,7 @@ cleanup() {
 	if [ "$exit_code" -ne 0 ]; then
 		printf 'Compose smoke failed; collecting bounded diagnostics\n' >&2
 		"${compose[@]}" ps >&2 || true
-		"${compose[@]}" logs --tail=80 clickhouse buildkit otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
+		"${compose[@]}" logs --tail=80 clickhouse buildkit otelcol-state-init telemetry-docker-logs-state-init traefik-state-init cloudflare-setup-state-init cloudflare-state-init otel-collector telemetry-host telemetry-docker-logs telemetry-docker-proxy telemetry-docker api worker migrate console proxy traefik >&2 || true
 	fi
 	if [ "${SMOKE_REMOVE_VOLUMES:-false}" = "true" ]; then
 		"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -190,11 +197,26 @@ cleanup() {
 		rm -rf -- "$buildkit_wrong_identity_dir"
 	fi
 	if [ "$buildkit_pki_smoke_created" = "true" ]; then
-		pki_path="$(dirname -- "$compose_file")/state/buildkit-mtls"
+		pki_path="$compose_root/private/buildkit-mtls"
 		if [ -d "$pki_path" ] && [ ! -L "$pki_path" ]; then
 			rm -rf -- "$pki_path"
 		fi
+		if [ -d "$compose_root/private" ] && [ ! -L "$compose_root/private" ] && [ -z "$(find "$compose_root/private" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+			rmdir -- "$compose_root/private" || true
+		fi
 		docker volume rm stealth_app_buildkit_worker_credentials stealth_app_buildkit_server_credentials >/dev/null 2>&1 || true
+	fi
+	if [ -n "$cloudflare_handoff_fixture" ]; then
+		rm -rf -- "$cloudflare_handoff_fixture"
+	fi
+	if [ -n "$cloudflare_handoff_container" ]; then
+		docker rm -f "$cloudflare_handoff_container" >/dev/null 2>&1 || true
+	fi
+	if [ -n "$cloudflare_handoff_artifact_copy" ]; then
+		rm -f -- "$cloudflare_handoff_artifact_copy"
+	fi
+	if [ -n "$cloudflare_handoff_listing" ]; then
+		rm -rf -- "$cloudflare_handoff_listing"
 	fi
 	rm -f "$cookie_file" "$register_response" "$platform_response" "$platform_archive" "$app_archive" "$app_probe_binary" "$buildkit_apparmor_profile_file"
 	if [ -n "$core_backup" ]; then
@@ -205,16 +227,19 @@ cleanup() {
 trap cleanup EXIT
 
 prepare_buildkit_pki_for_smoke() {
-	local state_dir pki_path
-	state_dir="$(dirname -- "$compose_file")/state"
-	pki_path="$state_dir/buildkit-mtls"
+	local pki_path old_pki_path
+	pki_path="$compose_root/private/buildkit-mtls"
+	old_pki_path="$compose_root/state/buildkit-mtls"
 	if [ ! -e "$pki_path" ] && [ ! -L "$pki_path" ] &&
+		[ ! -e "$old_pki_path" ] && [ ! -L "$old_pki_path" ] &&
 		[ ! -e "$pki_path.pending" ] && [ ! -L "$pki_path.pending" ] &&
-		[ ! -e "$pki_path.previous" ] && [ ! -L "$pki_path.previous" ]; then
+		[ ! -e "$pki_path.previous" ] && [ ! -L "$pki_path.previous" ] &&
+		[ ! -e "$old_pki_path.pending" ] && [ ! -L "$old_pki_path.pending" ] &&
+		[ ! -e "$old_pki_path.previous" ] && [ ! -L "$old_pki_path.previous" ]; then
 		buildkit_pki_smoke_created="true"
 	fi
-	STEALTH_BUILDKIT_PKI_SMOKE_STATE_DIR="$state_dir" \
-		go test ./internal/buildkitpki -run '^TestProductionComposeSmokePreparePKI$' -count=1
+	STEALTH_BUILDKIT_PKI_SMOKE_ROOT="$compose_root" \
+		go test ./internal/installengine -run '^TestProductionComposeSmokeEnsureBuildKitPKI$' -count=1
 	for key in "$pki_path/ca-key.pem" "$pki_path/server/key.pem" "$pki_path/worker/key.pem" "$pki_path/health/key.pem"; do
 		if [ -L "$key" ] || [ ! -f "$key" ]; then
 			printf 'BuildKit mTLS smoke key was not created as a regular file: %s\n' "$key" >&2
@@ -225,6 +250,56 @@ prepare_buildkit_pki_for_smoke() {
 			return 1
 		fi
 	done
+}
+
+verify_cloudflare_handoff_smoke() {
+	local fixture_state fixture_import test_key
+	cloudflare_handoff_fixture="$(mktemp -d "${TMPDIR:-/tmp}/stealth-cloudflare-handoff.XXXXXX")"
+	chmod 0700 "$cloudflare_handoff_fixture"
+	fixture_state="$cloudflare_handoff_fixture/state"
+	fixture_import="$fixture_state/.cloudflare-import/cloudflare-import.enc"
+	mkdir -m 0700 -- "$fixture_state"
+	cloudflare_smoke_key="$(openssl rand -base64 32)"
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=write \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$fixture_import" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	cloudflare_handoff_artifact_copy="$(mktemp "${TMPDIR:-/tmp}/stealth-cloudflare-import-smoke.XXXXXX")"
+	rm -f -- "$cloudflare_handoff_artifact_copy"
+	cloudflare_handoff_container="stealth-cloudflare-import-smoke-$$"
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --name "$cloudflare_handoff_container" --no-deps \
+		-e "FUNCTIONS_SECRET_KEY=$cloudflare_smoke_key" cloudflare-state-init
+	docker cp "$cloudflare_handoff_container:/output/cloudflare-import.enc" "$cloudflare_handoff_artifact_copy"
+	docker rm "$cloudflare_handoff_container" >/dev/null
+	cloudflare_handoff_container=""
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$cloudflare_handoff_artifact_copy" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	rm -f -- "$fixture_state/setup-state.enc"
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
+	cloudflare_handoff_container="stealth-cloudflare-import-missing-smoke-$$"
+	STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --name "$cloudflare_handoff_container" --no-deps \
+		-e "FUNCTIONS_SECRET_KEY=$cloudflare_smoke_key" cloudflare-state-init
+	cloudflare_handoff_listing="$(mktemp -d "${TMPDIR:-/tmp}/stealth-cloudflare-import-listing.XXXXXX")"
+	docker cp "$cloudflare_handoff_container:/output" "$cloudflare_handoff_listing"
+	docker rm "$cloudflare_handoff_container" >/dev/null
+	cloudflare_handoff_container=""
+	STEALTH_CLOUDFLARE_SMOKE_ACTION=verify-absent \
+	STEALTH_CLOUDFLARE_SMOKE_KEY="$cloudflare_smoke_key" \
+	STEALTH_CLOUDFLARE_SMOKE_SOURCE="$fixture_state/setup-state.enc" \
+	STEALTH_CLOUDFLARE_SMOKE_ARTIFACT="$cloudflare_handoff_listing/output/cloudflare-import.enc" \
+		go test ./internal/cloudflareimport -run '^TestComposeSmokeLegacyHandoff$' -count=1
+	rm -rf -- "$cloudflare_handoff_fixture"
+	cloudflare_handoff_fixture=""
+	rm -f -- "$cloudflare_handoff_artifact_copy"
+	cloudflare_handoff_artifact_copy=""
+	rm -rf -- "$cloudflare_handoff_listing"
+	cloudflare_handoff_listing=""
+	printf '%s\n' 'Cloudflare encrypted setup-state handoff accepts valid input and preserves the missing-source no-import path'
 }
 
 expect_buildkit_auth_rejection() {
@@ -416,6 +491,8 @@ prepare_traefik_state_for_smoke
 	-e "STEALTH_TRAEFIK_HOST_UID=$(id -u)" \
 	traefik-state-init
 verify_traefik_state_init
+verify_cloudflare_handoff_smoke
+"${compose[@]}" run --rm --no-deps cloudflare-setup-state-init
 "${compose[@]}" run --rm --no-deps cloudflare-state-init
 if [ "$cloudflare_setup_state_available" = "false" ] && { [ -e "$cloudflare_import_artifact" ] || [ -L "$cloudflare_import_artifact" ]; }; then
 	printf '%s\n' 'Cloudflare initializer fabricated an artifact without source state' >&2

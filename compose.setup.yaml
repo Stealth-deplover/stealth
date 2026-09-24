@@ -4,7 +4,8 @@ name: ${COMPOSE_PROJECT_NAME:-stealth}
 # starts and owns production Compose; this project only serves the wizard and
 # its temporary service dependencies. The setup API has no Docker socket,
 # Docker CLI, or production installation filesystem. The narrow state bind is
-# the encrypted coordination boundary shared with the host CLI.
+# the encrypted coordination boundary shared with the host CLI. BuildKit
+# credentials live separately under private/ and are never mounted here.
 
 services:
   postgres:

@@ -15,12 +15,15 @@ import (
 )
 
 func TestEnsureCreatesDistinctRoleBoundIdentitiesAndPreservesThem(t *testing.T) {
-	state := t.TempDir()
+	state := testPKIDir(t)
 	changed, err := Ensure(state)
 	if err != nil || !changed {
 		t.Fatalf("initial Ensure = %v, %v", changed, err)
 	}
 	paths := PathsAt(state)
+	if paths.Root != state {
+		t.Fatalf("PathsAt(%q).Root = %q; the argument must be the PKI directory itself", state, paths.Root)
+	}
 	caPEM := read(t, paths.CACert)
 	caBlock, _ := pem.Decode(caPEM)
 	ca, err := x509.ParseCertificate(caBlock.Bytes)
@@ -56,7 +59,7 @@ func TestEnsureCreatesDistinctRoleBoundIdentitiesAndPreservesThem(t *testing.T) 
 }
 
 func TestEnsureRenewsLeafSetBeforeExpiryWithoutRotatingCA(t *testing.T) {
-	state := t.TempDir()
+	state := testPKIDir(t)
 	if _, err := Ensure(state); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +86,7 @@ func TestEnsureRenewsLeafSetBeforeExpiryWithoutRotatingCA(t *testing.T) {
 
 func TestEnsureRenewsExpiredLeafAndRejectsBrokenState(t *testing.T) {
 	t.Run("expired leaf is renewed", func(t *testing.T) {
-		state := t.TempDir()
+		state := testPKIDir(t)
 		if _, err := Ensure(state); err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +143,7 @@ func TestEnsureRenewsExpiredLeafAndRejectsBrokenState(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			state := t.TempDir()
+			state := testPKIDir(t)
 			if _, err := Ensure(state); err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +156,7 @@ func TestEnsureRenewsExpiredLeafAndRejectsBrokenState(t *testing.T) {
 }
 
 func TestEnsureRecoversCompleteInterruptedCreationAndFailsOnPartial(t *testing.T) {
-	state := t.TempDir()
+	state := testPKIDir(t)
 	paths := PathsAt(state)
 	pending := paths.Root + ".pending"
 	if err := writeBundleAtomic(paths, pending); err != nil {
@@ -167,9 +170,12 @@ func TestEnsureRecoversCompleteInterruptedCreationAndFailsOnPartial(t *testing.T
 		t.Fatalf("recovered bundle does not validate: %v", err)
 	}
 
-	state = t.TempDir()
+	state = testPKIDir(t)
 	paths = PathsAt(state)
 	pending = paths.Root + ".pending"
+	if err := os.MkdirAll(filepath.Dir(pending), directoryMode); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(pending, directoryMode); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +184,7 @@ func TestEnsureRecoversCompleteInterruptedCreationAndFailsOnPartial(t *testing.T
 	}
 }
 
-func TestEnsureRejectsStateDirectorySymlink(t *testing.T) {
+func TestEnsureRejectsPKIDirectorySymlink(t *testing.T) {
 	parent := t.TempDir()
 	actual := filepath.Join(parent, "actual")
 	if err := os.Mkdir(actual, 0o700); err != nil {
@@ -189,18 +195,23 @@ func TestEnsureRejectsStateDirectorySymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Ensure(link); err == nil {
-		t.Fatal("symlink state directory accepted")
+		t.Fatal("symlink PKI directory accepted")
 	}
 }
 
 func TestProductionComposeSmokePreparePKI(t *testing.T) {
-	stateDir := os.Getenv("STEALTH_BUILDKIT_PKI_SMOKE_STATE_DIR")
-	if stateDir == "" {
+	pkiDir := os.Getenv("STEALTH_BUILDKIT_PKI_SMOKE_DIR")
+	if pkiDir == "" {
 		t.Skip("production Compose smoke did not request host PKI preparation")
 	}
-	if _, err := Ensure(stateDir); err != nil {
+	if _, err := Ensure(pkiDir); err != nil {
 		t.Fatalf("prepare production Compose smoke BuildKit PKI: %v", err)
 	}
+}
+
+func testPKIDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "private", DirectoryName)
 }
 
 func assertRole(t *testing.T, cert, ca *x509.Certificate, expected role) {

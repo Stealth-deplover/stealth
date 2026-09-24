@@ -45,7 +45,8 @@ Private Docker networking is not treated as authentication.
                 └── no BuildKit client key
 ```
 
-The installer creates and validates `state/buildkit-mtls` during install,
+The installer creates and validates `private/buildkit-mtls`, outside the
+legacy setup-state directory, during install,
 repair, and upgrade. The CA key stays on the host at mode `0600` and is not
 mounted into any container. A networkless, one-shot initializer copies only
 the server and dedicated health-client identities into BuildKit's private
@@ -61,9 +62,17 @@ when fewer than 30 days remain; renewal uses the same CA, updates role-specific
 volumes, and recreates the worker and BuildKit together. Complete valid state
 is preserved across routine updates. A partial or corrupt bundle fails closed
 with repair guidance instead of replacing one member independently. Backup
-and restore of the same installation should include `state/buildkit-mtls`;
-loss of that identity requires a new trust set for future builds but does not
-invalidate already persisted OCI artifacts.
+and restore of the same installation should include `private/buildkit-mtls`
+as internal control-plane credential state. It is not tenant data, BuildKit
+cache, or a release asset. A data-preserving uninstall keeps it; destructive
+purge removes it. Earlier development installs may have a complete bundle at
+`state/buildkit-mtls`; the installer validates and atomically relocates that
+bundle without changing its CA or leaf identities. Corrupt bundles or
+simultaneous old and new bundles stop installation rather than silently
+creating another CA. If the old and new paths are on different filesystems,
+installation stops rather than copying private keys nonatomically. Loss of the
+private identity requires a new trust set for future builds but does not
+invalidate persisted OCI artifacts.
 
 The BuildKit service joins only the private `app_build` network with the
 worker. It has no PostgreSQL/Redis/control-plane network, Docker socket, host
@@ -121,6 +130,7 @@ docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d postgres redis clickhouse
 docker compose --env-file .env.production -f compose.production.yaml up migrate
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps -e STEALTH_TRAEFIK_HOST_UID="$(id -u)" traefik-state-init
+docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-setup-state-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps cloudflare-state-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-worker-credentials-init
 docker compose --env-file .env.production -f compose.production.yaml run --rm --no-deps buildkit-server-credentials-init
@@ -431,7 +441,9 @@ configures the named tunnel with the Console route to `http://proxy:80`, the
 catch-all 404, and its proxied DNS record. The host CLI starts the production
 tunnel, verifies tunnel health and the production hostname, and removes the
 Quick Tunnel only after those checks pass. Before the worker starts, the
-network-isolated `cloudflare-state-init` helper decrypts the legacy setup
+networkless `cloudflare-setup-state-init` copies the optional encrypted
+setup snapshot into a dedicated named volume; `cloudflare-state-init` reads
+only that volume and decrypts the legacy setup
 snapshot and atomically creates a versioned, Cloudflare-only encrypted import
 artifact. It contains the existing Cloudflare connection identity and API
 token required for migration. The worker mounts only this narrow artifact;

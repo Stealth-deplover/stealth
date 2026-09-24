@@ -323,6 +323,23 @@ services:
         chmod 0775 "$${state}" "$${generated}"
         chmod 0664 "$${reload}"
 
+  cloudflare-setup-state-init:
+    # Copy only the optional encrypted setup snapshot into a narrow handoff
+    # volume. BuildKit PKI is outside ./state, and this helper has no key that
+    # can decrypt setup data. CHOWN normalizes the named-volume owner to the
+    # host state owner; DAC_READ_SEARCH is needed for restored 0600 snapshots.
+    image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-state-init"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/state:/source:ro"
+      - cloudflare_setup_state_input:/output:rw
+
   cloudflare-state-init:
     # Decrypt legacy state only in this isolated one-shot process, then publish
     # a typed Cloudflare-only encrypted artifact for the production worker.
@@ -332,11 +349,14 @@ services:
     network_mode: none
     read_only: true
     entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    depends_on:
+      cloudflare-setup-state-init:
+        condition: service_completed_successfully
     environment:
       FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
     volumes:
-      - ./state:/state:ro
-      - ./state/.cloudflare-import:/output:rw
+      - cloudflare_setup_state_input:/input:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
 
   telemetry-docker-logs-state-init:
     image: "${OTEL_STATE_INIT_IMAGE:-alpine:3.24}"
@@ -461,9 +481,9 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE]
     volumes:
-      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
-      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro
-      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro"
       - buildkit_worker_credentials:/output
     command:
       - sh
@@ -488,11 +508,11 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE]
     volumes:
-      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro
-      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro
-      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro
-      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro
-      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro"
       - buildkit_server_credentials:/output
     command:
       - sh
@@ -528,7 +548,7 @@ services:
       # the static Traefik file and installation root are not mounted.
       - ./traefik/dynamic:/var/lib/stealth/traefik:rw
       - ./traefik/dynamic/core.yaml:/var/lib/stealth/traefik/core.yaml:ro
-      - ./state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/var/lib/stealth/cloudflare-import:ro"
       - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
@@ -715,6 +735,8 @@ volumes:
     name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_worker_credentials"
   buildkit_server_credentials:
     name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
+  cloudflare_setup_state_input:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input"
   clickhouse_data:
     name: "${CLICKHOUSE_VOLUME_NAME:-stealth_clickhouse_data}"
   otelcol_state:

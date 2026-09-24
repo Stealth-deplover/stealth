@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/Stealth-deplover/stealth/internal/buildkitpki"
 )
 
 type recordedCommand struct {
@@ -109,12 +107,91 @@ func writeEngineFixture(t *testing.T, setup bool) Layout {
 }
 
 func testProductionComposeAsset() string {
-	return "services:\n" +
-		"  buildkit-worker-credentials-init:\n    network_mode: none\n    restart: \"no\"\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE]\n    command: [\"sh\", \"-ec\", \"for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \\\"$$stale\\\" ]\"]\n    volumes:\n      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro\n      - ./state/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro\n      - ./state/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro\n      - buildkit_worker_credentials:/output\n" +
-		"  buildkit-server-credentials-init:\n    network_mode: none\n    restart: \"no\"\n    cap_drop: [ALL]\n    cap_add: [CHOWN, DAC_OVERRIDE]\n    command: [\"sh\", \"-ec\", \"for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \\\"$$stale\\\" ]\"]\n    volumes:\n      - ./state/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro\n      - ./state/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro\n      - ./state/buildkit-mtls/server/key.pem:/input/server-key.pem:ro\n      - ./state/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro\n      - ./state/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro\n      - buildkit_server_credentials:/output\n" +
-		"  worker:\n    volumes:\n      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro\n" +
-		"  buildkit:\n    image: " + defaultBuildKitImage + "\n    user: \"1000:1000\"\n    read_only: true\n    command: [\"--addr\", \"tcp://0.0.0.0:1234\", \"--config\", \"/etc/buildkit/buildkitd.toml\"]\n    healthcheck:\n      test: [\"CMD\", \"buildctl\", \"--addr\", \"tcp://buildkit:1234\", \"--tlscacert\", \"/run/secrets/stealth-buildkit/ca.pem\", \"--tlscert\", \"/run/secrets/stealth-buildkit/health-client-cert.pem\", \"--tlskey\", \"/run/secrets/stealth-buildkit/health-client-key.pem\", \"debug\", \"workers\"]\n    security_opt:\n      - seccomp=unconfined\n      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}\n      - systempaths=unconfined\n    volumes:\n      - buildkit_state:/home/user/.local/share/buildkit\n      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro\n      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro\n    networks: [app_build]\n" +
-		"  ingress-control:\n  traefik:\n  traefik-state-init:\n  cloudflare-state-init:\n  otel-collector:\n  telemetry-host:\n  telemetry-docker-logs:\n  telemetry-docker:\n  telemetry-docker-proxy:\nnetworks:\n  telemetry_ingest:\n  app_build:\nvolumes:\n  buildkit_worker_credentials:\n  buildkit_server_credentials:\n"
+	return `services:
+  buildkit-worker-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/cert.pem:/input/client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/worker/key.pem:/input/client-key.pem:ro"
+      - buildkit_worker_credentials:/output
+  buildkit-server-credentials-init:
+    network_mode: none
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    command: ["sh", "-ec", "for stale in /output/* /output/.[!.]* /output/..?*; do [ ! -e \"$$stale\" ]"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/ca-cert.pem:/input/ca.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/cert.pem:/input/server-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/server/key.pem:/input/server-key.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/cert.pem:/input/health-client-cert.pem:ro"
+      - "${STEALTH_INSTALL_ROOT:-.}/private/buildkit-mtls/health/key.pem:/input/health-client-key.pem:ro"
+      - buildkit_server_credentials:/output
+  worker:
+    volumes:
+      - buildkit_worker_credentials:/run/secrets/stealth-buildkit:ro
+  buildkit:
+    image: ` + defaultBuildKitImage + `
+    user: "1000:1000"
+    read_only: true
+    command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+    healthcheck:
+      test: ["CMD", "buildctl", "--addr", "tcp://buildkit:1234", "--tlscacert", "/run/secrets/stealth-buildkit/ca.pem", "--tlscert", "/run/secrets/stealth-buildkit/health-client-cert.pem", "--tlskey", "/run/secrets/stealth-buildkit/health-client-key.pem", "debug", "workers"]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=${APPS_BUILDKIT_APPARMOR_PROFILE:-unconfined}
+      - systempaths=unconfined
+    volumes:
+      - buildkit_state:/home/user/.local/share/buildkit
+      - buildkit_server_credentials:/run/secrets/stealth-buildkit:ro
+      - ./buildkit/buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+    networks: [app_build]
+  ingress-control:
+  traefik:
+  traefik-state-init:
+  cloudflare-setup-state-init:
+    network_mode: none
+    restart: "no"
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-state-init"]
+    volumes:
+      - "${STEALTH_INSTALL_ROOT:-.}/state:/source:ro"
+      - cloudflare_setup_state_input:/output:rw
+  cloudflare-state-init:
+    network_mode: none
+    read_only: true
+    entrypoint: ["/usr/local/bin/stealth-cloudflare-import-init"]
+    depends_on:
+      cloudflare-setup-state-init:
+        condition: service_completed_successfully
+    environment:
+      FUNCTIONS_SECRET_KEY: "${FUNCTIONS_SECRET_KEY:?set FUNCTIONS_SECRET_KEY}"
+    volumes:
+      - cloudflare_setup_state_input:/input:ro
+      - "${STEALTH_INSTALL_ROOT:-.}/state/.cloudflare-import:/output:rw"
+  otel-collector:
+  telemetry-host:
+  telemetry-docker-logs:
+  telemetry-docker:
+  telemetry-docker-proxy:
+networks:
+  telemetry_ingest:
+  app_build:
+volumes:
+  buildkit_worker_credentials:
+  buildkit_server_credentials:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_app_buildkit_server_credentials"
+  cloudflare_setup_state_input:
+    name: "${COMPOSE_PROJECT_NAME:-stealth}_cloudflare_setup_state_input"
+`
 }
 
 func testBuildKitConfigAsset() string {
@@ -500,8 +577,8 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := runner.snapshot()
-	if len(calls) != 10 {
-		t.Fatalf("recorded calls = %#v, want six state inits, telemetry dependency, migration, and services", calls)
+	if len(calls) != 11 {
+		t.Fatalf("recorded calls = %#v, want seven state inits, telemetry dependency, migration, and services", calls)
 	}
 	if !equalArgs(calls[0].args[len(calls[0].args)-4:], []string{"run", "--rm", "--no-deps", "otelcol-state-init"}) {
 		t.Fatalf("Collector state init command = %#v", calls[0])
@@ -512,26 +589,29 @@ func TestExternalDependenciesNeverStartBundledServices(t *testing.T) {
 	if len(calls[2].args) < 2 || !strings.HasPrefix(calls[2].args[len(calls[2].args)-2], "STEALTH_TRAEFIK_HOST_UID=") || calls[2].args[len(calls[2].args)-1] != "traefik-state-init" {
 		t.Fatalf("Traefik state init command = %#v", calls[2])
 	}
-	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
-		t.Fatalf("Cloudflare state init command = %#v", calls[3])
+	if !equalArgs(calls[3].args[len(calls[3].args)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-setup-state-init"}) {
+		t.Fatalf("Cloudflare source state init command = %#v", calls[3])
 	}
-	if !equalArgs(calls[4].args[len(calls[4].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
-		t.Fatalf("worker BuildKit credentials init command = %#v", calls[4])
+	if !equalArgs(calls[4].args[len(calls[4].args)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
+		t.Fatalf("Cloudflare state init command = %#v", calls[4])
 	}
-	if !equalArgs(calls[5].args[len(calls[5].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
-		t.Fatalf("BuildKit credentials init command = %#v", calls[5])
+	if !equalArgs(calls[5].args[len(calls[5].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-worker-credentials-init"}) {
+		t.Fatalf("worker BuildKit credentials init command = %#v", calls[5])
 	}
-	if !equalArgs(calls[6].args[len(calls[6].args)-3:], []string{"up", "-d", "clickhouse"}) {
-		t.Fatalf("telemetry dependency command = %#v", calls[6])
+	if !equalArgs(calls[6].args[len(calls[6].args)-4:], []string{"run", "--rm", "--no-deps", "buildkit-server-credentials-init"}) {
+		t.Fatalf("BuildKit credentials init command = %#v", calls[6])
 	}
-	if !equalArgs(calls[7].args[len(calls[7].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
-		t.Fatalf("external migration command = %#v", calls[7])
+	if !equalArgs(calls[7].args[len(calls[7].args)-3:], []string{"up", "-d", "clickhouse"}) {
+		t.Fatalf("telemetry dependency command = %#v", calls[7])
 	}
-	if !equalArgs(calls[8].args[len(calls[8].args)-6:], []string{"up", "-d", "--no-deps", "--force-recreate", "buildkit", "worker"}) {
-		t.Fatalf("credential-refresh restart command = %#v", calls[8])
+	if !equalArgs(calls[8].args[len(calls[8].args)-4:], []string{"run", "--rm", "--no-deps", "migrate"}) {
+		t.Fatalf("external migration command = %#v", calls[8])
 	}
-	if !contains(calls[9].args, "--no-deps") || contains(calls[9].args, "postgres") || contains(calls[9].args, "redis") {
-		t.Fatalf("external service command = %#v", calls[9])
+	if !equalArgs(calls[9].args[len(calls[9].args)-6:], []string{"up", "-d", "--no-deps", "--force-recreate", "buildkit", "worker"}) {
+		t.Fatalf("credential-refresh restart command = %#v", calls[9])
+	}
+	if !contains(calls[10].args, "--no-deps") || contains(calls[10].args, "postgres") || contains(calls[10].args, "redis") {
+		t.Fatalf("external service command = %#v", calls[10])
 	}
 }
 
@@ -562,10 +642,10 @@ func TestProductionLifecyclesPrepareCloudflareImportBeforeWorkers(t *testing.T) 
 				t.Fatal(err)
 			}
 			calls := runner.snapshot()
-			if len(calls) < 6 {
+			if len(calls) < 7 {
 				t.Fatalf("recorded calls = %#v, want state preparation and production services", calls)
 			}
-			cloudflareInit := calls[3].args
+			cloudflareInit := calls[4].args
 			if !equalArgs(cloudflareInit[len(cloudflareInit)-4:], []string{"run", "--rm", "--no-deps", "cloudflare-state-init"}) {
 				t.Fatalf("Cloudflare state initializer did not run before services: %#v", cloudflareInit)
 			}
@@ -876,8 +956,8 @@ func TestPreparePreservesBuildKitPKIOnUpgrade(t *testing.T) {
 	if err := engine.Prepare(context.Background(), plan); err != nil {
 		t.Fatalf("fresh installation preparation: %v", err)
 	}
-	serverCertPath := filepath.Join(layout.StateDir, buildkitpki.DirectoryName, "server", "cert.pem")
-	serverKeyPath := filepath.Join(layout.StateDir, buildkitpki.DirectoryName, "server", "key.pem")
+	serverCertPath := filepath.Join(layout.BuildKitPKIDir, "server", "cert.pem")
+	serverKeyPath := filepath.Join(layout.BuildKitPKIDir, "server", "key.pem")
 	issuedServerCert, err := os.ReadFile(serverCertPath)
 	if err != nil {
 		t.Fatal(err)
