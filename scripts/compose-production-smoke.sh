@@ -273,7 +273,7 @@ verify_cloudflare_handoff_smoke() {
 		# input that the next real source initializer must remove.
 		STEALTH_INSTALL_ROOT="$cloudflare_handoff_fixture" "${compose[@]}" run --rm --no-deps -T \
 			--entrypoint /bin/sh cloudflare-setup-state-init -ec \
-			'chown 0:0 /output && chmod 0700 /output && printf stale > /output/setup-state.enc && chmod 0400 /output/setup-state.enc'
+			'chown 0:0 /output && chmod 0700 /output && rm -f /output/setup-state.enc && printf stale > /output/setup-state.enc && chmod 0400 /output/setup-state.enc'
 	}
 	verify_handoff_owner() {
 		local source_expected="$1" expected_snapshot actual
