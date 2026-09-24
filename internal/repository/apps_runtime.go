@@ -472,20 +472,24 @@ func (r *Repository) ClaimNextAppRuntimeCleanup(ctx context.Context, workerID st
 	}
 	defer tx.Rollback(ctx)
 	var job AppRuntimeCleanupJob
-	var containerID string
 	err = tx.QueryRow(ctx, `
-		SELECT id,project_id,app_id,COALESCE(container_id,''),container_name,stop_grace_period_seconds,attempt_count
+		SELECT id,project_id,app_id,container_name,stop_grace_period_seconds,attempt_count
 		FROM app_runtime_cleanup_jobs
 		WHERE (status='pending' AND next_attempt_at<=now()) OR (status='leased' AND lease_expires_at<=now())
 		ORDER BY next_attempt_at,created_at,id
-		FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&job.ID, &job.ProjectID, &job.AppID, &containerID, &job.ContainerName, &job.StopGracePeriodSecs, &job.AttemptCount)
+		FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&job.ID, &job.ProjectID, &job.AppID, &job.ContainerName, &job.StopGracePeriodSecs, &job.AttemptCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AppRuntimeCleanupJob{}, ErrNoAppRuntimeCleanup
 	}
 	if err != nil {
 		return AppRuntimeCleanupJob{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE app_runtime_cleanup_jobs SET status='leased',worker_id=$2,lease_token=$3,lease_expires_at=now()+($4::double precision*interval '1 second'),updated_at=now() WHERE id=$1`, job.ID, workerID, token, leaseAge.Seconds()); err != nil {
+	var containerID string
+	if err := tx.QueryRow(ctx, `
+		UPDATE app_runtime_cleanup_jobs
+		SET status='leased',worker_id=$2,lease_token=$3,lease_expires_at=now()+($4::double precision*interval '1 second'),updated_at=now()
+		WHERE id=$1
+		RETURNING COALESCE(container_id,'')`, job.ID, workerID, token, leaseAge.Seconds()).Scan(&containerID); err != nil {
 		return AppRuntimeCleanupJob{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

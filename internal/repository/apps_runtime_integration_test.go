@@ -145,7 +145,11 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 		t.Fatal(err)
 	}
 	if cleanup.AppID != appID || cleanup.ContainerID == nil || *cleanup.ContainerID != strings.Repeat("a", 64) || cleanup.ContainerName != AppRuntimeContainerName(appID) {
-		t.Fatalf("App deletion did not persist runtime identity for cleanup: %+v", cleanup)
+		var persistedContainerID string
+		if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(container_id,'') FROM app_runtime_cleanup_jobs WHERE id=$1`, cleanup.ID).Scan(&persistedContainerID); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("App deletion cleanup claim disagrees with its row: job=%+v persisted_container_id=%q", cleanup, persistedContainerID)
 	}
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
@@ -181,7 +185,11 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 		t.Fatal(err)
 	}
 	if cleanup.ProjectID == nil || *cleanup.ProjectID != f.projectTwoID || cleanup.AppID != appID || cleanup.ContainerID == nil || *cleanup.ContainerID != strings.Repeat("a", 64) {
-		t.Fatalf("project deletion lost runtime ownership cleanup data: %+v", cleanup)
+		var persistedContainerID string
+		if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(container_id,'') FROM app_runtime_cleanup_jobs WHERE id=$1`, cleanup.ID).Scan(&persistedContainerID); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("project deletion cleanup claim disagrees with its row: job=%+v persisted_container_id=%q", cleanup, persistedContainerID)
 	}
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
