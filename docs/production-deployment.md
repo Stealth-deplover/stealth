@@ -33,7 +33,9 @@ port, Stealth artifact storage mount, or platform credentials. The worker
 transfers a private source context through BuildKit's client protocol. Cache
 state is a separate bounded disposable volume; completed OCI archives in
 Stealth storage are authoritative and survive cache loss or a BuildKit
-container replacement.
+container replacement. RootlessKit's transient state and user runtime
+directory use small memory-backed tmpfs mounts owned by UID 1000; explicit
+ownership is required because those mounts hide the image's pre-owned paths.
 
 The repository includes [`compose.production.yaml`](../compose.production.yaml)
 and [`.env.production.example`](../.env.production.example). The Compose file

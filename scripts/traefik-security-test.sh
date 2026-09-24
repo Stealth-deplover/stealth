@@ -236,6 +236,14 @@ if ! printf '%s\n' "$buildkit_block" | grep -Fq '/home/user/.local/tmp'; then
 	printf '%s\n' 'App BuildKit rootless state directory must use ephemeral tmpfs storage' >&2
 	exit 1
 fi
+for required in \
+	'/home/user/.local/tmp:mode=0700,uid=1000,gid=1000,size=64m' \
+	'/run/user/1000:mode=0700,uid=1000,gid=1000,size=16m'; do
+	if ! printf '%s\n' "$buildkit_block" | grep -Fq -- "$required"; then
+		printf 'App BuildKit tmpfs must grant bounded writable state to UID 1000: %s\n' "$required" >&2
+		exit 1
+	fi
+done
 buildkit_state_volume="$(env_value APPS_BUILDKIT_STATE_VOLUME)"
 if [ -z "$buildkit_state_volume" ]; then
 	buildkit_state_volume='stealth_app_buildkit_state'

@@ -500,10 +500,11 @@ services:
     command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
     read_only: true
     tmpfs:
-      - /tmp
-      - /run/user/1000
-      # rootlesskit keeps transient namespace state under this directory.
-      - /home/user/.local/tmp
+      - /tmp:mode=1777,size=64m
+      - /run/user/1000:mode=0700,uid=1000,gid=1000,size=16m
+      # Mounts hide the image's pre-owned paths, so assign the rootless user
+      # explicitly for its transient rootlesskit namespace state.
+      - /home/user/.local/tmp:mode=0700,uid=1000,gid=1000,size=64m
     security_opt:
       # Required by the official rootless BuildKit image to establish its
       # nested user/mount namespaces. The service remains non-privileged and
