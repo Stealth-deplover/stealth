@@ -117,7 +117,7 @@ for required in \
 		exit 1
 	fi
 done
-for required in 'network_mode: none' 'read_only: true' 'restart: "no"' 'user: "0:0"' 'cap_drop: [ALL]' 'CHOWN' 'DAC_READ_SEARCH' '/usr/local/bin/stealth-cloudflare-state-init' 'target: /source' 'target: /output'; do
+for required in 'network_mode: none' 'read_only: true' 'restart: "no"' 'user: "0:0"' 'cap_drop:' 'CHOWN' 'DAC_READ_SEARCH' '/usr/local/bin/stealth-cloudflare-state-init' 'target: /source' 'target: /output'; do
 	if ! printf '%s\n' "$cloudflare_source_init_block" | grep -Fq -- "$required"; then
 		printf 'Cloudflare source handoff is missing required setting: %s\n' "$required" >&2
 		exit 1
@@ -134,6 +134,15 @@ in_caps && /^      - / { sub(/^[[:space:]]*- /, ""); print }
 ' | sort -u)"
 if [ "$source_capabilities" != "$(printf '%s\n' CHOWN DAC_READ_SEARCH)" ]; then
 	printf 'Cloudflare source handoff capabilities are broader than expected: %s\n' "$(printf '%s\n' "$source_capabilities" | paste -sd, -)" >&2
+	exit 1
+fi
+source_cap_drops="$(printf '%s\n' "$cloudflare_source_init_block" | awk '
+/^    cap_drop:[[:space:]]*$/ { in_caps=1; next }
+in_caps && /^    [^[:space:]][^:]*:/ { exit }
+in_caps && /^      - / { sub(/^[[:space:]]*- /, ""); print }
+' | sort -u)"
+if [ "$source_cap_drops" != 'ALL' ] && ! printf '%s\n' "$cloudflare_source_init_block" | grep -Eq '^    cap_drop:[[:space:]]*\[ALL\][[:space:]]*$'; then
+	printf 'Cloudflare source handoff must drop all capabilities; found: %s\n' "$(printf '%s\n' "$source_cap_drops" | paste -sd, -)" >&2
 	exit 1
 fi
 if printf '%s\n' "$cloudflare_source_init_block" | grep -Eqi 'environment:|FUNCTIONS_SECRET_KEY|DATABASE_URL|REDIS_URL|CLOUDFLARE_API_TOKEN|/var/run/docker.sock|private|buildkit-mtls|ca-key[.]pem|networks:|privileged:|cap_add:.*(ALL|DAC_OVERRIDE|SYS_ADMIN)'; then
