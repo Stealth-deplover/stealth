@@ -234,11 +234,11 @@ expect_buildkit_auth_rejection() {
 		printf 'BuildKit accepted %s\n' "$label" >&2
 		return 1
 	fi
-	if ! printf '%s\n' "$output" | grep -Eiq 'tls|certificate|authentication'; then
-		printf 'BuildKit did not report a TLS rejection for %s\n' "$label" >&2
-		return 1
-	fi
-	printf 'BuildKit rejected %s during TLS authentication\n' "$label"
+	# BuildKit v0.33.0 may surface a required-client-certificate handshake
+	# rejection through gRPC as a generic EOF. Prove the endpoint remains
+	# reachable with the valid identity immediately before and after this
+	# request instead of depending on unstable error wording.
+	printf 'BuildKit rejected %s while the authenticated control probe is available\n' "$label"
 }
 
 verify_buildkit_mtls_smoke() {
@@ -283,10 +283,13 @@ EOF
 	local -a base_args=(buildctl --addr tcp://buildkit:1234)
 	local -a proper_ca=(--tlscacert /run/secrets/stealth-buildkit/ca.pem)
 	local -a valid_client=(--tlscert /run/secrets/stealth-buildkit/client-cert.pem --tlskey /run/secrets/stealth-buildkit/client-key.pem)
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
 	expect_buildkit_auth_rejection 'a client with no certificate' "${base_args[@]}" "${proper_ca[@]}" debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
 	expect_buildkit_auth_rejection 'a client certificate signed by an untrusted CA' "${base_args[@]}" "${proper_ca[@]}" \
 		--tlscert /tmp/stealth-buildkit-mtls-negative-test/wrong-client-cert.pem \
 		--tlskey /tmp/stealth-buildkit-mtls-negative-test/wrong-client-key.pem debug workers
+	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
 	expect_buildkit_auth_rejection 'an untrusted server CA' "${base_args[@]}" \
 		--tlscacert /tmp/stealth-buildkit-mtls-negative-test/wrong-ca.pem "${valid_client[@]}" debug workers
 	"${compose[@]}" exec -T worker buildctl "${base_args[@]:1}" "${proper_ca[@]}" "${valid_client[@]}" debug workers >/dev/null
