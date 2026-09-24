@@ -2001,7 +2001,7 @@ wait_for_app_deployment_ready() {
 
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha
-	local disabled_generation conflict_observed runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local disabled_generation conflict_observed foreign_managed_label runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -2209,8 +2209,9 @@ verify_app_runtime_lifecycle() {
 		return 1
 	fi
 	wait_for_app_runtime_conflict "$conflict_observed"
-	if [ "$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")" != '<no value>' ]; then
-		printf '%s\n' 'foreign container was adopted or labeled by the runtime' >&2
+	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
+	if [ -n "$foreign_managed_label" ]; then
+		printf 'foreign container was adopted or labeled by the runtime (stealth.managed=%s)\n' "$foreign_managed_label" >&2
 		return 1
 	fi
 	docker inspect "$app_runtime_foreign_container" >/dev/null
