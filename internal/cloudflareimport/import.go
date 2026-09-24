@@ -219,10 +219,13 @@ func restoreLegacySetupInputOwner(directory string, owner *FileOwner) error {
 	if owner == nil {
 		return nil
 	}
-	if err := os.Chown(directory, owner.UID, owner.GID); err != nil {
+	// Set permissions while the root-run initializer still owns the directory.
+	// Its deliberately narrow capability set has CHOWN but not FOWNER, so a
+	// later chmod would fail after ownership moves to the host installation UID.
+	if err := os.Chmod(directory, 0o770); err != nil {
 		return errArtifactIO
 	}
-	if err := os.Chmod(directory, 0o770); err != nil {
+	if err := os.Chown(directory, owner.UID, owner.GID); err != nil {
 		return errArtifactIO
 	}
 	if err := syncDirectory(directory); err != nil {
