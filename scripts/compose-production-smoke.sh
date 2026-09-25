@@ -771,6 +771,22 @@ network_contains() {
 	printf '%s\n' "$networks" | grep -Fqx -- "$wanted"
 }
 
+wait_for_container_network() {
+	local service="$1" wanted="$2" container networks
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		container="$("${compose[@]}" ps -q "$service" 2>/dev/null || true)"
+		if [ -n "$container" ]; then
+			networks="$(container_networks "$container" 2>/dev/null || true)"
+			if network_contains "$networks" "$wanted"; then
+				return 0
+			fi
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	printf '%s did not join the expected network: %s\n' "$service" "$wanted" >&2
+	return 1
+}
+
 telemetry_ingest_network_name() {
 	local configured
 	configured="$(awk -F= '$1 == "STEALTH_TELEMETRY_INGEST_NETWORK_NAME" { print substr($0, index($0, "=") + 1); exit }' "$env_file")"
@@ -2345,10 +2361,15 @@ verify_app_runtime_lifecycle() {
 		fi
 	done
 	docker network rm "$network_name" >/dev/null
-	"${compose[@]}" start traefik >/dev/null
-	wait_for_healthy traefik
-	"${compose[@]}" start worker >/dev/null
+	# Compose retains the removed bridge ID on stopped containers. Recreate the
+	# trusted peers so the worker can establish a fresh owned bridge before
+	# Traefik joins it again.
+	"${compose[@]}" up -d --force-recreate worker >/dev/null
 	wait_for_healthy worker
+	wait_for_container_network worker "$network_name"
+	"${compose[@]}" up -d --force-recreate traefik >/dev/null
+	wait_for_healthy traefik
+	wait_for_container_network traefik "$network_name"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
 	if [ "$status" != '200' ]; then
 		printf 're-enabling App after runtime-network deletion returned HTTP %s\n' "$status" >&2
