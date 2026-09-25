@@ -11,6 +11,7 @@ import {
   WorkloadHealthCheckProtocol,
 } from "@/api/generated/schema";
 import type { AppDeployment, StealthApp } from "@/api/types";
+import { createLogSource } from "@/components/log-viewer";
 import { AppDetailView } from "@/features/apps/app-detail-view";
 
 const mocks = vi.hoisted(() => ({
@@ -52,9 +53,9 @@ vi.mock("@/api/mutations", () => ({
 vi.mock("@/components/log-viewer", async () => {
   const React = await import("react");
   return {
-    createLogSource: vi.fn(() => ({ key: "app-build", fetchPage: async () => [] })),
+    createLogSource: vi.fn((context: { kind: string }) => ({ key: context.kind, fetchPage: async () => ({ lines: [] }) })),
     LogViewer: ({ title, description }: { title: string; description: string }) =>
-      React.createElement("div", { "data-testid": "app-build-logs" }, `${title}: ${description}`),
+      React.createElement("div", { "data-testid": title === "Runtime logs" ? "app-runtime-logs" : "app-build-logs" }, `${title}: ${description}`),
   };
 });
 
@@ -194,7 +195,20 @@ describe("AppDetailView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getAllByText(`sha256:${"c".repeat(64)}`)).toHaveLength(2);
     expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Build logs");
-    expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Runtime logs are not available");
+    expect(screen.getByTestId("app-build-logs")).not.toHaveTextContent("Runtime logs are not available");
+  });
+
+  it("keeps retained runtime logs visible for stopped or unhealthy Apps", () => {
+    const app = makeApp();
+    app.runtime_status = AppRuntime_status.stopped;
+    app.health_status = AppHealth_status.unhealthy;
+    app.route_status = AppRoute_status.not_available;
+    mocks.app = app;
+
+    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+
+    expect(screen.getByTestId("app-runtime-logs")).toHaveTextContent("stdout/stderr captured from verified App containers");
+    expect(createLogSource).toHaveBeenCalledWith({ kind: "app-runtime", projectId: "project-1", appId: "app-1" });
   });
 
   it("shows a healthy current generation with its active hostname", () => {

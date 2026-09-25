@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -57,6 +58,17 @@ func verifyBuildKitSecrets() {
 }
 
 func serve() {
+	if payload, err := os.ReadFile("/payload.txt"); err == nil {
+		marker := strings.TrimSpace(string(payload))
+		if marker != "" && len(marker) <= 200 {
+			// Give the production file-log receiver time to discover the new
+			// Docker JSON log file before the first deterministic fixture lines.
+			time.Sleep(1500 * time.Millisecond)
+			startedAt := time.Now().UnixNano()
+			fmt.Printf("STEALTH_APP_RUNTIME_LOG_STDOUT_%s_%d\n", marker, startedAt)
+			fmt.Fprintf(os.Stderr, "STEALTH_APP_RUNTIME_LOG_STDERR_%s_%d\n", marker, startedAt)
+		}
+	}
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		if _, err := os.Stat("/tmp/stealth-health-unhealthy"); err == nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -105,19 +117,28 @@ func verifyRuntime() {
 			os.Exit(5)
 		}
 	}
-	response, err := http.Get("http://127.0.0.1:8080/healthz")
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", err)
-		os.Exit(6)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(15 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://127.0.0.1:8080/healthz")
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener returned HTTP %d\n", response.StatusCode)
+			os.Exit(7)
+		}
+		if readErr != nil || closeErr != nil || strings.TrimSpace(string(body)) != "app-runtime-smoke-ok" {
+			_, _ = fmt.Fprintln(os.Stderr, "runtime smoke app listener returned an unexpected response")
+			os.Exit(8)
+		}
+		return
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener returned HTTP %d\n", response.StatusCode)
-		os.Exit(7)
-	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil || strings.TrimSpace(string(body)) != "app-runtime-smoke-ok" {
-		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke app listener returned an unexpected response")
-		os.Exit(8)
-	}
+	_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", lastErr)
+	os.Exit(6)
 }

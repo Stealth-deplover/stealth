@@ -27,7 +27,9 @@ TLS terminator / Nginx
                                       └── telemetry-docker-logs → otel-collector
 worker → app_build network → dedicated rootless BuildKit → OCI archive in Stealth storage
 worker → Docker socket → Moby → stealth_app_runtime bridge → App containers
-OTLP / Prometheus → otel-collector → ClickHouse
+App stdout/stderr → Docker json-file → telemetry-docker-logs → redaction → ClickHouse
+OTLP / Prometheus ────────────────────────────────────────────┘
+ClickHouse → project-scoped App runtime-log API → Console
 ```
 
 The Docker socket is mounted only into the trusted worker for Docker-backed
@@ -298,7 +300,13 @@ ready, desired and observed generations match, runtime identity is current,
 and health is healthy.
 The worker writes eligible Apps to `platform-apps.yaml`; Site routes remain in
 `platform-sites.yaml`. This is asynchronous convergence, not a zero-downtime or
-HA guarantee. App runtime logs and encrypted App secrets are not implemented.
+HA guarantee. App stdout/stderr is collected through Docker's existing
+json-file logs and the isolated file-log Collector, redacted by the main
+Collector, stored in ClickHouse, and read through a bounded project-scoped API.
+PostgreSQL stores verified App-to-container mapping metadata only. Docker local
+rotation and ClickHouse retention are independent; historical logs are
+available only while ClickHouse retains them. A telemetry outage degrades log
+reads but does not stop Apps. Encrypted App secrets remain unimplemented.
 
 ### Manual host-reboot acceptance
 

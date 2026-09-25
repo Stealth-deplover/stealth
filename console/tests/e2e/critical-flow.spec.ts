@@ -251,6 +251,8 @@ async function installApiFixtures(
     }
     if (path === "/v1/projects/project-1/sites")
       return respond({ sites: [], pagination, can_manage: false });
+    if (path === "/v1/projects/project-1/apps")
+      return respond({ apps: [], pagination, can_manage: false });
     if (path === "/v1/projects/project-1/storage/buckets") {
       if (options.storageError)
         return respond(

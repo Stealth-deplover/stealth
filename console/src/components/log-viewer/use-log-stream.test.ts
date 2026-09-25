@@ -1,171 +1,109 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LogLine, LogSource } from "./log-source";
+import type { LogLine, LogPage, LogSource } from "./log-source";
 import { useLogStream } from "./use-log-stream";
 
 type PendingRequest = {
-  after?: number;
+  cursor?: string;
   signal?: AbortSignal;
-  resolve: (lines: LogLine[]) => void;
+  resolve: (page: LogPage) => void;
 };
 
-function logLine(sequence: number): LogLine {
-  return {
-    sequence,
-    level: "info",
-    message: `line ${sequence}`,
-    created_at: "2026-09-12T00:00:00Z",
-  };
+function line(id: string, message = id): LogLine {
+  return { id, level: "info", message, created_at: "2026-09-12T00:00:00Z" };
+}
+
+function page(lines: LogLine[], nextCursor?: string): LogPage {
+  return { lines, nextCursor };
 }
 
 function source(key: string, fetchPage: LogSource["fetchPage"]): LogSource {
   return { key, fetchPage };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 describe("useLogStream", () => {
-  it("waits for a pull to finish before scheduling the next poll", async () => {
+  it("waits for a page before polling and advances opaque cursors", async () => {
     vi.useFakeTimers();
     const requests: PendingRequest[] = [];
-    const fetchPage = vi.fn(
-      (after?: number, signal?: AbortSignal) =>
-        new Promise<LogLine[]>((resolve) => {
-          requests.push({ after, signal, resolve });
-        }),
-    );
-    const logSource = source("function-build:one", fetchPage);
+    const fetchPage = vi.fn((cursor?: string, signal?: AbortSignal) => new Promise<LogPage>((resolve) => {
+      requests.push({ cursor, signal, resolve });
+    }));
+    const { result, unmount } = renderHook(() => useLogStream({ source: source("runtime", fetchPage), polling: true }));
+    expect(requests).toHaveLength(1);
+    expect(requests[0].cursor).toBeUndefined();
 
-    const { result, unmount } = renderHook(() =>
-      useLogStream({ source: logSource, polling: true }),
-    );
-
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
     expect(fetchPage).toHaveBeenCalledTimes(1);
-    expect(requests[0].after).toBeUndefined();
-    expect(requests[0].signal?.aborted).toBe(false);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(9_000);
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      requests[0].resolve([logLine(1)]);
-      await Promise.resolve();
-    });
-    expect(result.current.after).toBe(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(2);
-    expect(requests[1].after).toBe(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(2);
-
-    await act(async () => {
-      requests[1].resolve([logLine(2)]);
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(3);
-    expect(requests[2].after).toBe(2);
-
+    await act(async () => { requests[0].resolve(page([line("stable-1")], "opaque-cursor-1")); await Promise.resolve(); });
+    expect(result.current.cursor).toBe("opaque-cursor-1");
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(requests[1].cursor).toBe("opaque-cursor-1");
+    await act(async () => { requests[1].resolve(page([], "opaque-cursor-1")); await Promise.resolve(); });
     unmount();
   });
 
-  it("aborts an active pull when unmounted", async () => {
+  it("cancels a pending request when the viewer unmounts", async () => {
     const requests: PendingRequest[] = [];
-    const fetchPage = vi.fn(
-      (_after?: number, signal?: AbortSignal) =>
-        new Promise<LogLine[]>((resolve) => {
-          requests.push({ signal, resolve });
-        }),
-    );
-    const logSource = source("agent-run:one", fetchPage);
-
-    const { unmount } = renderHook(() =>
-      useLogStream({ source: logSource, polling: false }),
-    );
-
+    const fetchPage = vi.fn((_cursor?: string, signal?: AbortSignal) => new Promise<LogPage>((resolve) => {
+      requests.push({ signal, resolve });
+    }));
+    const { unmount } = renderHook(() => useLogStream({ source: source("one", fetchPage), polling: false }));
     expect(requests[0].signal?.aborted).toBe(false);
     unmount();
     expect(requests[0].signal?.aborted).toBe(true);
-
-    await act(async () => {
-      requests[0].resolve([logLine(1)]);
-      await Promise.resolve();
-    });
+    await act(async () => { requests[0].resolve(page([line("ignored")])); await Promise.resolve(); });
   });
 
-  it("resets the cursor and retained lines when the source changes", async () => {
+  it("resets source state, cancels the old source, and accepts the new source only", async () => {
     const requests: PendingRequest[] = [];
-    const fetchPage = vi.fn(
-      (after?: number, signal?: AbortSignal) =>
-        new Promise<LogLine[]>((resolve) => {
-          requests.push({ after, signal, resolve });
-        }),
-    );
-    const firstSource = source("function-build:first", fetchPage);
-    const secondSource = source("function-build:second", fetchPage);
-
-    const { result, rerender } = renderHook(
-      ({ logSource }: { logSource: LogSource }) =>
-        useLogStream({ source: logSource, polling: false }),
-      { initialProps: { logSource: firstSource } },
-    );
-
+    const fetchPage = vi.fn((cursor?: string, signal?: AbortSignal) => new Promise<LogPage>((resolve) => {
+      requests.push({ cursor, signal, resolve });
+    }));
+    const first = source("first", fetchPage);
+    const second = source("second", fetchPage);
+    const { result, rerender } = renderHook(({ current, polling }: { current: LogSource; polling: boolean }) => useLogStream({ source: current, polling }), {
+      initialProps: { current: first, polling: false },
+    });
+    await act(async () => { requests[0].resolve(page([line("old")], "old-cursor")); await Promise.resolve(); });
+    expect(result.current.lines.map((item) => item.id)).toEqual(["old"]);
+    await act(async () => { rerender({ current: first, polling: true }); await Promise.resolve(); });
+    expect(requests[1].cursor).toBe("old-cursor");
+    await act(async () => { rerender({ current: second, polling: false }); await Promise.resolve(); });
+    expect(requests[1].signal?.aborted).toBe(true);
+    expect(requests[2].cursor).toBeUndefined();
     await act(async () => {
-      requests[0].resolve([logLine(4)]);
+      requests[1].resolve(page([line("stale")], "stale-cursor"));
+      requests[2].resolve(page([line("new")], "new-cursor"));
       await Promise.resolve();
     });
-    expect(result.current.lines).toHaveLength(1);
-    expect(result.current.after).toBe(4);
+    expect(result.current.lines.map((item) => item.id)).toEqual(["new"]);
+    expect(result.current.cursor).toBe("new-cursor");
+  });
 
-    await act(async () => {
-      rerender({ logSource: secondSource });
-      await Promise.resolve();
-    });
+  it("deduplicates overlapping pages and preserves source order for equal timestamps", async () => {
+    const fetchPage = vi.fn()
+      .mockResolvedValueOnce(page([line("one"), line("two")], "opaque-1"))
+      .mockResolvedValueOnce(page([line("two"), line("three"), line("three")], "opaque-2"));
+    const { result, rerender } = renderHook(({ polling }: { polling: boolean }) => useLogStream({
+      source: source("equal-time", fetchPage), polling,
+    }), { initialProps: { polling: false } });
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.lines.map((item) => item.id)).toEqual(["one", "two"]);
+    rerender({ polling: true });
+    await act(async () => { await Promise.resolve(); });
+    expect(fetchPage).toHaveBeenLastCalledWith("opaque-1", expect.any(AbortSignal));
+    expect(result.current.lines.map((item) => item.id)).toEqual(["one", "two", "three"]);
+  });
 
+  it("clears only the local view and keeps the opaque cursor", async () => {
+    const fetchPage = vi.fn().mockResolvedValue(page([line("one")], "opaque-1"));
+    const { result } = renderHook(() => useLogStream({ source: source("clear", fetchPage), polling: false }));
+    await act(async () => { await Promise.resolve(); });
+    act(() => result.current.clearLocal());
     expect(result.current.lines).toEqual([]);
-    expect(result.current.after).toBeUndefined();
-    expect(requests[1].after).toBeUndefined();
-  });
-
-  it("aborts the previous source before accepting a new source response", async () => {
-    const requests: PendingRequest[] = [];
-    const fetchPage = vi.fn(
-      (after?: number, signal?: AbortSignal) =>
-        new Promise<LogLine[]>((resolve) => {
-          requests.push({ after, signal, resolve });
-        }),
-    );
-    const firstSource = source("site-build:first", fetchPage);
-    const secondSource = source("site-build:second", fetchPage);
-
-    const { result, rerender } = renderHook(
-      ({ logSource }: { logSource: LogSource }) =>
-        useLogStream({ source: logSource, polling: false }),
-      { initialProps: { logSource: firstSource } },
-    );
-
-    await act(async () => {
-      rerender({ logSource: secondSource });
-      await Promise.resolve();
-    });
-    expect(requests[0].signal?.aborted).toBe(true);
-    expect(requests[1].after).toBeUndefined();
-
-    await act(async () => {
-      requests[0].resolve([logLine(1)]);
-      requests[1].resolve([logLine(2)]);
-      await Promise.resolve();
-    });
-    expect(result.current.lines.map((line) => line.sequence)).toEqual([2]);
+    expect(result.current.localCleared).toBe(true);
+    expect(result.current.cursor).toBe("opaque-1");
   });
 });

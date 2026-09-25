@@ -92,6 +92,7 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 	if err := f.repo.CompleteAppRuntime(f.ctx, changedJob, "running", container); !errors.Is(err, ErrAppRuntimeStale) {
 		t.Fatalf("old generation completion = %v, want ErrAppRuntimeStale", err)
 	}
+	assertAppRuntimeLogSources(t, f, appID)
 	stillUnobserved, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +127,7 @@ func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testi
 	if err := f.repo.CompleteAppRuntime(f.ctx, currentJob, "running", runtimeRepositoryContainer(currentJob, deploymentID)); !errors.Is(err, ErrAppRuntimeLeaseLost) {
 		t.Fatalf("expired worker completion = %v, want ErrAppRuntimeLeaseLost", err)
 	}
+	assertAppRuntimeLogSources(t, f, appID)
 	if err := f.repo.CompleteAppRuntime(f.ctx, newLeaseJob, "running", runtimeRepositoryContainer(newLeaseJob, deploymentID)); err != nil {
 		t.Fatal(err)
 	}
@@ -458,6 +460,7 @@ func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *t
 	if err := f.repo.CompleteAppRuntime(f.ctx, initialRuntime, "running", container); err != nil {
 		t.Fatal(err)
 	}
+	assertAppRuntimeLogSources(t, f, appID, strings.Repeat("a", 64))
 	if exists, err := f.repo.AppRuntimeContainerExists(f.ctx, f.projectOneID, appID, container.ID); err != nil || !exists {
 		t.Fatalf("startup orphan sweep did not preserve the exact current container: exists=%v err=%v", exists, err)
 	}
@@ -569,6 +572,7 @@ func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *t
 	if err := f.repo.CompleteAppRuntime(f.ctx, restartJob, "running", container); err != nil {
 		t.Fatal(err)
 	}
+	assertAppRuntimeLogSources(t, f, appID, strings.Repeat("a", 64))
 	started, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
 	if err != nil {
 		t.Fatal(err)
@@ -644,6 +648,71 @@ func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *t
 	if changed.DesiredGeneration != staleRestart.App.DesiredGeneration+1 || changed.RouteStatus != "waiting_for_runtime" {
 		t.Fatalf("stale restart reset authorized a changed generation: desired=%d route=%s", changed.DesiredGeneration, changed.RouteStatus)
 	}
+}
+
+func TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	appID := uuid.Must(uuid.NewV7())
+	if _, err := f.repo.CreateApp(f.ctx, appID, f.projectOneID, f.actor, AppInput{Name: "runtime-log-history", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	deploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, appID)
+	firstJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "runtime-log-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := runtimeRepositoryContainer(firstJob, deploymentID)
+	if err := f.repo.CompleteAppRuntime(f.ctx, firstJob, "running", first); err != nil {
+		t.Fatal(err)
+	}
+	assertAppRuntimeLogSources(t, f, appID, first.ID)
+
+	// Re-observing the same trusted Moby ID is idempotent even after identity
+	// rotation; the runtime incarnation name changes but the log source does not.
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_inspection_at=now() WHERE app_id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	sameJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "runtime-log-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameContainer := runtimeRepositoryContainer(sameJob, deploymentID)
+	if err := f.repo.CompleteAppRuntime(f.ctx, sameJob, "running", sameContainer); err != nil {
+		t.Fatal(err)
+	}
+	assertAppRuntimeLogSources(t, f, appID, first.ID)
+	if _, err := f.pool.Exec(f.ctx, `DELETE FROM app_runtime_log_sources WHERE app_id=$1 AND container_id=$2`, appID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_inspection_at=now() WHERE app_id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	recoveryJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "runtime-log-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredContainer := runtimeRepositoryContainer(recoveryJob, deploymentID)
+	if err := f.repo.CompleteAppRuntime(f.ctx, recoveryJob, "running", recoveredContainer); err != nil {
+		t.Fatal(err)
+	}
+	assertAppRuntimeLogSources(t, f, appID, first.ID)
+
+	changed := workloadspec.Default()
+	changed.Port++
+	if _, err := f.repo.UpdateApp(f.ctx, f.projectOneID, appID, f.actor, AppPatch{Workload: &changed}); err != nil {
+		t.Fatal(err)
+	}
+	replacementJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "runtime-log-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := runtimeRepositoryContainer(replacementJob, deploymentID)
+	replacement.ID = strings.Repeat("b", 64)
+	if err := f.repo.CompleteAppRuntime(f.ctx, replacementJob, "running", replacement); err != nil {
+		t.Fatal(err)
+	}
+	assertAppRuntimeLogSources(t, f, appID, strings.Repeat("a", 64), strings.Repeat("b", 64))
 }
 
 func TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration(t *testing.T) {
@@ -768,6 +837,22 @@ func assertAppRuntimeContainerID(t *testing.T, f appRepositoryFixture, appID uui
 	}
 	if containerID != strings.Repeat("a", 64) {
 		t.Fatalf("successful runtime completion did not persist the inspected container ID: %v", containerID)
+	}
+}
+
+func assertAppRuntimeLogSources(t *testing.T, f appRepositoryFixture, appID uuid.UUID, want ...string) {
+	t.Helper()
+	got, err := f.repo.ListAppRuntimeLogSources(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("runtime log source IDs = %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("runtime log source IDs = %v, want %v", got, want)
+		}
 	}
 }
 

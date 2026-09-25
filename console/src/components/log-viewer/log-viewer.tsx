@@ -25,7 +25,7 @@ const LOG_LEVEL_CLASSES: Record<string, string> = {
 };
 
 function getLogLevelClass(level: string) {
-  return LOG_LEVEL_CLASSES[level] ?? LOG_LEVEL_CLASSES.info;
+  return LOG_LEVEL_CLASSES[level.toLowerCase()] ?? LOG_LEVEL_CLASSES.info;
 }
 
 function getScrollBehavior(): ScrollBehavior {
@@ -37,7 +37,6 @@ function getScrollBehavior(): ScrollBehavior {
 function LogToolbar({
   title,
   description,
-  after,
   autoFollow,
   copied,
   search,
@@ -49,7 +48,6 @@ function LogToolbar({
 }: {
   title: string;
   description: string;
-  after?: number;
   autoFollow: boolean;
   copied: boolean;
   search: string;
@@ -65,7 +63,7 @@ function LogToolbar({
         <div>
           <CardTitle>{title}</CardTitle>
           <p className="mt-1 text-xs text-fog">
-            {description} · cursor {after ?? "start"}
+            {description}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
@@ -154,13 +152,13 @@ function LogBody({
         aria-live="polite"
       >
         {error ? (
-          <div className="mb-3 rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 font-sans text-xs text-mist">
+          <div role="alert" className="mb-3 rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 font-sans text-xs text-mist">
             {error}
           </div>
         ) : null}
         {lines.length ? (
           lines.map((line) => (
-            <div key={line.sequence} className="stealth-log-line flex gap-3">
+            <div key={line.id} className="stealth-log-line flex gap-3">
               <span className="w-32 shrink-0 text-fog">
                 {formatDate(line.created_at)}
               </span>
@@ -173,13 +171,15 @@ function LogBody({
             </div>
           ))
         ) : (
-          <div className="py-16 text-center font-sans text-sm text-fog">
-            {loading
-              ? "Loading log lines…"
-              : localCleared
-                ? "Local view cleared. New lines will appear here."
-                : emptyMessage}
-          </div>
+          error ? null : (
+            <div className="py-16 text-center font-sans text-sm text-fog">
+              {loading
+                ? "Loading log lines…"
+                : localCleared
+                  ? "Local view cleared. New lines will appear here."
+                  : emptyMessage}
+            </div>
+          )
         )}
         <div ref={bottomRef} />
       </div>
@@ -202,7 +202,7 @@ export function LogViewer({
   polling?: boolean;
   emptyMessage?: string;
 }) {
-  const { lines, after, loading, error, localCleared, clearLocal } =
+  const { lines, loading, error, localCleared, clearLocal } =
     useLogStream({ source, enabled, polling });
   const [search, setSearch] = useState("");
   const [autoFollow, setAutoFollow] = useState(true);
@@ -254,7 +254,6 @@ export function LogViewer({
       <LogToolbar
         title={title}
         description={description}
-        after={after}
         autoFollow={autoFollow}
         copied={copied}
         search={search}

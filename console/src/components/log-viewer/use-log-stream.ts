@@ -15,11 +15,11 @@ export function useLogStream({
   polling = enabled,
 }: UseLogStreamOptions) {
   const [lines, setLines] = useState<LogLine[]>([]);
-  const [after, setAfter] = useState<number | undefined>();
+  const [cursor, setCursor] = useState<string | undefined>();
   const [localCleared, setLocalCleared] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const afterRef = useRef<number | undefined>(undefined);
+  const cursorRef = useRef<string | undefined>(undefined);
   const inFlightRef = useRef(false);
   const activeControllerRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<LogSource | null>(source);
@@ -31,8 +31,8 @@ export function useLogStream({
   }, [source]);
 
   const resetStream = useCallback(() => {
-    afterRef.current = undefined;
-    setAfter(undefined);
+    cursorRef.current = undefined;
+    setCursor(undefined);
     setLines([]);
     setLocalCleared(false);
     setError(null);
@@ -48,25 +48,26 @@ export function useLogStream({
     activeControllerRef.current = controller;
     setLoading(true);
     try {
-      const next = await currentSource.fetchPage(
-        afterRef.current,
-        controller.signal,
-      );
+      const next = await currentSource.fetchPage(cursorRef.current, controller.signal);
       if (controller.signal.aborted) return;
 
       setError(null);
-      if (!next.length) return;
-
-      const latest = Math.max(...next.map((line) => line.sequence));
-      afterRef.current = Math.max(afterRef.current ?? 0, latest);
-      setAfter(afterRef.current);
+      if (next.nextCursor !== undefined) {
+        cursorRef.current = next.nextCursor;
+        setCursor(next.nextCursor);
+      }
+      if (!next.lines.length) return;
       setLines((current) => {
-        const known = new Set(current.map((line) => line.sequence));
-        return [...current, ...next.filter((line) => !known.has(line.sequence))]
-          .sort((a, b) => a.sequence - b.sequence)
-          .slice(-2000);
+        const known = new Set(current.map((line) => line.id));
+        const appended: LogLine[] = [];
+        for (const line of next.lines) {
+          if (known.has(line.id)) continue;
+          known.add(line.id);
+          appended.push(line);
+        }
+        return [...current, ...appended].slice(-2000);
       });
-      setLocalCleared(false);
+      if (next.lines.some((line) => line.id !== "")) setLocalCleared(false);
     } catch (caught) {
       if (controller.signal.aborted) return;
 
@@ -121,5 +122,5 @@ export function useLogStream({
     setLocalCleared(true);
   }, []);
 
-  return { lines, after, loading, error, localCleared, clearLocal };
+  return { lines, cursor, loading, error, localCleared, clearLocal };
 }
