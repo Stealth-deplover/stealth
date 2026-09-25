@@ -117,19 +117,28 @@ func verifyRuntime() {
 			os.Exit(5)
 		}
 	}
-	response, err := http.Get("http://127.0.0.1:8080/healthz")
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", err)
-		os.Exit(6)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(15 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		response, err := client.Get("http://127.0.0.1:8080/healthz")
+		if err != nil {
+			lastErr = err
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener returned HTTP %d\n", response.StatusCode)
+			os.Exit(7)
+		}
+		if readErr != nil || closeErr != nil || strings.TrimSpace(string(body)) != "app-runtime-smoke-ok" {
+			_, _ = fmt.Fprintln(os.Stderr, "runtime smoke app listener returned an unexpected response")
+			os.Exit(8)
+		}
+		return
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener returned HTTP %d\n", response.StatusCode)
-		os.Exit(7)
-	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil || strings.TrimSpace(string(body)) != "app-runtime-smoke-ok" {
-		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke app listener returned an unexpected response")
-		os.Exit(8)
-	}
+	_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", lastErr)
+	os.Exit(6)
 }
