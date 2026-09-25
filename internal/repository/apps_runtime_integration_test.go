@@ -646,6 +646,98 @@ func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *t
 	}
 }
 
+func TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	var previousDomain string
+	if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(workload_base_domain,'') FROM instance_domain_settings WHERE id=TRUE`).Scan(&previousDomain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE instance_domain_settings SET workload_base_domain='address-parity.example.test',updated_at=now() WHERE id=TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if previousDomain == "" {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=NULL,updated_at=now() WHERE id=TRUE`)
+		} else {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=$1,updated_at=now() WHERE id=TRUE`, previousDomain)
+		}
+	})
+
+	appID := uuid.Must(uuid.NewV7())
+	if _, err := f.repo.CreateApp(f.ctx, appID, f.projectOneID, f.actor, AppInput{
+		Name: "runtime-address-parity", Enabled: true, Workload: workloadspec.Default(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, appID)
+	runtimeJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "address-parity-runtime-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := runtimeRepositoryContainer(runtimeJob, deploymentID)
+	if err := f.repo.CompleteAppRuntime(f.ctx, runtimeJob, "running", container); err != nil {
+		t.Fatal(err)
+	}
+	forceAppHealthCheckDue(t, f, appID)
+	healthJob, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "address-parity-health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, healthJob, true); err != nil {
+		t.Fatal(err)
+	}
+
+	privateAddressState, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateAddressState.HealthStatus != "healthy" || privateAddressState.RouteStatus != "active" {
+		t.Fatalf("valid private runtime address did not permit API route eligibility: health=%s route=%s", privateAddressState.HealthStatus, privateAddressState.RouteStatus)
+	}
+	var privateAddress string
+	if err := f.pool.QueryRow(f.ctx, `SELECT host(container_address) FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&privateAddress); err != nil {
+		t.Fatal(err)
+	}
+	if !validPrivateRuntimeAddress(privateAddress) {
+		t.Fatalf("test runtime address %q is not a valid private IPv4 address", privateAddress)
+	}
+	privateRoutes, err := f.repo.ListAppPlatformRoutes(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !appRouteExists(privateRoutes, appID) {
+		t.Fatalf("API reported active for a valid private address but ingress omitted the App: routes=%+v", privateRoutes)
+	}
+
+	// 8.8.8.8 is valid IPv4 but is not in an RFC1918 private range. Changing
+	// only this persisted evidence must make both projections fail closed.
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET container_address='8.8.8.8'::inet WHERE app_id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	var persistedAddress string
+	if err := f.pool.QueryRow(f.ctx, `SELECT host(container_address) FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&persistedAddress); err != nil {
+		t.Fatal(err)
+	}
+	if persistedAddress != "8.8.8.8" || validPrivateRuntimeAddress(persistedAddress) {
+		t.Fatalf("test non-private runtime address = %q, unexpectedly accepted", persistedAddress)
+	}
+	nonPrivateAddressState, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonPrivateAddressState.HealthStatus != "healthy" || nonPrivateAddressState.RouteStatus != "waiting_for_health" {
+		t.Fatalf("non-private runtime address did not make the API projection fail closed: health=%s route=%s", nonPrivateAddressState.HealthStatus, nonPrivateAddressState.RouteStatus)
+	}
+	nonPrivateRoutes, err := f.repo.ListAppPlatformRoutes(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appRouteExists(nonPrivateRoutes, appID) {
+		t.Fatalf("API reported route_status=%s for a non-private address but ingress still included the App: routes=%+v", nonPrivateAddressState.RouteStatus, nonPrivateRoutes)
+	}
+}
+
 func forceAppHealthCheckDue(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
 	t.Helper()
 	result, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_health_check_at=now() WHERE app_id=$1`, appID)

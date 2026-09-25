@@ -198,11 +198,12 @@ jobs:
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration)$' \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration)$' \
             TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
             TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
             TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration \
-            TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration
+            TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration \
+            TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration
