@@ -303,6 +303,7 @@ describe("AppDetailView", () => {
     );
 
     expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Not reported")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select as desired image" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getByText("Dockerfile build failed")).toBeInTheDocument();

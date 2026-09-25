@@ -479,7 +479,7 @@ function deploymentColumns(
             {row.original.image_digest ?? "Not produced"}
           </span>
           <span className="block text-[11px] text-fog">
-            {row.original.image_size_bytes ? formatBytes(row.original.image_size_bytes) : "—"}
+            {row.original.image_size_bytes ? formatBytes(row.original.image_size_bytes) : "Not reported"}
           </span>
         </div>
       ),
