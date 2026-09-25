@@ -692,7 +692,7 @@ func (r *Repository) CompleteAppHealthCheck(ctx context.Context, job AppHealthCh
 	var token uuid.UUID
 	var containerID, healthContainerID, healthStatus string
 	var containerName string
-	var address string
+	var address *string
 	var healthGeneration int64
 	var healthDeploymentID, routeIdentity uuid.UUID
 	var healthRouteIdentity *uuid.UUID
@@ -711,7 +711,7 @@ func (r *Repository) CompleteAppHealthCheck(ctx context.Context, job AppHealthCh
 	if owner != job.WorkerID || token != job.LeaseToken {
 		return ErrAppRuntimeLeaseLost
 	}
-	if containerID != job.ContainerID || address != job.Address || healthContainerID != job.ContainerID ||
+	if containerID != job.ContainerID || address == nil || *address != job.Address || healthContainerID != job.ContainerID ||
 		routeIdentity != job.RouteIdentity || containerName != job.ContainerName || healthRouteIdentity == nil || *healthRouteIdentity != job.RouteIdentity ||
 		healthGeneration != job.App.DesiredGeneration || job.App.DesiredDeploymentID == nil || healthDeploymentID != uuid.MustParse(*job.App.DesiredDeploymentID) ||
 		current.RuntimeStatus != "running" || current.ObservedGeneration != current.DesiredGeneration {
