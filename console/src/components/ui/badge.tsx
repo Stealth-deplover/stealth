@@ -42,8 +42,9 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
       <span
         className={cn(
           "size-1.5 rounded-full bg-current",
-          variant === "building" && "animate-pulse",
+          variant === "building" && "animate-pulse motion-reduce:animate-none",
         )}
+        aria-hidden="true"
       />
       {label}
     </Badge>
