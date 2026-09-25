@@ -53,6 +53,10 @@ The project-local skills under `.agents/skills/` and `.claude/skills/` are commi
 
 Repository instructions and established architectural decisions take precedence over generic skill recommendations. If a skill conflicts with `AGENTS.md`, nested instructions, existing architecture, API compatibility, security boundaries, or ADR/project documentation, follow the repository-specific rule and report the conflict. Keep every change scoped to the task.
 
+## Graphify (optional local navigator)
+
+When a local `graphify-out/graph.json` and the Graphify skill are available, use Graphify to find likely source files and dependency paths for architecture questions. Verify findings against source, tests, constraints, and runtime behavior; treat `INFERRED` links as hypotheses. Graphify is optional developer tooling, not product infrastructure. See [`docs/graphify-development.md`](docs/graphify-development.md) for setup and local graph hygiene.
+
 Use this hierarchy: the specific task or user request, repository-specific instructions, applicable nested instructions, relevant skill guidance, then generic agent defaults.
 
 ### Skill Maintenance and Security
