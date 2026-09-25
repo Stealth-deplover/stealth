@@ -281,7 +281,16 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	requestJSON(t, ownerClient, http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusNotFound, nil)
 	runtimeLogs.err = fmt.Errorf("clickhouse password=must-not-leak")
 	unavailableBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusServiceUnavailable, readHeaders)
-	if strings.Contains(string(unavailableBody), "must-not-leak") || !strings.Contains(string(unavailableBody), "temporarily unavailable") {
+	var unavailableResponse struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(unavailableBody, &unavailableResponse); err != nil {
+		t.Fatalf("telemetry failure response JSON: %v", err)
+	}
+	if strings.Contains(string(unavailableBody), "must-not-leak") || unavailableResponse.Error.Code != "telemetry_unavailable" || unavailableResponse.Error.Message != "telemetry backend is unavailable" {
 		t.Fatalf("telemetry failure response was not generic: %s", unavailableBody)
 	}
 
