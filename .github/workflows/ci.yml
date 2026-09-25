@@ -184,10 +184,11 @@ jobs:
             done
           }
           run_and_require_tests ./internal/migrate \
-            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration)$' \
+            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration|TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration)$' \
             TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration \
             TestAppDeploymentMigrationPreservesExistingAppsIntegration \
-            TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration
+            TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration \
+            TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration
           run_and_require_tests ./internal/repository \
             '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration|TestAppDeploymentSnapshotSelectionAndQuotaIntegration|TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration|TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration|TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration)$' \
             TestAppsPersistenceGenerationAndPlanLimitIntegration \
