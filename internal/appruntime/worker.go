@@ -45,6 +45,7 @@ type Persistence interface {
 	IsAppRuntimeJobCurrent(context.Context, repository.AppRuntimeJob) (bool, error)
 	ReleaseAppRuntimeJob(context.Context, repository.AppRuntimeJob) error
 	CompleteAppRuntime(context.Context, repository.AppRuntimeJob, string, *repository.AppRuntimeContainer) error
+	ResetAppHealthBeforeRuntimeRestart(context.Context, repository.AppRuntimeJob) error
 	FailAppRuntime(context.Context, repository.AppRuntimeJob, string, string, time.Time) error
 	ClaimNextAppHealthCheck(context.Context, string, time.Duration) (repository.AppHealthCheckJob, error)
 	IsAppHealthCheckCurrent(context.Context, repository.AppHealthCheckJob) (bool, error)
@@ -457,6 +458,14 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 		}
 		// Docker restart policy is deliberately disabled. Stealth retries an
 		// exited process through this durable, backoff-controlled reconcile.
+		if err := w.requireCurrent(ctx, job); err != nil {
+			return err
+		}
+		if err := w.Store.ResetAppHealthBeforeRuntimeRestart(ctx, job); err != nil {
+			return err
+		}
+		// The reset is a durable route fence. Recheck the lease before the
+		// Docker side effect so an expired worker cannot restart after handoff.
 		if err := w.requireCurrent(ctx, job); err != nil {
 			return err
 		}

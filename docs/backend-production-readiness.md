@@ -80,6 +80,13 @@ metrics. `APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
 `APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` set validated runtime bounds. Docker daemon
 or bridge ownership errors do not terminate unrelated worker loops.
 
+When an inspected App container is stopped and restarted in place, the worker
+fences a durable health reset before `docker start`: the old probe identity,
+checked time, failure count, and route address are cleared, then the configured
+initial delay starts again. The runtime lease and desired-generation check
+protect the reset, and only a fresh probe for the restarted process can restore
+route eligibility.
+
 ## Security assumptions
 
 The BuildKit service is pinned to an exact rootless release and an immutable

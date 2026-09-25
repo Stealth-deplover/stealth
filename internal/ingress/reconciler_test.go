@@ -86,10 +86,10 @@ func TestRenderEmptyProducesNoopTraefikConfiguration(t *testing.T) {
 	}
 }
 
-func TestRenderAppsIsDeterministicAndUsesOnlyPrivateRuntimeTargets(t *testing.T) {
+func TestRenderAppsIsDeterministicAndUsesAppOwnedContainerNames(t *testing.T) {
 	routes := []domain.AppPlatformRoute{
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "beta.apps.example.com", Address: "172.22.0.8", Port: 8080},
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "alpha.apps.example.com", Address: "172.22.0.7", Port: 3000},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "beta.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "alpha.apps.example.com", Port: 3000},
 	}
 	first, err := RenderApps(routes)
 	if err != nil {
@@ -105,21 +105,24 @@ func TestRenderAppsIsDeterministicAndUsesOnlyPrivateRuntimeTargets(t *testing.T)
 	contents := string(first)
 	for _, want := range []string{
 		"Host(`alpha.apps.example.com`)", "Host(`beta.apps.example.com`)",
-		"http://172.22.0.7:3000", "http://172.22.0.8:8080",
+		"http://stealth-app-018f0d5e7c197abc8d1e1234567890ab:3000",
+		"http://stealth-app-018f0d5e7c197abc8d1e1234567890ac:8080",
 		"stealth-app-service-018f0d5e7c197abc8d1e1234567890ab",
 	} {
 		if !strings.Contains(contents, want) {
 			t.Errorf("generated App routes are missing %q: %s", want, contents)
 		}
 	}
+	if strings.Contains(contents, "172.22.") || strings.Contains(contents, "http://198.") {
+		t.Fatalf("App route target contains a reusable container address: %s", contents)
+	}
 }
 
-func TestRenderAppsFailsClosedOnMalformedHostnameAndUntrustedTargets(t *testing.T) {
+func TestRenderAppsFailsClosedOnMalformedHostnameAndInvalidIdentity(t *testing.T) {
 	routes := []domain.AppPlatformRoute{
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "safe.apps.example.com`,PathPrefix(`/admin", Address: "172.22.0.7", Port: 8080},
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "public-target.apps.example.com", Address: "198.51.100.8", Port: 8080},
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ad", Hostname: "url-target.apps.example.com", Address: "http://attacker.invalid", Port: 8080},
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ae", Hostname: "bad-port.apps.example.com", Address: "172.22.0.9", Port: 65536},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "safe.apps.example.com`,PathPrefix(`/admin", Port: 8080},
+		{AppID: "not-an-app-id", Hostname: "attacker.invalid", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ae", Hostname: "bad-port.apps.example.com", Port: 65536},
 	}
 	contents, err := RenderApps(routes)
 	if err != nil {
@@ -139,7 +142,7 @@ func TestReconcilePreservesLastKnownGoodAppSnapshotWhileSitesConverge(t *testing
 	store := &fakeStore{
 		lockAcquired: true,
 		routes:       []domain.PlatformRoute{{SiteID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "site.apps.example.com"}},
-		appRoutes:    []domain.AppPlatformRoute{{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "app.apps.example.com", Address: "172.22.0.8", Port: 8080}},
+		appRoutes:    []domain.AppPlatformRoute{{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "app.apps.example.com", Port: 8080}},
 	}
 	reconciler, err := New(store, generated, filepath.Join(directory, ".reload.yaml"), time.Second, nil)
 	if err != nil {

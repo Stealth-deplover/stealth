@@ -41,6 +41,7 @@ type runtimeTestStore struct {
 	currentErr          error
 	observedGeneration  int64
 	cleanupCompleteCall int
+	resetCalls          int
 }
 
 func (s *runtimeTestStore) ScheduleAppRuntimeStartupSweep(context.Context) error { return nil }
@@ -68,6 +69,10 @@ func (s *runtimeTestStore) CompleteAppRuntime(_ context.Context, job repository.
 	s.completeStatus = status
 	s.completed = container
 	s.observedGeneration = job.App.DesiredGeneration
+	return nil
+}
+func (s *runtimeTestStore) ResetAppHealthBeforeRuntimeRestart(context.Context, repository.AppRuntimeJob) error {
+	s.resetCalls++
 	return nil
 }
 func (s *runtimeTestStore) FailAppRuntime(_ context.Context, _ repository.AppRuntimeJob, status, message string, _ time.Time) error {
@@ -132,6 +137,8 @@ type runtimeTestDriver struct {
 	ensureImageCalls  int
 	createCalls       int
 	startCalls        int
+	startResetCalls   int
+	startedContainer  string
 	removeCalls       int
 	removeTargets     []string
 	networkCalls      int
@@ -190,6 +197,10 @@ func (r *runtimeTestDriver) CreateApp(_ context.Context, job repository.AppRunti
 }
 func (r *runtimeTestDriver) StartApp(_ context.Context, job repository.AppRuntimeJob, containerID string) (Container, error) {
 	r.startCalls++
+	r.startedContainer = containerID
+	if r.store != nil {
+		r.startResetCalls = r.store.resetCalls
+	}
 	if r.startErr != nil {
 		return Container{}, r.startErr
 	}
@@ -355,6 +366,26 @@ func TestWorkerReusesExactContainerAndReplacesGenerationDrift(t *testing.T) {
 			t.Fatalf("stale runtime was not replaced: completed=%d status=%s remove/create/start=%d/%d/%d", store.completeCalls, store.completeStatus, driver.removeCalls, driver.createCalls, driver.startCalls)
 		}
 	})
+}
+
+func TestWorkerResetsHealthBeforeRestartingSameContainer(t *testing.T) {
+	worker, store, driver, job, _ := newRuntimeWorkerFixture(t, false)
+	containerID := strings.Repeat("a", 64)
+	driver.container = runtimeTestContainer(job, driver.image, false, containerID)
+	driver.found = true
+
+	if err := worker.processApp(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if store.resetCalls != 1 || driver.startCalls != 1 || driver.startResetCalls != 1 {
+		t.Fatalf("restart did not durably invalidate health before Docker start: resets=%d starts=%d resets-before-start=%d", store.resetCalls, driver.startCalls, driver.startResetCalls)
+	}
+	if driver.startedContainer != containerID || driver.container.ID != containerID {
+		t.Fatalf("restart replaced the managed container identity: started=%q after=%q want=%q", driver.startedContainer, driver.container.ID, containerID)
+	}
+	if store.completeCalls != 1 || store.completeStatus != "running" || store.completed == nil || store.completed.ID != containerID {
+		t.Fatalf("same-container restart did not complete current runtime: status=%q container=%+v calls=%d", store.completeStatus, store.completed, store.completeCalls)
+	}
 }
 
 func TestWorkerRemovesRuntimeForDisabledAndUnselectedApps(t *testing.T) {

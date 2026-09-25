@@ -86,8 +86,8 @@ func (r *Repository) ListPlatformRoutes(ctx context.Context) ([]domain.PlatformR
 }
 
 // ListAppPlatformRoutes returns only Apps whose current observed runtime and
-// fenced application health state permit public routing. Backend addresses
-// are private worker-derived runtime facts and never enter an API projection.
+// fenced application health state permit public routing. It validates the
+// private runtime address but returns only trusted App identity and port.
 func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPlatformRoute, error) {
 	if r == nil || r.pool == nil {
 		return nil, ErrNotFound
@@ -137,7 +137,7 @@ func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPla
 			// Site snapshots or other valid App routes from converging.
 			continue
 		}
-		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), Hostname: hostname, Address: address, Port: int(*port)})
+		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), Hostname: hostname, Port: int(*port)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

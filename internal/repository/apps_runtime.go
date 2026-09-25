@@ -268,6 +268,84 @@ func (r *Repository) ReleaseAppRuntimeJob(ctx context.Context, job AppRuntimeJob
 	return err
 }
 
+// ResetAppHealthBeforeRuntimeRestart withdraws route eligibility before the
+// worker starts an exited managed container. The runtime lease and current
+// desired state fence the reset so a stale worker cannot invalidate or
+// authorize another generation.
+func (r *Repository) ResetAppHealthBeforeRuntimeRestart(ctx context.Context, job AppRuntimeJob) error {
+	if r == nil || r.pool == nil || validateRuntimeJob(job) != nil || !job.App.Enabled || job.App.DesiredDeploymentID == nil {
+		return ErrInvalidAppRuntimeJob
+	}
+	delay := 0
+	if job.App.Workload.HealthCheck.InitialDelaySeconds != nil {
+		delay = *job.App.Workload.HealthCheck.InitialDelaySeconds
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	appID := uuid.MustParse(job.App.ID)
+	projectID := uuid.MustParse(job.App.ProjectID)
+	current, err := appByID(ctx, tx, projectID, appID, true)
+	if errors.Is(err, ErrNotFound) {
+		return ErrAppRuntimeLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	var owner string
+	var token uuid.UUID
+	var healthStatus string
+	var healthCheckedAt *time.Time
+	var containerAddress *string
+	if err := tx.QueryRow(ctx, `
+		SELECT worker_id,lease_token,health_status,health_checked_at,host(container_address)
+		FROM app_runtime_state WHERE app_id=$1 AND lease_expires_at>now() FOR UPDATE`, appID).Scan(
+		&owner, &token, &healthStatus, &healthCheckedAt, &containerAddress,
+	); errors.Is(err, pgx.ErrNoRows) {
+		return ErrAppRuntimeLeaseLost
+	} else if err != nil {
+		return err
+	}
+	if owner != job.WorkerID || token != job.LeaseToken {
+		return ErrAppRuntimeLeaseLost
+	}
+	if !runtimeDesiredStateMatches(current, job.App) {
+		if _, err := tx.Exec(ctx, `UPDATE app_runtime_state SET worker_id=NULL,lease_token=NULL,lease_expires_at=NULL,next_inspection_at=now(),updated_at=now() WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3`, appID, job.WorkerID, job.LeaseToken); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return ErrAppRuntimeStale
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE app_runtime_state
+		SET health_status='pending',health_generation=NULL,health_deployment_id=NULL,health_container_id=NULL,
+		    health_failure_count=0,health_checked_at=NULL,
+		    next_health_check_at=now()+($4::double precision*interval '1 second'),
+		    container_address=NULL,last_inspected_at=NULL,next_inspection_at=now(),updated_at=now()
+		WHERE app_id=$1 AND worker_id=$2 AND lease_token=$3 AND lease_expires_at>now()`,
+		appID, job.WorkerID, job.LeaseToken, delay)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrAppRuntimeLeaseLost
+	}
+	if healthStatus != "pending" || healthCheckedAt != nil || containerAddress != nil {
+		if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "app.runtime.updated", "app", appID, map[string]any{
+			"runtime_status": current.RuntimeStatus, "health_status": "pending",
+			"route_status":       appRouteStatus(current, "pending"),
+			"desired_generation": current.DesiredGeneration, "observed_generation": current.ObservedGeneration,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // CompleteAppRuntime records convergence only after the caller has verified
 // actual Docker state. Expected desired fields and the lease token fence stale
 // work from newer App edits or reclaimed leases.

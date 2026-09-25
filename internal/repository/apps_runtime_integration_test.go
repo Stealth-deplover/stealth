@@ -382,6 +382,195 @@ func TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegratio
 	}
 }
 
+func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	var previousDomain string
+	if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(workload_base_domain,'') FROM instance_domain_settings WHERE id=TRUE`).Scan(&previousDomain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE instance_domain_settings SET workload_base_domain='restart-health.example.test',updated_at=now() WHERE id=TRUE`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if previousDomain == "" {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=NULL,updated_at=now() WHERE id=TRUE`)
+		} else {
+			_, _ = f.pool.Exec(context.Background(), `UPDATE instance_domain_settings SET workload_base_domain=$1,updated_at=now() WHERE id=TRUE`, previousDomain)
+		}
+	})
+
+	workload := workloadspec.Default()
+	initialDelay := 60
+	workload.HealthCheck.InitialDelaySeconds = &initialDelay
+	appID := uuid.Must(uuid.NewV7())
+	_, err := f.repo.CreateApp(f.ctx, appID, f.projectOneID, f.actor, AppInput{Name: "same-container-restart", Enabled: true, Workload: workload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, appID)
+	initialRuntime, err := f.repo.ClaimNextAppRuntime(f.ctx, "restart-runtime-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := runtimeRepositoryContainer(initialRuntime, deploymentID)
+	if err := f.repo.CompleteAppRuntime(f.ctx, initialRuntime, "running", container); err != nil {
+		t.Fatal(err)
+	}
+	forceAppHealthCheckDue(t, f, appID)
+	initialProbe, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "restart-health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, initialProbe, true); err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healthy.RuntimeStatus != "running" || healthy.HealthStatus != "healthy" || healthy.RouteStatus != "active" {
+		t.Fatalf("pre-restart App state = runtime %s health %s route %s, want running/healthy/active", healthy.RuntimeStatus, healthy.HealthStatus, healthy.RouteStatus)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
+		t.Fatalf("healthy App was not routed before restart: routes=%+v err=%v", routes, err)
+	}
+
+	// A health worker is in flight when the process exits. Expire its lease and
+	// reclaim the same App runtime job, as happens after a worker handoff.
+	forceAppHealthCheckDue(t, f, appID)
+	staleProbe, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "restart-health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET lease_expires_at=now()-interval '1 second' WHERE app_id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.RequeueStaleAppRuntimeLeases(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	restartJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "restart-runtime-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.ResetAppHealthBeforeRuntimeRestart(f.ctx, restartJob); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.RuntimeStatus != "running" || pending.HealthStatus != "pending" || pending.RouteStatus != "waiting_for_health" {
+		t.Fatalf("same-container restart did not enter pending/unroutable state: runtime=%s health=%s route=%s", pending.RuntimeStatus, pending.HealthStatus, pending.RouteStatus)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("reset App remained in route snapshot before a fresh probe: routes=%+v err=%v", routes, err)
+	}
+	var delayHonored bool
+	var healthStatus string
+	var healthFailures int
+	var healthCheckedAt, healthGeneration, healthDeploymentID, healthContainerID, containerAddress *string
+	if err := f.pool.QueryRow(f.ctx, `
+		SELECT health_status,health_failure_count,health_checked_at::text,health_generation::text,
+		       health_deployment_id::text,health_container_id,host(container_address),
+		       next_health_check_at > now() + interval '50 seconds'
+		FROM app_runtime_state WHERE app_id=$1`, appID).Scan(
+		&healthStatus, &healthFailures, &healthCheckedAt, &healthGeneration,
+		&healthDeploymentID, &healthContainerID, &containerAddress, &delayHonored,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if healthStatus != "pending" || healthFailures != 0 || healthCheckedAt != nil || healthGeneration != nil || healthDeploymentID != nil || healthContainerID != nil || containerAddress != nil || !delayHonored {
+		t.Fatalf("restart reset did not clear old process health identity: status=%s failures=%d checked=%v generation=%v deployment=%v container=%v address=%v delay=%v", healthStatus, healthFailures, healthCheckedAt, healthGeneration, healthDeploymentID, healthContainerID, containerAddress, delayHonored)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, staleProbe, true); !errors.Is(err, ErrAppRuntimeLeaseLost) {
+		t.Fatalf("pre-restart health completion = %v, want lost lease", err)
+	}
+	stillPending, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillPending.HealthStatus != "pending" || stillPending.RouteStatus != "waiting_for_health" {
+		t.Fatalf("stale pre-restart probe restored health: health=%s route=%s", stillPending.HealthStatus, stillPending.RouteStatus)
+	}
+
+	// Docker starts the same container ID and the repository rebinds its
+	// inspected runtime identity while preserving the fresh initial delay.
+	if err := f.repo.CompleteAppRuntime(f.ctx, restartJob, "running", container); err != nil {
+		t.Fatal(err)
+	}
+	started, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.RuntimeStatus != "running" || started.HealthStatus != "pending" || started.RouteStatus != "waiting_for_health" {
+		t.Fatalf("restarted same container became routable without a fresh probe: runtime=%s health=%s route=%s", started.RuntimeStatus, started.HealthStatus, started.RouteStatus)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
+		t.Fatalf("same-container restart appeared in route snapshot before fresh health: routes=%+v err=%v", routes, err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT next_health_check_at > now() + interval '50 seconds' FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&delayHonored); err != nil {
+		t.Fatal(err)
+	}
+	if !delayHonored {
+		t.Fatal("runtime completion did not preserve initial delay after process restart")
+	}
+	var reboundContainerID, reboundAddress string
+	var reboundGeneration int64
+	if err := f.pool.QueryRow(f.ctx, `SELECT health_container_id,host(container_address),health_generation FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&reboundContainerID, &reboundAddress, &reboundGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if reboundContainerID != container.ID || reboundAddress != container.Address || reboundGeneration != restartJob.App.DesiredGeneration {
+		t.Fatalf("runtime identity was not rebound to the restarted process: container=%s address=%s generation=%d", reboundContainerID, reboundAddress, reboundGeneration)
+	}
+
+	forceAppHealthCheckDue(t, f, appID)
+	freshProbe, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "restart-health-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshProbe.ContainerID != container.ID {
+		t.Fatalf("fresh probe targets container %q, restarted container is %q", freshProbe.ContainerID, container.ID)
+	}
+	if err := f.repo.CompleteAppHealthCheck(f.ctx, freshProbe, true); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.RuntimeStatus != "running" || recovered.HealthStatus != "healthy" || recovered.RouteStatus != "active" {
+		t.Fatalf("fresh post-restart probe did not restore routing: runtime=%s health=%s route=%s", recovered.RuntimeStatus, recovered.HealthStatus, recovered.RouteStatus)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
+		t.Fatalf("freshly healthy same-container restart was not routed: routes=%+v err=%v", routes, err)
+	}
+
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_inspection_at=now() WHERE app_id=$1`, appID); err != nil {
+		t.Fatal(err)
+	}
+	staleRestart, err := f.repo.ClaimNextAppRuntime(f.ctx, "stale-restart-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedWorkload := workload
+	changedWorkload.Port++
+	if _, err := f.repo.UpdateApp(f.ctx, f.projectOneID, appID, f.actor, AppPatch{Workload: &changedWorkload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.ResetAppHealthBeforeRuntimeRestart(f.ctx, staleRestart); !errors.Is(err, ErrAppRuntimeStale) {
+		t.Fatalf("health reset after desired generation changed = %v, want stale", err)
+	}
+	changed, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.DesiredGeneration != staleRestart.App.DesiredGeneration+1 || changed.RouteStatus != "waiting_for_runtime" {
+		t.Fatalf("stale restart reset authorized a changed generation: desired=%d route=%s", changed.DesiredGeneration, changed.RouteStatus)
+	}
+}
+
 func forceAppHealthCheckDue(t *testing.T, f appRepositoryFixture, appID uuid.UUID) {
 	t.Helper()
 	result, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_state SET next_health_check_at=now() WHERE app_id=$1`, appID)

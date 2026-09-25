@@ -22,6 +22,7 @@ import (
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/domainname"
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
 	"go.yaml.in/yaml/v3"
 	"log/slog"
@@ -337,7 +338,7 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 	seenApps := make(map[string]struct{}, len(ordered))
 	for _, route := range ordered {
 		id, err := uuid.Parse(route.AppID)
-		if err != nil || id == uuid.Nil || !validAppBackend(route.Address, route.Port) {
+		if err != nil || id == uuid.Nil || route.Port < 1 || route.Port > 65535 {
 			continue
 		}
 		hostname, err := domainname.NormalizeHostname(route.Hostname)
@@ -355,7 +356,7 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 		}
 		seenHosts[hostname] = struct{}{}
 		seenApps[routerID] = struct{}{}
-		backend := "http://" + net.JoinHostPort(route.Address, fmt.Sprint(route.Port))
+		backend := "http://" + net.JoinHostPort(repository.AppRuntimeContainerName(id), fmt.Sprint(route.Port))
 		config.HTTP.Routers[routerID] = dynamicRouter{
 			EntryPoints: []string{"web"}, Rule: "Host(`" + hostname + "`)",
 			Priority: 100, Service: serviceID,
@@ -377,12 +378,6 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 	return contents, nil
 }
 
-func validAppBackend(address string, port int) bool {
-	parsed := net.ParseIP(address)
-	return parsed != nil && parsed.To4() != nil && parsed.IsPrivate() && !parsed.IsLoopback() &&
-		!parsed.IsUnspecified() && !parsed.IsLinkLocalUnicast() && !parsed.IsMulticast() && port >= 1 && port <= 65535
-}
-
 func validateAppRendered(contents []byte, routerCount, serviceCount int) error {
 	var parsed dynamicConfig
 	if err := yaml.Unmarshal(contents, &parsed); err != nil {
@@ -392,20 +387,22 @@ func validateAppRendered(contents []byte, routerCount, serviceCount int) error {
 		return errors.New("generated App route and service counts do not match")
 	}
 	for routerID, router := range parsed.HTTP.Routers {
+		appID, idErr := uuid.Parse(strings.TrimPrefix(routerID, "stealth-app-"))
 		if !strings.HasPrefix(routerID, "stealth-app-") || len(router.EntryPoints) != 1 || router.EntryPoints[0] != "web" ||
 			router.Service != "stealth-app-service-"+strings.TrimPrefix(routerID, "stealth-app-") ||
+			idErr != nil || appID == uuid.Nil || routerID != "stealth-app-"+strings.ReplaceAll(appID.String(), "-", "") ||
 			!strings.HasPrefix(router.Rule, "Host(`") || !strings.HasSuffix(router.Rule, "`)") {
 			return fmt.Errorf("generated App router %q is invalid", routerID)
 		}
 		service, ok := parsed.HTTP.Services[router.Service]
-		if !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 || !validAppBackendURL(service.LoadBalancer.Servers[0].URL) {
+		if !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 || !validAppBackendURL(service.LoadBalancer.Servers[0].URL, repository.AppRuntimeContainerName(appID)) {
 			return fmt.Errorf("generated App backend for %q is invalid", routerID)
 		}
 	}
 	return nil
 }
 
-func validAppBackendURL(raw string) bool {
+func validAppBackendURL(raw, expectedHost string) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
@@ -415,7 +412,7 @@ func validAppBackendURL(raw string) bool {
 		return false
 	}
 	port, err := strconv.Atoi(portText)
-	return err == nil && validAppBackend(host, port)
+	return err == nil && host == expectedHost && port >= 1 && port <= 65535
 }
 
 func validBackendURL(raw string) error {

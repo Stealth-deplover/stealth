@@ -1075,12 +1075,11 @@ type PlatformRoute struct {
 }
 
 // AppPlatformRoute is private worker input for the generated App route file.
-// Address is a runtime-inspected private bridge address and never enters the
-// public API projection.
+// The target is derived from the stable App identity, never an arbitrary URL
+// or runtime address.
 type AppPlatformRoute struct {
 	AppID    string
 	Hostname string
-	Address  string
 	Port     int
 }
 

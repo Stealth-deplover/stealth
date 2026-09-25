@@ -203,9 +203,11 @@ before advancing `observed_generation`. Docker's restart policy is disabled;
 the worker implements `restart_policy=always` through durable, bounded retries
 after unexpected exits. `running` means the current expected process is
 running. Health is tracked independently and fenced to the desired generation,
-selected deployment, and container identity. The worker observes the configured
-initial delay and TCP or HTTP checks; HTTP accepts 2xx only and does not follow
-redirects. `healthy` means the configured probe has converged. An App route is
+selected deployment, and container identity. Before restarting an exited
+container, the worker clears prior health and the stored address even when
+Docker keeps the same container ID; the configured initial delay and a fresh
+probe run again. HTTP accepts 2xx only and does not follow redirects. `healthy`
+means the configured probe has converged. An App route is
 eligible only when the App is enabled, has a ready selected deployment, has
 matching desired and observed generations, and has current runtime identity
 with healthy probes. PostgreSQL remains authoritative and the worker publishes

@@ -32,8 +32,9 @@ The API contract is the detailed reference for each product surface. Operational
 
 - [Functions](backend-production-readiness.md#durable-work-mapping)
 - [Sites](backend-production-readiness.md#durable-work-mapping)
-- [Apps](../openapi/openapi.yaml): persistent App control-plane resources and
-  versioned workload intent; image builds and execution are not available yet.
+- [Apps](../openapi/openapi.yaml): persistent App control-plane resources,
+  immutable OCI deployments, Moby-backed execution, application health
+  convergence, and health-gated platform routing.
 - [Database](../openapi/openapi.yaml) and [database backup/restore](backup-restore.md#postgresql)
 - [Storage](../openapi/openapi.yaml) and [object storage backup/restore](backup-restore.md#object-storage)
 - [Messaging and Webhooks](backend-production-readiness.md#durable-work-mapping)

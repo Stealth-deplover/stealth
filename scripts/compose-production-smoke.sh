@@ -1519,6 +1519,18 @@ wait_for_app_route_snapshot() {
 	return 1
 }
 
+assert_app_route_uses_container_dns_name() {
+	local expected="url: http://$(app_runtime_name):8080" snapshot="$generated_state_dir/platform-apps.yaml"
+	if ! grep -Fq -- "$expected" "$snapshot"; then
+		printf 'App route snapshot does not target the App-owned container DNS name: expected=%s\n' "$expected" >&2
+		return 1
+	fi
+	if grep -Eq 'url: http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' "$snapshot"; then
+		printf '%s\n' 'App route snapshot contains an IP target that can be reused by another container' >&2
+		return 1
+	fi
+}
+
 print_app_runtime_diagnostics() {
 	local app_id="$1" container_name
 	container_name="$(printf 'stealth-app-%s' "${app_id//-/}")"
@@ -1843,7 +1855,7 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
-	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":30}}}' "$platform_response")"
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":20}}}' "$platform_response")"
 	if [ "$app_status" != '201' ]; then
 		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
 		sed -n '1,80p' "$platform_response" >&2
@@ -2042,6 +2054,7 @@ PY
 	fi
 	wait_for_app_health_state healthy active
 	wait_for_app_route_snapshot true
+	assert_app_route_uses_container_dns_name
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	if ! grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-apps.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
 		printf '%s\n' 'healthy App route was not isolated in the App snapshot' >&2
@@ -2339,12 +2352,19 @@ verify_app_runtime_lifecycle() {
 
 	old_container="$new_container"
 	docker stop --time 1 "$old_container" >/dev/null
+	wait_for_app_health_state pending waiting_for_health
 	new_container="$(wait_for_running_app_runtime_container)"
+	if [ "$new_container" != "$old_container" ]; then
+		printf 'stopped App process restarted with a new container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
+		return 1
+	fi
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_route_snapshot false
+	wait_for_app_public_route_removed
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
-	printf 'unexpected App container exit was recovered (id=%s)\n' "$new_container"
+	printf 'same-container App process restart withheld the route until fresh health converged (id=%s)\n' "$new_container"
 
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then

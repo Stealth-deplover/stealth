@@ -5460,7 +5460,7 @@ export interface components {
              */
             health_status: AppHealth_status;
             /**
-             * @description Active means the current desired
+             * @description Active means the current desired, observed, healthy App is eligible for the public platform route.
              * @enum {string}
              */
             route_status: AppRoute_status;
