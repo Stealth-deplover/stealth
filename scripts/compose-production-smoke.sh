@@ -1548,9 +1548,9 @@ app_runtime_log_counts() {
 }
 
 wait_for_app_runtime_log_markers() {
-	local marker="$1" minimum="$2" container_id="${3:-}" stdout_count stderr_count
+	local marker="$1" minimum="$2" container_id="${3:-}" cursor="${4:-}" stdout_count stderr_count
 	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
-		if fetch_app_runtime_logs "$container_id"; then
+		if fetch_app_runtime_logs "$container_id" "$cursor"; then
 			read -r stdout_count stderr_count <<<"$(app_runtime_log_counts "$marker")"
 			if [ "$stdout_count" -ge "$minimum" ] && [ "$stderr_count" -ge "$minimum" ]; then
 				return 0
@@ -2572,9 +2572,7 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 3 "$new_container"
 	wait_for_app_health_state pending waiting_for_health
-	if ! fetch_app_runtime_logs "$new_container" "$old_restart_cursor"; then
-		return 1
-	fi
+	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 1 "$new_container" "$old_restart_cursor"
 	read -r resume_stdout_count resume_stderr_count <<<"$(app_runtime_log_counts "${smoke_marker}-app-v2")"
 	if [ "$resume_stdout_count" -lt 1 ] || [ "$resume_stderr_count" -lt 1 ]; then
 		printf 'App runtime cursor continuation missed post-restart output: stdout=%s stderr=%s\n' "$resume_stdout_count" "$resume_stderr_count" >&2
