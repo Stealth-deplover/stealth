@@ -239,9 +239,10 @@ inspected as running or, for a disabled App, absent.
 
 The runtime worker polls durable App desired state and uses fenced PostgreSQL
 leases before performing Moby work. It rechecks the selected persisted OCI
-archive on reconciliation, uses a deterministic container name and labels, and
-verifies container configuration before reporting `running`. A worker restart
-marks prior observations for inspection; expired leases are recoverable and
+archive on reconciliation, uses a persisted incarnation-specific container
+name and Stealth labels, and verifies container configuration before reporting
+`running`. App identity is separate from runtime routing identity. A worker
+restart marks prior observations for inspection; expired leases are recoverable and
 orphaned Stealth-labeled containers are queued for ownership-checked cleanup.
 Docker's restart policy stays disabled. The durable worker retries unexpected
 process exits according to the logical `restart_policy=always`, with bounded
@@ -253,16 +254,20 @@ have no host-published ports, no extra network attachments, no host mounts or
 devices, and no backend environment variables. Their filesystem root is
 read-only, Linux capabilities are dropped, `no-new-privileges` is enabled, and
 CPU, memory/swap, process count, `/tmp`, logs, and ulimits are bounded by
-Stealth-owned values. Docker host restart policy is `no`; the worker owns
-recovery. The selected image's `ENTRYPOINT`, default `CMD`, `ENV`, working
-directory, and user are retained. WorkloadSpec command and working-directory
-overrides are applied as container argv/config, never through a shell.
+Stealth-owned values. The trusted worker and hardened Traefik join this bridge
+dynamically after the worker validates the bridge ownership labels and the
+Compose service identity/security profile. API, Console, BuildKit, and other
+backend services are not attached. Docker host restart policy is `no`; the
+worker owns recovery. The selected image's `ENTRYPOINT`, default `CMD`, `ENV`,
+working directory, and user are retained. WorkloadSpec command and
+working-directory overrides are applied as container argv/config, never
+through a shell.
 
-All Apps currently share this one bridge, so an App may be able to reach
-another App over that network. The bridge separates Apps from Stealth's Compose
-services; it is not per-tenant network isolation or a sandbox boundary. The
-runtime uses Docker's default runtime, not gVisor. Treat uploaded App images as
-untrusted code with the protections and limitations described here.
+All Apps currently share this bridge with the trusted worker and Traefik. An
+App may be able to reach another App and services listening on Traefik; this is
+not per-tenant network isolation or a sandbox boundary. The runtime uses
+Docker's default runtime, not gVisor. Treat uploaded App images as untrusted
+code with the protections and limitations described here.
 
 App filesystems are ephemeral in this release. The root filesystem is
 read-only, `/tmp` is a bounded tmpfs, and image-declared Dockerfile `VOLUME`
@@ -281,20 +286,30 @@ cache is lost, and the worker can import the selected image again. Production
 acceptance targets Docker Engine with Compose v2 and cgroup v2 resource
 accounting; verify the host with `docker info --format '{{.CgroupVersion}}'`.
 
-`running` means Moby reports the container process running. The stored
-WorkloadSpec health check is not yet executed, and there is no runtime log
-viewer, public hostname route, or encrypted App secret injection. Reserved App
-hostnames remain absent from Site routes and return 404. Do not use the
-runtime status as an application readiness or Internet reachability probe.
+`running` means Moby reports the current expected container process running.
+`healthy` means the configured TCP or HTTP probe has converged for the same
+desired generation, selected deployment, managed container, and runtime routing
+incarnation; HTTP requires a 2xx response and redirects are not followed. On a
+same-container process restart, the worker rotates the routing identity and
+renames the stopped container before starting it. A stale Traefik snapshot then
+targets a Docker name that no longer resolves to the new process. An App route
+becomes eligible only when the App is enabled, its selected deployment is
+ready, desired and observed generations match, runtime identity is current,
+and health is healthy.
+The worker writes eligible Apps to `platform-apps.yaml`; Site routes remain in
+`platform-sites.yaml`. This is asynchronous convergence, not a zero-downtime or
+HA guarantee. App runtime logs and encrypted App secrets are not implemented.
 
 ### Manual host-reboot acceptance
 
 For an operator acceptance check, record the App's desired and observed
-generations while it reports `running`, reboot the VPS, and wait for Docker,
-Compose, and the worker to return. Verify the App reports `running` again with
-matching generations and exactly one container with its `stealth.app_id` label.
-The worker recreates a missing runtime bridge or container during recovery.
-This procedure is manual and is not part of CI.
+generations, health, and route status, reboot the VPS, and wait for Docker,
+Compose, Traefik, and the worker to return. Verify the App reports `running`
+with matching generations, reaches `healthy`, and its platform hostname serves
+the expected response through Traefik. Confirm exactly one container has its
+`stealth.app_id` label. The worker recreates a missing runtime bridge or
+container and resumes health convergence from durable state. This procedure is
+manual and is not part of CI; it does not claim HA or exactly-once execution.
 
 ## Configuration
 

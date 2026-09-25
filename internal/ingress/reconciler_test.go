@@ -14,9 +14,18 @@ import (
 
 type fakeStore struct {
 	routes       []domain.PlatformRoute
+	appRoutes    []domain.AppPlatformRoute
 	listErr      error
+	appListErr   error
 	lockAcquired bool
 	releases     int
+}
+
+func (s *fakeStore) ListAppPlatformRoutes(context.Context) ([]domain.AppPlatformRoute, error) {
+	if s.appListErr != nil {
+		return nil, s.appListErr
+	}
+	return append([]domain.AppPlatformRoute(nil), s.appRoutes...), nil
 }
 
 func (s *fakeStore) TryPlatformRouteReconcileLock(context.Context) (func() error, bool, error) {
@@ -74,6 +83,116 @@ func TestRenderEmptyProducesNoopTraefikConfiguration(t *testing.T) {
 	}
 	if strings.Contains(string(contents), "routers:") || strings.Contains(string(contents), "services:") {
 		t.Fatalf("empty render contains standalone Traefik sections: %s", contents)
+	}
+}
+
+func TestRenderAppsIsDeterministicAndUsesIncarnationTargets(t *testing.T) {
+	routes := []domain.AppPlatformRoute{
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", RouteIdentity: "22222222-3333-4444-8555-666666666666", Hostname: "beta.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", RouteIdentity: "11111111-2222-4333-8444-555555555555", Hostname: "alpha.apps.example.com", Port: 3000},
+	}
+	first, err := RenderApps(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := RenderApps([]domain.AppPlatformRoute{routes[1], routes[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytesEqual(first, second) {
+		t.Fatalf("App route render is not byte-stable:\n%s\n---\n%s", first, second)
+	}
+	contents := string(first)
+	for _, want := range []string{
+		"Host(`alpha.apps.example.com`)", "Host(`beta.apps.example.com`)",
+		"http://st-018f0d5e7c197abc8d1e1234567890ab-111111112222433384445555:3000",
+		"http://st-018f0d5e7c197abc8d1e1234567890ac-222222223333444485556666:8080",
+		"stealth-app-service-018f0d5e7c197abc8d1e1234567890ab",
+	} {
+		if !strings.Contains(contents, want) {
+			t.Errorf("generated App routes are missing %q: %s", want, contents)
+		}
+	}
+	if strings.Contains(contents, "172.22.") || strings.Contains(contents, "http://198.") {
+		t.Fatalf("App route target contains a reusable container address: %s", contents)
+	}
+	if strings.Contains(contents, "http://stealth-app-018f0d5e7c197abc8d1e1234567890ab:") {
+		t.Fatalf("App route still targets the stable App-only name: %s", contents)
+	}
+}
+
+func TestRenderAppsFailsClosedOnMalformedHostnameAndInvalidIdentity(t *testing.T) {
+	routes := []domain.AppPlatformRoute{
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "safe.apps.example.com`,PathPrefix(`/admin", Port: 8080},
+		{AppID: "not-an-app-id", Hostname: "attacker.invalid", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ae", Hostname: "bad-port.apps.example.com", Port: 65536},
+	}
+	contents, err := RenderApps(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "# Stealth App route snapshot: no eligible Apps\n" {
+		t.Fatalf("untrusted rows produced a route: %s", contents)
+	}
+}
+
+func TestRenderAppsFailsClosedOnMalformedOrDuplicateRouteIdentity(t *testing.T) {
+	sharedIdentity := "11111111-2222-4333-8444-555555555555"
+	routes := []domain.AppPlatformRoute{
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", RouteIdentity: "tenant-chosen-target", Hostname: "malformed.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", RouteIdentity: sharedIdentity, Hostname: "duplicate-a.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ad", RouteIdentity: sharedIdentity, Hostname: "duplicate-b.apps.example.com", Port: 8080},
+	}
+	contents, err := RenderApps(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "# Stealth App route snapshot: no eligible Apps\n" {
+		t.Fatalf("malformed or duplicate routing identities produced routes: %s", contents)
+	}
+}
+
+func TestReconcilePreservesLastKnownGoodAppSnapshotWhileSitesConverge(t *testing.T) {
+	directory := t.TempDir()
+	generated := filepath.Join(directory, "generated")
+	if err := os.Mkdir(generated, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStore{
+		lockAcquired: true,
+		routes:       []domain.PlatformRoute{{SiteID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "site.apps.example.com"}},
+		appRoutes:    []domain.AppPlatformRoute{{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "app.apps.example.com", Port: 8080}},
+	}
+	reconciler, err := New(store, generated, filepath.Join(directory, ".reload.yaml"), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	appPath := filepath.Join(generated, GeneratedAppFilename)
+	knownGoodApp, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.routes = []domain.PlatformRoute{{SiteID: "018f0d5e-7c19-7abc-8d1e-1234567890ad", Hostname: "updated.apps.example.com"}}
+	store.appListErr = errors.New("temporary App snapshot failure")
+	if _, err := reconciler.Reconcile(context.Background()); err == nil {
+		t.Fatal("App snapshot failure was hidden")
+	}
+	appAfterFailure, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytesEqual(knownGoodApp, appAfterFailure) {
+		t.Fatal("App snapshot failure replaced last-known-good routes")
+	}
+	siteAfterFailure, err := os.ReadFile(filepath.Join(generated, GeneratedFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(siteAfterFailure), "updated.apps.example.com") {
+		t.Fatalf("independent Site snapshot did not converge: %s", siteAfterFailure)
 	}
 }
 

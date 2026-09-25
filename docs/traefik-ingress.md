@@ -23,8 +23,9 @@ The default and upgrade-safe public paths are:
 
 ```text
 cloud.example.com -> Named Tunnel -> proxy/Nginx -> API/Console
-*.apps.example.com -> same Named Tunnel -> Traefik -> API Site listener :8082
-                                                (platform Site routes)
+*.apps.example.com -> same Named Tunnel -> Traefik
+                                           |-- API Site listener :8082 (Sites)
+                                           `-- eligible App container port (Apps)
 ```
 
 Traefik also retains its core routes. The workload wildcard path is reconciled
@@ -89,9 +90,10 @@ derived configuration, never the business source of truth:
 
 - release assets are authoritative for static runtime settings and core
   API/Console routes;
-- PostgreSQL Stealth state is authoritative for platform Site ownership;
-- the existing worker renders the complete platform Site snapshot into
-  `generated/platform-sites.yaml` from PostgreSQL;
+- PostgreSQL Stealth state is authoritative for platform Site and App
+  eligibility;
+- the worker renders independent complete snapshots into
+  `generated/platform-sites.yaml` and `generated/platform-apps.yaml`;
 - the writer contract is render -> validate -> write a temporary file ->
   fsync/close -> atomic rename -> file-provider reload. A live YAML file must
   never be partially rewritten in place;
@@ -120,9 +122,8 @@ derived state, not a route registry or database.
 ## Platform Site routes
 
 Only eligible Sites appear in `platform-sites.yaml` and reach the private
-static Site listener on `:8082`. Apps reserve labels in the same platform
-hostname namespace, but App hostnames are metadata only: no App route or
-runtime listener is generated, and App requests are not sent to the Site API.
+static Site listener on `:8082`. Site behavior stays on its existing listener
+and generated file.
 
 For every enabled active Site with a persisted `platform_label` and configured
 `workload_base_domain`, the worker generates an exact `Host()` router. Router
@@ -142,6 +143,69 @@ therefore cannot make a disabled/deleted Site public or expose `/v1/*`,
 If `platform-sites.yaml` or the top-level `.reload.yaml` is deleted, restart or
 allow the worker's bounded reconcile loop to reconstruct the generated state.
 Operators must not edit generated YAML by hand.
+
+## Platform App routes and network boundary
+
+Apps reserve labels in the same global hostname namespace as Sites. An App
+hostname is published only when PostgreSQL reports the App enabled with a
+ready selected deployment, matching desired and observed generations, matching
+applied workload identity, a current managed container identity, and healthy
+state tied to that exact generation, deployment, and container. Runtime
+`running` means process liveness and does not make a route eligible. The
+configured health probe must converge first.
+
+The worker inspects the managed container on the owned App bridge and validates
+its private address before the App can be routed. App identity is distinct from
+runtime routing incarnation identity. Each incarnation has a persisted,
+worker-generated UUID and a DNS-safe Docker container name derived from that
+UUID and the trusted App UUID. The route target uses this incarnation-specific
+name plus the validated `WorkloadSpec.port`; the inspected address remains a
+health/runtime identity check, not a Traefik target. Tenant input never
+supplies a URL, address, router rule, network alias, or YAML fragment.
+Hostnames are canonicalized before typed Traefik configuration is rendered.
+HTTP health probes use the current inspected App address and configured port,
+accept 2xx responses, do not follow redirects, and carry no tenant or platform
+credentials.
+
+Apps have no published host ports and attach only to `stealth_app_runtime`.
+The trusted worker and hardened Traefik join that separately owned bridge
+dynamically through worker-owned Docker CLI calls. Before connecting either
+peer, the worker verifies the network ownership labels and checks the exact
+Compose service labels and relevant container security settings. It retries
+peer convergence after service recreation or Docker daemon restart. Traefik
+remains attached to the private `stealth_ingress` network as well; the worker
+does not join ingress. API, Console, BuildKit, and the remaining backend
+services are not attached to the App bridge, and neither Traefik nor an App
+receives the Docker socket. Uninstall preflight allows only these validated
+worker/Traefik peers plus Stealth-owned App containers on the owned bridge.
+
+All Apps share this bridge with each other, the worker, and Traefik. This
+network is not per-App isolation or a sandbox boundary. Route reconciliation
+uses an authoritative PostgreSQL snapshot and a distributed lock. Site and App
+files are rendered and atomically published independently, so an App snapshot
+failure preserves its last-known-good App file without blocking Site routing.
+An unhealthy App leaves the next App snapshot. Before an exited managed
+container is restarted, the worker clears its prior health result and address,
+rotates its persisted routing identity, and renames the stopped container before
+starting the process again. The old name therefore cannot resolve to the new
+process even if an old Traefik file remains loaded for the full reconcile
+interval. The configured initial delay and a fresh probe must pass before the
+new name is eligible for publication. Container replacement and generation
+changes also retire the previous name before creating a new process. Startup
+recovery validates and renames an existing managed container to its persisted
+incarnation name; if identity validation fails, routing stays closed. The
+production smoke holds the reconcile lock while repeatedly requesting through
+Traefik and confirms the stale target fails before fresh health converges. This
+design does not claim zero-downtime deployment or HA.
+
+The production Compose smoke checks the real topology, including an App that
+reaches running, pending then healthy, serves through Traefik, loses its route
+after the configured failure threshold, recovers, and returns after worker
+restart. For a same-container process restart it records the loaded target,
+holds the PostgreSQL reconcile lock so that target remains in Traefik, observes
+pending health, verifies repeated public requests fail, then confirms a
+different target is published only after fresh health. It also checks no host
+App port is published and that the App hostname never enters the Site snapshot.
 
 ## Core routing parity
 

@@ -27,6 +27,8 @@ register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.
 auth_cookie_header=""
 api_url=""
 filelog_smoke_pid=""
+platform_route_lock_active="false"
+platform_route_lock_name=""
 platform_archive=""
 app_archive=""
 app_archive_v2=""
@@ -136,6 +138,9 @@ restore_traefik_state_after_smoke() {
 
 cleanup() {
 	local exit_code=$? worker_container
+	if [ "$platform_route_lock_active" = "true" ]; then
+		release_platform_route_reconcile_lock || true
+	fi
 	if [ -n "$forwarded_echo_container_id" ]; then
 		docker rm -f "$forwarded_echo_container_id" >/dev/null 2>&1 || true
 		forwarded_echo_container_id=""
@@ -771,6 +776,22 @@ network_contains() {
 	printf '%s\n' "$networks" | grep -Fqx -- "$wanted"
 }
 
+wait_for_container_network() {
+	local service="$1" wanted="$2" container networks
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		container="$("${compose[@]}" ps -q "$service" 2>/dev/null || true)"
+		if [ -n "$container" ]; then
+			networks="$(container_networks "$container" 2>/dev/null || true)"
+			if network_contains "$networks" "$wanted"; then
+				return 0
+			fi
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	printf '%s did not join the expected network: %s\n' "$service" "$wanted" >&2
+	return 1
+}
+
 telemetry_ingest_network_name() {
 	local configured
 	configured="$(awk -F= '$1 == "STEALTH_TELEMETRY_INGEST_NETWORK_NAME" { print substr($0, index($0, "=") + 1); exit }' "$env_file")"
@@ -794,16 +815,41 @@ traefik_ingress_network_name() {
 }
 
 verify_traefik_runtime_boundaries() {
-	local container networks mounts caps security_opt user ingress_network service service_container
+	local container networks mounts caps security_opt user ingress_network runtime_network service service_container worker_container worker_networks port_bindings
 	ingress_network="$(traefik_ingress_network_name)"
+	runtime_network="$(app_runtime_network_name)"
 	container="$("${compose[@]}" ps -q traefik)"
 	if [ -z "$container" ]; then
 		printf 'missing Traefik container\n' >&2
 		return 1
 	fi
-	networks="$(container_networks "$container")"
-	if [ "$(network_count "$networks")" -ne 1 ] || ! network_contains "$networks" "$ingress_network"; then
-		printf 'Traefik must join only the dedicated ingress network: %s\n' "$networks" >&2
+	worker_container="$("${compose[@]}" ps -q worker)"
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		networks="$(container_networks "$container")"
+		worker_networks="$(container_networks "$worker_container")"
+		if [ "$(network_count "$networks")" -eq 2 ] && network_contains "$networks" "$ingress_network" && network_contains "$networks" "$runtime_network" && network_contains "$worker_networks" "$runtime_network"; then
+			break
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'Traefik and worker did not converge onto the owned App runtime bridge: traefik=%s worker=%s\n' "$networks" "$worker_networks" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	if [ "$(docker network inspect --format '{{.Driver}}|{{.Scope}}|{{.Internal}}|{{index .Labels "stealth.managed"}}|{{index .Labels "stealth.resource_type"}}|{{index .Labels "stealth.runtime_schema"}}' "$runtime_network")" != 'bridge|local|false|true|app_runtime_network|v1' ]; then
+		printf 'Traefik runtime peer network is not the owned App bridge: %s\n' "$runtime_network" >&2
+		return 1
+	fi
+	if [ "$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}|{{index .Config.Labels "stealth.resource_type"}}|{{index .Config.Labels "stealth.runtime_schema"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$container")" != 'true|app_runtime_ingress|v1|traefik' ]; then
+		printf '%s\n' 'Traefik runtime peer labels do not match the expected managed service' >&2
+		return 1
+	fi
+	if [ "$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}|{{index .Config.Labels "stealth.resource_type"}}|{{index .Config.Labels "stealth.runtime_schema"}}|{{index .Config.Labels "com.docker.compose.service"}}' "$worker_container")" != 'true|app_runtime_worker|v1|worker' ]; then
+		printf '%s\n' 'worker runtime peer labels do not match the expected managed service' >&2
+		return 1
+	fi
+	if ! network_contains "$worker_networks" "$runtime_network" || network_contains "$worker_networks" "$ingress_network"; then
+		printf 'worker must join the App runtime bridge and remain off ingress: %s\n' "$worker_networks" >&2
 		return 1
 	fi
 	if [ "$(docker network inspect --format '{{.Internal}}' "$ingress_network")" != "true" ]; then
@@ -819,6 +865,15 @@ verify_traefik_runtime_boundaries() {
 		*'/etc/traefik/dynamic=false '*|*'/etc/traefik/dynamic=false') ;;
 		*) printf 'Traefik dynamic config is not mounted read-only: %s\n' "$mounts" >&2; return 1 ;;
 	esac
+	port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' "$container" | tr -d '[:space:]')"
+	case "$port_bindings" in
+		''|null|\{\}) ;;
+		*) printf 'Traefik has host port bindings: %s\n' "$port_bindings" >&2; return 1 ;;
+	esac
+	if printf '%s\n' "$mounts" | grep -Fq '/var/run/docker.sock'; then
+		printf '%s\n' 'Traefik has a host port or Docker socket attachment' >&2
+		return 1
+	fi
 	caps="$(docker inspect --format '{{json .HostConfig.CapAdd}} {{json .HostConfig.CapDrop}}' "$container")"
 	case "$caps" in
 		*'"ALL"'*) ;;
@@ -848,6 +903,16 @@ verify_traefik_runtime_boundaries() {
 			return 1
 		fi
 	done
+	for service in api console; do
+		service_container="$("${compose[@]}" ps -q "$service")"
+		if network_contains "$(container_networks "$service_container")" "$runtime_network"; then
+			printf 'prohibited service %s is attached to the App runtime bridge\n' "$service" >&2
+			return 1
+		fi
+	done
+	case "$mounts" in
+		*'/var/run/docker.sock='*) printf '%s\n' 'Traefik has a Docker socket mount' >&2; return 1 ;;
+	esac
 	printf 'Traefik security, health, and network boundaries passed\n'
 }
 
@@ -1376,11 +1441,107 @@ wait_for_app_runtime() {
 	return 1
 }
 
+wait_for_app_health_state() {
+	local wanted_health="$1" wanted_route="$2" app_id="${3:-$platform_app_id}" health route runtime desired observed
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if fetch_app_runtime "$app_id"; then
+			health="$(platform_json_field "$platform_response" app.health_status)"
+			route="$(platform_json_field "$platform_response" app.route_status)"
+			runtime="$(platform_json_field "$platform_response" app.runtime_status)"
+			desired="$(platform_json_field "$platform_response" app.desired_generation)"
+			observed="$(platform_json_field "$platform_response" app.observed_generation)"
+			if [ "$health" = "$wanted_health" ] && [ "$route" = "$wanted_route" ] && [ -n "$desired" ] && [ "$observed" = "$desired" ]; then
+				return 0
+			fi
+			if [ "$runtime" = 'failed' ] || [ "$runtime" = 'degraded' ]; then
+				printf 'App runtime entered %s while waiting for health=%s route=%s\n' "$runtime" "$wanted_health" "$wanted_route" >&2
+				return 1
+			fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'App health did not converge to health=%s route=%s: runtime=%s health=%s route=%s desired=%s observed=%s\n' \
+				"$wanted_health" "$wanted_route" "$(platform_json_field "$platform_response" app.runtime_status)" \
+				"$(platform_json_field "$platform_response" app.health_status)" "$(platform_json_field "$platform_response" app.route_status)" \
+				"$(platform_json_field "$platform_response" app.desired_generation)" "$(platform_json_field "$platform_response" app.observed_generation)" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+wait_for_app_public_route() {
+	local expected_body="$1" status body
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(traefik_http_status /healthz "$platform_app_host")"
+		if [ "$status" = '200' ]; then
+			body="$("${compose[@]}" exec -T api sh -ec \
+				'wget -qO- --timeout=8 --header "Host: $1" http://traefik:8080/healthz || true' sh "$platform_app_host")"
+			if [ "$body" = "$expected_body" ]; then
+				return 0
+			fi
+		fi
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'Traefik did not serve expected healthy App response: host=%s status=%s body=%q\n' "$platform_app_host" "$status" "$body" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+wait_for_app_public_route_removed() {
+	local status
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		status="$(traefik_http_status /healthz "$platform_app_host")"
+		if [ "$status" = '404' ]; then
+			return 0
+		fi
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'withdrawn App route still responds through Traefik: host=%s status=%s\n' "$platform_app_host" "$status" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+wait_for_app_route_snapshot() {
+	local expected="$1" snapshot="$generated_state_dir/platform-apps.yaml" matched
+	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
+		if [ -f "$snapshot" ]; then
+			if grep -Fq -- "$platform_app_host" "$snapshot"; then matched=true; else matched=false; fi
+			if [ "$matched" = "$expected" ]; then
+				return 0
+			fi
+		fi
+		if [ "$attempt" = "${SMOKE_ATTEMPTS:-60}" ]; then
+			printf 'App route snapshot did not converge to host=%s present=%s\n' "$platform_app_host" "$expected" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+assert_app_route_uses_container_dns_name() {
+	local expected_name="${1:-$(app_runtime_name)}" actual_name snapshot="$generated_state_dir/platform-apps.yaml"
+	actual_name="$(app_route_snapshot_target)"
+	if [ "$actual_name" != "$expected_name" ]; then
+		printf 'App route snapshot target does not match the current incarnation: expected=%s actual=%s\n' "$expected_name" "$actual_name" >&2
+		return 1
+	fi
+	if grep -Eq 'url: http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' "$snapshot" || grep -Fq -- "url: http://stealth-app-${platform_app_id//-/}:" "$snapshot"; then
+		printf '%s\n' 'App route snapshot contains a reusable IP or stable App-only target' >&2
+		return 1
+	fi
+}
+
 print_app_runtime_diagnostics() {
-	local app_id="$1" container_name
-	container_name="$(printf 'stealth-app-%s' "${app_id//-/}")"
-	if ! docker inspect "$container_name" >"$platform_response" 2>/dev/null; then
-		printf 'App runtime diagnostic: container %s is absent\n' "$container_name" >&2
+	local app_id="$1" container_id
+	container_id="$(docker ps -aq --filter "label=stealth.app_id=${app_id}" --filter 'label=stealth.resource_type=app' | head -n 1)"
+	if [ -z "$container_id" ] || ! docker inspect "$container_id" >"$platform_response" 2>/dev/null; then
+		printf 'App runtime diagnostic: container for App %s is absent\n' "$app_id" >&2
 		return 0
 	fi
 	python3 - "$platform_response" <<'PY' >&2
@@ -1485,7 +1646,9 @@ app_runtime_network_name() {
 }
 
 app_runtime_name() {
-	printf 'stealth-app-%s' "${platform_app_id//-/}"
+	local container_id
+	container_id="$(app_runtime_container_id)"
+	docker inspect --format '{{.Name}}' "$container_id" | sed 's#^/##'
 }
 
 app_runtime_container_id() {
@@ -1497,6 +1660,88 @@ app_runtime_container_id() {
 		return 1
 	fi
 	printf '%s' "$containers"
+}
+
+app_runtime_container_count() {
+	local app_id="${1:-$platform_app_id}" containers
+	containers="$(docker ps -aq --filter "label=stealth.app_id=${app_id}" --filter 'label=stealth.resource_type=app')"
+	printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' '
+}
+
+app_route_snapshot_target() {
+	local snapshot="$generated_state_dir/platform-apps.yaml" service_id targets count
+	if [ ! -f "$snapshot" ]; then
+		printf '%s\n' 'App route snapshot is missing' >&2
+		return 1
+	fi
+	service_id="stealth-app-service-${platform_app_id//-/}"
+	targets="$(awk -v key="        ${service_id}:" '$0 == key { inside=1; next } inside && /^        [[:alnum:]_-]+:$/ { exit } inside && /url: http:\/\/[a-z0-9-]+:8080/ { print }' "$snapshot" | sed -E 's#.*url: http://##; s#:8080.*$##' | sort -u || true)"
+	count="$(printf '%s\n' "$targets" | sed '/^$/d' | wc -l | tr -d ' ')"
+	if [ "$count" != '1' ]; then
+		printf 'expected one App DNS target in the generated snapshot, got %s: %s\n' "$count" "$targets" >&2
+		return 1
+	fi
+	printf '%s' "$targets"
+}
+
+wait_for_app_route_target() {
+	local expected="$1" actual snapshot="$generated_state_dir/platform-apps.yaml"
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if [ -f "$snapshot" ] && grep -Fq -- "$platform_app_host" "$snapshot"; then
+			actual="$(app_route_snapshot_target 2>/dev/null || true)"
+			if [ "$actual" = "$expected" ]; then return 0; fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'App snapshot did not publish incarnation target %s for %s\n' "$expected" "$platform_app_host" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+start_platform_route_reconcile_lock() {
+	if [ "$platform_route_lock_active" = "true" ]; then
+		printf '%s\n' 'App route reconcile smoke lock is already active' >&2
+		return 1
+	fi
+	platform_route_lock_name="stealth-app-route-lock-${platform_app_id}"
+	"${compose[@]}" exec -T -d postgres sh -ec '
+		name="$1"
+		case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+		PGAPPNAME="$name" psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 \
+			--command "SELECT pg_advisory_lock(8105202602)" --command "SELECT pg_sleep(300)" >/dev/null
+	' sh "$platform_route_lock_name" >/dev/null
+	platform_route_lock_active="true"
+	for attempt in $(seq 1 40); do
+		local locked_query
+		locked_query="$("${compose[@]}" exec -T postgres sh -ec '
+			name="$1"
+			case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+			psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align \
+				--command "SELECT count(*) FROM pg_stat_activity WHERE application_name = '\''$name'\'' AND query LIKE '\''SELECT pg_sleep(300)%'\''"
+		' sh "$platform_route_lock_name" | tr -d '\r\n')"
+		if [ "$locked_query" = '1' ]; then
+			return 0
+		fi
+		sleep 0.25
+	done
+	printf '%s\n' 'App route reconcile smoke lock did not become active' >&2
+	release_platform_route_reconcile_lock || true
+	return 1
+}
+
+release_platform_route_reconcile_lock() {
+	if [ "$platform_route_lock_active" != "true" ] || [ -z "$platform_route_lock_name" ]; then
+		return 0
+	fi
+	"${compose[@]}" exec -T postgres sh -ec '
+		name="$1"
+		case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+		psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 \
+			--command "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '\''$name'\'' AND pid <> pg_backend_pid()" >/dev/null
+	' sh "$platform_route_lock_name" >/dev/null 2>&1 || true
+	platform_route_lock_active="false"
 }
 
 wait_for_app_runtime_container_replacement() {
@@ -1553,8 +1798,9 @@ assert_app_runtime_container() {
 		app_runtime_inspect_json="$(mktemp "${TMPDIR:-/tmp}/stealth-app-runtime-inspect.XXXXXX.json")"
 	fi
 	docker inspect "$container_id" >"$app_runtime_inspect_json"
-	python3 - "$app_runtime_inspect_json" "$platform_app_id" "$platform_project_id" "$generation" "$deployment_id" "$spec_sha256" "$cpu_millis" "$network_name" <<'PY'
+python3 - "$app_runtime_inspect_json" "$platform_app_id" "$platform_project_id" "$generation" "$deployment_id" "$spec_sha256" "$cpu_millis" "$network_name" <<'PY'
 import json
+import re
 import sys
 
 path, app_id, project_id, generation, deployment_id, spec_sha256, cpu_millis, network_name = sys.argv[1:]
@@ -1572,8 +1818,8 @@ forbidden_env = {"DATABASE_URL", "REDIS_URL", "FUNCTIONS_SECRET_KEY", "CLOUDFLAR
 env_names = {entry.split("=", 1)[0] for entry in container.get("Config", {}).get("Env", [])}
 expected_image = f"stealth-app/{deployment_id}:runtime"
 errors = []
-if container.get("Name") != "/stealth-app-" + app_id.replace("-", ""):
-    errors.append("deterministic name")
+if not re.fullmatch(r"/st-" + app_id.replace("-", "") + r"-[0-9a-f]{24}", container.get("Name") or ""):
+    errors.append("incarnation-specific DNS name")
 for key, value in {
     "stealth.managed": "true",
     "stealth.resource_type": "app",
@@ -1700,7 +1946,7 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
-	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true}' "$platform_response")"
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":20}}}' "$platform_response")"
 	if [ "$app_status" != '201' ]; then
 		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
 		sed -n '1,80p' "$platform_response" >&2
@@ -1886,8 +2132,10 @@ PY
 	assert_app_runtime_container "$runtime_container_id" "$app_desired_generation" "$app_desired_deployment" "$app_spec_sha256" 500
 	assert_app_runtime_network
 	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime
+	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_route_snapshot false
 	if [ ! -f "$generated_state_dir/platform-sites.yaml" ] || ! grep -Fq -- "$platform_host" "$generated_state_dir/platform-sites.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
-		printf '%s\n' 'App hostname appeared in the current Site-only Traefik route snapshot' >&2
+		printf '%s\n' 'App hostname was published before health converged or entered the Site snapshot' >&2
 		return 1
 	fi
 	status="$(traefik_http_status / "$platform_app_host")"
@@ -1895,7 +2143,27 @@ PY
 		printf 'built App hostname returned HTTP %s, want fail-closed 404\n' "$status" >&2
 		return 1
 	fi
-	printf 'real BuildKit App build and runtime passed: digest=%s archive_sha256=%s generation=%s runtime=%s route=absent\n' "$image_digest" "$image_archive_sha256" "$app_desired_generation" "$app_runtime"
+	wait_for_app_health_state healthy active
+	wait_for_app_route_snapshot true
+	assert_app_route_uses_container_dns_name
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	if ! grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-apps.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
+		printf '%s\n' 'healthy App route was not isolated in the App snapshot' >&2
+		return 1
+	fi
+	docker exec "$runtime_container_id" /buildkit-secret-probe set-unhealthy
+	wait_for_app_health_state unhealthy waiting_for_health
+	wait_for_app_public_route_removed
+	wait_for_app_route_snapshot false
+	if grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-apps.yaml"; then
+		printf '%s\n' 'unhealthy App remained in the generated route snapshot' >&2
+		return 1
+	fi
+	docker exec "$runtime_container_id" /buildkit-secret-probe set-healthy
+	wait_for_app_health_state healthy active
+	wait_for_app_route_snapshot true
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	printf 'real BuildKit App runtime and public route passed: digest=%s archive_sha256=%s generation=%s health=healthy route=active\n' "$image_digest" "$image_archive_sha256" "$app_desired_generation"
 }
 
 verify_app_secondary_state_smoke() {
@@ -1947,26 +2215,6 @@ assert_container_absent() {
 	fi
 }
 
-wait_for_app_runtime_conflict() {
-	local expected_observed="$1" status="" runtime_error="" observed=""
-	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
-		if fetch_app_runtime; then
-			status="$(platform_json_field "$platform_response" app.runtime_status)"
-			observed="$(platform_json_field "$platform_response" app.observed_generation)"
-			runtime_error="$(platform_json_field "$platform_response" app.runtime_error)"
-			if [ "$status" = 'failed' ] && [ "$runtime_error" = 'container ownership conflict' ] && [ "$observed" = "$expected_observed" ]; then
-				return 0
-			fi
-		fi
-		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
-			printf 'foreign name conflict did not fail safely: status=%s error=%s observed=%s\n' "$status" "$runtime_error" "$observed" >&2
-			return 1
-		fi
-		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
-	done
-	return 1
-}
-
 wait_for_app_deployment_ready() {
 	local deployment_id="$1" app_id="${2:-$platform_app_id}" response_url build_status status
 	response_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${app_id}/deployments/${deployment_id}"
@@ -2000,8 +2248,9 @@ wait_for_app_deployment_ready() {
 }
 
 verify_app_runtime_lifecycle() {
-	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha
-	local disabled_generation conflict_observed foreign_managed_label runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
+	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local old_route_target new_route_target body
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -2013,9 +2262,11 @@ verify_app_runtime_lifecycle() {
 		return 1
 	fi
 	wait_for_app_runtime stopped
+	wait_for_app_health_state pending not_available
+	wait_for_app_public_route_removed
 	disabled_generation="$(platform_json_field "$platform_response" app.desired_generation)"
-	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
-		printf '%s\n' 'disabled App still has its deterministic runtime container' >&2
+	if [ "$(app_runtime_container_count)" != '0' ]; then
+		printf '%s\n' 'disabled App still has a managed runtime container' >&2
 		return 1
 	fi
 	printf 'App disable converged at generation %s with no container\n' "$disabled_generation"
@@ -2038,6 +2289,8 @@ verify_app_runtime_lifecycle() {
 		return 1
 	fi
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 500
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'App re-enable restored the selected image at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2059,6 +2312,8 @@ verify_app_runtime_lifecycle() {
 	fi
 	assert_container_absent "$old_container"
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'App CPU update replaced the container and converged at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2096,6 +2351,8 @@ verify_app_runtime_lifecycle() {
 	assert_container_absent "$old_container"
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'App v2 deployment switch removed the previous container and converged at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2135,6 +2392,8 @@ verify_app_runtime_lifecycle() {
 	fi
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
 		printf '%s\n' 'BuildKit restarted during the OCI reimport test' >&2
 		return 1
@@ -2146,34 +2405,102 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_runtime running
 	new_container="$(app_runtime_container_id)"
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'worker restart recovered exactly one App container (id=%s)\n' "$new_container"
 
 	old_container="$new_container"
+	old_route_target="$(app_route_snapshot_target)"
 	docker rm -f "$old_container" >/dev/null
-	wait_for_app_runtime running
-	new_container="$(app_runtime_container_id)"
+	new_container="$(wait_for_running_app_runtime_container)"
 	if [ "$new_container" = "$old_container" ]; then
 		printf '%s\n' 'runtime did not recreate the deleted App container' >&2
 		return 1
 	fi
+	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
-	printf 'deleted App container was recreated (id=%s)\n' "$new_container"
+	wait_for_app_health_state healthy active
+	new_route_target="$(app_runtime_name)"
+	if [ "$new_route_target" = "$old_route_target" ]; then
+		printf 'container recreation reused route identity %s\n' "$old_route_target" >&2
+		return 1
+	fi
+	wait_for_app_route_target "$new_route_target"
+	assert_app_route_uses_container_dns_name "$new_route_target"
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	printf 'deleted App container was recreated with target %s -> %s (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	old_container="$new_container"
+	old_route_target="$(app_route_snapshot_target)"
+	if [ "$old_route_target" != "$(app_runtime_name)" ]; then
+		printf 'active App snapshot target %s does not match its current runtime target %s\n' "$old_route_target" "$(app_runtime_name)" >&2
+		return 1
+	fi
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	start_platform_route_reconcile_lock
 	docker stop --time 1 "$old_container" >/dev/null
-	wait_for_app_runtime running
+	wait_for_app_health_state pending waiting_for_health
 	new_container="$(wait_for_running_app_runtime_container)"
+	if [ "$new_container" != "$old_container" ]; then
+		printf 'same-container process restart changed container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
-	printf 'unexpected App container exit was recovered (id=%s)\n' "$new_container"
+	new_route_target="$(app_runtime_name)"
+	if [ "$new_route_target" = "$old_route_target" ]; then
+		printf 'same-container process restart reused route identity %s\n' "$old_route_target" >&2
+		return 1
+	fi
+	if [ "$(app_route_snapshot_target)" != "$old_route_target" ]; then
+		printf 'route snapshot changed while its reconcile lock was held: expected old target %s, got %s\n' "$old_route_target" "$(app_route_snapshot_target)" >&2
+		return 1
+	fi
+	for attempt in $(seq 1 8); do
+		status="$(traefik_http_status /healthz "$platform_app_host")"
+		body="$("${compose[@]}" exec -T api sh -ec \
+			'wget -qO- --timeout=4 --header "Host: $1" http://traefik:8080/healthz || true' sh "$platform_app_host")"
+		if [[ "$status" =~ ^2[0-9][0-9]$ ]] || [ "$body" = 'app-runtime-smoke-ok' ]; then
+			printf 'stale route target %s returned a successful response while health was pending (status=%s)\n' "$old_route_target" "$status" >&2
+			return 1
+		fi
+		if [ "$(app_route_snapshot_target)" != "$old_route_target" ]; then
+			printf '%s\n' 'route snapshot reconciled during the stale-target data-plane probe' >&2
+			return 1
+		fi
+		sleep 1
+	done
+	release_platform_route_reconcile_lock
+	wait_for_app_health_state healthy active
+	wait_for_app_route_target "$new_route_target"
+	assert_app_route_uses_container_dns_name "$new_route_target"
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	printf 'same-container restart kept stale target %s unusable while pending, then published %s after health (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 'disabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		printf 'disabling App before runtime bridge recreation returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime stopped
 	network_name="$(app_runtime_network_name)"
+	"${compose[@]}" stop worker traefik >/dev/null
+	for service in worker traefik; do
+		peer_container="$("${compose[@]}" ps -q "$service")"
+		if [ -n "$peer_container" ] && network_contains "$(container_networks "$peer_container")" "$network_name"; then
+			docker network disconnect --force "$network_name" "$peer_container" >/dev/null
+		fi
+	done
 	docker network rm "$network_name" >/dev/null
+	# Compose retains the removed bridge ID on stopped containers. Recreate the
+	# trusted peers so the worker can establish a fresh owned bridge before
+	# Traefik joins it again.
+	"${compose[@]}" up -d --force-recreate worker >/dev/null
+	wait_for_healthy worker
+	wait_for_container_network worker "$network_name"
+	"${compose[@]}" up -d --force-recreate traefik >/dev/null
+	wait_for_healthy traefik
+	wait_for_container_network traefik "$network_name"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
 	if [ "$status" != '200' ]; then
 		printf 're-enabling App after runtime-network deletion returned HTTP %s\n' "$status" >&2
@@ -2187,45 +2514,26 @@ verify_app_runtime_lifecycle() {
 	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
 	new_container="$(app_runtime_container_id)"
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'deleted App runtime bridge was recreated with owned labels\n'
+	runtime_name="$(app_runtime_name)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 'disabling App before foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		printf 'disabling App before stale-target fixture returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime stopped
-	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
-		printf '%s\n' 'App container remained before foreign-name conflict fixture' >&2
+	if [ "$(app_runtime_container_count)" != '0' ]; then
+		printf '%s\n' 'App container remained before stale-target fixture' >&2
 		return 1
 	fi
-	runtime_name="$(app_runtime_name)"
 	worker="$("${compose[@]}" ps -q worker)"
 	worker_image="$(docker inspect --format '{{.Config.Image}}' "$worker")"
 	app_runtime_foreign_container="$(docker create --name "$runtime_name" "$worker_image")"
-	conflict_observed="$(platform_json_field "$platform_response" app.observed_generation)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 're-enabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
-		return 1
-	fi
-	wait_for_app_runtime_conflict "$conflict_observed"
-	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
-	if [ -n "$foreign_managed_label" ]; then
-		printf 'foreign container was adopted or labeled by the runtime (stealth.managed=%s)\n' "$foreign_managed_label" >&2
-		return 1
-	fi
-	docker inspect "$app_runtime_foreign_container" >/dev/null
-	docker rm "$app_runtime_foreign_container" >/dev/null
-	app_runtime_foreign_container=""
-	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
-	if [ "$status" != '200' ]; then
-		printf 'disabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
-		return 1
-	fi
-	wait_for_app_runtime stopped
-	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
-	if [ "$status" != '200' ]; then
-		printf 're-enabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
+		printf 're-enabling App beside the stale-target fixture returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime running
@@ -2234,8 +2542,23 @@ verify_app_runtime_lifecycle() {
 	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
 	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
 	new_container="$(app_runtime_container_id)"
+	new_runtime_name="$(app_runtime_name)"
+	if [ "$new_runtime_name" = "$runtime_name" ]; then
+		printf 'new App incarnation reused a stale foreign target name %s\n' "$runtime_name" >&2
+		return 1
+	fi
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
-	printf 'foreign deterministic-name conflict remained untouched and recovered after removal\n'
+	foreign_container_name="$(docker inspect --format '{{.Name}}' "$app_runtime_foreign_container")"
+	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
+	if [ "$foreign_container_name" != "/$runtime_name" ] || [ -n "$foreign_managed_label" ]; then
+		printf 'stale target fixture was changed: name=%s managed=%s\n' "$foreign_container_name" "$foreign_managed_label" >&2
+		return 1
+	fi
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	docker rm "$app_runtime_foreign_container" >/dev/null
+	app_runtime_foreign_container=""
+	printf 'stale target %s remained untouched while App recovered under new target %s\n' "$runtime_name" "$new_runtime_name"
 
 	orphan_app="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 	orphan_project="$(python3 -c 'import uuid; print(uuid.uuid4())')"
@@ -2261,10 +2584,8 @@ verify_app_runtime_lifecycle() {
 	app_runtime_orphan_container=""
 	printf 'valid orphan App container was removed after worker recovery\n'
 
-	if [ "$(traefik_http_status / "$platform_app_host")" != '404' ]; then
-		printf '%s\n' 'App runtime lifecycle unexpectedly created a public Traefik route' >&2
-		return 1
-	fi
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 }
 
 clear_platform_route_smoke() {
@@ -2573,11 +2894,6 @@ smoke_marker="compose-smoke-$(date -u +%Y%m%d%H%M%S)-$$"
 smoke_email="${smoke_marker}@example.test"
 smoke_password='correct-horse-battery-staple'
 metric_name='stealth.compose.smoke'
-timestamp_seconds="$(date -u +%s)"
-timestamp_ns="$((timestamp_seconds * 1000000000))"
-start_timestamp_ns="$((timestamp_ns - 1000000000))"
-trace_id="$(printf '%s' "$smoke_marker" | sha256sum | cut -c1-32)"
-span_id="$(printf '%s-span' "$smoke_marker" | sha256sum | cut -c1-16)"
 
 register_status="$(curl --silent --show-error --max-time 10 \
 	--cookie-jar "$cookie_file" \
@@ -2631,6 +2947,14 @@ clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"
 start_docker_filelog_smoke "compose filelog smoke ${filelog_marker}"
+
+# App lifecycle smoke can take several minutes. Timestamp telemetry when it is
+# emitted so the later ingestion query window remains valid after that work.
+timestamp_seconds="$(date -u +%s)"
+timestamp_ns="$((timestamp_seconds * 1000000000))"
+start_timestamp_ns="$((timestamp_ns - 1000000000))"
+trace_id="$(printf '%s' "$smoke_marker" | sha256sum | cut -c1-32)"
+span_id="$(printf '%s-span' "$smoke_marker" | sha256sum | cut -c1-16)"
 
 log_payload="$(cat <<EOF
 {"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"compose-smoke"}},{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}]},"scopeLogs":[{"scope":{"name":"compose-smoke"},"logRecords":[{"timeUnixNano":"$timestamp_ns","observedTimeUnixNano":"$timestamp_ns","severityNumber":17,"severityText":"ERROR","body":{"stringValue":"compose smoke log $smoke_marker"},"attributes":[{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}],"traceId":"$trace_id","spanId":"$span_id"}]}]}]}

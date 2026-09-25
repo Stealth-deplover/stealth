@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AppHealth_status,
+  AppRoute_status,
   AppDeploymentBuild_status,
   AppDeploymentPlatform,
   AppDeploymentSource,
@@ -101,6 +103,8 @@ function makeApp(): StealthApp {
     observed_generation: 0,
     runtime_status: AppRuntime_status.not_deployed,
     runtime_error: null,
+    health_status: AppHealth_status.pending,
+    route_status: AppRoute_status.not_available,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -159,7 +163,7 @@ describe("AppDetailView", () => {
     expect(
       screen.getByText("No deployment has been created for this App yet."),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Not deployed")).toHaveLength(2);
+    expect(screen.getAllByText("Not deployed")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /deploy/i })).toBeNull();
   });
 
@@ -167,6 +171,7 @@ describe("AppDetailView", () => {
     const app = makeApp();
     app.desired_deployment_id = "deployment-1";
     app.runtime_status = AppRuntime_status.pending;
+    app.route_status = AppRoute_status.waiting_for_runtime;
     mocks.app = app;
     mocks.deployments = [makeDeployment()];
     render(
@@ -179,15 +184,81 @@ describe("AppDetailView", () => {
 
     expect(screen.getByText("Desired image selected")).toBeInTheDocument();
     expect(screen.getByText(/The runtime is reconciling generation 1/)).toBeInTheDocument();
-    expect(screen.getAllByText("Pending")).toHaveLength(2);
+    expect(screen.getByText("Pending")).toBeInTheDocument();
     expect(screen.queryByText("Running")).toBeNull();
     expect(screen.queryByText("Healthy")).toBeNull();
-    expect(screen.getByText(/application health and public routing are not available yet/)).toBeInTheDocument();
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for runtime")).toBeInTheDocument();
+    expect(screen.getByText(/public route waits for the current generation to pass its configured health check/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getAllByText(`sha256:${"c".repeat(64)}`)).toHaveLength(2);
     expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Build logs");
     expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Runtime logs are not available");
+  });
+
+  it("shows a healthy current generation with its active hostname", () => {
+    const app = makeApp();
+    app.platform_hostname = "backend.apps.example.com";
+    app.desired_deployment_id = "deployment-1";
+    app.desired_generation = 3;
+    app.observed_generation = 3;
+    app.runtime_status = AppRuntime_status.running;
+    app.health_status = AppHealth_status.healthy;
+    app.route_status = AppRoute_status.active;
+    mocks.app = app;
+    mocks.deployments = [makeDeployment()];
+
+    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    const hostnameLink = screen.getByRole("link", {
+      name: "backend.apps.example.com (opens in a new tab)",
+    });
+    expect(hostnameLink).toHaveAttribute("href", "https://backend.apps.example.com");
+    expect(hostnameLink).toHaveClass("min-h-11");
+  });
+
+  it("shows a running process as starting until health converges", () => {
+    const app = makeApp();
+    app.platform_hostname = "backend.apps.example.com";
+    app.desired_deployment_id = "deployment-1";
+    app.desired_generation = 2;
+    app.observed_generation = 2;
+    app.runtime_status = AppRuntime_status.running;
+    app.route_status = AppRoute_status.waiting_for_health;
+    mocks.app = app;
+
+    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for health")).toBeInTheDocument();
+    expect(screen.getByText("backend.apps.example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "backend.apps.example.com" })).toBeNull();
+    expect(screen.queryByText(/publicly available/i)).toBeNull();
+  });
+
+  it("keeps an unhealthy App out of the public route", () => {
+    const app = makeApp();
+    app.platform_hostname = "backend.apps.example.com";
+    app.desired_deployment_id = "deployment-1";
+    app.desired_generation = 3;
+    app.observed_generation = 3;
+    app.runtime_status = AppRuntime_status.running;
+    app.health_status = AppHealth_status.unhealthy;
+    app.route_status = AppRoute_status.waiting_for_health;
+    mocks.app = app;
+
+    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Unhealthy")).toBeInTheDocument();
+    expect(screen.getByText("Not published")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "backend.apps.example.com" })).toBeNull();
+    expect(screen.queryByText(/publicly available/i)).toBeNull();
   });
 
   it("shows safe runtime failure details and preserves the last observed generation", () => {
@@ -232,6 +303,7 @@ describe("AppDetailView", () => {
     );
 
     expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Not reported")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Select as desired image" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getByText("Dockerfile build failed")).toBeInTheDocument();

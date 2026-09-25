@@ -545,6 +545,10 @@ services:
     image: "${STEALTH_WORKER_IMAGE:?set STEALTH_WORKER_IMAGE to a versioned image}"
     restart: unless-stopped
     stop_grace_period: 30s
+    labels:
+      stealth.managed: "true"
+      stealth.resource_type: app_runtime_worker
+      stealth.runtime_schema: v1
     environment:
       <<: *backend-environment
       CLOUDFLARE_IMPORT_FILE: /var/lib/stealth/cloudflare-import/cloudflare-import.enc
@@ -683,11 +687,15 @@ services:
     networks: [stealth]
 
   traefik:
-    # Traefik handles platform Site requests received through the private
-    # Cloudflare ingress network. It has no published host port; Nginx remains
-    # the Console/API origin for the existing named tunnel.
+    # Traefik handles platform Site and eligible App requests received through
+    # the private Cloudflare ingress network. It has no published host port;
+    # Nginx remains the Console/API origin for the existing named tunnel.
     image: "${TRAEFIK_IMAGE:-traefik:v3.7.13@sha256:1c32e7c368204fd72812152ebdd2ac0425993df6fd982317deb02e48f2d5423c}"
     restart: unless-stopped
+    labels:
+      stealth.managed: "true"
+      stealth.resource_type: app_runtime_ingress
+      stealth.runtime_schema: v1
     command: ["--configFile=/etc/traefik/traefik.yaml"]
     volumes:
       - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro

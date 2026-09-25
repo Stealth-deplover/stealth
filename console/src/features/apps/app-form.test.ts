@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { StealthApp } from "@/api/types";
-import { AppRuntime_status, WorkloadHealthCheckProtocol } from "@/api/generated/schema";
+import {
+  AppHealth_status,
+  AppRoute_status,
+  AppRuntime_status,
+  WorkloadHealthCheckProtocol,
+} from "@/api/generated/schema";
 import {
   appFormValues,
   createAppPayload,
@@ -103,6 +108,8 @@ describe("App configuration form", () => {
       observed_generation: 0,
       runtime_status: AppRuntime_status.not_deployed,
       runtime_error: null,
+      health_status: AppHealth_status.pending,
+      route_status: AppRoute_status.not_available,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     };

@@ -285,6 +285,7 @@ jobs:
           DOCKER_GID=${docker_gid}
           METRICS_TOKEN=${metrics_token}
           FUNCTIONS_RUNNER_ENABLED=true
+          PLATFORM_ROUTE_RECONCILE_INTERVAL=30s
           FUNCTIONS_RUNNER_STAGING_VOLUME=stealth_release_smoke_staging_${GITHUB_RUN_ID}
           POSTGRES_VOLUME_NAME=stealth_release_smoke_postgres_${GITHUB_RUN_ID}
           STORAGE_VOLUME_NAME=stealth_release_smoke_storage_${GITHUB_RUN_ID}

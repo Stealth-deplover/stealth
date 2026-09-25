@@ -165,24 +165,27 @@ report a bounded runtime failure or drift. A running process does not mean
 the App passed its configured application-level health check.
 
 Apps and Sites reserve labels in one database-enforced platform hostname
-namespace. An App hostname is reserved metadata; Apps do not enter the Site
-route snapshot or receive a public route. WorkloadSpec contains runtime intent
-only: build and image identity are separate. The worker imports a selected
-immutable OCI archive into Moby and reconciles a deterministic container on
-the separately managed `stealth_app_runtime` bridge network. The worker alone
-receives the Docker socket; API, Console, BuildKit, Traefik, and App containers
-do not. App containers have no host-published ports, host mounts, host
-networking, host PID/IPC, added Linux capabilities, privileged mode, Docker
-socket, backend credentials, or Stealth storage. The image's own environment
-is preserved; Stealth injects no environment values. The current runtime uses
-Moby directly; gVisor is not configured yet. Secret values have a separate
-future encrypted lifecycle and never belong in WorkloadSpec.
+namespace. WorkloadSpec contains runtime intent only: build and image identity
+are separate. The worker imports a selected immutable OCI archive into Moby
+and reconciles a deterministic container on the separately managed
+`stealth_app_runtime` bridge network. The worker alone receives the Docker
+socket. It attaches the hardened Traefik service to that bridge after
+validating bridge ownership and the current Compose peer identity; API,
+Console, BuildKit, and the remaining backend services stay off it. App
+containers have no host-published ports, host mounts, host networking, host
+PID/IPC, added Linux capabilities, privileged mode, Docker socket, backend
+credentials, or Stealth storage. The image's own environment is preserved;
+Stealth injects no environment values. The current runtime uses Moby directly;
+gVisor is not configured yet. Secret values have a separate future encrypted
+lifecycle and never belong in WorkloadSpec.
 
-All Apps currently share the private runtime bridge, so this topology does not
-isolate one App from another. App filesystems are ephemeral: only `/tmp` is
-writable, as a bounded tmpfs, and OCI images declaring Dockerfile `VOLUME`
-paths are rejected. The host Docker image cache can consume disk; Stealth does
-not garbage-collect it automatically. Production acceptance targets cgroup v2.
+All Apps currently share the runtime bridge with Traefik, so one App may be
+able to reach another App and services listening on Traefik. This is not
+per-tenant network isolation or a sandbox boundary. App filesystems are
+ephemeral: only `/tmp` is writable, as a bounded tmpfs, and OCI images
+declaring Dockerfile `VOLUME` paths are rejected. The host Docker image cache
+can consume disk; Stealth does not garbage-collect it automatically.
+Production acceptance targets cgroup v2.
 
 An `AppDeployment` is an immutable build input snapshot and durable result.
 Uploaded source bytes, the Dockerfile build definition, and the current
@@ -198,9 +201,23 @@ Moby work has run. The runtime worker consumes `App.enabled`,
 manifest before import, then verifies the image identity and container settings
 before advancing `observed_generation`. Docker's restart policy is disabled;
 the worker implements `restart_policy=always` through durable, bounded retries
-after unexpected exits. Runtime status confirms process liveness only.
-Application health probing, public routing, runtime log viewing, and encrypted
-App secrets are not implemented.
+after unexpected exits. `running` means the current expected process is
+running. Health is tracked independently and fenced to the desired generation,
+selected deployment, container identity, and runtime routing incarnation.
+App resource identity is distinct from its routing incarnation identity. Each
+incarnation gets a trusted Docker DNS name; before an exited same-container
+process is restarted, the worker clears prior health and renames the stopped
+container to a new incarnation name. The old name therefore cannot resolve to
+the restarted process while Traefik still has an older snapshot. Container
+replacement and generation changes likewise retire the old name before a new
+process starts. The configured initial delay and a fresh probe run again. HTTP
+accepts 2xx only and does not follow redirects. `healthy` means the configured
+probe has converged. An App route is eligible only when the App is enabled,
+has a ready selected deployment, has matching desired and observed generations,
+and has current runtime identity with healthy probes. PostgreSQL remains
+authoritative and the worker publishes eligible Apps through a separate
+App-only Traefik snapshot. Runtime log viewing and encrypted App secrets are
+not implemented.
 
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no

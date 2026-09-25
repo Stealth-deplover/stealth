@@ -1,0 +1,20 @@
+DROP INDEX app_runtime_state_health_due_idx;
+
+ALTER TABLE app_runtime_state
+  DROP CONSTRAINT app_runtime_state_health_deployment_fk,
+  DROP CONSTRAINT app_runtime_state_healthy_route_identity,
+  DROP CONSTRAINT app_runtime_state_health_result_consistent,
+  DROP CONSTRAINT app_runtime_state_health_identity_consistent,
+  DROP CONSTRAINT app_runtime_state_health_failures_valid,
+  DROP CONSTRAINT app_runtime_state_health_container_id_valid,
+  DROP CONSTRAINT app_runtime_state_health_generation_valid,
+  DROP CONSTRAINT app_runtime_state_health_status_valid,
+  DROP CONSTRAINT app_runtime_state_container_address_valid,
+  DROP COLUMN next_health_check_at,
+  DROP COLUMN health_checked_at,
+  DROP COLUMN health_failure_count,
+  DROP COLUMN health_container_id,
+  DROP COLUMN health_deployment_id,
+  DROP COLUMN health_generation,
+  DROP COLUMN health_status,
+  DROP COLUMN container_address;
