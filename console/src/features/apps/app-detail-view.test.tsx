@@ -256,7 +256,7 @@ describe("AppDetailView", () => {
 
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Unhealthy")).toBeInTheDocument();
-    expect(screen.getByText("Waiting for health")).toBeInTheDocument();
+    expect(screen.getByText("Not published")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "backend.apps.example.com" })).toBeNull();
     expect(screen.queryByText(/publicly available/i)).toBeNull();
   });

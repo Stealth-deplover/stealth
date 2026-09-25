@@ -193,7 +193,9 @@ export function AppDetailView({
         <CardContent className="grid gap-4 sm:grid-cols-3">
           <Metric label="Runtime"><StatusBadge status={app.runtime_status} /></Metric>
           <Metric label="Health"><HealthBadge status={app.health_status} /></Metric>
-          <Metric label="Public route"><RouteBadge status={app.route_status} /></Metric>
+          <Metric label="Public route">
+            <RouteBadge status={app.route_status} healthStatus={app.health_status} />
+          </Metric>
         </CardContent>
         <CardContent className="border-t border-white/[0.06] py-3">
           <Metric label="Platform hostname">
@@ -417,13 +419,21 @@ function HealthBadge({ status }: { status: AppHealth_status }) {
   );
 }
 
-function RouteBadge({ status }: { status: AppRoute_status }) {
+function RouteBadge({ status, healthStatus }: { status: AppRoute_status; healthStatus: AppHealth_status }) {
   const view = {
     [AppRoute_status.active]: { label: "Active", variant: "success" as const },
     [AppRoute_status.waiting_for_runtime]: { label: "Waiting for runtime", variant: "building" as const },
     [AppRoute_status.waiting_for_health]: { label: "Waiting for health", variant: "warning" as const },
     [AppRoute_status.not_available]: { label: "Not published", variant: "neutral" as const },
   }[status];
+  if (status === AppRoute_status.waiting_for_health && healthStatus === AppHealth_status.unhealthy) {
+    return (
+      <Badge variant="neutral">
+        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+        Not published
+      </Badge>
+    );
+  }
   return (
     <Badge variant={view.variant}>
       <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
