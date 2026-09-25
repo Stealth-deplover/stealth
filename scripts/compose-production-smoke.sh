@@ -2894,11 +2894,6 @@ smoke_marker="compose-smoke-$(date -u +%Y%m%d%H%M%S)-$$"
 smoke_email="${smoke_marker}@example.test"
 smoke_password='correct-horse-battery-staple'
 metric_name='stealth.compose.smoke'
-timestamp_seconds="$(date -u +%s)"
-timestamp_ns="$((timestamp_seconds * 1000000000))"
-start_timestamp_ns="$((timestamp_ns - 1000000000))"
-trace_id="$(printf '%s' "$smoke_marker" | sha256sum | cut -c1-32)"
-span_id="$(printf '%s-span' "$smoke_marker" | sha256sum | cut -c1-16)"
 
 register_status="$(curl --silent --show-error --max-time 10 \
 	--cookie-jar "$cookie_file" \
@@ -2952,6 +2947,14 @@ clear_platform_route_smoke
 
 filelog_marker="${smoke_marker}-docker-log"
 start_docker_filelog_smoke "compose filelog smoke ${filelog_marker}"
+
+# App lifecycle smoke can take several minutes. Timestamp telemetry when it is
+# emitted so the later ingestion query window remains valid after that work.
+timestamp_seconds="$(date -u +%s)"
+timestamp_ns="$((timestamp_seconds * 1000000000))"
+start_timestamp_ns="$((timestamp_ns - 1000000000))"
+trace_id="$(printf '%s' "$smoke_marker" | sha256sum | cut -c1-32)"
+span_id="$(printf '%s-span' "$smoke_marker" | sha256sum | cut -c1-16)"
 
 log_payload="$(cat <<EOF
 {"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"compose-smoke"}},{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}]},"scopeLogs":[{"scope":{"name":"compose-smoke"},"logRecords":[{"timeUnixNano":"$timestamp_ns","observedTimeUnixNano":"$timestamp_ns","severityNumber":17,"severityText":"ERROR","body":{"stringValue":"compose smoke log $smoke_marker"},"attributes":[{"key":"smoke.marker","value":{"stringValue":"$smoke_marker"}}],"traceId":"$trace_id","spanId":"$span_id"}]}]}]}
