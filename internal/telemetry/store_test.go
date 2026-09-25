@@ -107,6 +107,66 @@ func TestQueryLogsAfterUsesCompleteStableCursor(t *testing.T) {
 	}
 }
 
+func TestQueryContainerLogsUsesExactBoundedIDsAndCompleteCursor(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 250})
+	now := time.Now().UTC()
+	ids := []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}
+	_, err := store.QueryContainerLogs(context.Background(), ContainerLogsQuery{
+		ContainerIDs: ids,
+		Range:        TimeRange{From: now.Add(-time.Minute), To: now},
+		Limit:        100,
+		After:        &LogCursor{Timestamp: now.Add(-time.Second), EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"has({container_ids:Array(String)}, ResourceAttributes['container.id'])",
+		"(Timestamp, LogAttributes['stealth.log.event_id']) >",
+		"ORDER BY Timestamp ASC, EventID ASC",
+	} {
+		if !strings.Contains(conn.query, required) {
+			t.Fatalf("App runtime log query missing %q: %s", required, conn.query)
+		}
+	}
+	if strings.Contains(conn.query, ids[0]) || strings.Contains(conn.query, "container.name") || len(conn.args) != 8 {
+		t.Fatalf("runtime query embedded IDs/used an unexpected shape: query=%s args=%#v", conn.query, conn.args)
+	}
+	foundIDs, foundArray := false, false
+	for _, argument := range conn.args {
+		if named, ok := argument.(driver.NamedValue); ok && named.Name == "container_ids" {
+			foundArray = true
+			values, ok := named.Value.([]string)
+			foundIDs = ok && len(values) == 2 && values[0] == ids[0] && values[1] == ids[1]
+		}
+	}
+	if !foundArray || !foundIDs {
+		t.Fatalf("trusted container IDs were not passed as one typed array: %#v", conn.args)
+	}
+}
+
+func TestQueryContainerLogsRejectsInvalidSourceBoundsAndFilters(t *testing.T) {
+	conn := &recordingConn{}
+	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 250})
+	now := time.Now().UTC()
+	valid := ContainerLogsQuery{ContainerIDs: []string{strings.Repeat("a", 64)}, Range: TimeRange{From: now.Add(-time.Minute), To: now}, Limit: 10}
+	cases := []ContainerLogsQuery{
+		{ContainerIDs: []string{"not-a-container-id"}, Range: valid.Range, Limit: 10},
+		{ContainerIDs: make([]string, 2049), Range: valid.Range, Limit: 10},
+		{ContainerIDs: valid.ContainerIDs, Range: valid.Range, Limit: 251},
+		{ContainerIDs: valid.ContainerIDs, Range: valid.Range, Limit: 10, Search: strings.Repeat("x", 257)},
+	}
+	for _, query := range cases {
+		if _, err := store.QueryContainerLogs(context.Background(), query); !errors.Is(err, ErrInvalidQuery) {
+			t.Fatalf("query=%+v error=%v, want ErrInvalidQuery", query, err)
+		}
+	}
+	if conn.query != "" {
+		t.Fatalf("invalid runtime source query reached ClickHouse: %s", conn.query)
+	}
+}
+
 func TestQueryLogsEnrichesDockerIdentityFromScalarMetrics(t *testing.T) {
 	conn := &recordingConn{}
 	store := NewWithConn(conn, Config{MaxQueryDuration: time.Second, MaxQueryRange: time.Hour, MaxQueryRows: 100})

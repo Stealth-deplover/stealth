@@ -80,6 +80,10 @@ export function AppDetailView({
         : null,
     [appId, inspectedDeploymentId, projectId],
   );
+  const runtimeLogSource = useMemo(
+    () => createLogSource({ kind: "app-runtime", projectId, appId }),
+    [appId, projectId],
+  );
 
   const onUpdate = async (values: AppFormValues) => {
     await update.mutateAsync(updateAppPayload(values));
@@ -319,6 +323,14 @@ export function AppDetailView({
         )}
       </Card>
 
+      <LogViewer
+        key={`runtime:${app.id}`}
+        title="Runtime logs"
+        description="stdout/stderr captured from verified App containers and retained by the platform telemetry policy."
+        source={runtimeLogSource}
+        emptyMessage="No retained runtime log lines were returned for this App."
+      />
+
       {inspectedDeployment ? (
         <div className="mt-5 space-y-4">
           <Card>
@@ -348,7 +360,7 @@ export function AppDetailView({
           <LogViewer
             key={inspectedDeployment.id}
             title="Build logs"
-            description="Bounded output from the trusted App build worker. Runtime logs are not available."
+            description="Bounded output from the trusted App build worker."
             source={buildLogSource}
             polling={inspectedDeployment.status === "queued" || inspectedDeployment.status === "building"}
             emptyMessage="Build output will appear when this deployment starts."

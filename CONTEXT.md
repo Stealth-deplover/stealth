@@ -216,8 +216,15 @@ probe has converged. An App route is eligible only when the App is enabled,
 has a ready selected deployment, has matching desired and observed generations,
 and has current runtime identity with healthy probes. PostgreSQL remains
 authoritative and the worker publishes eligible Apps through a separate
-App-only Traefik snapshot. Runtime log viewing and encrypted App secrets are
-not implemented.
+App-only Traefik snapshot. Runtime stdout/stderr follows Docker's existing
+json-file logging into the isolated file-log Collector, then through the main
+Collector's redaction/event-ID pipeline to ClickHouse. PostgreSQL stores only
+the worker-verified App-to-container source mapping. A project-scoped API
+resolves those trusted sources before querying bounded ClickHouse history;
+the Console uses its shared log viewer. Logs remain subject to Docker local
+rotation and ClickHouse telemetry retention, which are separate limits.
+Telemetry outages affect log retrieval, not App reconciliation or routing.
+Encrypted App secrets remain deferred.
 
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no

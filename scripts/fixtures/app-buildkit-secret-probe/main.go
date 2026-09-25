@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -57,6 +58,17 @@ func verifyBuildKitSecrets() {
 }
 
 func serve() {
+	if payload, err := os.ReadFile("/payload.txt"); err == nil {
+		marker := strings.TrimSpace(string(payload))
+		if marker != "" && len(marker) <= 200 {
+			// Give the production file-log receiver time to discover the new
+			// Docker JSON log file before the first deterministic fixture lines.
+			time.Sleep(1500 * time.Millisecond)
+			startedAt := time.Now().UnixNano()
+			fmt.Printf("STEALTH_APP_RUNTIME_LOG_STDOUT_%s_%d\n", marker, startedAt)
+			fmt.Fprintf(os.Stderr, "STEALTH_APP_RUNTIME_LOG_STDERR_%s_%d\n", marker, startedAt)
+		}
+	}
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		if _, err := os.Stat("/tmp/stealth-health-unhealthy"); err == nil {
 			w.WriteHeader(http.StatusServiceUnavailable)

@@ -19,9 +19,34 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/ratelimit"
 	"github.com/Stealth-deplover/stealth/internal/repository"
+	"github.com/Stealth-deplover/stealth/internal/telemetry"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type appRuntimeLogTelemetryFake struct {
+	query  telemetry.ContainerLogsQuery
+	result telemetry.ContainerLogsResult
+	err    error
+}
+
+func (*appRuntimeLogTelemetryFake) Ping(context.Context) error { return nil }
+func (*appRuntimeLogTelemetryFake) QueryLogs(context.Context, telemetry.LogsQuery) (telemetry.LogsResult, error) {
+	return telemetry.LogsResult{}, nil
+}
+func (*appRuntimeLogTelemetryFake) QueryTraces(context.Context, telemetry.TracesQuery) (telemetry.TracesResult, error) {
+	return telemetry.TracesResult{}, nil
+}
+func (*appRuntimeLogTelemetryFake) QueryMetrics(context.Context, telemetry.MetricsQuery) (telemetry.MetricsResult, error) {
+	return telemetry.MetricsResult{}, nil
+}
+func (*appRuntimeLogTelemetryFake) ListSources(context.Context, telemetry.SourcesQuery) (telemetry.SourcesResult, error) {
+	return telemetry.SourcesResult{}, nil
+}
+func (f *appRuntimeLogTelemetryFake) QueryContainerLogs(_ context.Context, query telemetry.ContainerLogsQuery) (telemetry.ContainerLogsResult, error) {
+	f.query = query
+	return f.result, f.err
+}
 
 func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -55,6 +80,9 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		_, _ = pool.Exec(cleanupCtx, `UPDATE instance_domain_settings SET workload_base_domain=$1,updated_at=now() WHERE id=TRUE`, restore)
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	runtimeLogs := &appRuntimeLogTelemetryFake{result: telemetry.ContainerLogsResult{Items: []telemetry.ContainerLogRecord{{
+		Timestamp: time.Now().UTC(), Severity: "INFO", Body: "runtime-output-marker", EventID: "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c",
+	}}}}
 	server := httptest.NewServer(httpapi.NewWithDependencies(config.Config{
 		StorageRoot:                   t.TempDir(),
 		AppsMaxSourceArchiveBytes:     128 << 20,
@@ -65,7 +93,7 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		SessionCookieName:             "stealth_session",
 		SessionTTL:                    time.Hour,
 		AppSessionTTL:                 2 * time.Hour,
-	}, repository.New(pool), logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewMemoryLimiter()}))
+	}, repository.New(pool), logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewMemoryLimiter(), TelemetryStore: runtimeLogs}))
 	t.Cleanup(server.Close)
 
 	ownerClient := newIntegrationClient(t)
@@ -216,6 +244,46 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	}
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusForbidden, writeHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps", nil, http.StatusUnauthorized, wrongProjectHeaders)
+
+	// Runtime log source IDs are inserted here only to exercise the HTTP read
+	// boundary. Production mappings are registered by fenced runtime converge.
+	containerID := strings.Repeat("c", 64)
+	if _, err := pool.Exec(ctx, `INSERT INTO app_runtime_log_sources (project_id,app_id,container_id) VALUES ($1,$2,$3)`, firstProject.Project.ID, created.App.ID, containerID); err != nil {
+		t.Fatal(err)
+	}
+	logsURL := projectURL + "/apps/" + created.App.ID + "/logs?container_id=" + strings.Repeat("f", 64)
+	var runtimeLogsPage struct {
+		Logs       []domain.AppRuntimeLog `json:"logs"`
+		NextCursor string                 `json:"next_cursor"`
+	}
+	runtimeBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, logsURL, nil, http.StatusOK, readHeaders)
+	if err := json.Unmarshal(runtimeBody, &runtimeLogsPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeLogsPage.Logs) != 1 || runtimeLogsPage.Logs[0].Message != "runtime-output-marker" || runtimeLogsPage.NextCursor == "" {
+		t.Fatalf("runtime log API response = %+v", runtimeLogsPage)
+	}
+	if strings.Contains(string(runtimeBody), containerID) || strings.Contains(string(runtimeBody), "event_id") {
+		t.Fatalf("runtime log API exposed internal container or event identity: %s", runtimeBody)
+	}
+	if len(runtimeLogs.query.ContainerIDs) != 1 || runtimeLogs.query.ContainerIDs[0] != containerID || runtimeLogs.query.Limit != 100 {
+		t.Fatalf("runtime query did not use only trusted PG mapping/default bound: %+v", runtimeLogs.query)
+	}
+	requestJSONRaw(t, viewerClient, http.MethodGet, logsURL, nil, http.StatusOK)
+	resumeURL := projectURL + "/apps/" + created.App.ID + "/logs?cursor=" + runtimeLogsPage.NextCursor
+	requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, resumeURL, nil, http.StatusOK, readHeaders)
+	if runtimeLogs.query.After == nil || runtimeLogs.query.After.EventID != "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c" {
+		t.Fatalf("runtime cursor was not resumed by the server: %+v", runtimeLogs.query.After)
+	}
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusForbidden, writeHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSON(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusUnauthorized, nil)
+	requestJSON(t, ownerClient, http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusNotFound, nil)
+	runtimeLogs.err = fmt.Errorf("clickhouse password=must-not-leak")
+	unavailableBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusServiceUnavailable, readHeaders)
+	if strings.Contains(string(unavailableBody), "must-not-leak") || !strings.Contains(string(unavailableBody), "temporarily unavailable") {
+		t.Fatalf("telemetry failure response was not generic: %s", unavailableBody)
+	}
 
 	deploymentURL := projectURL + "/apps/" + writeKeyApp.App.ID + "/deployments"
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL, nil, http.StatusForbidden, writeHeaders)

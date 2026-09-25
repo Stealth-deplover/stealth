@@ -1066,6 +1066,20 @@ type AppBuildLog struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// AppRuntimeLog is a redacted, project-scoped projection of App stdout/stderr.
+// Its stable ID is opaque and does not reveal the ClickHouse event ID.
+type AppRuntimeLog struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Level     string    `json:"level"`
+	Message   string    `json:"message"`
+}
+
+type AppRuntimeLogsResponse struct {
+	Logs       []AppRuntimeLog `json:"logs"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+}
+
 // PlatformRoute is the PostgreSQL-derived desired state consumed by the
 // Traefik file-provider reconciler. It contains no filesystem or router
 // implementation details.

@@ -128,7 +128,9 @@ claim a full browser/provider installation or run a full production stack.
       observed generations, pending then healthy health convergence, route
       activation through Traefik, unhealthy route withdrawal and recovery,
       bounded Moby settings, no host ports, and no Docker socket/storage/secrets
-      in the App.
+      in the App. Confirm unique App stdout/stderr markers are returned by the
+      project-scoped runtime-log API, response lines omit container IDs, and
+      same-container restart plus container recreation retain verified history.
 - [ ] Confirm the Compose smoke covers disable/enable reuse, CPU replacement,
       v2 image selection, worker restart, deleted container recovery, unexpected
       exit recovery, incarnation-specific target rotation, stale retired-name

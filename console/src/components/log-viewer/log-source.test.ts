@@ -22,7 +22,7 @@ describe("createLogSource", () => {
     });
     const signal = new AbortController().signal;
 
-    await expect(source.fetchPage(undefined, signal)).resolves.toEqual([]);
+    await expect(source.fetchPage(undefined, signal)).resolves.toEqual({ lines: [], nextCursor: undefined });
     expect(get).toHaveBeenCalledWith(
       "/v1/agents/{agentID}/runs/{runID}/logs",
       expect.objectContaining({
@@ -91,6 +91,17 @@ describe("createLogSource", () => {
       },
       pathParams: { agentID: "agent-1", runID: "run-1" },
     },
+    {
+      kind: "app-build" as const,
+      path: "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/logs",
+      context: {
+        kind: "app-build" as const,
+        projectId: "project-1",
+        appId: "app-1",
+        deploymentId: "deployment-1",
+      },
+      pathParams: { projectID: "project-1", appID: "app-1", deploymentID: "deployment-1" },
+    },
   ])(
     "loads and maps the $kind endpoint",
     async ({ context, path, pathParams }) => {
@@ -110,14 +121,15 @@ describe("createLogSource", () => {
       const source = createLogSource(context);
       const signal = new AbortController().signal;
 
-      await expect(source.fetchPage(6, signal)).resolves.toEqual([
-        {
-          sequence: 7,
+      await expect(source.fetchPage("seq:6", signal)).resolves.toEqual({
+        lines: [{
+          id: "seq:7",
           level: "info",
           message: "worker started",
           created_at: "2026-09-12T00:00:00Z",
-        },
-      ]);
+        }],
+        nextCursor: "seq:7",
+      });
       expect(source.key).toContain(context.kind);
       expect(get).toHaveBeenCalledWith(
         path,
@@ -131,6 +143,32 @@ describe("createLogSource", () => {
       );
     },
   );
+
+  it("passes App runtime cursors through without decoding them", async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        logs: [{ id: "opaque-line", level: "WARN", message: "runtime output", created_at: "2026-09-12T00:00:00Z" }],
+        next_cursor: "opaque-cursor-token-that-is-not-numeric",
+      },
+    });
+    const source = createLogSource({ kind: "app-runtime", projectId: "project-1", appId: "app-1" });
+    const signal = new AbortController().signal;
+
+    await expect(source.fetchPage("opaque-input-cursor", signal)).resolves.toEqual({
+      lines: [{ id: "opaque-line", level: "WARN", message: "runtime output", created_at: "2026-09-12T00:00:00Z" }],
+      nextCursor: "opaque-cursor-token-that-is-not-numeric",
+    });
+    expect(get).toHaveBeenCalledWith(
+      "/v1/projects/{projectID}/apps/{appID}/logs",
+      expect.objectContaining({
+        params: {
+          path: { projectID: "project-1", appID: "app-1" },
+          query: { limit: 100, cursor: "opaque-input-cursor" },
+        },
+        signal,
+      }),
+    );
+  });
 
   it("uses a stable key for the same resource and changes it for another", () => {
     const first = createLogSource({

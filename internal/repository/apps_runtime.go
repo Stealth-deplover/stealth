@@ -23,13 +23,16 @@ const (
 )
 
 var (
-	ErrNoAppRuntimeJob      = errors.New("no App runtime job available")
-	ErrNoAppHealthCheckJob  = errors.New("no App health check available")
-	ErrNoAppRuntimeCleanup  = errors.New("no App runtime cleanup job available")
-	ErrAppRuntimeLeaseLost  = errors.New("App runtime lease is no longer owned by this worker")
-	ErrAppRuntimeStale      = errors.New("App desired state changed during runtime reconciliation")
-	ErrInvalidAppRuntimeJob = errors.New("invalid App runtime job")
+	ErrNoAppRuntimeJob           = errors.New("no App runtime job available")
+	ErrNoAppHealthCheckJob       = errors.New("no App health check available")
+	ErrNoAppRuntimeCleanup       = errors.New("no App runtime cleanup job available")
+	ErrAppRuntimeLeaseLost       = errors.New("App runtime lease is no longer owned by this worker")
+	ErrAppRuntimeStale           = errors.New("App desired state changed during runtime reconciliation")
+	ErrInvalidAppRuntimeJob      = errors.New("invalid App runtime job")
+	ErrAppRuntimeLogSourcesLimit = errors.New("App runtime log source limit exceeded")
 )
+
+const maxAppRuntimeLogSources = 2048
 
 // AppRuntimeJob is a trusted worker projection. ImagePath is private and is
 // read only from the immutable selected AppDeployment.
@@ -535,6 +538,16 @@ func (r *Repository) CompleteAppRuntime(ctx context.Context, job AppRuntimeJob, 
 	if stateResult.RowsAffected() != 1 {
 		return ErrAppRuntimeLeaseLost
 	}
+	if status == "running" && container != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO app_runtime_log_sources (app_id,project_id,container_id,first_seen_at,last_seen_at)
+			VALUES ($1,$2,$3,now(),now())
+			ON CONFLICT (app_id,container_id) DO UPDATE
+			SET last_seen_at=GREATEST(app_runtime_log_sources.last_seen_at,EXCLUDED.last_seen_at),updated_at=now()`,
+			appID, projectID, container.ID); err != nil {
+			return err
+		}
+	}
 	if current.RuntimeStatus != status || current.RuntimeError != nil || current.ObservedGeneration != job.App.DesiredGeneration {
 		if err := r.enqueueRealtimeOnlyEventTx(ctx, tx, projectID, "app.runtime.updated", "app", appID, map[string]any{
 			"runtime_status": status, "desired_generation": job.App.DesiredGeneration,
@@ -934,6 +947,50 @@ func (r *Repository) AppRuntimeContainerExists(ctx context.Context, projectID, a
 		    AND (runtime.container_id=$3 OR (runtime.lease_token IS NOT NULL AND runtime.lease_expires_at>now()))
 		)`, projectID, appID, containerID).Scan(&exists)
 	return exists, err
+}
+
+// ListAppRuntimeLogSources returns only container IDs previously verified by
+// successful runtime convergence. Callers cannot select a container ID, and
+// the project/App authorization check happens before the private mapping is
+// read. The extra row detects overflow rather than silently hiding history.
+func (r *Repository) ListAppRuntimeLogSources(ctx context.Context, projectID, appID uuid.UUID, actor AppActor) ([]string, error) {
+	if r == nil || r.pool == nil || projectID == uuid.Nil || appID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	if _, err := r.requireAppRead(ctx, projectID, actor); err != nil {
+		return nil, err
+	}
+	if _, err := appByID(ctx, r.pool, projectID, appID, false); err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT container_id
+		FROM app_runtime_log_sources
+		WHERE project_id=$1 AND app_id=$2
+		ORDER BY first_seen_at,container_id
+		LIMIT $3`, projectID, appID, maxAppRuntimeLogSources+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if !validRuntimeContainerID(id) {
+			return nil, ErrInvalidAppRuntimeJob
+		}
+		ids = append(ids, id)
+		if len(ids) > maxAppRuntimeLogSources {
+			return nil, ErrAppRuntimeLogSourcesLimit
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // QueueAppRuntimeCleanup is used by the trusted worker for validated orphan

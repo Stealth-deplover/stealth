@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -181,6 +182,34 @@ type LogRecord struct {
 
 type LogsResult struct {
 	Items []LogRecord `json:"items"`
+}
+
+// ContainerLogsQuery is the narrowly scoped App runtime-log query. Container
+// IDs must come from the PostgreSQL runtime-source registry, never a caller.
+type ContainerLogsQuery struct {
+	ContainerIDs []string
+	Range        TimeRange
+	Level        string
+	Search       string
+	Limit        int
+	After        *LogCursor
+}
+
+type ContainerLogRecord struct {
+	Timestamp time.Time
+	Severity  string
+	Body      string
+	EventID   string
+}
+
+type ContainerLogsResult struct {
+	Items []ContainerLogRecord
+}
+
+// ContainerLogReader is an optional narrow capability so existing telemetry
+// stores/fakes do not need App-specific query methods.
+type ContainerLogReader interface {
+	QueryContainerLogs(context.Context, ContainerLogsQuery) (ContainerLogsResult, error)
 }
 
 type TracesQuery struct {
@@ -365,6 +394,114 @@ WHERE Timestamp >= {from:DateTime64(9)}
       ({after_timestamp:DateTime64(9)}, {after_event_id:String})
 ORDER BY Timestamp ASC, EventID ASC
 LIMIT {limit:UInt32}`
+
+const appContainerLogsQuery = `
+SELECT Timestamp, SeverityText, Body, LogAttributes['stealth.log.event_id'] AS EventID
+FROM otel_logs
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND Timestamp < {to:DateTime64(9)}
+  AND has({container_ids:Array(String)}, ResourceAttributes['container.id'])
+  AND LogAttributes['stealth.log.event_id'] != ''
+  AND ({level:String} = '' OR SeverityText = {level:String})
+  AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
+ORDER BY Timestamp DESC, EventID DESC
+LIMIT {limit:UInt32}`
+
+const appContainerLogsAfterQuery = `
+SELECT Timestamp, SeverityText, Body, LogAttributes['stealth.log.event_id'] AS EventID
+FROM otel_logs
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND Timestamp < {to:DateTime64(9)}
+  AND has({container_ids:Array(String)}, ResourceAttributes['container.id'])
+  AND LogAttributes['stealth.log.event_id'] != ''
+  AND ({level:String} = '' OR SeverityText = {level:String})
+  AND ({search:String} = '' OR positionCaseInsensitiveUTF8(Body, {search:String}) > 0)
+  AND (Timestamp, LogAttributes['stealth.log.event_id']) >
+      ({after_timestamp:DateTime64(9)}, {after_event_id:String})
+ORDER BY Timestamp ASC, EventID ASC
+LIMIT {limit:UInt32}`
+
+var runtimeContainerIDPattern = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
+
+func (s *ClickHouseStore) QueryContainerLogs(ctx context.Context, query ContainerLogsQuery) (ContainerLogsResult, error) {
+	if err := s.validate(query.Range, query.Limit); err != nil {
+		return ContainerLogsResult{}, err
+	}
+	if len(query.ContainerIDs) == 0 || len(query.ContainerIDs) > 2048 {
+		return ContainerLogsResult{}, fmt.Errorf("%w: runtime container source count is outside the allowed range", ErrInvalidQuery)
+	}
+	ids := make([]string, 0, len(query.ContainerIDs))
+	seen := make(map[string]struct{}, len(query.ContainerIDs))
+	for _, id := range query.ContainerIDs {
+		if !runtimeContainerIDPattern.MatchString(id) {
+			return ContainerLogsResult{}, fmt.Errorf("%w: invalid runtime container source", ErrInvalidQuery)
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(query.Level) > 64 || len(query.Search) > 256 {
+		return ContainerLogsResult{}, fmt.Errorf("%w: App runtime log filter exceeds the allowed length", ErrInvalidQuery)
+	}
+	limit, err := clickHouseLimit(query.Limit)
+	if err != nil {
+		return ContainerLogsResult{}, err
+	}
+	statement := appContainerLogsQuery
+	args := []any{
+		clickhouse.DateNamed("from", query.Range.From.UTC(), clickhouse.NanoSeconds),
+		clickhouse.DateNamed("to", query.Range.To.UTC(), clickhouse.NanoSeconds),
+		clickhouse.Named("container_ids", ids),
+		clickhouse.Named("level", query.Level),
+		clickhouse.Named("search", query.Search),
+	}
+	if query.After != nil {
+		statement = appContainerLogsAfterQuery
+		args = append(args,
+			clickhouse.DateNamed("after_timestamp", query.After.Timestamp.UTC(), clickhouse.NanoSeconds),
+			clickhouse.Named("after_event_id", query.After.EventID),
+		)
+	}
+	args = append(args, clickhouse.Named("limit", limit))
+	rows, err := s.query(ctx, statement, args...)
+	if err != nil {
+		return ContainerLogsResult{}, err
+	}
+	defer rows.Close()
+	result := ContainerLogsResult{Items: make([]ContainerLogRecord, 0, query.Limit)}
+	for rows.Next() {
+		var item ContainerLogRecord
+		if err := rows.Scan(&item.Timestamp, &item.Severity, &item.Body, &item.EventID); err != nil {
+			return ContainerLogsResult{}, fmt.Errorf("scan App runtime log: %w", err)
+		}
+		if item.EventID == "" || len(item.EventID) > 256 {
+			continue
+		}
+		item.Body = boundedRuntimeLogBody(redactText(item.Body), 16<<10)
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ContainerLogsResult{}, fmt.Errorf("read App runtime logs: %w", err)
+	}
+	if query.After == nil {
+		for left, right := 0, len(result.Items)-1; left < right; left, right = left+1, right-1 {
+			result.Items[left], result.Items[right] = result.Items[right], result.Items[left]
+		}
+	}
+	return result, nil
+}
+
+func boundedRuntimeLogBody(value string, maximum int) string {
+	if len(value) <= maximum {
+		return value
+	}
+	value = value[:maximum]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
+}
 
 const tracesQuery = `
 SELECT Timestamp, TraceId, SpanId, ParentSpanId, SpanName, SpanKind,

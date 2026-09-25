@@ -33,6 +33,28 @@ Docker file-log Collector ────────────┘
 Docker metrics Collector ── restricted Docker proxy
 ```
 
+Persistent App runtime logs use that existing Docker file-log path:
+
+```text
+App stdout/stderr
+  → Docker json-file logs
+  → isolated telemetry-docker-logs Collector
+  → main Collector redaction + event ID
+  → ClickHouse otel_logs
+  → project-scoped App runtime-log API
+  → Console shared LogViewer
+```
+
+PostgreSQL stores only verified App-to-container source metadata used for
+project ownership and authorization; it does not store log bodies. The worker
+records a source only when its fenced runtime convergence confirms a managed
+container. Repeated observation is idempotent, and verified prior container
+IDs remain associated while the App exists so replacement and restart history
+can be read within ClickHouse retention. The browser cannot select container
+IDs or connect to ClickHouse. The migration backfills only the current
+structurally valid runtime container ID; it cannot reconstruct retired
+container mappings from before this feature.
+
 The API and worker use the standard OpenTelemetry SDK where instrumentation
 exists. The API also keeps the existing low-cardinality Prometheus endpoint
 for scraping. The Collector is the canonical transport boundary for new
@@ -142,6 +164,10 @@ response so backend details and query fragments are not disclosed.
 
 The current query surface is deliberately domain-shaped:
 
+- `/v1/projects/{projectID}/apps/{appID}/logs` returns bounded runtime
+  stdout/stderr history from only the PostgreSQL-verified containers for that
+  App. Its opaque cursor orders by timestamp and event ID; callers cannot
+  supply a container ID.
 - `/v1/admin/telemetry/logs` supports bounded service, level, and text filters.
 - `/v1/admin/telemetry/traces` supports service, trace ID, and minimum duration.
 - `/v1/admin/telemetry/metrics` returns real OTel gauge, sum, histogram,
@@ -186,7 +212,15 @@ browser.
 The API remains usable when ClickHouse or the Collector is unavailable. Admin
 pages report the telemetry backend as unavailable; core authentication,
 projects, deployments, and storage do not depend on a successful telemetry
-query.
+query. App runtime-log retrieval reports a generic unavailable response while
+App runtime reconciliation and public routing continue independently.
+
+Docker's local json-file `max-size`/`max-file` rotation and ClickHouse's signal
+TTL are separate retention limits. ClickHouse history is not guaranteed to
+outlive that store's configured retention, and PostgreSQL backups do not
+contain log bodies. The Docker-log Collector keeps its persistent file offsets
+across restart; it has no Docker socket and reuses the existing read-only
+Docker container-log mount. The API and Console have no Docker socket.
 
 ## Component stability decision
 

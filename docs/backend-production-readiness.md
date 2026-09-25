@@ -13,7 +13,7 @@ providers.
 | Function execution | Execution row is created with `status=accepted`. | `ClaimNextFunctionExecution` uses `FOR UPDATE OF e SKIP LOCKED`; the runtime receives a context timeout and terminal writes are fenced by worker ID. | Runtime failures are terminal rather than blindly retried because user code may have side effects. | Stale `running` executions return to `accepted`; a replacement worker can claim them. |
 | Site build | Site deployment row is created with `build_status=queued`. | `ClaimNextSiteDeployment` uses `FOR UPDATE OF d SKIP LOCKED`; archive extraction and build have bounded limits and a deadline. | Invalid archives, build errors, and quota failures are terminal. | Stale `running` builds become `deferred`; completion checks the build worker ID. |
 | App build | AppDeployment and a reserved immutable source artifact are recorded before the queued row is committed. | `ClaimNextAppDeployment` uses PostgreSQL `FOR UPDATE SKIP LOCKED`; a dedicated worker verifies and extracts the archive, then invokes `buildctl` against the isolated BuildKit service under a deadline. | BuildKit output must include a valid metadata digest and a verified OCI layout before publication; failures have bounded messages and release artifact/quota reservations. | Stale leases become reclaimable, and every completion is fenced by a unique per-claim worker token. BuildKit unavailability leaves the queue deferred/available and does not stop unrelated worker loops. |
-| App runtime, health, and route | App mutations and deployment selection advance desired generation; deleting an App or project writes durable cleanup work before removing rows. Health is separate state tied to generation, deployment, container, and routing-incarnation identity. | Runtime and health claims use PostgreSQL transactions and `FOR UPDATE ... SKIP LOCKED`; the worker verifies the persisted OCI archive, inspects the managed container, runs bounded TCP/HTTP probes, and publishes a separate App Traefik snapshot from an authoritative database query. | Runtime failures use bounded retries. Health uses the WorkloadSpec initial delay, interval, timeout, and failure threshold. Stale leases or identities cannot publish health. | Startup marks prior observations for inspection and checked health due, expired leases are reclaimable, cleanup survives App/project deletion, and orphan sweeps queue only ownership-validated containers. `running` means process liveness; an App route requires enabled state, a ready selected deployment, matching desired/observed generations, current runtime identity, and healthy state. |
+| App runtime, health, route, and logs | App mutations and deployment selection advance desired generation; deleting an App or project writes durable cleanup work before removing rows. Health is separate state tied to generation, deployment, container, and routing-incarnation identity. Fenced runtime completion upserts verified container IDs into PostgreSQL metadata; log bodies remain in ClickHouse. | Runtime and health claims use PostgreSQL transactions and `FOR UPDATE ... SKIP LOCKED`; the worker verifies the persisted OCI archive, inspects the managed container, runs bounded TCP/HTTP probes, and publishes a separate App Traefik snapshot from an authoritative database query. The project-scoped runtime-log API resolves App sources from PostgreSQL and issues one bounded typed ClickHouse query. | Runtime failures use bounded retries. Health uses the WorkloadSpec initial delay, interval, timeout, and failure threshold. Stale leases or identities cannot publish health or log-source mappings. Telemetry query failures affect log reads only. | Startup marks prior observations for inspection and checked health due, expired leases are reclaimable, cleanup survives App/project deletion, and orphan sweeps queue only ownership-validated containers. Verified historical container IDs remain mapped while the App exists. `running` means process liveness; an App route requires enabled state, a ready selected deployment, matching desired/observed generations, current runtime identity, and healthy state. Runtime logs are retained according to Docker local rotation and ClickHouse TTL. |
 | Agent run | Run row is created with `status=queued`. | Provider workers claim with `FOR UPDATE OF r SKIP LOCKED`; provider calls use a context timeout and terminal writes require the claiming worker ID. | Provider failures are terminal. Unknown providers remain queued. | Stale `running` runs return to `queued`; the agent status is refreshed transactionally. |
 | Webhook delivery | Mutation transaction writes an outbox event and its delivery rows. | Delivery claim is transactional and `SKIP LOCKED`; outbound HTTP has SSRF checks, a response limit, and a timeout. | HTTP 408/425/429/5xx and network failures retry up to 12 attempts with bounded exponential jitter (or a bounded `Retry-After`); permanent 4xx and expiry are terminal. | Stale leases return to `pending`; expired events are marked failed. `X-Stealth-Delivery` is stable for consumer idempotency. |
 | Messaging delivery | Message and delivery rows are created transactionally with message idempotency constraints. | Delivery claim is transactional and `SKIP LOCKED`; provider calls have a timeout and bounded response handling. | Provider adapters classify retryable failures; attempts are capped at 12 and use bounded exponential jitter. | Stale leases return to `pending`; worker ownership fences terminal updates. |
@@ -161,10 +161,11 @@ or start an App. Runtime `running` confirms the current expected process;
 `healthy` confirms the configured TCP or HTTP probe converged for the current
 generation, selected deployment, and container. Only an enabled App with a
 ready selected deployment, matching desired/observed generations, current
-runtime identity, and healthy probes is eligible for its platform route. App
-runtime logs, encrypted App secrets, gVisor, and per-App network isolation
-remain unimplemented. App container outbound access follows Docker's bridge
-and host firewall policy.
+runtime identity, and healthy probes is eligible for its platform route.
+Runtime stdout/stderr logs are available through the project-scoped API and
+follow telemetry retention. Encrypted App secrets, gVisor, and per-App network
+isolation remain unimplemented. App container outbound access follows Docker's
+bridge and host firewall policy.
 
 The Go API owns sessions and uses HttpOnly cookies with `Secure` and
 `SameSite=None` for explicitly configured cross-origin HTTPS console requests;
@@ -186,9 +187,10 @@ network policy boundary.
 
 These are intentional boundaries, not hidden reliability claims:
 
-- App health convergence and health-gated public routing are implemented.
-  Runtime log viewing, encrypted App secrets, gVisor isolation, and per-App
-  network isolation remain deferred. The current Moby `running` status confirms
+- App health convergence, health-gated public routing, and runtime stdout/stderr
+  log viewing through the existing Collector/ClickHouse pipeline are
+  implemented. Encrypted App secrets, gVisor isolation, and per-App network
+  isolation remain deferred. The current Moby `running` status confirms
   process liveness only; `healthy` confirms the configured probe, and route
   eligibility additionally requires the current enabled desired generation and
   inspected runtime identity.

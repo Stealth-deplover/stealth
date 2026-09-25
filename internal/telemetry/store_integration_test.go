@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,6 +172,71 @@ func TestClickHouseStoreIntegration(t *testing.T) {
 	}
 	if logsResult.Items[0].TraceID != traceID || logsResult.Items[0].Body != "**** "+marker || logsResult.Items[0].Attributes["smoke.marker"] != marker {
 		t.Fatalf("unexpected real Collector log result = %#v", logsResult.Items[0])
+	}
+
+	// Exercise the exact App source filter against real Collector-written rows.
+	// All timestamps are equal so the event-ID cursor must preserve a complete
+	// deterministic ordering without duplicates or loss between pages.
+	containerOne, containerTwo, unrelatedContainer := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	appMarker := fmt.Sprintf("app-runtime-log-%d", time.Now().UnixNano())
+	appTimestamp := time.Now().UTC().Truncate(time.Second)
+	appSecret := "STEALTH_APP_RUNTIME_FAKE_SECRET_4821"
+	resourceLogs := []any{
+		map[string]any{"resource": map[string]any{"attributes": []any{stringAttribute("service.name", "app.runtime.integration"), stringAttribute("container.id", containerOne)}}, "scopeLogs": []any{map[string]any{
+			"scope": map[string]any{"name": "app.runtime.integration"},
+			"logRecords": []any{
+				map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "INFO", "body": map[string]any{"stringValue": appMarker + " stdout"}},
+				map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "ERROR", "body": map[string]any{"stringValue": appMarker + " password=" + appSecret}},
+				map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "ERROR", "body": map[string]any{"stringValue": appMarker + " token=" + appSecret}},
+				map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "WARN", "body": map[string]any{"stringValue": appMarker + " Authorization: Bearer " + appSecret}},
+				map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "INFO", "body": map[string]any{"stringValue": appMarker + " https://user:" + appSecret + "@example.test/health"}},
+			},
+		}}},
+		map[string]any{"resource": map[string]any{"attributes": []any{stringAttribute("service.name", "app.runtime.integration"), stringAttribute("container.id", containerTwo)}}, "scopeLogs": []any{map[string]any{
+			"scope":      map[string]any{"name": "app.runtime.integration"},
+			"logRecords": []any{map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "INFO", "body": map[string]any{"stringValue": appMarker + " second container"}}},
+		}}},
+		map[string]any{"resource": map[string]any{"attributes": []any{stringAttribute("service.name", "app.runtime.integration"), stringAttribute("container.id", unrelatedContainer)}}, "scopeLogs": []any{map[string]any{
+			"scope":      map[string]any{"name": "app.runtime.integration"},
+			"logRecords": []any{map[string]any{"timeUnixNano": fmt.Sprintf("%d", appTimestamp.UnixNano()), "severityText": "INFO", "body": map[string]any{"stringValue": appMarker + " unrelated"}}},
+		}}},
+	}
+	emitCollectorSignal(t, collectorHTTP, "logs", map[string]any{"resourceLogs": resourceLogs})
+	appRange := TimeRange{From: appTimestamp.Add(-time.Minute), To: appTimestamp.Add(time.Minute)}
+	var appLogs ContainerLogsResult
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		appLogs, lastErr = store.QueryContainerLogs(ctx, ContainerLogsQuery{ContainerIDs: []string{containerOne, containerTwo}, Range: appRange, Limit: 10})
+		if lastErr == nil && len(appLogs.Items) == 6 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if lastErr != nil || len(appLogs.Items) != 6 {
+		t.Fatalf("exact App container query returned %d rows, last error=%v", len(appLogs.Items), lastErr)
+	}
+	for index, item := range appLogs.Items {
+		if index > 0 && (item.Timestamp.Before(appLogs.Items[index-1].Timestamp) || (item.Timestamp.Equal(appLogs.Items[index-1].Timestamp) && item.EventID <= appLogs.Items[index-1].EventID)) {
+			t.Fatalf("App runtime logs are not ordered by complete timestamp/event identity: %#v", appLogs.Items)
+		}
+		if strings.Contains(item.Body, appSecret) {
+			t.Fatalf("Collector/API redaction leaked fake secret: %q", item.Body)
+		}
+		if strings.Contains(item.Body, "unrelated") {
+			t.Fatalf("unregistered container leaked into the App result: %#v", item)
+		}
+	}
+	pageAfterFirst, err := store.QueryContainerLogs(ctx, ContainerLogsQuery{
+		ContainerIDs: []string{containerOne, containerTwo}, Range: appRange, Limit: 10,
+		After: &LogCursor{Timestamp: appLogs.Items[0].Timestamp, EventID: appLogs.Items[0].EventID},
+	})
+	if err != nil || len(pageAfterFirst.Items) != 5 {
+		t.Fatalf("equal-timestamp cursor page has %d rows, err=%v, want 5", len(pageAfterFirst.Items), err)
+	}
+	for index := 1; index < len(appLogs.Items); index++ {
+		if pageAfterFirst.Items[index-1].EventID != appLogs.Items[index].EventID {
+			t.Fatalf("equal-timestamp page skipped/duplicated events: full=%#v after=%#v", appLogs.Items, pageAfterFirst.Items)
+		}
 	}
 	if tracesResult.Items[0].TraceID != traceID || tracesResult.Items[0].StatusMessage != "[REDACTED]" || tracesResult.Items[0].ResourceAttributes["smoke.marker"] != marker {
 		t.Fatalf("unexpected real Collector trace result = %#v", tracesResult.Items[0])

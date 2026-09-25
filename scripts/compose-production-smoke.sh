@@ -1490,6 +1490,76 @@ wait_for_app_public_route() {
 	return 1
 }
 
+fetch_app_runtime_logs() {
+	local container_id="${1:-}" status
+	status="$(curl --silent --show-error --max-time 10 \
+		--header "Cookie: $auth_cookie_header" \
+		--output "$platform_response" --write-out '%{http_code}' \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/logs?limit=250")"
+	if [ "$status" != '200' ]; then
+		printf 'project-scoped App runtime logs API returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	if [ -n "$container_id" ] && grep -Fq -- "$container_id" "$platform_response"; then
+		printf '%s\n' 'App runtime logs API exposed a Docker container ID' >&2
+		return 1
+	fi
+}
+
+app_runtime_log_ids() {
+	local marker="$1" stream="$2"
+	python3 - "$platform_response" "$marker" "$stream" <<'PY'
+import json
+import sys
+
+path, marker, stream = sys.argv[1:]
+prefix = f"STEALTH_APP_RUNTIME_LOG_{stream.upper()}_{marker}_"
+with open(path, encoding="utf-8") as source:
+    response = json.load(source)
+for entry in response.get("logs", []):
+    if str(entry.get("message", "")).startswith(prefix):
+        print(entry.get("id", ""))
+PY
+}
+
+app_runtime_log_counts() {
+	local marker="$1" stdout_ids stderr_ids stdout_count stderr_count
+	stdout_ids="$(app_runtime_log_ids "$marker" stdout)"
+	stderr_ids="$(app_runtime_log_ids "$marker" stderr)"
+	stdout_count="$(printf '%s\n' "$stdout_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+	stderr_count="$(printf '%s\n' "$stderr_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+	printf '%s %s\n' "$stdout_count" "$stderr_count"
+}
+
+wait_for_app_runtime_log_markers() {
+	local marker="$1" minimum="$2" container_id="${3:-}" stdout_count stderr_count
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if fetch_app_runtime_logs "$container_id"; then
+			read -r stdout_count stderr_count <<<"$(app_runtime_log_counts "$marker")"
+			if [ "$stdout_count" -ge "$minimum" ] && [ "$stderr_count" -ge "$minimum" ]; then
+				return 0
+			fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'App runtime logs API did not return %s stdout and stderr marker(s) for %s: stdout=%s stderr=%s\n' \
+				"$minimum" "$marker" "${stdout_count:-0}" "${stderr_count:-0}" >&2
+			return 1
+		fi
+		sleep 1
+	done
+	return 1
+}
+
+assert_app_runtime_log_ids_retained() {
+	local marker="$1" stdout_id="$2" stderr_id="$3" stdout_ids stderr_ids
+	stdout_ids="$(app_runtime_log_ids "$marker" stdout)"
+	stderr_ids="$(app_runtime_log_ids "$marker" stderr)"
+	if ! printf '%s\n' "$stdout_ids" | grep -Fqx -- "$stdout_id" || ! printf '%s\n' "$stderr_ids" | grep -Fqx -- "$stderr_id"; then
+		printf 'App runtime log history lost previously observed lines: stdout=%s stderr=%s\n' "$stdout_id" "$stderr_id" >&2
+		return 1
+	fi
+}
+
 wait_for_app_public_route_removed() {
 	local status
 	for attempt in $(seq 1 "${SMOKE_ATTEMPTS:-60}"); do
@@ -2147,6 +2217,19 @@ PY
 	wait_for_app_route_snapshot true
 	assert_app_route_uses_container_dns_name
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	wait_for_app_runtime_log_markers "$smoke_marker" 1 "$runtime_container_id"
+	local runtime_log_counts_before runtime_log_counts_after
+	runtime_log_counts_before="$(app_runtime_log_counts "$smoke_marker")"
+	"${compose[@]}" restart telemetry-docker-logs >/dev/null
+	wait_for_healthy telemetry-docker-logs
+	sleep 2
+	fetch_app_runtime_logs "$runtime_container_id"
+	runtime_log_counts_after="$(app_runtime_log_counts "$smoke_marker")"
+	if [ "$runtime_log_counts_after" != "$runtime_log_counts_before" ]; then
+		printf 'Docker file-log Collector restart changed retained marker counts: before=%s after=%s\n' "$runtime_log_counts_before" "$runtime_log_counts_after" >&2
+		return 1
+	fi
+	printf 'App runtime log API retained its history across Docker file-log Collector restart (stdout/stderr=%s)\n' "$runtime_log_counts_after"
 	if ! grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-apps.yaml" || grep -Fq -- "$platform_app_host" "$generated_state_dir/platform-sites.yaml"; then
 		printf '%s\n' 'healthy App route was not isolated in the App snapshot' >&2
 		return 1
@@ -2250,7 +2333,7 @@ wait_for_app_deployment_ready() {
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
 	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
-	local old_route_target new_route_target body
+	local old_route_target new_route_target body old_v2_stdout_id old_v2_stderr_id old_restart_stdout_id old_restart_stderr_id
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -2353,6 +2436,14 @@ verify_app_runtime_lifecycle() {
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 1 "$new_container"
+	fetch_app_runtime_logs "$new_container"
+	old_v2_stdout_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stdout | sed -n '1p')"
+	old_v2_stderr_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stderr | sed -n '1p')"
+	if [ -z "$old_v2_stdout_id" ] || [ -z "$old_v2_stderr_id" ]; then
+		printf '%s\n' 'App runtime logs API did not return both v2 stream markers before container recreation' >&2
+		return 1
+	fi
 	printf 'App v2 deployment switch removed the previous container and converged at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2393,6 +2484,8 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
 	wait_for_app_health_state healthy active
+	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 2 "$new_container"
+	assert_app_runtime_log_ids_retained "${smoke_marker}-app-v2" "$old_v2_stdout_id" "$old_v2_stderr_id"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
 		printf '%s\n' 'BuildKit restarted during the OCI reimport test' >&2
@@ -2432,6 +2525,14 @@ verify_app_runtime_lifecycle() {
 
 	old_container="$new_container"
 	old_route_target="$(app_route_snapshot_target)"
+	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 2 "$old_container"
+	fetch_app_runtime_logs "$old_container"
+	old_restart_stdout_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stdout | tail -n 1)"
+	old_restart_stderr_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stderr | tail -n 1)"
+	if [ -z "$old_restart_stdout_id" ] || [ -z "$old_restart_stderr_id" ]; then
+		printf '%s\n' 'App runtime logs API did not return pre-restart stdout and stderr markers' >&2
+		return 1
+	fi
 	if [ "$old_route_target" != "$(app_runtime_name)" ]; then
 		printf 'active App snapshot target %s does not match its current runtime target %s\n' "$old_route_target" "$(app_runtime_name)" >&2
 		return 1
@@ -2447,6 +2548,10 @@ verify_app_runtime_lifecycle() {
 	fi
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 3 "$new_container"
+	wait_for_app_health_state pending waiting_for_health
+	fetch_app_runtime_logs "$new_container"
+	assert_app_runtime_log_ids_retained "${smoke_marker}-app-v2" "$old_restart_stdout_id" "$old_restart_stderr_id"
 	new_route_target="$(app_runtime_name)"
 	if [ "$new_route_target" = "$old_route_target" ]; then
 		printf 'same-container process restart reused route identity %s\n' "$old_route_target" >&2

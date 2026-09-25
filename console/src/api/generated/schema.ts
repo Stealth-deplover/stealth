@@ -2691,6 +2691,23 @@ export interface paths {
         patch: operations["updateApp"];
         trace?: never;
     };
+    "/v1/projects/{projectID}/apps/{appID}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded, redacted stdout/stderr from verified containers for this App. This runtime stream is separate from deployment build logs. The cursor is opaque and ordered by timestamp plus a Collector-generated event identity. PostgreSQL supplies the trusted container mapping; callers cannot select container IDs. API-key callers require apps.read. If telemetry is unavailable, the endpoint returns 503 while App runtime continues. */
+        get: operations["listAppRuntimeLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectID}/apps/{appID}/deployments": {
         parameters: {
             query?: never;
@@ -2751,7 +2768,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description List bounded, normalized build-worker output only. The after cursor is the last returned sequence; no runtime logs are available for Apps in this release. API-key callers require apps.read. */
+        /** @description List bounded, normalized build-worker output only. The after cursor is the last returned sequence. App stdout/stderr runtime logs are available from the separate App runtime logs endpoint. API-key callers require apps.read. */
         get: operations["listAppBuildLogs"];
         put?: never;
         post?: never;
@@ -5600,6 +5617,20 @@ export interface components {
         AppBuildLogsPage: {
             logs: components["schemas"]["AppBuildLog"][];
             pagination: components["schemas"]["Pagination"];
+        };
+        AppRuntimeLog: {
+            /** @description Opaque stable line identity; does not expose the ClickHouse event ID. */
+            id: string;
+            /** Format: date-time */
+            created_at: string;
+            level: string;
+            /** @description Redacted and bounded to 16 KiB. */
+            message: string;
+        };
+        AppRuntimeLogsResponse: {
+            logs: components["schemas"]["AppRuntimeLog"][];
+            /** @description Opaque cursor for the next incremental page. */
+            next_cursor?: string;
         };
         SiteDomain: {
             /** Format: uuid */
@@ -13507,6 +13538,45 @@ export interface operations {
             415: components["responses"]["UnsupportedMediaType"];
             422: components["responses"]["ValidationError"];
             500: components["responses"]["InternalError"];
+        };
+    };
+    listAppRuntimeLogs: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Opaque cursor returned by the previous response. */
+                cursor?: string;
+                /** @description Start of the bounded history window. Defaults to the recent one-hour window. */
+                from?: string;
+                /** @description End of the bounded history window. Defaults to now. */
+                to?: string;
+                level?: string;
+                /** @description Case-insensitive message search. */
+                query?: string;
+            };
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted App runtime logs with an opaque incremental cursor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppRuntimeLogsResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listAppDeployments: {

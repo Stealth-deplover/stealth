@@ -184,11 +184,12 @@ jobs:
             done
           }
           run_and_require_tests ./internal/migrate \
-            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration|TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration)$' \
+            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration|TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration|TestAppRuntimeLogSourcesMigrationBackfillConstraintsAndDownIntegration)$' \
             TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration \
             TestAppDeploymentMigrationPreservesExistingAppsIntegration \
             TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration \
-            TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration
+            TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration \
+            TestAppRuntimeLogSourcesMigrationBackfillConstraintsAndDownIntegration
           run_and_require_tests ./internal/repository \
             '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration|TestAppDeploymentSnapshotSelectionAndQuotaIntegration|TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration|TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration|TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration)$' \
             TestAppsPersistenceGenerationAndPlanLimitIntegration \
@@ -198,12 +199,14 @@ jobs:
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration)$' \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration|TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration|TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration)$' \
             TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
             TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
             TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration \
             TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration \
-            TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration
+            TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration \
+            TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration \
+            TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration
@@ -254,7 +257,14 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:13133/ >/dev/null
           go test ./internal/httpapi -run Integration -count=1 -v
-          go test ./internal/telemetry -run Integration -count=1 -v
+          telemetry_log="$RUNNER_TEMP/telemetry-integration.log"
+          go test ./internal/telemetry -run Integration -count=1 -v 2>&1 | tee "$telemetry_log"
+          for test_name in TestClickHouseStoreIntegration TestClickHouseStoreLogCursorIntegration; do
+            if ! grep -Fq -- "--- PASS: ${test_name}" "$telemetry_log" || grep -Fq -- "--- SKIP: ${test_name}" "$telemetry_log"; then
+              echo "required ClickHouse/Collector integration did not pass: ${test_name}" >&2
+              exit 1
+            fi
+          done
 
       - name: Docker image build
         run: docker build --target api -t stealth-api .
