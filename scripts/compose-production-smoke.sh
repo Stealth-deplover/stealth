@@ -1675,7 +1675,7 @@ app_route_snapshot_target() {
 		return 1
 	fi
 	service_id="stealth-app-service-${platform_app_id//-/}"
-	targets="$(awk -v key="  ${service_id}:" '$0 == key { inside=1; next } inside && /^  [[:alnum:]_-]+:$/ { exit } inside && /url: http:\/\/[a-z0-9-]+:8080/ { print }' "$snapshot" | sed -E 's#.*url: http://##; s#:8080.*$##' | sort -u || true)"
+	targets="$(awk -v key="        ${service_id}:" '$0 == key { inside=1; next } inside && /^        [[:alnum:]_-]+:$/ { exit } inside && /url: http:\/\/[a-z0-9-]+:8080/ { print }' "$snapshot" | sed -E 's#.*url: http://##; s#:8080.*$##' | sort -u || true)"
 	count="$(printf '%s\n' "$targets" | sed '/^$/d' | wc -l | tr -d ' ')"
 	if [ "$count" != '1' ]; then
 		printf 'expected one App DNS target in the generated snapshot, got %s: %s\n' "$count" "$targets" >&2
