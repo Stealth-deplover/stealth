@@ -2215,26 +2215,6 @@ assert_container_absent() {
 	fi
 }
 
-wait_for_app_runtime_conflict() {
-	local expected_observed="$1" status="" runtime_error="" observed=""
-	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
-		if fetch_app_runtime; then
-			status="$(platform_json_field "$platform_response" app.runtime_status)"
-			observed="$(platform_json_field "$platform_response" app.observed_generation)"
-			runtime_error="$(platform_json_field "$platform_response" app.runtime_error)"
-			if [ "$status" = 'failed' ] && [ "$runtime_error" = 'container ownership conflict' ] && [ "$observed" = "$expected_observed" ]; then
-				return 0
-			fi
-		fi
-		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
-			printf 'foreign name conflict did not fail safely: status=%s error=%s observed=%s\n' "$status" "$runtime_error" "$observed" >&2
-			return 1
-		fi
-		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
-	done
-	return 1
-}
-
 wait_for_app_deployment_ready() {
 	local deployment_id="$1" app_id="${2:-$platform_app_id}" response_url build_status status
 	response_url="${api_url%/}/v1/projects/${platform_project_id}/apps/${app_id}/deployments/${deployment_id}"
@@ -2269,7 +2249,7 @@ wait_for_app_deployment_ready() {
 
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
-	local disabled_generation conflict_observed foreign_managed_label runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
 	local old_route_target new_route_target body
 	local orphan_app orphan_project orphan_name
 
@@ -2499,7 +2479,7 @@ verify_app_runtime_lifecycle() {
 
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 'disabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		printf 'disabling App before runtime bridge recreation returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime stopped
@@ -2540,41 +2520,20 @@ verify_app_runtime_lifecycle() {
 	runtime_name="$(app_runtime_name)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 'disabling App before foreign-name conflict test returned HTTP %s\n' "$status" >&2
+		printf 'disabling App before stale-target fixture returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime stopped
 	if [ "$(app_runtime_container_count)" != '0' ]; then
-		printf '%s\n' 'App container remained before foreign-name conflict fixture' >&2
+		printf '%s\n' 'App container remained before stale-target fixture' >&2
 		return 1
 	fi
 	worker="$("${compose[@]}" ps -q worker)"
 	worker_image="$(docker inspect --format '{{.Config.Image}}' "$worker")"
 	app_runtime_foreign_container="$(docker create --name "$runtime_name" "$worker_image")"
-	conflict_observed="$(platform_json_field "$platform_response" app.observed_generation)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 're-enabling App for foreign-name conflict test returned HTTP %s\n' "$status" >&2
-		return 1
-	fi
-	wait_for_app_runtime_conflict "$conflict_observed"
-	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
-	if [ -n "$foreign_managed_label" ]; then
-		printf 'foreign container was adopted or labeled by the runtime (stealth.managed=%s)\n' "$foreign_managed_label" >&2
-		return 1
-	fi
-	docker inspect "$app_runtime_foreign_container" >/dev/null
-	docker rm "$app_runtime_foreign_container" >/dev/null
-	app_runtime_foreign_container=""
-	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
-	if [ "$status" != '200' ]; then
-		printf 'disabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
-		return 1
-	fi
-	wait_for_app_runtime stopped
-	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":true}' "$platform_response")"
-	if [ "$status" != '200' ]; then
-		printf 're-enabling App after foreign fixture removal returned HTTP %s\n' "$status" >&2
+		printf 're-enabling App beside the stale-target fixture returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime running
@@ -2583,10 +2542,23 @@ verify_app_runtime_lifecycle() {
 	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
 	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
 	new_container="$(app_runtime_container_id)"
+	new_runtime_name="$(app_runtime_name)"
+	if [ "$new_runtime_name" = "$runtime_name" ]; then
+		printf 'new App incarnation reused a stale foreign target name %s\n' "$runtime_name" >&2
+		return 1
+	fi
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	foreign_container_name="$(docker inspect --format '{{.Name}}' "$app_runtime_foreign_container")"
+	foreign_managed_label="$(docker inspect --format '{{index .Config.Labels "stealth.managed"}}' "$app_runtime_foreign_container")"
+	if [ "$foreign_container_name" != "/$runtime_name" ] || [ -n "$foreign_managed_label" ]; then
+		printf 'stale target fixture was changed: name=%s managed=%s\n' "$foreign_container_name" "$foreign_managed_label" >&2
+		return 1
+	fi
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
-	printf 'foreign deterministic-name conflict remained untouched and recovered after removal\n'
+	docker rm "$app_runtime_foreign_container" >/dev/null
+	app_runtime_foreign_container=""
+	printf 'stale target %s remained untouched while App recovered under new target %s\n' "$runtime_name" "$new_runtime_name"
 
 	orphan_app="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 	orphan_project="$(python3 -c 'import uuid; print(uuid.uuid4())')"
