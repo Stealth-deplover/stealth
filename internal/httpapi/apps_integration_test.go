@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ type appRuntimeLogTelemetryFake struct {
 	query  telemetry.ContainerLogsQuery
 	result telemetry.ContainerLogsResult
 	err    error
+	calls  int
 }
 
 func (*appRuntimeLogTelemetryFake) Ping(context.Context) error { return nil }
@@ -44,6 +46,7 @@ func (*appRuntimeLogTelemetryFake) ListSources(context.Context, telemetry.Source
 	return telemetry.SourcesResult{}, nil
 }
 func (f *appRuntimeLogTelemetryFake) QueryContainerLogs(_ context.Context, query telemetry.ContainerLogsQuery) (telemetry.ContainerLogsResult, error) {
+	f.calls++
 	f.query = query
 	return f.result, f.err
 }
@@ -93,6 +96,7 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		SessionCookieName:             "stealth_session",
 		SessionTTL:                    time.Hour,
 		AppSessionTTL:                 2 * time.Hour,
+		TelemetryMaxQueryRange:        2 * time.Hour,
 	}, repository.New(pool), logger, httpapi.Dependencies{AuthLimiter: ratelimit.NewMemoryLimiter(), TelemetryStore: runtimeLogs}))
 	t.Cleanup(server.Close)
 
@@ -275,6 +279,63 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	if runtimeLogs.query.After == nil || runtimeLogs.query.After.EventID != "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3c" {
 		t.Fatalf("runtime cursor was not resumed by the server: %+v", runtimeLogs.query.After)
 	}
+
+	// A cursor older than the initial one-hour window must anchor the resumed
+	// query range instead of inheriting the moving no-cursor default.
+	oldCursorAt := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Second)
+	oldCursor := telemetry.EncodeLogCursor(telemetry.LogCursor{
+		Timestamp: oldCursorAt,
+		EventID:   "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3d",
+	})
+	oldCursorURL := projectURL + "/apps/" + created.App.ID + "/logs?cursor=" + url.QueryEscape(oldCursor)
+	requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, oldCursorURL, nil, http.StatusOK, readHeaders)
+	if runtimeLogs.query.Range.From.IsZero() || !runtimeLogs.query.Range.From.Equal(oldCursorAt) || runtimeLogs.query.After == nil || !runtimeLogs.query.After.Timestamp.Equal(oldCursorAt) {
+		t.Fatalf("old cursor did not anchor query range at its timestamp: range=%+v cursor=%+v", runtimeLogs.query.Range, runtimeLogs.query.After)
+	}
+
+	assertRuntimeCursorRejectedWithoutQuery := func(name, cursor string, from *time.Time) []byte {
+		t.Helper()
+		values := url.Values{}
+		values.Set("cursor", cursor)
+		if from != nil {
+			values.Set("from", from.UTC().Format(time.RFC3339Nano))
+		}
+		before := runtimeLogs.calls
+		body := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet,
+			projectURL+"/apps/"+created.App.ID+"/logs?"+values.Encode(), nil, http.StatusBadRequest, readHeaders)
+		if runtimeLogs.calls != before {
+			t.Fatalf("%s cursor validation executed a telemetry query", name)
+		}
+		if !strings.Contains(string(body), `"code":"validation_error"`) {
+			t.Fatalf("%s cursor did not return a validation error: %s", name, body)
+		}
+		return body
+	}
+	assertRuntimeCursorRejectedWithoutQuery("malformed", "tampered-cursor", nil)
+
+	futureCursor := telemetry.EncodeLogCursor(telemetry.LogCursor{
+		Timestamp: time.Now().UTC().Add(time.Minute),
+		EventID:   "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3e",
+	})
+	assertRuntimeCursorRejectedWithoutQuery("future", futureCursor, nil)
+
+	expiredCursor := telemetry.EncodeLogCursor(telemetry.LogCursor{
+		Timestamp: time.Now().UTC().Add(-3 * time.Hour),
+		EventID:   "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4d3f",
+	})
+	expiredBody := assertRuntimeCursorRejectedWithoutQuery("expired", expiredCursor, nil)
+	if !strings.Contains(string(expiredBody), "runtime log cursor is outside the allowed query window") {
+		t.Fatalf("expired cursor did not explain the bounded query window: %s", expiredBody)
+	}
+
+	contradictoryCursorAt := time.Now().UTC().Add(-30 * time.Minute)
+	contradictoryCursor := telemetry.EncodeLogCursor(telemetry.LogCursor{
+		Timestamp: contradictoryCursorAt,
+		EventID:   "0198f3d8-7c2f-7b2e-8a9e-8c7d6f5e4e",
+	})
+	fromAfterCursor := contradictoryCursorAt.Add(time.Minute)
+	assertRuntimeCursorRejectedWithoutQuery("from after cursor", contradictoryCursor, &fromAfterCursor)
+
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusForbidden, writeHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusUnauthorized, wrongProjectHeaders)
 	requestJSON(t, newIntegrationClient(t), http.MethodGet, projectURL+"/apps/"+created.App.ID+"/logs", nil, http.StatusUnauthorized, nil)

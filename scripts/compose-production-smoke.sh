@@ -1491,11 +1491,16 @@ wait_for_app_public_route() {
 }
 
 fetch_app_runtime_logs() {
-	local container_id="${1:-}" status
-	status="$(curl --silent --show-error --max-time 10 \
+	local container_id="${1:-}" cursor="${2:-}" status
+	local -a curl_args=(--silent --show-error --max-time 10 \
 		--header "Cookie: $auth_cookie_header" \
-		--output "$platform_response" --write-out '%{http_code}' \
-		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/logs?limit=250")"
+		--output "$platform_response" --write-out '%{http_code}' --get \
+		--data-urlencode 'limit=250')
+	if [ -n "$cursor" ]; then
+		curl_args+=(--data-urlencode "cursor=$cursor")
+	fi
+	status="$(curl "${curl_args[@]}" \
+		"${api_url%/}/v1/projects/${platform_project_id}/apps/${platform_app_id}/logs")"
 	if [ "$status" != '200' ]; then
 		printf 'project-scoped App runtime logs API returned HTTP %s\n' "$status" >&2
 		return 1
@@ -1504,6 +1509,17 @@ fetch_app_runtime_logs() {
 		printf '%s\n' 'App runtime logs API exposed a Docker container ID' >&2
 		return 1
 	fi
+}
+
+app_runtime_log_next_cursor() {
+	python3 - "$platform_response" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    response = json.load(source)
+print(response.get("next_cursor", ""))
+PY
 }
 
 app_runtime_log_ids() {
@@ -2334,6 +2350,7 @@ verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
 	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
 	local old_route_target new_route_target body old_v2_stdout_id old_v2_stderr_id old_restart_stdout_id old_restart_stderr_id
+	local old_restart_cursor resume_stdout_count resume_stderr_count
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -2527,6 +2544,11 @@ verify_app_runtime_lifecycle() {
 	old_route_target="$(app_route_snapshot_target)"
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 2 "$old_container"
 	fetch_app_runtime_logs "$old_container"
+	old_restart_cursor="$(app_runtime_log_next_cursor)"
+	if [ -z "$old_restart_cursor" ]; then
+		printf '%s\n' 'App runtime logs API did not return a cursor before process restart' >&2
+		return 1
+	fi
 	old_restart_stdout_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stdout | tail -n 1)"
 	old_restart_stderr_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stderr | tail -n 1)"
 	if [ -z "$old_restart_stdout_id" ] || [ -z "$old_restart_stderr_id" ]; then
@@ -2550,6 +2572,15 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 3 "$new_container"
 	wait_for_app_health_state pending waiting_for_health
+	if ! fetch_app_runtime_logs "$new_container" "$old_restart_cursor"; then
+		return 1
+	fi
+	read -r resume_stdout_count resume_stderr_count <<<"$(app_runtime_log_counts "${smoke_marker}-app-v2")"
+	if [ "$resume_stdout_count" -lt 1 ] || [ "$resume_stderr_count" -lt 1 ]; then
+		printf 'App runtime cursor continuation missed post-restart output: stdout=%s stderr=%s\n' "$resume_stdout_count" "$resume_stderr_count" >&2
+		return 1
+	fi
+	printf 'App runtime cursor returned post-restart output after the captured position (stdout/stderr=%s/%s)\n' "$resume_stdout_count" "$resume_stderr_count"
 	fetch_app_runtime_logs "$new_container"
 	assert_app_runtime_log_ids_retained "${smoke_marker}-app-v2" "$old_restart_stdout_id" "$old_restart_stderr_id"
 	new_route_target="$(app_runtime_name)"

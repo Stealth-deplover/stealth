@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/telemetry"
@@ -12,6 +14,15 @@ import (
 const (
 	defaultAppRuntimeLogsLimit = 100
 	maxAppRuntimeLogsLimit     = 250
+)
+
+var (
+	errInvalidAppRuntimeLogRange       = errors.New("time range is invalid or exceeds the configured limit")
+	errInvalidAppRuntimeLogCursor      = errors.New("runtime log cursor is invalid")
+	errAppRuntimeLogCursorOutsideRange = errors.New("runtime log cursor is outside the allowed query window")
+	errAppRuntimeLogFromAfterCursor    = errors.New("from cannot be after the runtime log cursor")
+	errAppRuntimeLogToBeforeCursor     = errors.New("to must be after the runtime log cursor")
+	errAppRuntimeLogToTooFarFuture     = errors.New("to cannot be more than five minutes in the future")
 )
 
 func (s *Server) listAppRuntimeLogs(w http.ResponseWriter, r *http.Request) {
@@ -28,19 +39,6 @@ func (s *Server) listAppRuntimeLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "logs_unavailable", "App runtime logs are temporarily unavailable")
 		return
 	}
-	if len(containerIDs) == 0 {
-		writeJSON(w, http.StatusOK, domain.AppRuntimeLogsResponse{Logs: []domain.AppRuntimeLog{}})
-		return
-	}
-	reader, ok := s.telemetry.(telemetry.ContainerLogReader)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "App runtime logs are temporarily unavailable")
-		return
-	}
-	queryRange, ok := s.adminTimeRange(w, r)
-	if !ok {
-		return
-	}
 	limit, ok := appRuntimeLogsLimit(w, r)
 	if !ok {
 		return
@@ -49,6 +47,16 @@ func (s *Server) listAppRuntimeLogs(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(r.URL.Query().Get("query"))
 	if len(level) > 64 || len(search) > 256 {
 		writeError(w, http.StatusBadRequest, "validation_error", "runtime log filters exceed the allowed length")
+		return
+	}
+	from, err := appRuntimeLogsQueryTime(r, "from")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	to, err := appRuntimeLogsQueryTime(r, "to")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return
 	}
 	rawCursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
@@ -60,10 +68,24 @@ func (s *Server) listAppRuntimeLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		decoded, err := telemetry.DecodeLogCursor(rawCursor)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "validation_error", "runtime log cursor is invalid")
+			writeError(w, http.StatusBadRequest, "validation_error", errInvalidAppRuntimeLogCursor.Error())
 			return
 		}
 		cursor = &decoded
+	}
+	queryRange, err := resolveAppRuntimeLogRange(time.Now().UTC(), from, to, cursor, s.config.TelemetryMaxQueryRange)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return
+	}
+	if len(containerIDs) == 0 {
+		writeJSON(w, http.StatusOK, domain.AppRuntimeLogsResponse{Logs: []domain.AppRuntimeLog{}})
+		return
+	}
+	reader, ok := s.telemetry.(telemetry.ContainerLogReader)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "telemetry_unavailable", "App runtime logs are temporarily unavailable")
+		return
 	}
 	result, err := reader.QueryContainerLogs(r.Context(), telemetry.ContainerLogsQuery{
 		ContainerIDs: containerIDs,
@@ -88,6 +110,64 @@ func (s *Server) listAppRuntimeLogs(w http.ResponseWriter, r *http.Request) {
 		response.NextCursor = identity
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func appRuntimeLogsQueryTime(r *http.Request, name string) (*time.Time, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, errors.New(name + " must be an RFC3339 timestamp")
+	}
+	parsed = parsed.UTC()
+	return &parsed, nil
+}
+
+func resolveAppRuntimeLogRange(now time.Time, explicitFrom, explicitTo *time.Time, cursor *telemetry.LogCursor, maxRange time.Duration) (telemetry.TimeRange, error) {
+	if now.IsZero() || maxRange <= 0 {
+		return telemetry.TimeRange{}, errInvalidAppRuntimeLogRange
+	}
+	now = now.UTC()
+	to := now
+	if explicitTo != nil {
+		to = explicitTo.UTC()
+	}
+	if to.After(now.Add(5 * time.Minute)) {
+		return telemetry.TimeRange{}, errAppRuntimeLogToTooFarFuture
+	}
+
+	lookback := time.Hour
+	if maxRange < lookback {
+		lookback = maxRange
+	}
+	from := to.Add(-lookback)
+	if explicitFrom != nil {
+		from = explicitFrom.UTC()
+	}
+	if cursor != nil {
+		cursorTime := cursor.Timestamp.UTC()
+		if cursor.Timestamp.IsZero() || strings.TrimSpace(cursor.EventID) == "" || len(cursor.EventID) > 256 || cursorTime.After(now) {
+			return telemetry.TimeRange{}, errInvalidAppRuntimeLogCursor
+		}
+		if explicitFrom != nil && from.After(cursorTime) {
+			return telemetry.TimeRange{}, errAppRuntimeLogFromAfterCursor
+		}
+		if explicitFrom == nil {
+			from = cursorTime
+		}
+		if !to.After(cursorTime) {
+			return telemetry.TimeRange{}, errAppRuntimeLogToBeforeCursor
+		}
+		if to.Sub(cursorTime) > maxRange {
+			return telemetry.TimeRange{}, errAppRuntimeLogCursorOutsideRange
+		}
+	}
+	if !to.After(from) || to.Sub(from) > maxRange {
+		return telemetry.TimeRange{}, errInvalidAppRuntimeLogRange
+	}
+	return telemetry.TimeRange{From: from, To: to}, nil
 }
 
 func appRuntimeLogsLimit(w http.ResponseWriter, r *http.Request) (int, bool) {

@@ -2624,15 +2624,16 @@ paths:
   /v1/projects/{projectID}/apps/{appID}/logs:
     get:
       operationId: listAppRuntimeLogs
-      description: List bounded, redacted stdout/stderr from verified containers for this App. This runtime stream is separate from deployment build logs. The cursor is opaque and ordered by timestamp plus a Collector-generated event identity. PostgreSQL supplies the trusted container mapping; callers cannot select container IDs. API-key callers require apps.read. If telemetry is unavailable, the endpoint returns 503 while App runtime continues.
+      description: >-
+        List bounded, redacted stdout/stderr from verified containers for this App. This runtime stream is separate from deployment build logs. A cursor is opaque and must be passed back unchanged to resume from its retained position. Without a cursor, history defaults to the most recent hour. With a cursor and no from value, the query starts at the cursor position; an explicit from after that position is rejected. Cursor requests remain bounded by the configured maximum telemetry query range. Cursors outside that window fail with a validation error instead of silently skipping retained logs. PostgreSQL supplies the trusted container mapping; callers cannot select container IDs. API-key callers require apps.read. If telemetry is unavailable, the endpoint returns 503 while App runtime continues.
       security: [{ sessionCookie: [] }, { projectApiKey: [] }]
       parameters:
         - { $ref: '#/components/parameters/ProjectID' }
         - { $ref: '#/components/parameters/AppID' }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 250, default: 100 } }
-        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 2048 }, description: Opaque cursor returned by the previous response. }
-        - { name: from, in: query, required: false, schema: { type: string, format: date-time }, description: Start of the bounded history window. Defaults to the recent one-hour window. }
-        - { name: to, in: query, required: false, schema: { type: string, format: date-time }, description: End of the bounded history window. Defaults to now. }
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 2048 }, description: Opaque cursor returned by a previous response; pass it back unchanged to resume from its retained position. }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time }, description: "Start of the bounded history window. Defaults to the recent one-hour window without a cursor and to the cursor position with a cursor. When a cursor is supplied, a value after its position is rejected." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time }, description: End of the bounded history window. Defaults to now and must be after the cursor position when resuming. }
         - { name: level, in: query, required: false, schema: { type: string, maxLength: 64 } }
         - { name: query, in: query, required: false, schema: { type: string, maxLength: 256 }, description: Case-insensitive message search. }
       responses: { '200': { description: Redacted App runtime logs with an opaque incremental cursor, content: { application/json: { schema: { $ref: '#/components/schemas/AppRuntimeLogsResponse' } } } }, '400': { $ref: '#/components/responses/BadRequest' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' }, '404': { $ref: '#/components/responses/NotFound' }, '503': { $ref: '#/components/responses/ServiceUnavailable' } }

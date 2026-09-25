@@ -2698,7 +2698,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description List bounded, redacted stdout/stderr from verified containers for this App. This runtime stream is separate from deployment build logs. The cursor is opaque and ordered by timestamp plus a Collector-generated event identity. PostgreSQL supplies the trusted container mapping; callers cannot select container IDs. API-key callers require apps.read. If telemetry is unavailable, the endpoint returns 503 while App runtime continues. */
+        /** @description List bounded, redacted stdout/stderr from verified containers for this App. This runtime stream is separate from deployment build logs. A cursor is opaque and must be passed back unchanged to resume from its retained position. Without a cursor, history defaults to the most recent hour. With a cursor and no from value, the query starts at the cursor position; an explicit from after that position is rejected. Cursor requests remain bounded by the configured maximum telemetry query range. Cursors outside that window fail with a validation error instead of silently skipping retained logs. PostgreSQL supplies the trusted container mapping; callers cannot select container IDs. API-key callers require apps.read. If telemetry is unavailable, the endpoint returns 503 while App runtime continues. */
         get: operations["listAppRuntimeLogs"];
         put?: never;
         post?: never;
@@ -13544,11 +13544,11 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description Opaque cursor returned by the previous response. */
+                /** @description Opaque cursor returned by a previous response; pass it back unchanged to resume from its retained position. */
                 cursor?: string;
-                /** @description Start of the bounded history window. Defaults to the recent one-hour window. */
+                /** @description Start of the bounded history window. Defaults to the recent one-hour window without a cursor and to the cursor position with a cursor. When a cursor is supplied, a value after its position is rejected. */
                 from?: string;
-                /** @description End of the bounded history window. Defaults to now. */
+                /** @description End of the bounded history window. Defaults to now and must be after the cursor position when resuming. */
                 to?: string;
                 level?: string;
                 /** @description Case-insensitive message search. */
