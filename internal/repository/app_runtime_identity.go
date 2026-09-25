@@ -59,3 +59,11 @@ func AppRuntimeContainerNameForRouteIdentity(appID uuid.UUID, identity string) (
 	name := AppRuntimeContainerNameForIncarnation(appID, parsed)
 	return name, name != "" && ValidAppRuntimeContainerName(appID, name)
 }
+
+func appRuntimeRouteIdentityMatches(appID uuid.UUID, routeIdentity, healthRouteIdentity, containerName *string) bool {
+	if routeIdentity == nil || healthRouteIdentity == nil || containerName == nil || *healthRouteIdentity != *routeIdentity {
+		return false
+	}
+	expectedName, valid := AppRuntimeContainerNameForRouteIdentity(appID, *routeIdentity)
+	return valid && *containerName == expectedName
+}

@@ -95,3 +95,33 @@ func TestAppRouteStatusRequiresCurrentRuntimeHealthAndHostname(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectedAppRouteStatusRequiresCurrentRoutingIncarnation(t *testing.T) {
+	deploymentID := uuid.Must(uuid.NewV7()).String()
+	hostname := "incarnation.apps.example.test"
+	address := "172.22.0.5"
+	app := domain.App{
+		Enabled: true, DesiredDeploymentID: &deploymentID, PlatformHostname: &hostname,
+		DesiredGeneration: 4, ObservedGeneration: 4, RuntimeStatus: "running", RouteDeploymentReady: true,
+	}
+
+	if got := projectedAppRouteStatus(app, "healthy", &address, true); got != "active" {
+		t.Fatalf("healthy current incarnation route status = %q, want active", got)
+	}
+	for _, test := range []struct {
+		name                 string
+		healthStatus         string
+		routeIdentityCurrent bool
+		wantRoute            string
+	}{
+		{name: "healthy with missing health route identity", healthStatus: "healthy", wantRoute: "waiting_for_health"},
+		{name: "healthy with stale health route identity", healthStatus: "healthy", wantRoute: "waiting_for_health"},
+		{name: "pending after identity rotation", healthStatus: "pending", wantRoute: "waiting_for_health"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := projectedAppRouteStatus(app, test.healthStatus, &address, test.routeIdentityCurrent); got != test.wantRoute {
+				t.Fatalf("route status = %q, want %q", got, test.wantRoute)
+			}
+		})
+	}
+}

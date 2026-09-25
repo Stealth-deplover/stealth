@@ -45,3 +45,34 @@ func TestNewAppRuntimeRouteIdentitiesAreUnique(t *testing.T) {
 		seen[name] = struct{}{}
 	}
 }
+
+func TestAppRuntimeRouteIdentityMatchesOnlyCurrentHealthIncarnation(t *testing.T) {
+	appID := uuid.MustParse("018f0d5e-7c19-7abc-8d1e-1234567890ab")
+	current := uuid.MustParse("11111111-2222-4333-8444-555555555555").String()
+	stale := uuid.MustParse("11111111-2222-4333-8444-666666666666").String()
+	currentName := AppRuntimeContainerNameForIncarnation(appID, uuid.MustParse(current))
+	wrongName := AppRuntimeContainerNameForIncarnation(appID, uuid.MustParse(stale))
+	malformed := "tenant-chosen-target"
+	name := func(value string) *string { return &value }
+
+	for _, test := range []struct {
+		name                string
+		routeIdentity       *string
+		healthIdentity      *string
+		containerName       *string
+		wantCurrentIdentity bool
+	}{
+		{name: "current incarnation", routeIdentity: name(current), healthIdentity: name(current), containerName: name(currentName), wantCurrentIdentity: true},
+		{name: "missing health identity", routeIdentity: name(current), containerName: name(currentName)},
+		{name: "stale health identity", routeIdentity: name(current), healthIdentity: name(stale), containerName: name(currentName)},
+		{name: "wrong target name", routeIdentity: name(current), healthIdentity: name(current), containerName: name(wrongName)},
+		{name: "tenant-crafted identity", routeIdentity: name(malformed), healthIdentity: name(malformed), containerName: name(malformed)},
+		{name: "missing runtime identity", healthIdentity: name(current), containerName: name(currentName)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := appRuntimeRouteIdentityMatches(appID, test.routeIdentity, test.healthIdentity, test.containerName); got != test.wantCurrentIdentity {
+				t.Fatalf("route identity current = %v, want %v", got, test.wantCurrentIdentity)
+			}
+		})
+	}
+}

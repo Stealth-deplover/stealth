@@ -28,7 +28,8 @@ ALTER TABLE app_runtime_state
     CHECK (container_name='st-'||replace(app_id::text,'-','')||'-'||substring(replace(route_identity::text,'-','') FROM 1 FOR 24)),
   ADD CONSTRAINT app_runtime_state_health_route_identity_consistent
     CHECK (
-      health_route_identity IS NULL OR health_route_identity=route_identity
+      (health_status='pending' AND (health_route_identity IS NULL OR health_route_identity=route_identity)) OR
+      (health_status IN ('healthy','unhealthy') AND health_route_identity IS NOT NULL AND health_route_identity=route_identity)
     );
 
 CREATE UNIQUE INDEX app_runtime_state_route_identity_idx

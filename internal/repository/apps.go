@@ -41,7 +41,7 @@ type AppPatch struct {
 	Workload *workloadspec.Spec
 }
 
-const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id,COALESCE(runtime.health_status,'pending'),runtime.health_generation,runtime.health_deployment_id::text,runtime.health_container_id,runtime.container_id,host(runtime.container_address),runtime.applied_generation,runtime.applied_deployment_id::text,runtime.applied_workload_spec_sha256,EXISTS(SELECT 1 FROM app_deployments deployment WHERE deployment.id=app.desired_deployment_id AND deployment.app_id=app.id AND deployment.project_id=app.project_id AND deployment.status='ready' AND deployment.build_status='succeeded')`
+const appProjection = `app.id::text,app.project_id::text,app.name,app.enabled,app.workload_spec,app.workload_spec_sha256,app.desired_generation,app.observed_generation,app.runtime_status,app.runtime_error,app.created_at,app.updated_at,app.platform_label,settings.workload_base_domain,app.desired_deployment_id,COALESCE(runtime.health_status,'pending'),runtime.health_generation,runtime.health_deployment_id::text,runtime.health_container_id,runtime.container_id,host(runtime.container_address),runtime.applied_generation,runtime.applied_deployment_id::text,runtime.applied_workload_spec_sha256,EXISTS(SELECT 1 FROM app_deployments deployment WHERE deployment.id=app.desired_deployment_id AND deployment.app_id=app.id AND deployment.project_id=app.project_id AND deployment.status='ready' AND deployment.build_status='succeeded'),runtime.route_identity::text,runtime.health_route_identity::text,runtime.container_name`
 
 type appScanner interface{ Scan(...any) error }
 
@@ -54,6 +54,7 @@ func scanApp(row appScanner) (domain.App, error) {
 	var healthStatus string
 	var healthGeneration *int64
 	var healthDeploymentID, healthContainerID, runtimeContainerID, runtimeAddress *string
+	var routeIdentity, healthRouteIdentity, containerName *string
 	var appliedGeneration *int64
 	var appliedDeploymentID, appliedWorkloadSHA *string
 	var routeDeploymentReady bool
@@ -83,6 +84,9 @@ func scanApp(row appScanner) (domain.App, error) {
 		&appliedDeploymentID,
 		&appliedWorkloadSHA,
 		&routeDeploymentReady,
+		&routeIdentity,
+		&healthRouteIdentity,
+		&containerName,
 	); err != nil {
 		return domain.App{}, err
 	}
@@ -109,7 +113,9 @@ func scanApp(row appScanner) (domain.App, error) {
 		}
 		item.PlatformHostname = &hostname
 	}
-	healthIdentityCurrent := healthGeneration != nil && *healthGeneration == item.DesiredGeneration &&
+	appID, parseErr := uuid.Parse(item.ID)
+	routeIdentityCurrent := parseErr == nil && appID != uuid.Nil && appRuntimeRouteIdentityMatches(appID, routeIdentity, healthRouteIdentity, containerName)
+	healthIdentityCurrent := routeIdentityCurrent && healthGeneration != nil && *healthGeneration == item.DesiredGeneration &&
 		healthDeploymentID != nil && desiredDeploymentID != nil && *healthDeploymentID == desiredDeploymentID.String() &&
 		healthContainerID != nil && runtimeContainerID != nil && *healthContainerID == *runtimeContainerID &&
 		appliedGeneration != nil && *appliedGeneration == item.DesiredGeneration && appliedDeploymentID != nil &&
@@ -120,17 +126,21 @@ func scanApp(row appScanner) (domain.App, error) {
 	if !healthIdentityCurrent || item.ObservedGeneration != item.DesiredGeneration || item.RuntimeStatus != "running" {
 		item.HealthStatus = "pending"
 	}
-	switch {
-	case !item.Enabled || item.DesiredDeploymentID == nil || item.PlatformHostname == nil:
-		item.RouteStatus = "not_available"
-	case !item.RouteDeploymentReady || item.ObservedGeneration != item.DesiredGeneration || item.RuntimeStatus != "running":
-		item.RouteStatus = "waiting_for_runtime"
-	case item.HealthStatus != "healthy" || runtimeAddress == nil || !validPrivateRuntimeAddress(*runtimeAddress):
-		item.RouteStatus = "waiting_for_health"
-	default:
-		item.RouteStatus = "active"
-	}
+	item.RouteStatus = projectedAppRouteStatus(item, item.HealthStatus, runtimeAddress, routeIdentityCurrent)
 	return item, nil
+}
+
+func projectedAppRouteStatus(app domain.App, healthStatus string, runtimeAddress *string, routeIdentityCurrent bool) string {
+	switch {
+	case !app.Enabled || app.DesiredDeploymentID == nil || app.PlatformHostname == nil:
+		return "not_available"
+	case !app.RouteDeploymentReady || app.ObservedGeneration != app.DesiredGeneration || app.RuntimeStatus != "running":
+		return "waiting_for_runtime"
+	case !routeIdentityCurrent || healthStatus != "healthy" || runtimeAddress == nil || !validPrivateRuntimeAddress(*runtimeAddress):
+		return "waiting_for_health"
+	default:
+		return "active"
+	}
 }
 
 func (r *Repository) requireAppRead(ctx context.Context, projectID uuid.UUID, actor AppActor) (bool, error) {

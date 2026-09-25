@@ -282,6 +282,46 @@ func TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegratio
 	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
 		t.Fatalf("healthy App is absent from route snapshot: routes=%+v err=%v", routes, err)
 	}
+	var currentRouteIdentity, healthRouteIdentity uuid.UUID
+	var currentContainerName string
+	if err := f.pool.QueryRow(f.ctx, `
+		SELECT route_identity,health_route_identity,container_name
+		FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&currentRouteIdentity, &healthRouteIdentity, &currentContainerName); err != nil {
+		t.Fatal(err)
+	}
+	if currentRouteIdentity == uuid.Nil || healthRouteIdentity != currentRouteIdentity || currentContainerName != AppRuntimeContainerNameForIncarnation(appID, currentRouteIdentity) {
+		t.Fatalf("healthy runtime routing identity = route:%s health:%s name:%q", currentRouteIdentity, healthRouteIdentity, currentContainerName)
+	}
+	wrongRouteIdentity, err := NewAppRuntimeRouteIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{name: "healthy result without health route identity", query: `UPDATE app_runtime_state SET health_route_identity=NULL WHERE app_id=$1`, args: []any{appID}},
+		{name: "unhealthy result without health route identity", query: `UPDATE app_runtime_state SET health_status='unhealthy',health_route_identity=NULL WHERE app_id=$1`, args: []any{appID}},
+		{name: "health result for a stale route identity", query: `UPDATE app_runtime_state SET health_route_identity=$2 WHERE app_id=$1`, args: []any{appID, wrongRouteIdentity}},
+		{name: "route identity rotated without rebinding health", query: `UPDATE app_runtime_state SET route_identity=$2,container_name=$3 WHERE app_id=$1`, args: []any{appID, wrongRouteIdentity, AppRuntimeContainerNameForIncarnation(appID, wrongRouteIdentity)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := f.pool.Exec(f.ctx, test.query, test.args...); err == nil {
+				t.Fatal("database accepted a health result that is not bound to the current route identity")
+			}
+		})
+	}
+	stillHealthy, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillHealthy.RouteStatus != "active" {
+		t.Fatalf("rejected stale identity writes changed the App projection: route_status=%s", stillHealthy.RouteStatus)
+	}
+	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || !appRouteExists(routes, appID) {
+		t.Fatalf("current healthy App projection disagrees with ingress after rejected stale identity writes: routes=%+v err=%v", routes, err)
+	}
 	if _, err := f.pool.Exec(f.ctx, `UPDATE project_apps SET workload_spec=jsonb_set(workload_spec,'{port}','"malformed"'::jsonb) WHERE id=$1`, appID); err != nil {
 		t.Fatal(err)
 	}
@@ -482,8 +522,16 @@ func TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration(t *t
 	if pending.RuntimeStatus != "running" || pending.HealthStatus != "pending" || pending.RouteStatus != "waiting_for_health" {
 		t.Fatalf("same-container restart did not enter pending/unroutable state: runtime=%s health=%s route=%s", pending.RuntimeStatus, pending.HealthStatus, pending.RouteStatus)
 	}
+	var rotatedRouteIdentity uuid.UUID
+	var rotatedHealthRouteIdentity *uuid.UUID
+	if err := f.pool.QueryRow(f.ctx, `SELECT route_identity,health_route_identity FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&rotatedRouteIdentity, &rotatedHealthRouteIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if rotatedRouteIdentity != newRouteIdentity || rotatedHealthRouteIdentity != nil {
+		t.Fatalf("pending restart identity = route:%s health:%v, want rotated route with no health identity", rotatedRouteIdentity, rotatedHealthRouteIdentity)
+	}
 	if routes, err := f.repo.ListAppPlatformRoutes(f.ctx); err != nil || appRouteExists(routes, appID) {
-		t.Fatalf("reset App remained in route snapshot before a fresh probe: routes=%+v err=%v", routes, err)
+		t.Fatalf("App projection and ingress disagreed while health identity was pending: routes=%+v err=%v", routes, err)
 	}
 	if oldRouteTarget == restartJob.ContainerName {
 		t.Fatalf("old target %q became current again during restart", oldRouteTarget)

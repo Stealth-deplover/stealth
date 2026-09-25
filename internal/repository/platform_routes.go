@@ -94,7 +94,7 @@ func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPla
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT app.id::text,app.platform_label,settings.workload_base_domain,
-		       runtime.route_identity::text,runtime.container_name,
+		       runtime.route_identity::text,runtime.health_route_identity::text,runtime.container_name,
 		       CASE WHEN app.workload_spec->>'port' ~ '^[0-9]{1,5}$'
 		            THEN (app.workload_spec->>'port')::integer ELSE NULL END
 		FROM project_apps app
@@ -127,20 +127,21 @@ func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPla
 	defer rows.Close()
 	routes := make([]domain.AppPlatformRoute, 0)
 	for rows.Next() {
-		var appID, label, baseDomain, routeIdentity, containerName string
+		var appID, label, baseDomain string
+		var routeIdentity, healthRouteIdentity, containerName *string
 		var port *int32
-		if err := rows.Scan(&appID, &label, &baseDomain, &routeIdentity, &containerName, &port); err != nil {
+		if err := rows.Scan(&appID, &label, &baseDomain, &routeIdentity, &healthRouteIdentity, &containerName, &port); err != nil {
 			return nil, err
 		}
 		parsedID, idErr := ParseUUID(appID)
 		hostname, hostErr := platformhostname.Hostname(label, baseDomain)
-		expectedName, validIdentity := AppRuntimeContainerNameForRouteIdentity(parsedID, routeIdentity)
-		if idErr != nil || hostErr != nil || !validIdentity || containerName != expectedName || port == nil || *port < 1 || *port > 65535 {
+		validIdentity := idErr == nil && appRuntimeRouteIdentityMatches(parsedID, routeIdentity, healthRouteIdentity, containerName)
+		if idErr != nil || hostErr != nil || !validIdentity || routeIdentity == nil || port == nil || *port < 1 || *port > 65535 {
 			// Fail closed for this App only. A bad App record must not prevent
 			// Site snapshots or other valid App routes from converging.
 			continue
 		}
-		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), RouteIdentity: routeIdentity, Hostname: hostname, Port: int(*port)})
+		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), RouteIdentity: *routeIdentity, Hostname: hostname, Port: int(*port)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

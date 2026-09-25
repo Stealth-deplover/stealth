@@ -7,3 +7,6 @@ ALTER TABLE app_runtime_state
   DROP CONSTRAINT IF EXISTS app_runtime_state_route_identity_valid,
   DROP COLUMN IF EXISTS health_route_identity,
   DROP COLUMN IF EXISTS route_identity;
+
+ALTER TABLE app_runtime_state
+  ALTER COLUMN container_name DROP NOT NULL;

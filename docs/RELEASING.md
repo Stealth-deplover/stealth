@@ -131,7 +131,8 @@ claim a full browser/provider installation or run a full production stack.
       in the App.
 - [ ] Confirm the Compose smoke covers disable/enable reuse, CPU replacement,
       v2 image selection, worker restart, deleted container recovery, unexpected
-      exit recovery, foreign deterministic-name refusal, and valid orphan cleanup.
+      exit recovery, incarnation-specific target rotation, stale retired-name
+      non-adoption, and valid orphan cleanup.
 - [ ] Confirm `scripts/traefik-security-test.sh` keeps the App runtime network
       outside Compose services and the Docker socket out of API, Console,
       BuildKit, and Traefik.
