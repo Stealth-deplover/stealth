@@ -214,10 +214,11 @@ describe("AppDetailView", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Healthy")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "backend.apps.example.com" })).toHaveAttribute(
-      "href",
-      "https://backend.apps.example.com",
-    );
+    const hostnameLink = screen.getByRole("link", {
+      name: "backend.apps.example.com (opens in a new tab)",
+    });
+    expect(hostnameLink).toHaveAttribute("href", "https://backend.apps.example.com");
+    expect(hostnameLink).toHaveClass("min-h-11");
   });
 
   it("shows a running process as starting until health converges", () => {

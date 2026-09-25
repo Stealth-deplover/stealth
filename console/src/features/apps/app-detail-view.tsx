@@ -200,10 +200,11 @@ export function AppDetailView({
             {app.platform_hostname ? (
               app.route_status === "active" ? (
                 <a
-                  className="break-all font-mono text-xs text-cyan-200 underline decoration-cyan-200/30 underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                  className="inline-flex min-h-11 max-w-full items-center break-all font-mono text-xs text-cyan-200 underline decoration-cyan-200/30 underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
                   href={`https://${app.platform_hostname}`}
                   target="_blank"
                   rel="noopener noreferrer"
+                  aria-label={`${app.platform_hostname} (opens in a new tab)`}
                 >
                   {app.platform_hostname}
                 </a>
@@ -410,7 +411,7 @@ function HealthBadge({ status }: { status: AppHealth_status }) {
   const label = status === AppHealth_status.healthy ? "Healthy" : status === AppHealth_status.unhealthy ? "Unhealthy" : "Starting";
   return (
     <Badge variant={state}>
-      <span className={`size-1.5 rounded-full bg-current ${status === AppHealth_status.pending ? "animate-pulse" : ""}`} aria-hidden="true" />
+      <span className={`size-1.5 rounded-full bg-current ${status === AppHealth_status.pending ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden="true" />
       {label}
     </Badge>
   );
