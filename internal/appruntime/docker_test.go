@@ -56,11 +56,15 @@ func runtimeTestJob() repository.AppRuntimeJob {
 	appID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	projectID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	deploymentID := uuid.MustParse("33333333-3333-4333-8333-333333333333").String()
-	return repository.AppRuntimeJob{App: domain.App{
-		ID: appID.String(), ProjectID: projectID.String(), Enabled: true,
-		DesiredDeploymentID: &deploymentID, DesiredGeneration: 4,
-		WorkloadSpecSHA256: strings.Repeat("a", 64), Workload: workloadspec.Default(),
-	}}
+	routeIdentity := uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	return repository.AppRuntimeJob{
+		RouteIdentity: routeIdentity, ContainerName: repository.AppRuntimeContainerNameForIncarnation(appID, routeIdentity),
+		App: domain.App{
+			ID: appID.String(), ProjectID: projectID.String(), Enabled: true,
+			DesiredDeploymentID: &deploymentID, DesiredGeneration: 4,
+			WorkloadSpecSHA256: strings.Repeat("a", 64), Workload: workloadspec.Default(),
+		},
+	}
 }
 
 func TestContainerCreateArgsKeepsTenantCommandAsArgumentsAndAppliesIsolation(t *testing.T) {
@@ -71,7 +75,7 @@ func TestContainerCreateArgsKeepsTenantCommandAsArgumentsAndAppliesIsolation(t *
 		t.Fatal(err)
 	}
 	for _, pair := range [][]string{
-		{"--name", repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID))},
+		{"--name", job.ContainerName},
 		{"--network", "stealth_app_runtime"},
 		{"--cap-drop", "ALL"},
 		{"--security-opt", "no-new-privileges:true"},
@@ -294,7 +298,7 @@ func TestContainerCreateArgsCoverResourceBoundariesAndLiteralCommand(t *testing.
 			{"--memory-swap", fmt.Sprint(test.memory)},
 			{"--pids-limit", fmt.Sprint(test.pids)},
 			{"--workdir", workingDirectory},
-			{"--name", repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID))},
+			{"--name", job.ContainerName},
 			{"--network", "stealth_app_runtime"},
 			{"--read-only"},
 			{"--cap-drop", "ALL"},
@@ -332,7 +336,8 @@ func TestMobyStartAndStopUseTypedDockerCommands(t *testing.T) {
 	stopped := runtimeContainerJSON(job, containerID, labels, false)
 	runner := &scriptedRuntimeRunner{
 		results: []CommandResult{
-			{Stdout: running},
+			{},
+			{Stdout: []byte(containerID + "\n")},
 			{Stdout: running},
 			{Stdout: running},
 			{Stdout: running},
@@ -341,7 +346,7 @@ func TestMobyStartAndStopUseTypedDockerCommands(t *testing.T) {
 			{},
 			{},
 		},
-		errors: []error{nil, nil, nil, nil, nil, nil, nil, &CommandFailure{ExitCode: 1, Stderr: "Error: No such container: " + containerID}},
+		errors: []error{nil, nil, nil, nil, nil, nil, nil, nil, &CommandFailure{ExitCode: 1, Stderr: "Error: No such container: " + containerID}},
 	}
 	moby, err := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
 	if err != nil {
@@ -357,16 +362,16 @@ func TestMobyStartAndStopUseTypedDockerCommands(t *testing.T) {
 	if !slices.Equal(runner.calls[0].args, []string{"container", "start", containerID}) {
 		t.Fatalf("start command = %#v", runner.calls[0].args)
 	}
-	if !slices.Equal(runner.calls[2].args, []string{"container", "inspect", containerID}) {
-		t.Fatalf("remove preflight did not inspect the captured container ID: %#v", runner.calls[2].args)
+	if !slices.Equal(runner.calls[3].args, []string{"container", "inspect", containerID}) {
+		t.Fatalf("remove preflight did not inspect the captured container ID: %#v", runner.calls[3].args)
 	}
-	if !slices.Equal(runner.calls[4].args, []string{"container", "stop", "--time", "15", containerID}) {
-		t.Fatalf("stop command = %#v", runner.calls[4].args)
+	if !slices.Equal(runner.calls[5].args, []string{"container", "stop", "--time", "15", containerID}) {
+		t.Fatalf("stop command = %#v", runner.calls[5].args)
 	}
-	if !slices.Equal(runner.calls[6].args, []string{"container", "rm", containerID}) {
-		t.Fatalf("remove command = %#v", runner.calls[6].args)
+	if !slices.Equal(runner.calls[7].args, []string{"container", "rm", containerID}) {
+		t.Fatalf("remove command = %#v", runner.calls[7].args)
 	}
-	if len(runner.calls) != 8 {
+	if len(runner.calls) != 9 {
 		t.Fatalf("Docker command sequence has unexpected operations: %#v", runner.calls)
 	}
 }
@@ -561,11 +566,46 @@ func TestContainerInspectionRejectsMalformedOrOversizedOutput(t *testing.T) {
 		{Stdout: []byte("[]")},
 		{Stdout: []byte("[]"), StdoutTruncated: true},
 	} {
-		runner := &scriptedRuntimeRunner{results: []CommandResult{result}}
+		runner := &scriptedRuntimeRunner{results: []CommandResult{{Stdout: []byte(strings.Repeat("a", 64) + "\n")}, result}}
 		moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, time.Minute)
 		if _, found, err := moby.InspectApp(context.Background(), uuid.MustParse(runtimeTestJob().App.ID)); found || !errors.Is(err, ErrContainerInspection) {
 			t.Fatalf("malformed Docker inspect accepted: found=%v err=%v output=%q", found, err, result.Stdout)
 		}
+	}
+}
+
+func TestMobyRenameRotatesManagedContainerDNSIdentity(t *testing.T) {
+	oldJob := runtimeTestJob()
+	job := oldJob
+	job.RouteIdentity = uuid.MustParse("55555555-5555-4555-8555-555555555555")
+	job.ContainerName = repository.AppRuntimeContainerNameForIncarnation(uuid.MustParse(job.App.ID), job.RouteIdentity)
+	containerID := strings.Repeat("a", 64)
+	labels, err := ContainerLabels(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldName := "/" + oldJob.ContainerName
+	runner := &scriptedRuntimeRunner{results: []CommandResult{
+		{Stdout: runtimeContainerJSONWithName(job, containerID, labels, false, oldName)},
+		{},
+		{Stdout: runtimeContainerJSONWithName(job, containerID, labels, false, "/"+job.ContainerName)},
+	}}
+	moby, err := NewMoby(runner, "stealth_app_runtime", 30*time.Second, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := moby.RenameApp(context.Background(), job, containerID, job.ContainerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.ID != containerID || renamed.Name != "/"+job.ContainerName || oldJob.ContainerName == job.ContainerName {
+		t.Fatalf("rename did not establish a distinct process target: old=%q new=%q container=%+v", oldJob.ContainerName, job.ContainerName, renamed)
+	}
+	if !slices.Equal(runner.calls[1].args, []string{"container", "rename", containerID, job.ContainerName}) {
+		t.Fatalf("Docker rename args = %#v", runner.calls[1].args)
+	}
+	if len(runner.calls) != 3 || runner.calls[0].args[1] != "inspect" || runner.calls[2].args[1] != "inspect" {
+		t.Fatalf("rename was not surrounded by runtime identity inspection: %#v", runner.calls)
 	}
 }
 
@@ -583,7 +623,7 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 	pids := int64(256)
 	initEnabled := true
 	container := Container{
-		ID: strings.Repeat("c", 64), Name: "/" + repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID)),
+		ID: strings.Repeat("c", 64), Name: "/" + job.ContainerName,
 		ImageID: image.ID,
 		Config:  containerConfig{Labels: labels, Entrypoint: image.Entrypoint, Cmd: image.Command, Env: image.Environment, WorkingDir: image.WorkingDir, User: image.User},
 		State:   containerState{Status: "running", Running: true},
@@ -668,7 +708,7 @@ func argsBeforeImageContains(args []string, imageAt int, value string) bool {
 }
 
 func runtimeContainerJSON(job repository.AppRuntimeJob, id string, labels map[string]string, running bool) []byte {
-	return runtimeContainerJSONWithName(job, id, labels, running, "/"+repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID)))
+	return runtimeContainerJSONWithName(job, id, labels, running, "/"+job.ContainerName)
 }
 
 func runtimeContainerJSONWithName(job repository.AppRuntimeJob, id string, labels map[string]string, running bool, name string) []byte {

@@ -13,7 +13,7 @@ providers.
 | Function execution | Execution row is created with `status=accepted`. | `ClaimNextFunctionExecution` uses `FOR UPDATE OF e SKIP LOCKED`; the runtime receives a context timeout and terminal writes are fenced by worker ID. | Runtime failures are terminal rather than blindly retried because user code may have side effects. | Stale `running` executions return to `accepted`; a replacement worker can claim them. |
 | Site build | Site deployment row is created with `build_status=queued`. | `ClaimNextSiteDeployment` uses `FOR UPDATE OF d SKIP LOCKED`; archive extraction and build have bounded limits and a deadline. | Invalid archives, build errors, and quota failures are terminal. | Stale `running` builds become `deferred`; completion checks the build worker ID. |
 | App build | AppDeployment and a reserved immutable source artifact are recorded before the queued row is committed. | `ClaimNextAppDeployment` uses PostgreSQL `FOR UPDATE SKIP LOCKED`; a dedicated worker verifies and extracts the archive, then invokes `buildctl` against the isolated BuildKit service under a deadline. | BuildKit output must include a valid metadata digest and a verified OCI layout before publication; failures have bounded messages and release artifact/quota reservations. | Stale leases become reclaimable, and every completion is fenced by a unique per-claim worker token. BuildKit unavailability leaves the queue deferred/available and does not stop unrelated worker loops. |
-| App runtime, health, and route | App mutations and deployment selection advance desired generation; deleting an App or project writes durable cleanup work before removing rows. Health is separate state tied to generation, deployment, and container identity. | Runtime and health claims use PostgreSQL transactions and `FOR UPDATE ... SKIP LOCKED`; the worker verifies the persisted OCI archive, inspects the managed container, runs bounded TCP/HTTP probes, and publishes a separate App Traefik snapshot from an authoritative database query. | Runtime failures use bounded retries. Health uses the WorkloadSpec initial delay, interval, timeout, and failure threshold. Stale leases or identities cannot publish health. | Startup marks prior observations for inspection and checked health due, expired leases are reclaimable, cleanup survives App/project deletion, and orphan sweeps queue only ownership-validated containers. `running` means process liveness; an App route requires enabled state, a ready selected deployment, matching desired/observed generations, current runtime identity, and healthy state. |
+| App runtime, health, and route | App mutations and deployment selection advance desired generation; deleting an App or project writes durable cleanup work before removing rows. Health is separate state tied to generation, deployment, container, and routing-incarnation identity. | Runtime and health claims use PostgreSQL transactions and `FOR UPDATE ... SKIP LOCKED`; the worker verifies the persisted OCI archive, inspects the managed container, runs bounded TCP/HTTP probes, and publishes a separate App Traefik snapshot from an authoritative database query. | Runtime failures use bounded retries. Health uses the WorkloadSpec initial delay, interval, timeout, and failure threshold. Stale leases or identities cannot publish health. | Startup marks prior observations for inspection and checked health due, expired leases are reclaimable, cleanup survives App/project deletion, and orphan sweeps queue only ownership-validated containers. `running` means process liveness; an App route requires enabled state, a ready selected deployment, matching desired/observed generations, current runtime identity, and healthy state. |
 | Agent run | Run row is created with `status=queued`. | Provider workers claim with `FOR UPDATE OF r SKIP LOCKED`; provider calls use a context timeout and terminal writes require the claiming worker ID. | Provider failures are terminal. Unknown providers remain queued. | Stale `running` runs return to `queued`; the agent status is refreshed transactionally. |
 | Webhook delivery | Mutation transaction writes an outbox event and its delivery rows. | Delivery claim is transactional and `SKIP LOCKED`; outbound HTTP has SSRF checks, a response limit, and a timeout. | HTTP 408/425/429/5xx and network failures retry up to 12 attempts with bounded exponential jitter (or a bounded `Retry-After`); permanent 4xx and expiry are terminal. | Stale leases return to `pending`; expired events are marked failed. `X-Stealth-Delivery` is stable for consumer idempotency. |
 | Messaging delivery | Message and delivery rows are created transactionally with message idempotency constraints. | Delivery claim is transactional and `SKIP LOCKED`; provider calls have a timeout and bounded response handling. | Provider adapters classify retryable failures; attempts are capped at 12 and use bounded exponential jitter. | Stale leases return to `pending`; worker ownership fences terminal updates. |
@@ -83,9 +83,12 @@ or bridge ownership errors do not terminate unrelated worker loops.
 When an inspected App container is stopped and restarted in place, the worker
 fences a durable health reset before `docker start`: the old probe identity,
 checked time, failure count, and route address are cleared, then the configured
-initial delay starts again. The runtime lease and desired-generation check
-protect the reset, and only a fresh probe for the restarted process can restore
-route eligibility.
+initial delay starts again. It also rotates the persisted runtime routing
+identity and renames the stopped container before starting it. The old Docker
+DNS name no longer resolves to the restarted process, so a stale Traefik file
+fails closed even before the next route snapshot. The runtime lease and
+desired-generation check protect the reset, and only a fresh probe for the
+restarted process can restore route eligibility.
 
 ## Security assumptions
 
@@ -151,7 +154,8 @@ overrides are applied separately.
 The runtime verifies the persisted archive size and checksum, OCI manifest,
 platform, config digest, root filesystem diff IDs, and unsupported volume
 declarations before Moby import. Container ownership uses only Stealth-added
-Docker labels plus the deterministic name; OCI image labels are not trusted.
+Docker labels plus the persisted incarnation-specific name; OCI image labels
+are not trusted.
 `stealth doctor` only inspects network identity and does not create a network
 or start an App. Runtime `running` confirms the current expected process;
 `healthy` confirms the configured TCP or HTTP probe converged for the current

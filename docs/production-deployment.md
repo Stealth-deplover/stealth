@@ -239,9 +239,10 @@ inspected as running or, for a disabled App, absent.
 
 The runtime worker polls durable App desired state and uses fenced PostgreSQL
 leases before performing Moby work. It rechecks the selected persisted OCI
-archive on reconciliation, uses a deterministic container name and labels, and
-verifies container configuration before reporting `running`. A worker restart
-marks prior observations for inspection; expired leases are recoverable and
+archive on reconciliation, uses a persisted incarnation-specific container
+name and Stealth labels, and verifies container configuration before reporting
+`running`. App identity is separate from runtime routing identity. A worker
+restart marks prior observations for inspection; expired leases are recoverable and
 orphaned Stealth-labeled containers are queued for ownership-checked cleanup.
 Docker's restart policy stays disabled. The durable worker retries unexpected
 process exits according to the logical `restart_policy=always`, with bounded
@@ -287,10 +288,14 @@ accounting; verify the host with `docker info --format '{{.CgroupVersion}}'`.
 
 `running` means Moby reports the current expected container process running.
 `healthy` means the configured TCP or HTTP probe has converged for the same
-desired generation, selected deployment, and managed container; HTTP requires
-a 2xx response and redirects are not followed. An App route becomes eligible
-only when the App is enabled, its selected deployment is ready, desired and
-observed generations match, runtime identity is current, and health is healthy.
+desired generation, selected deployment, managed container, and runtime routing
+incarnation; HTTP requires a 2xx response and redirects are not followed. On a
+same-container process restart, the worker rotates the routing identity and
+renames the stopped container before starting it. A stale Traefik snapshot then
+targets a Docker name that no longer resolves to the new process. An App route
+becomes eligible only when the App is enabled, its selected deployment is
+ready, desired and observed generations match, runtime identity is current,
+and health is healthy.
 The worker writes eligible Apps to `platform-apps.yaml`; Site routes remain in
 `platform-sites.yaml`. This is asynchronous convergence, not a zero-downtime or
 HA guarantee. App runtime logs and encrypted App secrets are not implemented.

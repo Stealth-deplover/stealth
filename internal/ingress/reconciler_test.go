@@ -86,10 +86,10 @@ func TestRenderEmptyProducesNoopTraefikConfiguration(t *testing.T) {
 	}
 }
 
-func TestRenderAppsIsDeterministicAndUsesAppOwnedContainerNames(t *testing.T) {
+func TestRenderAppsIsDeterministicAndUsesIncarnationTargets(t *testing.T) {
 	routes := []domain.AppPlatformRoute{
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", Hostname: "beta.apps.example.com", Port: 8080},
-		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", Hostname: "alpha.apps.example.com", Port: 3000},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", RouteIdentity: "22222222-3333-4444-8555-666666666666", Hostname: "beta.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", RouteIdentity: "11111111-2222-4333-8444-555555555555", Hostname: "alpha.apps.example.com", Port: 3000},
 	}
 	first, err := RenderApps(routes)
 	if err != nil {
@@ -105,8 +105,8 @@ func TestRenderAppsIsDeterministicAndUsesAppOwnedContainerNames(t *testing.T) {
 	contents := string(first)
 	for _, want := range []string{
 		"Host(`alpha.apps.example.com`)", "Host(`beta.apps.example.com`)",
-		"http://stealth-app-018f0d5e7c197abc8d1e1234567890ab:3000",
-		"http://stealth-app-018f0d5e7c197abc8d1e1234567890ac:8080",
+		"http://st-018f0d5e7c197abc8d1e1234567890ab-111111112222433384445555:3000",
+		"http://st-018f0d5e7c197abc8d1e1234567890ac-222222223333444485556666:8080",
 		"stealth-app-service-018f0d5e7c197abc8d1e1234567890ab",
 	} {
 		if !strings.Contains(contents, want) {
@@ -115,6 +115,9 @@ func TestRenderAppsIsDeterministicAndUsesAppOwnedContainerNames(t *testing.T) {
 	}
 	if strings.Contains(contents, "172.22.") || strings.Contains(contents, "http://198.") {
 		t.Fatalf("App route target contains a reusable container address: %s", contents)
+	}
+	if strings.Contains(contents, "http://stealth-app-018f0d5e7c197abc8d1e1234567890ab:") {
+		t.Fatalf("App route still targets the stable App-only name: %s", contents)
 	}
 }
 
@@ -130,6 +133,22 @@ func TestRenderAppsFailsClosedOnMalformedHostnameAndInvalidIdentity(t *testing.T
 	}
 	if string(contents) != "# Stealth App route snapshot: no eligible Apps\n" {
 		t.Fatalf("untrusted rows produced a route: %s", contents)
+	}
+}
+
+func TestRenderAppsFailsClosedOnMalformedOrDuplicateRouteIdentity(t *testing.T) {
+	sharedIdentity := "11111111-2222-4333-8444-555555555555"
+	routes := []domain.AppPlatformRoute{
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ab", RouteIdentity: "tenant-chosen-target", Hostname: "malformed.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ac", RouteIdentity: sharedIdentity, Hostname: "duplicate-a.apps.example.com", Port: 8080},
+		{AppID: "018f0d5e-7c19-7abc-8d1e-1234567890ad", RouteIdentity: sharedIdentity, Hostname: "duplicate-b.apps.example.com", Port: 8080},
+	}
+	contents, err := RenderApps(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "# Stealth App route snapshot: no eligible Apps\n" {
+		t.Fatalf("malformed or duplicate routing identities produced routes: %s", contents)
 	}
 }
 

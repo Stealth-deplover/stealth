@@ -80,7 +80,8 @@ func validRuntimePurgeFixture() (*runtimePurgeTestRunner, uninstallPlan) {
 	projectID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	deploymentID := uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	containerID := strings.Repeat("a", 64)
-	container := appRuntimePurgeInspect{ID: containerID, Name: "/" + repository.AppRuntimeContainerName(appID), State: struct {
+	routeIdentity := uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	container := appRuntimePurgeInspect{ID: containerID, Name: "/" + repository.AppRuntimeContainerNameForIncarnation(appID, routeIdentity), State: struct {
 		Running bool `json:"Running"`
 	}{Running: true}, HostConfig: appRuntimePurgeHostConfig{NetworkMode: "stealth_app_runtime"}}
 	container.Config.Labels = map[string]string{

@@ -45,14 +45,15 @@ type Persistence interface {
 	IsAppRuntimeJobCurrent(context.Context, repository.AppRuntimeJob) (bool, error)
 	ReleaseAppRuntimeJob(context.Context, repository.AppRuntimeJob) error
 	CompleteAppRuntime(context.Context, repository.AppRuntimeJob, string, *repository.AppRuntimeContainer) error
-	ResetAppHealthBeforeRuntimeRestart(context.Context, repository.AppRuntimeJob) error
+	ResetAppHealthBeforeRuntimeRestart(context.Context, repository.AppRuntimeJob, uuid.UUID) error
+	RotateAppRuntimeIdentityBeforeCreate(context.Context, repository.AppRuntimeJob, uuid.UUID) error
 	FailAppRuntime(context.Context, repository.AppRuntimeJob, string, string, time.Time) error
 	ClaimNextAppHealthCheck(context.Context, string, time.Duration) (repository.AppHealthCheckJob, error)
 	IsAppHealthCheckCurrent(context.Context, repository.AppHealthCheckJob) (bool, error)
 	CompleteAppHealthCheck(context.Context, repository.AppHealthCheckJob, bool) error
 	InvalidateAppHealthIdentity(context.Context, repository.AppHealthCheckJob) error
 	ReleaseAppHealthCheck(context.Context, repository.AppHealthCheckJob) error
-	AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+	AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID, string) (bool, error)
 	QueueAppRuntimeCleanup(context.Context, *uuid.UUID, uuid.UUID, string, string, int) error
 	ClaimNextAppRuntimeCleanup(context.Context, string, time.Duration) (repository.AppRuntimeCleanupJob, error)
 	RenewAppRuntimeCleanupLease(context.Context, repository.AppRuntimeCleanupJob, time.Duration) error
@@ -69,6 +70,7 @@ type Runtime interface {
 	InspectApp(context.Context, uuid.UUID) (Container, bool, error)
 	ProbeApp(context.Context, repository.AppHealthCheckJob, Container) error
 	CreateApp(context.Context, repository.AppRuntimeJob, Image) (Container, error)
+	RenameApp(context.Context, repository.AppRuntimeJob, string, string) (Container, error)
 	StartApp(context.Context, repository.AppRuntimeJob, string) (Container, error)
 	RemoveApp(context.Context, repository.AppRuntimeJob, string) error
 	RemoveCleanupTarget(context.Context, repository.AppRuntimeCleanupJob) error
@@ -316,11 +318,11 @@ func (w *Worker) sweepOrphansIfDue(ctx context.Context) error {
 			w.Logger.Warn("ignored managed App container with invalid ownership labels")
 			continue
 		}
-		exists, err := w.Store.AppRuntimeContainerExists(ctx, projectID, appID)
+		exists, err := w.Store.AppRuntimeContainerExists(ctx, projectID, appID, container.ID)
 		if err != nil {
 			return err
 		}
-		if exists && container.Name == "/"+repository.AppRuntimeContainerName(appID) {
+		if exists {
 			continue
 		}
 		projectCopy := projectID
@@ -452,7 +454,19 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 	if found && !managedForApp(container, appID, projectID) {
 		return ErrRuntimeOwnershipConflict
 	}
-	if found && ContainerMatchesDesired(container, job, image, w.runtimeNetworkName()) {
+	if found && ContainerMatchesDesiredExceptName(container, job, image, w.runtimeNetworkName()) {
+		if strings.TrimPrefix(container.Name, "/") != job.ContainerName {
+			if err := w.requireCurrent(ctx, job); err != nil {
+				return err
+			}
+			container, err = w.Runtime.RenameApp(ctx, job, container.ID, job.ContainerName)
+			if err != nil {
+				return errors.Join(ErrRuntimeOwnershipConflict, err)
+			}
+			if !ContainerMatchesDesired(container, job, image, w.runtimeNetworkName()) {
+				return ErrRuntimeOwnershipConflict
+			}
+		}
 		if container.State.Running {
 			return w.completeRunning(ctx, job, container, imageInfo, runtimeTag)
 		}
@@ -461,11 +475,24 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 		if err := w.requireCurrent(ctx, job); err != nil {
 			return err
 		}
-		if err := w.Store.ResetAppHealthBeforeRuntimeRestart(ctx, job); err != nil {
+		identity, err := repository.NewAppRuntimeRouteIdentity()
+		if err != nil {
 			return err
 		}
+		if err := w.Store.ResetAppHealthBeforeRuntimeRestart(ctx, job, identity); err != nil {
+			return err
+		}
+		job.RouteIdentity = identity
+		job.ContainerName = repository.AppRuntimeContainerNameForIncarnation(appID, identity)
 		// The reset is a durable route fence. Recheck the lease before the
 		// Docker side effect so an expired worker cannot restart after handoff.
+		if err := w.requireCurrent(ctx, job); err != nil {
+			return err
+		}
+		container, err = w.Runtime.RenameApp(ctx, job, container.ID, job.ContainerName)
+		if err != nil {
+			return errors.Join(ErrRuntimeOwnershipConflict, err)
+		}
 		if err := w.requireCurrent(ctx, job); err != nil {
 			return err
 		}
@@ -487,6 +514,15 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 			return err
 		}
 	}
+	identity, err := repository.NewAppRuntimeRouteIdentity()
+	if err != nil {
+		return err
+	}
+	if err := w.Store.RotateAppRuntimeIdentityBeforeCreate(ctx, job, identity); err != nil {
+		return err
+	}
+	job.RouteIdentity = identity
+	job.ContainerName = repository.AppRuntimeContainerNameForIncarnation(appID, identity)
 	if err := w.requireCurrent(ctx, job); err != nil {
 		return err
 	}
@@ -526,7 +562,7 @@ func (w *Worker) completeRunning(ctx context.Context, job repository.AppRuntimeJ
 	}
 	state := &repository.AppRuntimeContainer{
 		ID:          container.ID,
-		Name:        repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID)),
+		Name:        job.ContainerName,
 		ImageID:     imageID,
 		ImageDigest: imageInfo.ManifestDigest,
 		RuntimeTag:  runtimeTag,

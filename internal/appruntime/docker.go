@@ -587,7 +587,29 @@ func (m *Moby) InspectApp(ctx context.Context, appID uuid.UUID) (Container, bool
 	if appID == uuid.Nil {
 		return Container{}, false, ErrContainerInspection
 	}
-	return m.inspectContainer(ctx, repository.AppRuntimeContainerName(appID))
+	result, err := m.runAction(ctx, []string{
+		"container", "ls", "--all", "--quiet", "--no-trunc",
+		"--filter", "label=stealth.managed=true",
+		"--filter", "label=stealth.resource_type=app",
+		"--filter", "label=stealth.app_id=" + appID.String(),
+	}, nil)
+	if err != nil {
+		return Container{}, false, err
+	}
+	if result.StdoutTruncated {
+		return Container{}, false, ErrDockerOutputTooLarge
+	}
+	ids := strings.Fields(string(result.Stdout))
+	if len(ids) > 1 {
+		return Container{}, false, ErrRuntimeOwnershipConflict
+	}
+	if len(ids) == 0 {
+		return Container{}, false, nil
+	}
+	if !validRuntimeID(ids[0]) {
+		return Container{}, false, ErrContainerInspection
+	}
+	return m.inspectContainer(ctx, ids[0])
 }
 
 // ProbeApp probes only the current owned container on the Stealth App bridge.
@@ -644,6 +666,7 @@ func validHealthCheckJobIdentity(job repository.AppHealthCheckJob) bool {
 	workload, workloadErr := workloadspec.Normalize(job.App.Workload)
 	workloadDigest, digestErr := workloadspec.Digest(workload)
 	return appErr == nil && projectErr == nil && deploymentErr == nil && appID != uuid.Nil && projectID != uuid.Nil && deploymentID != uuid.Nil &&
+		job.RouteIdentity != uuid.Nil && job.ContainerName == repository.AppRuntimeContainerNameForIncarnation(appID, job.RouteIdentity) &&
 		job.App.Enabled && job.App.RuntimeStatus == "running" && job.App.ObservedGeneration == job.App.DesiredGeneration &&
 		job.App.DesiredGeneration > 0 && validRuntimeID(job.ContainerID) && job.LeaseToken != uuid.Nil && job.WorkerID != "" &&
 		len(job.App.WorkloadSpecSHA256) == 64 && workloadErr == nil && digestErr == nil && workloadDigest == job.App.WorkloadSpecSHA256 &&
@@ -656,7 +679,8 @@ func containerMatchesHealthIdentity(container Container, job repository.AppHealt
 	}
 	appID, appErr := uuid.Parse(job.App.ID)
 	projectID, projectErr := uuid.Parse(job.App.ProjectID)
-	if appErr != nil || projectErr != nil || !managedForApp(container, appID, projectID) || container.ID != job.ContainerID || !container.State.Running {
+	if appErr != nil || projectErr != nil || !managedForApp(container, appID, projectID) ||
+		container.Name != "/"+job.ContainerName || container.ID != job.ContainerID || !container.State.Running {
 		return false
 	}
 	deploymentID, err := uuid.Parse(*job.App.DesiredDeploymentID)
@@ -731,6 +755,42 @@ func (m *Moby) CreateApp(ctx context.Context, job repository.AppRuntimeJob, imag
 	return container, nil
 }
 
+// RenameApp rotates the container's Docker DNS identity before a restarted
+// process starts. Docker updates the endpoint's DNS names with the rename, so
+// an old Traefik snapshot cannot resolve its old target to the new process.
+func (m *Moby) RenameApp(ctx context.Context, job repository.AppRuntimeJob, containerID, targetName string) (Container, error) {
+	appID, appErr := uuid.Parse(job.App.ID)
+	projectID, projectErr := uuid.Parse(job.App.ProjectID)
+	if appErr != nil || projectErr != nil || appID == uuid.Nil || projectID == uuid.Nil ||
+		!validRuntimeID(containerID) || targetName != job.ContainerName ||
+		targetName != repository.AppRuntimeContainerNameForIncarnation(appID, job.RouteIdentity) {
+		return Container{}, ErrRuntimeOwnershipConflict
+	}
+	container, found, err := m.inspectContainer(ctx, containerID)
+	if err != nil || !found {
+		if err != nil {
+			return Container{}, err
+		}
+		return Container{}, ErrRuntimeOwnershipConflict
+	}
+	if container.ID != containerID || !managedForApp(container, appID, projectID) || !repository.ValidAppRuntimeContainerName(appID, targetName) {
+		return Container{}, ErrRuntimeOwnershipConflict
+	}
+	if strings.TrimPrefix(container.Name, "/") != targetName {
+		if _, err := m.runAction(ctx, []string{"container", "rename", container.ID, targetName}, nil); err != nil {
+			return Container{}, errors.Join(ErrRuntimeOwnershipConflict, err)
+		}
+	}
+	renamed, found, err := m.inspectContainer(ctx, containerID)
+	if err != nil || !found || renamed.ID != containerID || renamed.Name != "/"+targetName || !managedForApp(renamed, appID, projectID) {
+		if err != nil {
+			return Container{}, err
+		}
+		return Container{}, ErrRuntimeOwnershipConflict
+	}
+	return renamed, nil
+}
+
 func (m *Moby) StartApp(ctx context.Context, job repository.AppRuntimeJob, containerID string) (Container, error) {
 	if !validRuntimeID(containerID) {
 		return Container{}, ErrContainerStart
@@ -784,7 +844,8 @@ func (m *Moby) RemoveCleanupTarget(ctx context.Context, job repository.AppRuntim
 		return ErrRuntimeOwnershipConflict
 	}
 	storedName := strings.TrimPrefix(job.ContainerName, "/")
-	if container.Name != "/"+storedName {
+	actualName := strings.TrimPrefix(container.Name, "/")
+	if actualName != storedName && (!repository.ValidAppRuntimeContainerName(job.AppID, actualName) || !repository.ValidAppRuntimeContainerName(job.AppID, storedName)) {
 		return ErrRuntimeOwnershipConflict
 	}
 	if job.ContainerID == nil && !validRuntimeNameForApp(job.AppID, storedName) {
@@ -920,6 +981,9 @@ func ContainerCreateArgs(job repository.AppRuntimeJob, imageRef, networkName str
 	if err != nil || projectID == uuid.Nil || job.App.DesiredDeploymentID == nil || job.App.WorkloadSpecSHA256 == "" || !validDockerName(networkName) || !validImageTag(imageRef) {
 		return nil, ErrContainerCreate
 	}
+	if job.RouteIdentity == uuid.Nil || job.ContainerName != repository.AppRuntimeContainerNameForIncarnation(appID, job.RouteIdentity) {
+		return nil, ErrContainerCreate
+	}
 	if profile.Runtime != "" && !validDockerName(profile.Runtime) {
 		return nil, ErrContainerCreate
 	}
@@ -937,7 +1001,7 @@ func ContainerCreateArgs(job repository.AppRuntimeJob, imageRef, networkName str
 		"stealth.workload_spec_sha256": job.App.WorkloadSpecSHA256,
 		"stealth.runtime_schema":       runtimeSchema,
 	}
-	args := []string{"container", "create", "--name", repository.AppRuntimeContainerName(appID), "--network", networkName}
+	args := []string{"container", "create", "--name", job.ContainerName, "--network", networkName}
 	for _, key := range []string{"stealth.managed", "stealth.resource_type", "stealth.app_id", "stealth.project_id", "stealth.deployment_id", "stealth.generation", "stealth.workload_spec_sha256", "stealth.runtime_schema"} {
 		args = append(args, "--label", key+"="+labels[key])
 	}
@@ -994,6 +1058,10 @@ func ContainerLabels(job repository.AppRuntimeJob) (map[string]string, error) {
 }
 
 func ContainerMatchesDesired(container Container, job repository.AppRuntimeJob, image Image, networkName string) bool {
+	return strings.TrimPrefix(container.Name, "/") == job.ContainerName && ContainerMatchesDesiredExceptName(container, job, image, networkName)
+}
+
+func ContainerMatchesDesiredExceptName(container Container, job repository.AppRuntimeJob, image Image, networkName string) bool {
 	labels, err := ContainerLabels(job)
 	if err != nil || !managedForApp(container, uuid.MustParse(job.App.ID), uuid.MustParse(job.App.ProjectID)) || !hasLabels(container.Config.Labels, labels) {
 		return false
@@ -1037,11 +1105,11 @@ func managedForApp(container Container, appID, projectID uuid.UUID) bool {
 	if !managedAppContainer(container) || container.Config.Labels["stealth.app_id"] != appID.String() || container.Config.Labels["stealth.project_id"] != projectID.String() {
 		return false
 	}
-	return container.Name == "/"+repository.AppRuntimeContainerName(appID)
+	return repository.ValidAppRuntimeContainerName(appID, strings.TrimPrefix(container.Name, "/"))
 }
 
 func validRuntimeNameForApp(appID uuid.UUID, name string) bool {
-	return name == repository.AppRuntimeContainerName(appID)
+	return repository.ValidAppRuntimeContainerName(appID, name)
 }
 
 func validManagedAppContainerIdentity(container Container) (uuid.UUID, uuid.UUID, bool) {

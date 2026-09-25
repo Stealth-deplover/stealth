@@ -330,15 +330,26 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 	if len(ordered) == 0 {
 		return []byte("# Stealth App route snapshot: no eligible Apps\n"), nil
 	}
+	identityCounts := make(map[string]int, len(ordered))
+	for _, route := range ordered {
+		if identity, err := uuid.Parse(route.RouteIdentity); err == nil && identity != uuid.Nil && identity.String() == route.RouteIdentity {
+			identityCounts[route.RouteIdentity]++
+		}
+	}
 	config := dynamicConfig{HTTP: dynamicHTTP{
 		Routers:  make(map[string]dynamicRouter, len(ordered)),
 		Services: make(map[string]dynamicService, len(ordered)),
 	}}
 	seenHosts := make(map[string]struct{}, len(ordered))
 	seenApps := make(map[string]struct{}, len(ordered))
+	expectedTargets := make(map[string]string, len(ordered))
 	for _, route := range ordered {
 		id, err := uuid.Parse(route.AppID)
 		if err != nil || id == uuid.Nil || route.Port < 1 || route.Port > 65535 {
+			continue
+		}
+		backendHost, validIdentity := repository.AppRuntimeContainerNameForRouteIdentity(id, route.RouteIdentity)
+		if !validIdentity || identityCounts[route.RouteIdentity] != 1 {
 			continue
 		}
 		hostname, err := domainname.NormalizeHostname(route.Hostname)
@@ -356,7 +367,8 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 		}
 		seenHosts[hostname] = struct{}{}
 		seenApps[routerID] = struct{}{}
-		backend := "http://" + net.JoinHostPort(repository.AppRuntimeContainerName(id), fmt.Sprint(route.Port))
+		backend := "http://" + net.JoinHostPort(backendHost, fmt.Sprint(route.Port))
+		expectedTargets[routerID] = backendHost
 		config.HTTP.Routers[routerID] = dynamicRouter{
 			EntryPoints: []string{"web"}, Rule: "Host(`" + hostname + "`)",
 			Priority: 100, Service: serviceID,
@@ -372,13 +384,13 @@ func RenderApps(routes []domain.AppPlatformRoute) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateAppRendered(contents, len(config.HTTP.Routers), len(config.HTTP.Services)); err != nil {
+	if err := validateAppRendered(contents, len(config.HTTP.Routers), len(config.HTTP.Services), expectedTargets); err != nil {
 		return nil, err
 	}
 	return contents, nil
 }
 
-func validateAppRendered(contents []byte, routerCount, serviceCount int) error {
+func validateAppRendered(contents []byte, routerCount, serviceCount int, expectedTargets map[string]string) error {
 	var parsed dynamicConfig
 	if err := yaml.Unmarshal(contents, &parsed); err != nil {
 		return fmt.Errorf("generated App Traefik YAML is invalid: %w", err)
@@ -394,8 +406,9 @@ func validateAppRendered(contents []byte, routerCount, serviceCount int) error {
 			!strings.HasPrefix(router.Rule, "Host(`") || !strings.HasSuffix(router.Rule, "`)") {
 			return fmt.Errorf("generated App router %q is invalid", routerID)
 		}
+		expectedHost := expectedTargets[routerID]
 		service, ok := parsed.HTTP.Services[router.Service]
-		if !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 || !validAppBackendURL(service.LoadBalancer.Servers[0].URL, repository.AppRuntimeContainerName(appID)) {
+		if expectedHost == "" || !ok || !service.LoadBalancer.PassHostHeader || len(service.LoadBalancer.Servers) != 1 || !validAppBackendURL(service.LoadBalancer.Servers[0].URL, expectedHost) {
 			return fmt.Errorf("generated App backend for %q is invalid", routerID)
 		}
 	}

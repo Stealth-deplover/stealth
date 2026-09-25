@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,15 +76,30 @@ func TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration(t *testing
 	if _, err := conn.Exec(ctx, string(upSQL)); err != nil {
 		t.Fatal(err)
 	}
+	incarnationSQL, err := files.ReadFile("migrations/000061_app_route_incarnations.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, string(incarnationSQL)); err != nil {
+		t.Fatal(err)
+	}
 	var healthStatus string
 	var healthGeneration *int64
 	var healthDeploymentID, healthContainerID, address *string
+	var routeIdentity, healthRouteIdentity *string
+	var containerName string
 	if err := conn.QueryRow(ctx, `
-		SELECT health_status,health_generation,health_deployment_id::text,health_container_id,container_address::text
-		FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&healthStatus, &healthGeneration, &healthDeploymentID, &healthContainerID, &address); err != nil {
+		SELECT health_status,health_generation,health_deployment_id::text,health_container_id,container_address::text,
+		       route_identity::text,health_route_identity::text,container_name
+		FROM app_runtime_state WHERE app_id=$1`, appID).Scan(&healthStatus, &healthGeneration, &healthDeploymentID, &healthContainerID, &address,
+		&routeIdentity, &healthRouteIdentity, &containerName); err != nil {
 		t.Fatal(err)
 	}
-	if healthStatus != "pending" || healthGeneration != nil || healthDeploymentID != nil || healthContainerID != nil || address != nil {
-		t.Fatalf("existing runtime was implicitly marked routable: status=%q generation=%v deployment=%v container=%v address=%v", healthStatus, healthGeneration, healthDeploymentID, healthContainerID, address)
+	wantName := ""
+	if routeIdentity != nil {
+		wantName = "st-" + strings.ReplaceAll(appID.String(), "-", "") + "-" + strings.ReplaceAll(*routeIdentity, "-", "")[:24]
+	}
+	if healthStatus != "pending" || healthGeneration != nil || healthDeploymentID != nil || healthContainerID != nil || address != nil || routeIdentity == nil || *routeIdentity == uuid.Nil.String() || healthRouteIdentity != nil || containerName != wantName {
+		t.Fatalf("existing runtime migration state is not safely pending: status=%q generation=%v deployment=%v container=%v address=%v route_identity=%v health_route_identity=%v name=%q want_name=%q", healthStatus, healthGeneration, healthDeploymentID, healthContainerID, address, routeIdentity, healthRouteIdentity, containerName, wantName)
 	}
 }

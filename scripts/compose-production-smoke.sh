@@ -27,6 +27,8 @@ register_response="$(mktemp "${TMPDIR:-/tmp}/stealth-compose-smoke-registration.
 auth_cookie_header=""
 api_url=""
 filelog_smoke_pid=""
+platform_route_lock_active="false"
+platform_route_lock_name=""
 platform_archive=""
 app_archive=""
 app_archive_v2=""
@@ -136,6 +138,9 @@ restore_traefik_state_after_smoke() {
 
 cleanup() {
 	local exit_code=$? worker_container
+	if [ "$platform_route_lock_active" = "true" ]; then
+		release_platform_route_reconcile_lock || true
+	fi
 	if [ -n "$forwarded_echo_container_id" ]; then
 		docker rm -f "$forwarded_echo_container_id" >/dev/null 2>&1 || true
 		forwarded_echo_container_id=""
@@ -1520,22 +1525,23 @@ wait_for_app_route_snapshot() {
 }
 
 assert_app_route_uses_container_dns_name() {
-	local expected="url: http://$(app_runtime_name):8080" snapshot="$generated_state_dir/platform-apps.yaml"
-	if ! grep -Fq -- "$expected" "$snapshot"; then
-		printf 'App route snapshot does not target the App-owned container DNS name: expected=%s\n' "$expected" >&2
+	local expected_name="${1:-$(app_runtime_name)}" actual_name snapshot="$generated_state_dir/platform-apps.yaml"
+	actual_name="$(app_route_snapshot_target)"
+	if [ "$actual_name" != "$expected_name" ]; then
+		printf 'App route snapshot target does not match the current incarnation: expected=%s actual=%s\n' "$expected_name" "$actual_name" >&2
 		return 1
 	fi
-	if grep -Eq 'url: http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' "$snapshot"; then
-		printf '%s\n' 'App route snapshot contains an IP target that can be reused by another container' >&2
+	if grep -Eq 'url: http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:' "$snapshot" || grep -Fq -- "url: http://stealth-app-${platform_app_id//-/}:" "$snapshot"; then
+		printf '%s\n' 'App route snapshot contains a reusable IP or stable App-only target' >&2
 		return 1
 	fi
 }
 
 print_app_runtime_diagnostics() {
-	local app_id="$1" container_name
-	container_name="$(printf 'stealth-app-%s' "${app_id//-/}")"
-	if ! docker inspect "$container_name" >"$platform_response" 2>/dev/null; then
-		printf 'App runtime diagnostic: container %s is absent\n' "$container_name" >&2
+	local app_id="$1" container_id
+	container_id="$(docker ps -aq --filter "label=stealth.app_id=${app_id}" --filter 'label=stealth.resource_type=app' | head -n 1)"
+	if [ -z "$container_id" ] || ! docker inspect "$container_id" >"$platform_response" 2>/dev/null; then
+		printf 'App runtime diagnostic: container for App %s is absent\n' "$app_id" >&2
 		return 0
 	fi
 	python3 - "$platform_response" <<'PY' >&2
@@ -1640,7 +1646,9 @@ app_runtime_network_name() {
 }
 
 app_runtime_name() {
-	printf 'stealth-app-%s' "${platform_app_id//-/}"
+	local container_id
+	container_id="$(app_runtime_container_id)"
+	docker inspect --format '{{.Name}}' "$container_id" | sed 's#^/##'
 }
 
 app_runtime_container_id() {
@@ -1652,6 +1660,88 @@ app_runtime_container_id() {
 		return 1
 	fi
 	printf '%s' "$containers"
+}
+
+app_runtime_container_count() {
+	local app_id="${1:-$platform_app_id}" containers
+	containers="$(docker ps -aq --filter "label=stealth.app_id=${app_id}" --filter 'label=stealth.resource_type=app')"
+	printf '%s\n' "$containers" | sed '/^$/d' | wc -l | tr -d ' '
+}
+
+app_route_snapshot_target() {
+	local snapshot="$generated_state_dir/platform-apps.yaml" service_id targets count
+	if [ ! -f "$snapshot" ]; then
+		printf '%s\n' 'App route snapshot is missing' >&2
+		return 1
+	fi
+	service_id="stealth-app-service-${platform_app_id//-/}"
+	targets="$(awk -v key="  ${service_id}:" '$0 == key { inside=1; next } inside && /^  [[:alnum:]_-]+:$/ { exit } inside && /url: http:\/\/[a-z0-9-]+:8080/ { print }' "$snapshot" | sed -E 's#.*url: http://##; s#:8080.*$##' | sort -u || true)"
+	count="$(printf '%s\n' "$targets" | sed '/^$/d' | wc -l | tr -d ' ')"
+	if [ "$count" != '1' ]; then
+		printf 'expected one App DNS target in the generated snapshot, got %s: %s\n' "$count" "$targets" >&2
+		return 1
+	fi
+	printf '%s' "$targets"
+}
+
+wait_for_app_route_target() {
+	local expected="$1" actual snapshot="$generated_state_dir/platform-apps.yaml"
+	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
+		if [ -f "$snapshot" ] && grep -Fq -- "$platform_app_host" "$snapshot"; then
+			actual="$(app_route_snapshot_target 2>/dev/null || true)"
+			if [ "$actual" = "$expected" ]; then return 0; fi
+		fi
+		if [ "$attempt" = "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}" ]; then
+			printf 'App snapshot did not publish incarnation target %s for %s\n' "$expected" "$platform_app_host" >&2
+			return 1
+		fi
+		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
+	done
+	return 1
+}
+
+start_platform_route_reconcile_lock() {
+	if [ "$platform_route_lock_active" = "true" ]; then
+		printf '%s\n' 'App route reconcile smoke lock is already active' >&2
+		return 1
+	fi
+	platform_route_lock_name="stealth-app-route-lock-${platform_app_id}"
+	"${compose[@]}" exec -T -d postgres sh -ec '
+		name="$1"
+		case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+		PGAPPNAME="$name" psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 \
+			--command "SELECT pg_advisory_lock(8105202602)" --command "SELECT pg_sleep(300)" >/dev/null
+	' sh "$platform_route_lock_name" >/dev/null
+	platform_route_lock_active="true"
+	for attempt in $(seq 1 40); do
+		local locked_query
+		locked_query="$("${compose[@]}" exec -T postgres sh -ec '
+			name="$1"
+			case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+			psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align \
+				--command "SELECT count(*) FROM pg_stat_activity WHERE application_name = '\''$name'\'' AND query LIKE '\''SELECT pg_sleep(300)%'\''"
+		' sh "$platform_route_lock_name" | tr -d '\r\n')"
+		if [ "$locked_query" = '1' ]; then
+			return 0
+		fi
+		sleep 0.25
+	done
+	printf '%s\n' 'App route reconcile smoke lock did not become active' >&2
+	release_platform_route_reconcile_lock || true
+	return 1
+}
+
+release_platform_route_reconcile_lock() {
+	if [ "$platform_route_lock_active" != "true" ] || [ -z "$platform_route_lock_name" ]; then
+		return 0
+	fi
+	"${compose[@]}" exec -T postgres sh -ec '
+		name="$1"
+		case "$name" in *[!A-Za-z0-9_-]*|"") exit 2;; esac
+		psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 \
+			--command "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = '\''$name'\'' AND pid <> pg_backend_pid()" >/dev/null
+	' sh "$platform_route_lock_name" >/dev/null 2>&1 || true
+	platform_route_lock_active="false"
 }
 
 wait_for_app_runtime_container_replacement() {
@@ -1708,8 +1798,9 @@ assert_app_runtime_container() {
 		app_runtime_inspect_json="$(mktemp "${TMPDIR:-/tmp}/stealth-app-runtime-inspect.XXXXXX.json")"
 	fi
 	docker inspect "$container_id" >"$app_runtime_inspect_json"
-	python3 - "$app_runtime_inspect_json" "$platform_app_id" "$platform_project_id" "$generation" "$deployment_id" "$spec_sha256" "$cpu_millis" "$network_name" <<'PY'
+python3 - "$app_runtime_inspect_json" "$platform_app_id" "$platform_project_id" "$generation" "$deployment_id" "$spec_sha256" "$cpu_millis" "$network_name" <<'PY'
 import json
+import re
 import sys
 
 path, app_id, project_id, generation, deployment_id, spec_sha256, cpu_millis, network_name = sys.argv[1:]
@@ -1727,8 +1818,8 @@ forbidden_env = {"DATABASE_URL", "REDIS_URL", "FUNCTIONS_SECRET_KEY", "CLOUDFLAR
 env_names = {entry.split("=", 1)[0] for entry in container.get("Config", {}).get("Env", [])}
 expected_image = f"stealth-app/{deployment_id}:runtime"
 errors = []
-if container.get("Name") != "/stealth-app-" + app_id.replace("-", ""):
-    errors.append("deterministic name")
+if not re.fullmatch(r"/st-" + app_id.replace("-", "") + r"-[0-9a-f]{24}", container.get("Name") or ""):
+    errors.append("incarnation-specific DNS name")
 for key, value in {
     "stealth.managed": "true",
     "stealth.resource_type": "app",
@@ -2179,6 +2270,7 @@ wait_for_app_deployment_ready() {
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
 	local disabled_generation conflict_observed foreign_managed_label runtime_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local old_route_target new_route_target body
 	local orphan_app orphan_project orphan_name
 
 	fetch_app_runtime
@@ -2193,8 +2285,8 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_health_state pending not_available
 	wait_for_app_public_route_removed
 	disabled_generation="$(platform_json_field "$platform_response" app.desired_generation)"
-	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
-		printf '%s\n' 'disabled App still has its deterministic runtime container' >&2
+	if [ "$(app_runtime_container_count)" != '0' ]; then
+		printf '%s\n' 'disabled App still has a managed runtime container' >&2
 		return 1
 	fi
 	printf 'App disable converged at generation %s with no container\n' "$disabled_generation"
@@ -2338,6 +2430,7 @@ verify_app_runtime_lifecycle() {
 	printf 'worker restart recovered exactly one App container (id=%s)\n' "$new_container"
 
 	old_container="$new_container"
+	old_route_target="$(app_route_snapshot_target)"
 	docker rm -f "$old_container" >/dev/null
 	new_container="$(wait_for_running_app_runtime_container)"
 	if [ "$new_container" = "$old_container" ]; then
@@ -2347,24 +2440,62 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_health_state healthy active
+	new_route_target="$(app_runtime_name)"
+	if [ "$new_route_target" = "$old_route_target" ]; then
+		printf 'container recreation reused route identity %s\n' "$old_route_target" >&2
+		return 1
+	fi
+	wait_for_app_route_target "$new_route_target"
+	assert_app_route_uses_container_dns_name "$new_route_target"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
-	printf 'deleted App container was recreated (id=%s)\n' "$new_container"
+	printf 'deleted App container was recreated with target %s -> %s (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	old_container="$new_container"
+	old_route_target="$(app_route_snapshot_target)"
+	if [ "$old_route_target" != "$(app_runtime_name)" ]; then
+		printf 'active App snapshot target %s does not match its current runtime target %s\n' "$old_route_target" "$(app_runtime_name)" >&2
+		return 1
+	fi
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	start_platform_route_reconcile_lock
 	docker stop --time 1 "$old_container" >/dev/null
 	wait_for_app_health_state pending waiting_for_health
 	new_container="$(wait_for_running_app_runtime_container)"
 	if [ "$new_container" != "$old_container" ]; then
-		printf 'stopped App process restarted with a new container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
+		printf 'same-container process restart changed container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
 		return 1
 	fi
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
-	wait_for_app_route_snapshot false
-	wait_for_app_public_route_removed
+	new_route_target="$(app_runtime_name)"
+	if [ "$new_route_target" = "$old_route_target" ]; then
+		printf 'same-container process restart reused route identity %s\n' "$old_route_target" >&2
+		return 1
+	fi
+	if [ "$(app_route_snapshot_target)" != "$old_route_target" ]; then
+		printf 'route snapshot changed while its reconcile lock was held: expected old target %s, got %s\n' "$old_route_target" "$(app_route_snapshot_target)" >&2
+		return 1
+	fi
+	for attempt in $(seq 1 8); do
+		status="$(traefik_http_status /healthz "$platform_app_host")"
+		body="$("${compose[@]}" exec -T api sh -ec \
+			'wget -qO- --timeout=4 --header "Host: $1" http://traefik:8080/healthz || true' sh "$platform_app_host")"
+		if [[ "$status" =~ ^2[0-9][0-9]$ ]] || [ "$body" = 'app-runtime-smoke-ok' ]; then
+			printf 'stale route target %s returned a successful response while health was pending (status=%s)\n' "$old_route_target" "$status" >&2
+			return 1
+		fi
+		if [ "$(app_route_snapshot_target)" != "$old_route_target" ]; then
+			printf '%s\n' 'route snapshot reconciled during the stale-target data-plane probe' >&2
+			return 1
+		fi
+		sleep 1
+	done
+	release_platform_route_reconcile_lock
 	wait_for_app_health_state healthy active
+	wait_for_app_route_target "$new_route_target"
+	assert_app_route_uses_container_dns_name "$new_route_target"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
-	printf 'same-container App process restart withheld the route until fresh health converged (id=%s)\n' "$new_container"
+	printf 'same-container restart kept stale target %s unusable while pending, then published %s after health (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
@@ -2406,17 +2537,17 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	printf 'deleted App runtime bridge was recreated with owned labels\n'
+	runtime_name="$(app_runtime_name)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
 	if [ "$status" != '200' ]; then
 		printf 'disabling App before foreign-name conflict test returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
 	wait_for_app_runtime stopped
-	if docker inspect "$(app_runtime_name)" >/dev/null 2>&1; then
+	if [ "$(app_runtime_container_count)" != '0' ]; then
 		printf '%s\n' 'App container remained before foreign-name conflict fixture' >&2
 		return 1
 	fi
-	runtime_name="$(app_runtime_name)"
 	worker="$("${compose[@]}" ps -q worker)"
 	worker_image="$(docker inspect --format '{{.Config.Image}}' "$worker")"
 	app_runtime_foreign_container="$(docker create --name "$runtime_name" "$worker_image")"

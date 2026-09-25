@@ -155,16 +155,17 @@ state tied to that exact generation, deployment, and container. Runtime
 configured health probe must converge first.
 
 The worker inspects the managed container on the owned App bridge and validates
-its private address before the App can be routed. The route target uses the
-deterministic Docker container name derived from the trusted App UUID plus the
-validated `WorkloadSpec.port`; the inspected address remains a health/runtime
-identity check, not a Traefik target. User-defined Docker bridge DNS resolves
-the managed container by name, so reuse of an old App IP by another App cannot
-silently retarget a stale route to that other App. Tenant input never supplies
-a URL, address, router rule, or YAML fragment. Hostnames are canonicalized
-before typed Traefik configuration is rendered. HTTP health probes use the
-current inspected App address and configured port, accept 2xx responses, do
-not follow redirects, and carry no tenant or platform credentials.
+its private address before the App can be routed. App identity is distinct from
+runtime routing incarnation identity. Each incarnation has a persisted,
+worker-generated UUID and a DNS-safe Docker container name derived from that
+UUID and the trusted App UUID. The route target uses this incarnation-specific
+name plus the validated `WorkloadSpec.port`; the inspected address remains a
+health/runtime identity check, not a Traefik target. Tenant input never
+supplies a URL, address, router rule, network alias, or YAML fragment.
+Hostnames are canonicalized before typed Traefik configuration is rendered.
+HTTP health probes use the current inspected App address and configured port,
+accept 2xx responses, do not follow redirects, and carry no tenant or platform
+credentials.
 
 Apps have no published host ports and attach only to `stealth_app_runtime`.
 The trusted worker and hardened Traefik join that separately owned bridge
@@ -183,25 +184,28 @@ network is not per-App isolation or a sandbox boundary. Route reconciliation
 uses an authoritative PostgreSQL snapshot and a distributed lock. Site and App
 files are rendered and atomically published independently, so an App snapshot
 failure preserves its last-known-good App file without blocking Site routing.
-An unhealthy App leaves the next App snapshot; before an exited managed
-container is restarted, its prior health result and address are cleared even
-when Docker keeps the same container ID. The configured initial delay and a
-fresh probe must pass before PostgreSQL makes it eligible again. A recreated or
-drifted container also has its address and health identity cleared before it
-can become eligible. File-provider reload is asynchronous, so an
-already-published router may remain in Traefik until the next complete snapshot
-reloads; the production smoke verifies withdrawal before the configured initial
-delay ends. A stale snapshot targets the App's Docker name and cannot follow a
-reused IP into a different App. This design does not claim zero-downtime
-deployment or HA.
+An unhealthy App leaves the next App snapshot. Before an exited managed
+container is restarted, the worker clears its prior health result and address,
+rotates its persisted routing identity, and renames the stopped container before
+starting the process again. The old name therefore cannot resolve to the new
+process even if an old Traefik file remains loaded for the full reconcile
+interval. The configured initial delay and a fresh probe must pass before the
+new name is eligible for publication. Container replacement and generation
+changes also retire the previous name before creating a new process. Startup
+recovery validates and renames an existing managed container to its persisted
+incarnation name; if identity validation fails, routing stays closed. The
+production smoke holds the reconcile lock while repeatedly requesting through
+Traefik and confirms the stale target fails before fresh health converges. This
+design does not claim zero-downtime deployment or HA.
 
 The production Compose smoke checks the real topology, including an App that
 reaches running, pending then healthy, serves through Traefik, loses its route
 after the configured failure threshold, recovers, and returns after worker
-restart. It stops the App process and verifies pending health, route withdrawal,
-same-container restart, and fresh health before the public route returns. It
-also checks no host App port is published and that the App hostname never
-enters the Site snapshot.
+restart. For a same-container process restart it records the loaded target,
+holds the PostgreSQL reconcile lock so that target remains in Traefik, observes
+pending health, verifies repeated public requests fail, then confirms a
+different target is published only after fresh health. It also checks no host
+App port is published and that the App hostname never enters the Site snapshot.
 
 ## Core routing parity
 

@@ -205,13 +205,33 @@ func (a *App) inspectAppRuntimeContainer(ctx context.Context, id, runtimeNetwork
 	if !validDockerContainerID(item.ID) || item.ID != id || appErr != nil || projectErr != nil || deploymentErr != nil ||
 		appID == uuid.Nil || projectID == uuid.Nil || deploymentID == uuid.Nil || generation < 1 || generationErr != nil ||
 		labels["stealth.managed"] != "true" || labels["stealth.resource_type"] != "app" || labels["stealth.runtime_schema"] != appRuntimeSchema ||
-		!validRuntimeSpecDigest(labels["stealth.workload_spec_sha256"]) || item.Name != "/stealth-app-"+strings.ReplaceAll(appID.String(), "-", "") {
+		!validRuntimeSpecDigest(labels["stealth.workload_spec_sha256"]) || !validAppRuntimePurgeContainerName(appID, strings.TrimPrefix(item.Name, "/")) {
 		return appRuntimePurgeContainer{}, fmt.Errorf("App container %q does not have a complete, deterministic Stealth ownership identity; refusing purge", id)
 	}
 	if !validDockerResourceName(item.Name[1:]) || item.HostConfig.NetworkMode != runtimeNetwork {
 		return appRuntimePurgeContainer{}, fmt.Errorf("App container %q has an unsafe name or network mode; refusing purge", id)
 	}
 	return appRuntimePurgeContainer{ID: item.ID, Name: item.Name[1:], Running: item.State.Running, NetworkMode: item.HostConfig.NetworkMode}, nil
+}
+
+func validAppRuntimePurgeContainerName(appID uuid.UUID, name string) bool {
+	if appID == uuid.Nil || name != strings.TrimSpace(name) || strings.ContainsRune(name, '/') {
+		return false
+	}
+	app := strings.ReplaceAll(appID.String(), "-", "")
+	if name == "stealth-app-"+app {
+		return true
+	}
+	prefix := "st-" + app + "-"
+	if len(name) != len(prefix)+24 || !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	for _, character := range name[len(prefix):] {
+		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) inspectAppRuntimeNetwork(ctx context.Context, name string) (appRuntimePurgeNetwork, bool, error) {

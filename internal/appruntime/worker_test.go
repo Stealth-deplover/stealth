@@ -42,6 +42,9 @@ type runtimeTestStore struct {
 	observedGeneration  int64
 	cleanupCompleteCall int
 	resetCalls          int
+	resetIdentity       uuid.UUID
+	createIdentity      uuid.UUID
+	runtimeContainerID  string
 }
 
 func (s *runtimeTestStore) ScheduleAppRuntimeStartupSweep(context.Context) error { return nil }
@@ -71,8 +74,13 @@ func (s *runtimeTestStore) CompleteAppRuntime(_ context.Context, job repository.
 	s.observedGeneration = job.App.DesiredGeneration
 	return nil
 }
-func (s *runtimeTestStore) ResetAppHealthBeforeRuntimeRestart(context.Context, repository.AppRuntimeJob) error {
+func (s *runtimeTestStore) ResetAppHealthBeforeRuntimeRestart(_ context.Context, _ repository.AppRuntimeJob, identity uuid.UUID) error {
 	s.resetCalls++
+	s.resetIdentity = identity
+	return nil
+}
+func (s *runtimeTestStore) RotateAppRuntimeIdentityBeforeCreate(_ context.Context, _ repository.AppRuntimeJob, identity uuid.UUID) error {
+	s.createIdentity = identity
 	return nil
 }
 func (s *runtimeTestStore) FailAppRuntime(_ context.Context, _ repository.AppRuntimeJob, status, message string, _ time.Time) error {
@@ -97,8 +105,8 @@ func (s *runtimeTestStore) ReleaseAppHealthCheck(context.Context, repository.App
 	s.released++
 	return nil
 }
-func (s *runtimeTestStore) AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return true, nil
+func (s *runtimeTestStore) AppRuntimeContainerExists(_ context.Context, _ uuid.UUID, _ uuid.UUID, containerID string) (bool, error) {
+	return containerID != "" && containerID == s.runtimeContainerID, nil
 }
 
 func (s *runtimeTestStore) QueueAppRuntimeCleanup(_ context.Context, projectID *uuid.UUID, appID uuid.UUID, containerID, containerName string, _ int) error {
@@ -139,12 +147,16 @@ type runtimeTestDriver struct {
 	startCalls        int
 	startResetCalls   int
 	startedContainer  string
+	renameCalls       int
+	renamedFrom       string
+	renamedTo         string
 	removeCalls       int
 	removeTargets     []string
 	networkCalls      int
 	createJob         repository.AppRuntimeJob
 	loadedBytes       []byte
 	onCreate          func()
+	onRename          func()
 	nextContainerID   string
 	listedContainers  []Container
 	removeCleanupCall int
@@ -192,6 +204,19 @@ func (r *runtimeTestDriver) CreateApp(_ context.Context, job repository.AppRunti
 	r.found = true
 	if r.onCreate != nil {
 		r.onCreate()
+	}
+	return r.container, nil
+}
+func (r *runtimeTestDriver) RenameApp(_ context.Context, job repository.AppRuntimeJob, containerID, targetName string) (Container, error) {
+	r.renameCalls++
+	r.renamedFrom = strings.TrimPrefix(r.container.Name, "/")
+	r.renamedTo = targetName
+	if !r.found || r.container.ID != containerID {
+		return Container{}, ErrRuntimeOwnershipConflict
+	}
+	r.container.Name = "/" + targetName
+	if r.onRename != nil {
+		r.onRename()
 	}
 	return r.container, nil
 }
@@ -251,6 +276,9 @@ func TestWorkerImportsVerifiedImageAndAppliesCurrentWorkload(t *testing.T) {
 	}
 	if driver.ensureImageCalls != 1 || !bytes.Equal(driver.loadedBytes, archive) || driver.createCalls != 1 || driver.startCalls != 1 {
 		t.Fatalf("image import/create/start calls = %d/%d/%d; archive match=%v", driver.ensureImageCalls, driver.createCalls, driver.startCalls, bytes.Equal(driver.loadedBytes, archive))
+	}
+	if store.createIdentity == uuid.Nil || driver.createJob.RouteIdentity != store.createIdentity || driver.createJob.ContainerName == job.ContainerName {
+		t.Fatalf("new container did not receive a distinct persisted routing incarnation: prior=%s create=%+v identity=%s", job.ContainerName, driver.createJob, store.createIdentity)
 	}
 	if got := driver.createJob.App.Workload.Resources.CPUMillis; got != 750 {
 		t.Fatalf("runtime used workload snapshot CPU %d, want mutable App CPU 750", got)
@@ -365,6 +393,9 @@ func TestWorkerReusesExactContainerAndReplacesGenerationDrift(t *testing.T) {
 		if store.completeCalls != 1 || store.completeStatus != "running" || driver.removeCalls != 1 || driver.createCalls != 1 || driver.startCalls != 1 {
 			t.Fatalf("stale runtime was not replaced: completed=%d status=%s remove/create/start=%d/%d/%d", store.completeCalls, store.completeStatus, driver.removeCalls, driver.createCalls, driver.startCalls)
 		}
+		if store.createIdentity == uuid.Nil || driver.createJob.RouteIdentity != store.createIdentity || driver.createJob.ContainerName == staleJob.ContainerName {
+			t.Fatalf("generation replacement reused the old routing identity: old=%s create=%+v identity=%s", staleJob.ContainerName, driver.createJob, store.createIdentity)
+		}
 	})
 }
 
@@ -383,8 +414,25 @@ func TestWorkerResetsHealthBeforeRestartingSameContainer(t *testing.T) {
 	if driver.startedContainer != containerID || driver.container.ID != containerID {
 		t.Fatalf("restart replaced the managed container identity: started=%q after=%q want=%q", driver.startedContainer, driver.container.ID, containerID)
 	}
+	if store.resetIdentity == uuid.Nil || driver.renameCalls != 1 || driver.renamedFrom != job.ContainerName || driver.renamedTo == job.ContainerName || driver.container.Name != "/"+driver.renamedTo {
+		t.Fatalf("restart did not rotate DNS target before starting: identity=%s rename=%d %q -> %q current=%q", store.resetIdentity, driver.renameCalls, driver.renamedFrom, driver.renamedTo, driver.container.Name)
+	}
 	if store.completeCalls != 1 || store.completeStatus != "running" || store.completed == nil || store.completed.ID != containerID {
 		t.Fatalf("same-container restart did not complete current runtime: status=%q container=%+v calls=%d", store.completeStatus, store.completed, store.completeCalls)
+	}
+}
+
+func TestWorkerDoesNotStartSameContainerAfterLeaseExpiresDuringRename(t *testing.T) {
+	worker, store, driver, job, _ := newRuntimeWorkerFixture(t, false)
+	driver.container = runtimeTestContainer(job, driver.image, false, strings.Repeat("a", 64))
+	driver.found = true
+	driver.onRename = func() { store.current = false }
+
+	if err := worker.processApp(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if store.resetCalls != 1 || driver.renameCalls != 1 || driver.startCalls != 0 || store.completeCalls != 0 {
+		t.Fatalf("expired runtime lease allowed a same-container restart: reset=%d rename=%d start=%d complete=%d", store.resetCalls, driver.renameCalls, driver.startCalls, store.completeCalls)
 	}
 }
 
@@ -522,12 +570,14 @@ func newRuntimeWorkerFixture(t *testing.T, withVolume bool) (*Worker, *runtimeTe
 		},
 		ImagePath: prepared.RelativePath, WorkerID: "runtime-worker", LeaseToken: uuid.Must(uuid.NewV7()), FailureCount: 1,
 	}
+	job.RouteIdentity = uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	job.ContainerName = repository.AppRuntimeContainerNameForIncarnation(appID, job.RouteIdentity)
 	image := Image{
 		ID: configDigest, OS: "linux", Architecture: runtimeArchitecture(),
 		Entrypoint: []string{"/probe"}, Command: []string{"image-default"},
 		Environment: []string{"FROM_IMAGE=kept"}, WorkingDir: "/image", User: "10001:10001",
 	}
-	persistence := &runtimeTestStore{current: true, observedGeneration: job.App.ObservedGeneration}
+	persistence := &runtimeTestStore{current: true, observedGeneration: job.App.ObservedGeneration, runtimeContainerID: strings.Repeat("8", 64)}
 	driver := &runtimeTestDriver{store: persistence, image: image, nextContainerID: strings.Repeat("a", 64)}
 	worker := &Worker{
 		Store: persistence, Artifacts: store, Runtime: driver, WorkerID: job.WorkerID,
@@ -549,7 +599,7 @@ func runtimeTestContainer(job repository.AppRuntimeJob, image Image, running boo
 	pids := int64(job.App.Workload.Resources.PIDsLimit)
 	initEnabled := true
 	return Container{
-		ID: id, Name: "/" + repository.AppRuntimeContainerName(uuid.MustParse(job.App.ID)), ImageID: image.ID,
+		ID: id, Name: "/" + job.ContainerName, ImageID: image.ID,
 		Config: containerConfig{
 			Labels: labels, Cmd: append([]string(nil), command...), Entrypoint: append([]string(nil), image.Entrypoint...),
 			Env: append([]string(nil), image.Environment...), WorkingDir: workingDirectory, User: image.User,

@@ -86,15 +86,15 @@ func (r *Repository) ListPlatformRoutes(ctx context.Context) ([]domain.PlatformR
 }
 
 // ListAppPlatformRoutes returns only Apps whose current observed runtime and
-// fenced application health state permit public routing. It validates the
-// private runtime address but returns only trusted App identity and port.
+// fenced application health state permit public routing. The route identity
+// is private worker state used to derive the Docker DNS target.
 func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPlatformRoute, error) {
 	if r == nil || r.pool == nil {
 		return nil, ErrNotFound
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT app.id::text,app.platform_label,settings.workload_base_domain,
-		       host(runtime.container_address),
+		       runtime.route_identity::text,runtime.container_name,
 		       CASE WHEN app.workload_spec->>'port' ~ '^[0-9]{1,5}$'
 		            THEN (app.workload_spec->>'port')::integer ELSE NULL END
 		FROM project_apps app
@@ -118,6 +118,8 @@ func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPla
 		  AND runtime.health_generation=app.desired_generation
 		  AND runtime.health_deployment_id=app.desired_deployment_id
 		  AND runtime.health_container_id=runtime.container_id
+		  AND runtime.health_route_identity=runtime.route_identity
+		  AND runtime.container_name='st-'||replace(app.id::text,'-','')||'-'||substring(replace(runtime.route_identity::text,'-','') FROM 1 FOR 24)
 		ORDER BY app.platform_label,app.id`)
 	if err != nil {
 		return nil, err
@@ -125,19 +127,20 @@ func (r *Repository) ListAppPlatformRoutes(ctx context.Context) ([]domain.AppPla
 	defer rows.Close()
 	routes := make([]domain.AppPlatformRoute, 0)
 	for rows.Next() {
-		var appID, label, baseDomain, address string
+		var appID, label, baseDomain, routeIdentity, containerName string
 		var port *int32
-		if err := rows.Scan(&appID, &label, &baseDomain, &address, &port); err != nil {
+		if err := rows.Scan(&appID, &label, &baseDomain, &routeIdentity, &containerName, &port); err != nil {
 			return nil, err
 		}
 		parsedID, idErr := ParseUUID(appID)
 		hostname, hostErr := platformhostname.Hostname(label, baseDomain)
-		if idErr != nil || hostErr != nil || !validPrivateRuntimeAddress(address) || port == nil || *port < 1 || *port > 65535 {
+		expectedName, validIdentity := AppRuntimeContainerNameForRouteIdentity(parsedID, routeIdentity)
+		if idErr != nil || hostErr != nil || !validIdentity || containerName != expectedName || port == nil || *port < 1 || *port > 65535 {
 			// Fail closed for this App only. A bad App record must not prevent
 			// Site snapshots or other valid App routes from converging.
 			continue
 		}
-		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), Hostname: hostname, Port: int(*port)})
+		routes = append(routes, domain.AppPlatformRoute{AppID: parsedID.String(), RouteIdentity: routeIdentity, Hostname: hostname, Port: int(*port)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

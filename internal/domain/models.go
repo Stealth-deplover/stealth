@@ -1075,12 +1075,13 @@ type PlatformRoute struct {
 }
 
 // AppPlatformRoute is private worker input for the generated App route file.
-// The target is derived from the stable App identity, never an arbitrary URL
-// or runtime address.
+// RouteIdentity is the trusted runtime incarnation used to derive the backend
+// target; it is not exposed by the App API.
 type AppPlatformRoute struct {
-	AppID    string
-	Hostname string
-	Port     int
+	AppID         string
+	RouteIdentity string
+	Hostname      string
+	Port          int
 }
 
 // SiteDomain binds a verified DNS hostname to a Site. The verification token
