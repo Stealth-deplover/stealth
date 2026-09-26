@@ -140,9 +140,14 @@ passed.
 - [x] PR merged.
 - [x] Post-merge `main` required CI is green.
 
-### [ ] ▶ CURRENT A5.5. Codebase Quality & Refactor Baseline
+### [x] A5.5. Codebase Quality & Refactor Baseline
 
-Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
+PR: #103
+merge commit: `a4d1c34c324440d1f4f3c73d04970e542723d7bc`
+post-merge main SHA: `a4d1c34c324440d1f4f3c73d04970e542723d7bc`
+audit verdict: READY TO MERGE / passed
+post-merge required checks: Backend, Console, Installer/release, CodeQL Go,
+and CodeQL JavaScript/TypeScript passed on the verified main SHA.
 
 #### Formatting / static quality
 
@@ -174,16 +179,62 @@ Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
 - [x] Console lint, typecheck, tests, build, and E2E green.
 - [x] Production Compose Smoke green, including the real v0.2.5 upgrade smoke.
 - [x] No dependency additions.
+- [x] Independent audit passes.
+- [x] PR merged.
+- [x] Post-merge `main` CI green.
+
+### [ ] ▶ CURRENT A6. App Resource + Operational Hardening
+
+#### Runtime image cache
+
+- [ ] Stealth-owned runtime image inventory is strict and bounded.
+- [ ] Desired/current deployment images are protected.
+- [ ] GC removes only safe Stealth runtime tags; global Docker prune is forbidden.
+- [ ] Runtime cache has validated max/target/interval configuration.
+- [ ] GC ordering and per-sweep work are deterministic and bounded.
+- [ ] Persisted OCI artifacts and artifact quota survive cache eviction.
+- [ ] An evicted deployment can be re-imported and converge.
+
+#### Cleanup and recovery
+
+- [ ] Orphan container discovery remains ownership-fenced and idempotent.
+- [ ] Expired cleanup leases recover and stale workers are fenced.
+- [ ] Already-absent proven targets converge successfully.
+- [ ] Runtime, health, cleanup, and network retries remain bounded.
+- [ ] Completed and terminal cleanup history has a bounded retention policy.
+
+#### Resource enforcement
+
+- [ ] Real runtime CPU limit is verified.
+- [ ] Real runtime memory and swap limits are verified.
+- [ ] Real runtime PID limit is verified.
+- [ ] Docker security profile and namespace constraints are verified.
+- [ ] Runtime log rotation settings are verified.
+
+#### Operational visibility
+
+- [ ] Runtime image cache size, limit, pressure, GC result, and reclaim estimates are exposed.
+- [ ] OOM and process exit metrics use fixed low-cardinality reasons.
+- [ ] Safe structured diagnostics contain no secrets or unbounded metric labels.
+
+#### Network review
+
+- [ ] Shared App bridge peers, reachable ports, and routing are documented.
+- [ ] Direct control-plane database/build networks remain unattached to the App bridge.
+- [ ] App containers are rejected if they gain unexpected network attachments.
+- [ ] Shared-bridge east-west traffic is documented and deferred to Phase C1.
+
+#### Regression proof
+
+- [ ] Backend unit/integration tests green.
+- [ ] Required PostgreSQL Apps tests actually run and pass.
+- [ ] Production Compose Smoke verifies GC, image recovery, and actual HostConfig.
+- [ ] Existing Apps routing, health, logs, encrypted environment, and recovery smoke stays green.
+- [ ] Backend, Console, Installer/release, CodeQL Go, CodeQL JavaScript/TypeScript, and Production Compose Smoke CI green.
+- [ ] No dependency expansion.
 - [ ] Independent audit passes.
 - [ ] PR merged.
 - [ ] Post-merge `main` CI green.
-
-### [ ] A6. App Resource + Operational Hardening
-
-- [ ] Disk/image pressure management and safe garbage collection.
-- [ ] Orphan cleanup convergence and resource enforcement under pressure.
-- [ ] Network isolation review and bounded retry/backoff tuning.
-- [ ] Operator-visible runtime diagnostics.
 
 ### [ ] A7. Deployment History + Rollback + Diagnostics
 
@@ -211,7 +262,7 @@ Completion of A8 means the Apps Production Runtime phase is complete.
 
 ## Phase C — Security Hardening
 
-- [ ] C1. Tenant isolation review.
+- [ ] C1. Tenant isolation review, including per-App east-west network isolation.
 - [ ] C2. Quotas and abuse limits.
 - [ ] C3. Security acceptance suite.
 

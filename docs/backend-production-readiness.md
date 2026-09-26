@@ -77,8 +77,39 @@ App runtime reconciliation has separate `apps.runtime` tracing and bounded
 poll, claim, completion, duration, retry, error, in-flight, cleanup, and orphan
 metrics. `APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
 `APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`, and
-`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` set validated runtime bounds. Docker daemon
-or bridge ownership errors do not terminate unrelated worker loops.
+`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` set validated runtime bounds. The
+recoverable Docker image cache has validated max/target/interval settings:
+20 GiB, 16 GiB, and 15 minutes by default. A sweep inventories at most 256
+strictly owned Stealth runtime tags and removes at most four safe entries.
+It protects selected deployments, verified managed container references, and
+live runtime leases; inventory or ownership failures fail closed. Cache
+maintenance does not change App desired state or fail unrelated Apps.
+Docker daemon or bridge ownership errors do not terminate unrelated worker
+loops.
+
+Worker metrics include `stealth_apps_worker_runtime_image_cache_bytes`,
+`stealth_apps_worker_runtime_image_cache_limit_bytes`,
+`stealth_apps_worker_runtime_image_cache_inventory_available`,
+`stealth_apps_worker_runtime_image_cache_pressure`,
+`stealth_apps_worker_runtime_image_gc_total{result=...}`,
+`stealth_apps_worker_runtime_image_gc_reclaimed_bytes_total`, and
+`stealth_apps_worker_runtime_process_exits_total{reason=...}`. GC results and
+process-exit reasons use fixed vocabularies; no tenant or Docker IDs are
+Prometheus labels. Structured runtime exit logs may include the App ID and
+generation, but do not include container environment values or Docker stderr.
+The cache byte and reclaimed-byte values are estimates: Docker reports image
+size per image ID and shared layers across different IDs may be counted more
+than once. They do not measure exact host filesystem space recovered.
+
+The runtime cache contains imported Docker tags only. Persistent source and OCI
+deployment artifacts remain in Stealth storage and the App artifact quota;
+runtime image GC never deletes them. Reconciliation verifies and imports an
+evicted selected deployment from its persisted OCI archive. Stealth never runs
+global Docker prune commands. Cleanup history is bounded by retaining
+completed rows for 14 days and terminal failures for 90 days, pruning at most
+100 terminal rows per hourly pass. Runtime exponential retry delay is capped
+at one minute; cleanup stops after 20 attempts and ownership conflicts are
+terminal.
 
 When an inspected App container is stopped and restarted in place, the worker
 fences a durable health reset before `docker start`: the old probe identity,
@@ -140,9 +171,18 @@ immutable result is the exact digest and archive captured for that deployment.
 Persistent App containers are created only by the trusted worker through Moby.
 The API, Console, BuildKit, and Traefik have no Docker socket. The owned App
 bridge is joined dynamically by only the validated worker and hardened Traefik
-peers; API, Console, BuildKit, and other backend services remain off it. App
-containers publish no host ports and attach only to that bridge. A container
-uses a read-only root, drops all Linux capabilities, enables
+peers; API, Console, BuildKit, databases, Redis, ClickHouse, and telemetry
+services remain unattached. App containers publish no host ports and attach
+only to that bridge. This is a shared user-defined bridge: Apps can use Docker
+DNS/container names and connect to ports on other App containers. The worker
+and Traefik container names are also bridge peers. Traefik listens on 8080 and
+health ping on 8081; its public Host-routed API/Console services are reachable
+indirectly through Traefik. The worker's port 9091 exposes `/healthz` and
+`/version`, while `/metrics` requires the configured metrics token. The bridge
+is `Internal=false`, so outbound App traffic follows Docker bridge NAT and the
+host firewall. This east-west/egress limitation is documented and deferred to
+Phase C1; there is no per-App network isolation. A container uses a read-only
+root, drops all Linux capabilities, enables
 `no-new-privileges`, and receives bounded CPU, memory/swap, PID, tmpfs, log,
 and ulimit settings. No Stealth backend or provider environment variables,
 storage mounts, Docker socket, build staging, BuildKit credentials, Cloudflare
@@ -192,11 +232,12 @@ network policy boundary.
 
 These are intentional boundaries, not hidden reliability claims:
 
-- App health convergence, health-gated public routing, and runtime stdout/stderr
-  log viewing through the existing Collector/ClickHouse pipeline are
-  implemented. App environment values use dedicated-key authenticated
-  encryption at rest and are injected by the runtime worker; gVisor isolation
-  and per-App network isolation remain deferred. The current Moby `running`
+- App health convergence, health-gated public routing, runtime stdout/stderr
+  log viewing through the existing Collector/ClickHouse pipeline, and bounded
+  Stealth-owned runtime image-cache maintenance are implemented. App
+  environment values use dedicated-key authenticated encryption at rest and
+  are injected by the runtime worker; gVisor isolation and per-App network
+  isolation remain deferred to Phase C1. The current Moby `running`
   status confirms process liveness only; `healthy` confirms the configured
   probe, and route eligibility additionally requires the current enabled
   desired generation and inspected runtime identity. Values are limited to
