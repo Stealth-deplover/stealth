@@ -42,7 +42,8 @@ export function AppsView({
   const onCreate = async (values: AppFormValues) => {
     const result = await create.mutateAsync(createAppPayload(values));
     toast.success("App configuration saved");
-    if (!result?.app?.id) throw new Error("The API did not return the created App.");
+    if (!result?.app?.id)
+      throw new Error("The API did not return the created App.");
     router.push(`${base}/apps/${result.app.id}`);
   };
 
@@ -81,14 +82,17 @@ export function AppsView({
       header: "Resources",
       cell: ({ row }) => (
         <span className="whitespace-nowrap text-xs text-mist">
-          {row.original.workload.resources.cpu_millis} mCPU · {formatBytes(row.original.workload.resources.memory_bytes)}
+          {row.original.workload.resources.cpu_millis} mCPU ·{" "}
+          {formatBytes(row.original.workload.resources.memory_bytes)}
         </span>
       ),
     },
     {
       accessorKey: "workload.port",
       header: "Internal port",
-      cell: ({ row }) => <span className="font-mono text-xs">:{row.original.workload.port}</span>,
+      cell: ({ row }) => (
+        <span className="font-mono text-xs">:{row.original.workload.port}</span>
+      ),
     },
     {
       accessorKey: "updated_at",
@@ -125,12 +129,18 @@ export function AppsView({
         description="Build versioned deployments, follow process and health convergence, and publish a platform route after the current generation is healthy."
       />
       {query.isError ? (
-        <ErrorState title="Could not load Apps" error={query.error} retry={() => query.refetch()} />
+        <ErrorState
+          title="Could not load Apps"
+          error={query.error}
+          retry={() => query.refetch()}
+        />
       ) : query.data?.apps.length ? (
         <ResourceTableCard
           data={query.data.apps}
           searchable={(item, term) =>
-            `${item.name} ${item.runtime_status} ${item.platform_hostname ?? ""}`.toLowerCase().includes(term)
+            `${item.name} ${item.runtime_status} ${item.platform_hostname ?? ""}`
+              .toLowerCase()
+              .includes(term)
           }
           serverPagination={pageControls(
             navigation,
@@ -139,7 +149,11 @@ export function AppsView({
           )}
         >
           {(filtered, pagination) => (
-            <DataTable data={filtered} columns={columns} serverPagination={pagination} />
+            <DataTable
+              data={filtered}
+              columns={columns}
+              serverPagination={pagination}
+            />
           )}
         </ResourceTableCard>
       ) : query.isLoading ? (
@@ -150,7 +164,11 @@ export function AppsView({
         <EmptyState
           icon={<AppWindow className="size-5" aria-hidden="true" />}
           title="No Apps yet"
-          description={canManage ? "Create an App to save its desired workload settings. Its runtime status will remain Not deployed until build and execution support arrive." : "No Apps are available in this project."}
+          description={
+            canManage
+              ? "Create an App to save its desired workload settings. Its runtime status will remain Not deployed until build and execution support arrive."
+              : "No Apps are available in this project."
+          }
           actionLabel={canManage ? "Create App" : undefined}
           action={canManage ? () => setCreateOpen(true) : undefined}
         />

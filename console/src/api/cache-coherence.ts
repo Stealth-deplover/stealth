@@ -262,7 +262,10 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
 
     case "app-environment-variable":
       addKey(keys, queryKeys.app(change.projectId, change.appId));
-      addKey(keys, queryKeys.appEnvironmentVariables(change.projectId, change.appId));
+      addKey(
+        keys,
+        queryKeys.appEnvironmentVariables(change.projectId, change.appId),
+      );
       return keys;
 
     case "site-deployment":

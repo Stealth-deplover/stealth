@@ -68,7 +68,11 @@ export type LogSource = {
 };
 
 type ApiLogLine = Pick<
-  FunctionBuildLog | FunctionExecutionLog | SiteBuildLog | AppBuildLog | AgentRunLog,
+  | FunctionBuildLog
+  | FunctionExecutionLog
+  | SiteBuildLog
+  | AppBuildLog
+  | AgentRunLog,
   "sequence" | "level" | "message" | "created_at"
 >;
 
@@ -92,7 +96,10 @@ function mapNumericLogLines(logs: readonly ApiLogLine[]): LogLine[] {
 function mapNumericPage(logs: readonly ApiLogLine[], after?: string): LogPage {
   const lines = mapNumericLogLines(logs);
   if (!lines.length) return { lines, nextCursor: after };
-  const latest = logs.reduce((sequence, line) => Math.max(sequence, line.sequence), 0);
+  const latest = logs.reduce(
+    (sequence, line) => Math.max(sequence, line.sequence),
+    0,
+  );
   return { lines, nextCursor: `${NUMERIC_CURSOR_PREFIX}${latest}` };
 }
 
@@ -131,7 +138,10 @@ function sourceKey(context: LogSourceContext) {
   }
 }
 
-function createSource(context: LogSourceContext, fetchPage: LogPageFetcher): LogSource {
+function createSource(
+  context: LogSourceContext,
+  fetchPage: LogPageFetcher,
+): LogSource {
   return { key: sourceKey(context), fetchPage };
 }
 
@@ -144,7 +154,11 @@ export function createLogSource(context: LogSourceContext): LogSource {
           "/v1/projects/{projectID}/functions/{functionID}/deployments/{deploymentID}/logs",
           {
             params: {
-              path: { projectID: context.projectId, functionID: context.functionId, deploymentID: context.deploymentId },
+              path: {
+                projectID: context.projectId,
+                functionID: context.functionId,
+                deploymentID: context.deploymentId,
+              },
               query: queryFor(after),
             },
             signal,
@@ -161,7 +175,11 @@ export function createLogSource(context: LogSourceContext): LogSource {
           "/v1/projects/{projectID}/functions/{functionID}/executions/{executionID}/logs",
           {
             params: {
-              path: { projectID: context.projectId, functionID: context.functionId, executionID: context.executionId },
+              path: {
+                projectID: context.projectId,
+                functionID: context.functionId,
+                executionID: context.executionId,
+              },
               query: queryFor(after),
             },
             signal,
@@ -178,7 +196,11 @@ export function createLogSource(context: LogSourceContext): LogSource {
           "/v1/projects/{projectID}/sites/{siteID}/deployments/{deploymentID}/logs",
           {
             params: {
-              path: { projectID: context.projectId, siteID: context.siteId, deploymentID: context.deploymentId },
+              path: {
+                projectID: context.projectId,
+                siteID: context.siteId,
+                deploymentID: context.deploymentId,
+              },
               query: queryFor(after),
             },
             signal,
@@ -195,7 +217,11 @@ export function createLogSource(context: LogSourceContext): LogSource {
           "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/logs",
           {
             params: {
-              path: { projectID: context.projectId, appID: context.appId, deploymentID: context.deploymentId },
+              path: {
+                projectID: context.projectId,
+                appID: context.appId,
+                deploymentID: context.deploymentId,
+              },
               query: queryFor(after),
             },
             signal,
@@ -207,13 +233,19 @@ export function createLogSource(context: LogSourceContext): LogSource {
 
     case "app-runtime":
       return createSource(context, async (cursor, signal) => {
-        const result = await api.GET("/v1/projects/{projectID}/apps/{appID}/logs", {
-          params: {
-            path: { projectID: context.projectId, appID: context.appId },
-            query: cursor === undefined ? { limit: LOG_PAGE_LIMIT } : { limit: LOG_PAGE_LIMIT, cursor },
+        const result = await api.GET(
+          "/v1/projects/{projectID}/apps/{appID}/logs",
+          {
+            params: {
+              path: { projectID: context.projectId, appID: context.appId },
+              query:
+                cursor === undefined
+                  ? { limit: LOG_PAGE_LIMIT }
+                  : { limit: LOG_PAGE_LIMIT, cursor },
+            },
+            signal,
           },
-          signal,
-        });
+        );
         const data = await unwrap(result);
         return {
           lines: (data?.logs ?? []).map((line) => ({

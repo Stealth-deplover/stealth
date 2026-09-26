@@ -62,9 +62,7 @@ function LogToolbar({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <CardTitle>{title}</CardTitle>
-          <p className="mt-1 text-xs text-fog">
-            {description}
-          </p>
+          <p className="mt-1 text-xs text-fog">{description}</p>
         </div>
         <div className="flex items-center gap-1.5">
           <Badge variant={autoFollow ? "success" : "warning"}>
@@ -152,7 +150,10 @@ function LogBody({
         aria-live="polite"
       >
         {error ? (
-          <div role="alert" className="mb-3 rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 font-sans text-xs text-mist">
+          <div
+            role="alert"
+            className="mb-3 rounded-lg border border-coral-red/20 bg-coral-red/10 px-3 py-2 font-sans text-xs text-mist"
+          >
             {error}
           </div>
         ) : null}
@@ -170,16 +171,14 @@ function LogBody({
               </span>
             </div>
           ))
-        ) : (
-          error ? null : (
-            <div className="py-16 text-center font-sans text-sm text-fog">
-              {loading
-                ? "Loading log lines…"
-                : localCleared
-                  ? "Local view cleared. New lines will appear here."
-                  : emptyMessage}
-            </div>
-          )
+        ) : error ? null : (
+          <div className="py-16 text-center font-sans text-sm text-fog">
+            {loading
+              ? "Loading log lines…"
+              : localCleared
+                ? "Local view cleared. New lines will appear here."
+                : emptyMessage}
+          </div>
         )}
         <div ref={bottomRef} />
       </div>
@@ -202,8 +201,11 @@ export function LogViewer({
   polling?: boolean;
   emptyMessage?: string;
 }) {
-  const { lines, loading, error, localCleared, clearLocal } =
-    useLogStream({ source, enabled, polling });
+  const { lines, loading, error, localCleared, clearLocal } = useLogStream({
+    source,
+    enabled,
+    polling,
+  });
   const [search, setSearch] = useState("");
   const [autoFollow, setAutoFollow] = useState(true);
   const [copied, setCopied] = useState(false);

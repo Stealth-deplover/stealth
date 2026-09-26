@@ -56,7 +56,11 @@ post-merge required `main` checks were green.
 - Retained history can span verified runtime container replacements while
   telemetry retains the records.
 
-### [ ] ▶ CURRENT A5. App Environment Variables + Encrypted Secrets
+### [x] A5. App Environment Variables + Encrypted Secrets
+
+Evidence: PR #102, merge commit `8c09819d84d53b4e65ded23a6744d7c23e84802b`;
+post-merge `main` SHA `8c09819d84d53b4e65ded23a6744d7c23e84802b`; audit verdict:
+passed.
 
 #### Cryptography and operator key
 
@@ -132,9 +136,47 @@ post-merge required `main` checks were green.
 - [x] Production Compose smoke exercises real variable and secret injection,
   replacement, and runtime recovery.
 - [x] Final-head required CI is green.
+- [x] Independent audit passes.
+- [x] PR merged.
+- [x] Post-merge `main` required CI is green.
+
+### [ ] ▶ CURRENT A5.5. Codebase Quality & Refactor Baseline
+
+Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
+
+#### Formatting / static quality
+
+- [x] Explicit Console Prettier config and ignore policy.
+- [x] Generated API client excluded from Prettier ownership.
+- [x] `npm run format:check` required in Console CI.
+- [x] Human-written Console source formatted.
+- [x] Go remains gofmt-enforced.
+
+#### Backend structure
+
+- [x] `internal/appruntime/docker.go` decomposed by responsibility.
+- [x] `internal/repository/apps_runtime.go` decomposed by responsibility.
+- [x] `internal/appruntime/worker.go` decomposed by responsibility.
+- [x] Existing package and layer boundaries preserved.
+- [x] No behavior, schema, or API change intended.
+
+#### Frontend structure
+
+- [x] App detail is primarily composition and orchestration.
+- [x] Feature panels own relevant UI logic.
+- [x] No new frontend state framework or dependency.
+- [x] Generated OpenAPI types remain authoritative.
+
+#### Regression proof
+
+- [x] Backend unit and integration tests green.
+- [x] Required PostgreSQL Apps suites ran and passed.
+- [x] Console lint, typecheck, tests, build, and E2E green.
+- [x] Production Compose Smoke green, including the real v0.2.5 upgrade smoke.
+- [x] No dependency additions.
 - [ ] Independent audit passes.
 - [ ] PR merged.
-- [ ] Post-merge `main` required CI is green.
+- [ ] Post-merge `main` CI green.
 
 ### [ ] A6. App Resource + Operational Hardening
 

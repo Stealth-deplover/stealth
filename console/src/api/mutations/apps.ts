@@ -14,7 +14,8 @@ export function useCreateApp(projectId: string) {
           body,
         }),
       ),
-    onSuccess: () => applyCacheChanges(queryClient, [{ kind: "app", projectId }]),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "app", projectId }]),
   });
 }
 
@@ -28,7 +29,8 @@ export function useUpdateApp(projectId: string, appId: string) {
           body,
         }),
       ),
-    onSuccess: () => applyCacheChanges(queryClient, [{ kind: "app", projectId, appId }]),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "app", projectId, appId }]),
   });
 }
 
@@ -41,7 +43,8 @@ export function useDeleteApp(projectId: string, appId: string) {
           params: { path: { projectID: projectId, appID: appId } },
         }),
       ),
-    onSuccess: () => applyCacheChanges(queryClient, [{ kind: "app", projectId, appId }]),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [{ kind: "app", projectId, appId }]),
   });
 }
 
@@ -51,16 +54,13 @@ export function useCreateAppDeployment(projectId: string, appId: string) {
     mutationFn: async (form: FormData) =>
       uploadMultipart(
         (body, signal) =>
-          api.POST(
-            "/v1/projects/{projectID}/apps/{appID}/deployments",
-            {
-              params: { path: { projectID: projectId, appID: appId } },
-              // The browser sends multipart file parts; generated OpenAPI
-              // models binary parts as string for the schema-only client.
-              body: body as unknown as components["schemas"]["AppDeploymentUploadRequest"],
-              signal,
-            },
-          ),
+          api.POST("/v1/projects/{projectID}/apps/{appID}/deployments", {
+            params: { path: { projectID: projectId, appID: appId } },
+            // The browser sends multipart file parts; generated OpenAPI
+            // models binary parts as string for the schema-only client.
+            body: body as unknown as components["schemas"]["AppDeploymentUploadRequest"],
+            signal,
+          }),
         form,
       ),
     onSuccess: (result) =>
@@ -83,7 +83,13 @@ export function useSelectAppDeployment(projectId: string, appId: string) {
         await api.POST(
           "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/select",
           {
-            params: { path: { projectID: projectId, appID: appId, deploymentID: deploymentId } },
+            params: {
+              path: {
+                projectID: projectId,
+                appID: appId,
+                deploymentID: deploymentId,
+              },
+            },
           },
         ),
       ),
@@ -94,10 +100,15 @@ export function useSelectAppDeployment(projectId: string, appId: string) {
   });
 }
 
-export function useCreateAppEnvironmentVariable(projectId: string, appId: string) {
+export function useCreateAppEnvironmentVariable(
+  projectId: string,
+  appId: string,
+) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: components["schemas"]["CreateAppEnvironmentVariableRequest"]) =>
+    mutationFn: async (
+      body: components["schemas"]["CreateAppEnvironmentVariableRequest"],
+    ) =>
       unwrap(
         await api.POST("/v1/projects/{projectID}/apps/{appID}/variables", {
           params: { path: { projectID: projectId, appID: appId } },
@@ -111,7 +122,10 @@ export function useCreateAppEnvironmentVariable(projectId: string, appId: string
   });
 }
 
-export function useUpdateAppEnvironmentVariable(projectId: string, appId: string) {
+export function useUpdateAppEnvironmentVariable(
+  projectId: string,
+  appId: string,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({
@@ -122,10 +136,19 @@ export function useUpdateAppEnvironmentVariable(projectId: string, appId: string
       body: components["schemas"]["UpdateAppEnvironmentVariableRequest"];
     }) =>
       unwrap(
-        await api.PATCH("/v1/projects/{projectID}/apps/{appID}/variables/{variableID}", {
-          params: { path: { projectID: projectId, appID: appId, variableID: variableId } },
-          body,
-        }),
+        await api.PATCH(
+          "/v1/projects/{projectID}/apps/{appID}/variables/{variableID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                appID: appId,
+                variableID: variableId,
+              },
+            },
+            body,
+          },
+        ),
       ),
     onSuccess: () =>
       applyCacheChanges(queryClient, [
@@ -134,14 +157,26 @@ export function useUpdateAppEnvironmentVariable(projectId: string, appId: string
   });
 }
 
-export function useDeleteAppEnvironmentVariable(projectId: string, appId: string) {
+export function useDeleteAppEnvironmentVariable(
+  projectId: string,
+  appId: string,
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (variableId: string) =>
       unwrap(
-        await api.DELETE("/v1/projects/{projectID}/apps/{appID}/variables/{variableID}", {
-          params: { path: { projectID: projectId, appID: appId, variableID: variableId } },
-        }),
+        await api.DELETE(
+          "/v1/projects/{projectID}/apps/{appID}/variables/{variableID}",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                appID: appId,
+                variableID: variableId,
+              },
+            },
+          },
+        ),
       ),
     onSuccess: () =>
       applyCacheChanges(queryClient, [
@@ -157,7 +192,15 @@ export function useDeleteAppDeployment(projectId: string, appId: string) {
       unwrap(
         await api.DELETE(
           "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}",
-          { params: { path: { projectID: projectId, appID: appId, deploymentID: deploymentId } } },
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                appID: appId,
+                deploymentID: deploymentId,
+              },
+            },
+          },
         ),
       ),
     onSuccess: (_result, deploymentId) =>

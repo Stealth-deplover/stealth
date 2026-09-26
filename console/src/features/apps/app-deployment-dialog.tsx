@@ -34,8 +34,14 @@ export function AppDeploymentDialog({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!source || !safeRelativePath(dockerfilePath) || !safeContext(contextDirectory)) {
-      toast.error("Choose a source archive and enter safe relative build paths.");
+    if (
+      !source ||
+      !safeRelativePath(dockerfilePath) ||
+      !safeContext(contextDirectory)
+    ) {
+      toast.error(
+        "Choose a source archive and enter safe relative build paths.",
+      );
       return;
     }
     if (target && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(target)) {
@@ -81,7 +87,9 @@ export function AppDeploymentDialog({
               accept=".zip,.tar,.tar.gz,.tgz"
               required
               disabled={pending}
-              onChange={(event) => setSource(event.currentTarget.files?.[0] ?? null)}
+              onChange={(event) =>
+                setSource(event.currentTarget.files?.[0] ?? null)
+              }
             />
             <p className="text-[11px] leading-5 text-fog">
               ZIP, TAR, TAR.GZ, or TGZ. Archive paths and expanded size are
@@ -101,7 +109,9 @@ export function AppDeploymentDialog({
                 disabled={pending}
                 onChange={(event) => setDockerfilePath(event.target.value)}
               />
-              <p className="text-[11px] text-fog">Relative to the archive root.</p>
+              <p className="text-[11px] text-fog">
+                Relative to the archive root.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="app-context-directory">Context directory</Label>
@@ -115,11 +125,15 @@ export function AppDeploymentDialog({
                 disabled={pending}
                 onChange={(event) => setContextDirectory(event.target.value)}
               />
-              <p className="text-[11px] text-fog">Use . for the archive root.</p>
+              <p className="text-[11px] text-fog">
+                Use . for the archive root.
+              </p>
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="app-build-target">Dockerfile target <span className="text-fog">(optional)</span></Label>
+            <Label htmlFor="app-build-target">
+              Dockerfile target <span className="text-fog">(optional)</span>
+            </Label>
             <Input
               id="app-build-target"
               value={target}
@@ -148,7 +162,12 @@ export function AppDeploymentDialog({
             </span>
           </label>
           <DialogFooter>
-            <Button type="button" variant="ghost" disabled={pending} onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={pending || !source}>
@@ -181,5 +200,7 @@ function canonicalRelativePath(value: string, allowDot: boolean) {
     return false;
   }
   if (allowDot && value === ".") return true;
-  return value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+  return value
+    .split("/")
+    .every((part) => part !== "" && part !== "." && part !== "..");
 }

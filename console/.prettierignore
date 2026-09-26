@@ -1,11 +1,14 @@
-.next
-node_modules
-coverage
-playwright-report
-test-results
-dist
-build
+.next/**
+node_modules/**
+coverage/**
+dist/**
+build/**
+playwright-report/**
+test-results/**
 
 # Generated OpenAPI output is intentionally excluded. The generator owns its
 # formatting and api:generate must remain deterministic.
-src/api/generated
+src/api/generated/**
+
+# npm owns the dependency lockfile; this milestone adds no dependencies.
+package-lock.json

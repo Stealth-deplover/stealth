@@ -48,7 +48,10 @@ export function useLogStream({
     activeControllerRef.current = controller;
     setLoading(true);
     try {
-      const next = await currentSource.fetchPage(cursorRef.current, controller.signal);
+      const next = await currentSource.fetchPage(
+        cursorRef.current,
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
 
       setError(null);

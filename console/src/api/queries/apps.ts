@@ -43,7 +43,10 @@ export function useCanvasApps(projectId: string | undefined) {
   });
 }
 
-export function useApp(projectId: string | undefined, appId: string | undefined) {
+export function useApp(
+  projectId: string | undefined,
+  appId: string | undefined,
+) {
   return useQuery({
     queryKey: queryKeys.app(projectId ?? "", appId ?? ""),
     enabled: Boolean(projectId && appId),
@@ -63,16 +66,22 @@ export function useAppDeployments(
 ) {
   const params = withCursorPage(query);
   return useQuery({
-    queryKey: [...queryKeys.appDeployments(projectId ?? "", appId ?? ""), params],
+    queryKey: [
+      ...queryKeys.appDeployments(projectId ?? "", appId ?? ""),
+      params,
+    ],
     enabled: Boolean(projectId && appId),
     queryFn: async ({ signal }) => {
-      const response = await api.GET("/v1/projects/{projectID}/apps/{appID}/deployments", {
-        params: {
-          path: { projectID: projectId!, appID: appId! },
-          query: params,
+      const response = await api.GET(
+        "/v1/projects/{projectID}/apps/{appID}/deployments",
+        {
+          params: {
+            path: { projectID: projectId!, appID: appId! },
+            query: params,
+          },
+          signal,
         },
-        signal,
-      });
+      );
       const page = await unwrap(response);
       if (!page) throw new Error("The App deployment response was empty.");
       return page;
@@ -95,16 +104,22 @@ export function useAppEnvironmentVariables(
 ) {
   const params = withCursorPage(query);
   return useQuery({
-    queryKey: [...queryKeys.appEnvironmentVariables(projectId ?? "", appId ?? ""), params],
+    queryKey: [
+      ...queryKeys.appEnvironmentVariables(projectId ?? "", appId ?? ""),
+      params,
+    ],
     enabled: Boolean(projectId && appId),
     queryFn: async ({ signal }) => {
-      const response = await api.GET("/v1/projects/{projectID}/apps/{appID}/variables", {
-        params: {
-          path: { projectID: projectId!, appID: appId! },
-          query: params,
+      const response = await api.GET(
+        "/v1/projects/{projectID}/apps/{appID}/variables",
+        {
+          params: {
+            path: { projectID: projectId!, appID: appId! },
+            query: params,
+          },
+          signal,
         },
-        signal,
-      });
+      );
       const page = await unwrap(response);
       if (!page) throw new Error("The App environment response was empty.");
       return page;
