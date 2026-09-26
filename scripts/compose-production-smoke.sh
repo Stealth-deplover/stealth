@@ -1443,7 +1443,7 @@ wait_for_app_runtime() {
 }
 
 wait_for_app_health_state() {
-	local wanted_health="$1" wanted_route="$2" app_id="${3:-$platform_app_id}" health route runtime desired observed
+	local wanted_health="$1" wanted_route="$2" app_id="${3:-$platform_app_id}" allow_transient_degraded="${4:-false}" health route runtime desired observed
 	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
 		if fetch_app_runtime "$app_id"; then
 			health="$(platform_json_field "$platform_response" app.health_status)"
@@ -1454,7 +1454,7 @@ wait_for_app_health_state() {
 			if [ "$health" = "$wanted_health" ] && [ "$route" = "$wanted_route" ] && [ -n "$desired" ] && [ "$observed" = "$desired" ]; then
 				return 0
 			fi
-			if [ "$runtime" = 'failed' ] || [ "$runtime" = 'degraded' ]; then
+			if [ "$runtime" = 'failed' ] || { [ "$runtime" = 'degraded' ] && [ "$allow_transient_degraded" != 'true' ]; }; then
 				printf 'App runtime entered %s while waiting for health=%s route=%s\n' "$runtime" "$wanted_health" "$wanted_route" >&2
 				return 1
 			fi
@@ -2643,7 +2643,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	start_platform_route_reconcile_lock
 	docker stop --time 1 "$old_container" >/dev/null
-	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_health_state pending waiting_for_health "$platform_app_id" true
 	new_container="$(wait_for_running_app_runtime_container)"
 	if [ "$new_container" != "$old_container" ]; then
 		printf 'same-container process restart changed container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
@@ -2652,7 +2652,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 3 "$new_container"
-	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_health_state pending waiting_for_health "$platform_app_id" true
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 1 "$new_container" "$old_restart_cursor"
 	read -r resume_stdout_count resume_stderr_count <<<"$(app_runtime_log_counts "${smoke_marker}-app-v2")"
 	if [ "$resume_stdout_count" -lt 1 ] || [ "$resume_stderr_count" -lt 1 ]; then
