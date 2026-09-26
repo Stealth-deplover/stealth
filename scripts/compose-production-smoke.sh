@@ -1405,6 +1405,13 @@ app_deployment_artifact_row() {
 		sh "$deployment_id" "$app_id" | tr -d '\r'
 }
 
+app_deployment_artifact_readiness_flags() {
+	local deployment_id="$1" app_id="$2"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'deployment_id="$1"; app_id="$2"; case "$deployment_id" in *[!0-9a-f-]*|"") exit 2;; esac; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT (status = '\''ready'\'')::text,(build_status = '\''succeeded'\'')::text,(image_digest ~ '\''^sha256:[0-9a-f]{64}$'\'')::text,(image_archive_sha256 ~ '\''^[0-9a-f]{64}$'\'')::text,(image_size_bytes > 0)::text,(image_path IS NOT NULL)::text,(image_path ~ '\''^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\'')::text,(image_path = project_id::text || '\''/'\'' || app_id::text || '\''/'\'' || id::text)::text FROM app_deployments WHERE id = '\''$deployment_id'\'' AND app_id = '\''$app_id'\''"' \
+		sh "$deployment_id" "$app_id" | tr -d '\r'
+}
+
 app_artifact_quota_row() {
 	local app_id="$1"
 	"${compose[@]}" exec -T postgres sh -ec \
@@ -1493,7 +1500,7 @@ PY
 assert_app_diagnostics() {
 	local expected_status="$1" desired_id="$2" desired_version="$3" applied_id="$4" applied_version="$5"
 	fetch_app_diagnostics
-	python3 - "$platform_response" "$expected_status" "$desired_id" "$desired_version" "$applied_id" "$applied_version" <<'PY'
+	if ! python3 - "$platform_response" "$expected_status" "$desired_id" "$desired_version" "$applied_id" "$applied_version" <<'PY'
 import json
 import sys
 
@@ -1533,6 +1540,11 @@ if actual != expected:
     }
     raise SystemExit(f"App diagnostics mismatch: expected={expected!r} actual={actual!r} details={details!r}")
 PY
+then
+	printf 'persisted artifact readiness component flags (status|build|digest|archive checksum|size|locator present|canonical v7 locator|owner locator match): %s\n' \
+		"$(app_deployment_artifact_readiness_flags "$desired_id" "$platform_app_id")" >&2
+	return 1
+fi
 }
 
 assert_app_rollback_pending_diagnostics() {
