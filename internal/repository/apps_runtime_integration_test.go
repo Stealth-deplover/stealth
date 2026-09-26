@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,8 +16,27 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/migrate"
 	"github.com/Stealth-deplover/stealth/internal/workloadspec"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type runtimeProtectionQueryTracer struct {
+	selectedQueries atomic.Int32
+	leaseQueries    atomic.Int32
+}
+
+func (tracer *runtimeProtectionQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "FROM project_apps") {
+		tracer.selectedQueries.Add(1)
+	}
+	if strings.Contains(data.SQL, "FROM app_runtime_state") {
+		tracer.leaseQueries.Add(1)
+	}
+	return ctx
+}
+
+func (*runtimeProtectionQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+}
 
 func TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration(t *testing.T) {
 	f := newAppRepositoryFixture(t)
@@ -261,6 +281,116 @@ func TestRuntimeImageProtectionIncludesSelectedDisabledAndLiveLeaseDeploymentsIn
 	}
 	if !active || !slices.Contains(ids, selectedDeploymentID) || !slices.Contains(ids, disabledDeploymentID) {
 		t.Fatalf("runtime lease/deployment protection = active %v IDs %v", active, ids)
+	}
+	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeImageProtectionBatchesLargeCandidateInventoryIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	enabledAppID, disabledAppID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, item := range []struct {
+		id      uuid.UUID
+		project uuid.UUID
+		name    string
+	}{
+		{enabledAppID, f.projectOneID, "cache-batch-enabled"},
+		{disabledAppID, f.projectTwoID, "cache-batch-disabled"},
+	} {
+		if _, err := f.repo.CreateApp(f.ctx, item.id, item.project, f.actor, AppInput{Name: item.name, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enabledDeploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, enabledAppID)
+	disabledDeploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectTwoID, disabledAppID)
+	disabled := false
+	if _, err := f.repo.UpdateApp(f.ctx, f.projectTwoID, disabledAppID, f.actor, AppPatch{Enabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates := make([]uuid.UUID, 0, 513)
+	for len(candidates) < protectionQueryBatchSize-1 {
+		candidates = append(candidates, uuid.Must(uuid.NewV7()))
+	}
+	candidates = append(candidates, enabledDeploymentID, disabledDeploymentID)
+	for len(candidates) < 513 {
+		candidates = append(candidates, uuid.Must(uuid.NewV7()))
+	}
+	tracer := &runtimeProtectionQueryTracer{}
+	poolConfig := f.pool.Config()
+	poolConfig.ConnConfig.Tracer = tracer
+	tracedPool, err := pgxpool.NewWithConfig(f.ctx, poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracedPool.Close()
+	tracedRepository := New(tracedPool)
+	for _, count := range []int{protectionQueryBatchSize - 1, protectionQueryBatchSize, protectionQueryBatchSize + 1, 2*protectionQueryBatchSize + 1} {
+		batchCandidates := make([]uuid.UUID, count)
+		for index := range batchCandidates {
+			batchCandidates[index] = uuid.Must(uuid.NewV7())
+		}
+		tracer.selectedQueries.Store(0)
+		tracer.leaseQueries.Store(0)
+		protected, liveLease, err := tracedRepository.ListProtectedAppRuntimeDeploymentIDs(f.ctx, batchCandidates)
+		if err != nil || liveLease || len(protected) != 0 {
+			t.Fatalf("unselected candidate batch of %d = %v, live lease %v, error %v", count, protected, liveLease, err)
+		}
+		wantQueries := (count + protectionQueryBatchSize - 1) / protectionQueryBatchSize
+		if got := int(tracer.selectedQueries.Load()); got != wantQueries {
+			t.Fatalf("candidate count %d made %d selected-state queries, want %d batches", count, got, wantQueries)
+		}
+		if got := tracer.leaseQueries.Load(); got != 1 {
+			t.Fatalf("candidate count %d made %d global lease queries, want one", count, got)
+		}
+	}
+	tracer.selectedQueries.Store(0)
+	tracer.leaseQueries.Store(0)
+
+	protected, activeLease, err := tracedRepository.ListProtectedAppRuntimeDeploymentIDs(f.ctx, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activeLease || !slices.Contains(protected, enabledDeploymentID) || !slices.Contains(protected, disabledDeploymentID) {
+		t.Fatalf("large candidate protection = %v, live lease %v; want selected enabled and disabled deployments", protected, activeLease)
+	}
+	wantBatches := (len(candidates) + protectionQueryBatchSize - 1) / protectionQueryBatchSize
+	if got := int(tracer.selectedQueries.Load()); got != wantBatches {
+		t.Fatalf("selected-deployment SQL calls = %d for %d candidates, want %d batches", got, len(candidates), wantBatches)
+	}
+	if got := tracer.leaseQueries.Load(); got != 1 {
+		t.Fatalf("live-lease SQL calls = %d, want one global check", got)
+	}
+
+	beforeSelectedQueries := tracer.selectedQueries.Load()
+	invalidCandidates := append(slices.Clone(candidates), uuid.Nil)
+	if _, _, err := tracedRepository.ListProtectedAppRuntimeDeploymentIDs(f.ctx, invalidCandidates); !errors.Is(err, ErrInvalidAppRuntimeJob) {
+		t.Fatalf("invalid candidate ID = %v, want fail-closed repository error", err)
+	}
+	if tracer.selectedQueries.Load() != beforeSelectedQueries {
+		t.Fatal("invalid candidate ID reached the protection query")
+	}
+
+	job, err := f.repo.ClaimNextAppRuntime(f.ctx, "cache-large-candidate-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracer.selectedQueries.Store(0)
+	tracer.leaseQueries.Store(0)
+	protected, activeLease, err = tracedRepository.ListProtectedAppRuntimeDeploymentIDs(f.ctx, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !activeLease || !slices.Contains(protected, enabledDeploymentID) || !slices.Contains(protected, disabledDeploymentID) {
+		t.Fatalf("large-candidate live lease protection = %v, live lease %v", protected, activeLease)
+	}
+	if got := int(tracer.selectedQueries.Load()); got != wantBatches {
+		t.Fatalf("leased selected-deployment SQL calls = %d, want %d bounded batches", got, wantBatches)
+	}
+	if got := tracer.leaseQueries.Load(); got != 1 {
+		t.Fatalf("leased global runtime lease SQL calls = %d, want one", got)
 	}
 	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, job); err != nil {
 		t.Fatal(err)

@@ -49,6 +49,7 @@ type runtimeTestStore struct {
 	runtimeContainerID   string
 	environment          []repository.AppRuntimeEnvironmentCiphertext
 	protectedDeployments []uuid.UUID
+	protectedQuerySizes  []int
 	activeRuntimeLease   bool
 	pruneCleanupCalls    int
 }
@@ -118,6 +119,7 @@ func (s *runtimeTestStore) AppRuntimeContainerExists(_ context.Context, _ uuid.U
 	return containerID != "" && containerID == s.runtimeContainerID, nil
 }
 func (s *runtimeTestStore) ListProtectedAppRuntimeDeploymentIDs(_ context.Context, candidates []uuid.UUID) ([]uuid.UUID, bool, error) {
+	s.protectedQuerySizes = append(s.protectedQuerySizes, len(candidates))
 	candidateSet := make(map[uuid.UUID]struct{}, len(candidates))
 	for _, id := range candidates {
 		candidateSet[id] = struct{}{}
@@ -374,6 +376,14 @@ func (r *runtimeTestDriver) ListRuntimeImageCache(context.Context) ([]RuntimeIma
 }
 func (r *runtimeTestDriver) RemoveRuntimeImageTag(_ context.Context, entry RuntimeImageCacheEntry) error {
 	r.removedImageTags = append(r.removedImageTags, entry.Reference)
+	if r.removeImageTagErr == nil {
+		for index, cached := range r.runtimeImageCache {
+			if cached.Reference == entry.Reference {
+				r.runtimeImageCache = append(r.runtimeImageCache[:index], r.runtimeImageCache[index+1:]...)
+				break
+			}
+		}
+	}
 	return r.removeImageTagErr
 }
 func (r *runtimeTestDriver) ListManagedAppImageReferences(context.Context) ([]ManagedAppImageReference, error) {

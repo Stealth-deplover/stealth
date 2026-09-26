@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxRuntimeImageProtectionContainers = 512
+const managedContainerInspectBatchSize = 128
 
 // ManagedAppImageReference contains only identity needed to protect images
 // referenced by a container whose ownership labels have been verified.
@@ -18,9 +18,10 @@ type ManagedAppImageReference struct {
 	ImageID      string
 }
 
-// ListManagedAppImageReferences returns a bounded, minimal projection of
+// ListManagedAppImageReferences returns a byte-bounded, minimal projection of
 // Docker container identity. It deliberately avoids `docker inspect`'s full
-// environment payload while verifying every ownership label.
+// environment payload while verifying every ownership label in bounded
+// batches, independent of lifetime container count.
 func (m *Moby) ListManagedAppImageReferences(ctx context.Context) ([]ManagedAppImageReference, error) {
 	listed, err := m.runAction(ctx, []string{
 		"container", "ls", "--all", "--quiet", "--no-trunc",
@@ -34,9 +35,6 @@ func (m *Moby) ListManagedAppImageReferences(ctx context.Context) ([]ManagedAppI
 		return nil, ErrDockerOutputTooLarge
 	}
 	ids := strings.Fields(string(listed.Stdout))
-	if len(ids) > maxRuntimeImageProtectionContainers {
-		return nil, ErrDockerOutputTooLarge
-	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -50,26 +48,60 @@ func (m *Moby) ListManagedAppImageReferences(ctx context.Context) ([]ManagedAppI
 		}
 		seenIDs[id] = struct{}{}
 	}
+	slices.Sort(ids)
 	format := `{{printf "%s\t%s\t%s\t%s" .Id .Image .Name (json .Config.Labels)}}`
-	args := []string{"container", "inspect", "--format", format}
-	args = append(args, ids...)
-	inspected, err := m.runAction(ctx, args, nil)
-	if err != nil {
-		return nil, err
+	seenRefs := make(map[string]ManagedAppImageReference, len(ids))
+	for start := 0; start < len(ids); start += managedContainerInspectBatchSize {
+		end := min(start+managedContainerInspectBatchSize, len(ids))
+		args := []string{"container", "inspect", "--format", format}
+		args = append(args, ids[start:end]...)
+		inspected, err := m.runAction(ctx, args, nil)
+		if err != nil {
+			return nil, err
+		}
+		if inspected.StdoutTruncated {
+			return nil, ErrDockerOutputTooLarge
+		}
+		batchRefs, err := parseManagedAppImageReferenceBatch(inspected.Stdout, ids[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range batchRefs {
+			key := ref.DeploymentID.String() + ":" + ref.ImageID
+			seenRefs[key] = ref
+		}
 	}
-	if inspected.StdoutTruncated {
-		return nil, ErrDockerOutputTooLarge
+	refs := make([]ManagedAppImageReference, 0, len(seenRefs))
+	for _, ref := range seenRefs {
+		refs = append(refs, ref)
 	}
-	lines := strings.Split(strings.TrimSuffix(string(inspected.Stdout), "\n"), "\n")
+	sortManagedAppImageReferences(refs)
+	return refs, nil
+}
+
+func parseManagedAppImageReferenceBatch(output []byte, ids []string) ([]ManagedAppImageReference, error) {
+	lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
 	if len(lines) != len(ids) {
 		return nil, ErrContainerInspection
 	}
+	expected := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		expected[id] = struct{}{}
+	}
+	seenIDs := make(map[string]struct{}, len(ids))
 	seenRefs := make(map[string]ManagedAppImageReference, len(ids))
 	for _, line := range lines {
 		fields := strings.SplitN(line, "\t", 4)
 		if len(fields) != 4 || !validRuntimeID(fields[0]) || !validImageID(fields[1]) || !validManagedDockerContainerName(fields[2]) {
 			return nil, ErrContainerInspection
 		}
+		if _, requested := expected[fields[0]]; !requested {
+			return nil, ErrContainerInspection
+		}
+		if _, duplicate := seenIDs[fields[0]]; duplicate {
+			return nil, ErrContainerInspection
+		}
+		seenIDs[fields[0]] = struct{}{}
 		var labels map[string]string
 		if err := json.Unmarshal([]byte(fields[3]), &labels); err != nil || labels == nil {
 			return nil, ErrContainerInspection
@@ -81,23 +113,24 @@ func (m *Moby) ListManagedAppImageReferences(ctx context.Context) ([]ManagedAppI
 		}
 		deploymentID, _ := uuid.Parse(labels["stealth.deployment_id"])
 		key := deploymentID.String() + ":" + container.ImageID
-		if previous, duplicate := seenRefs[key]; duplicate {
-			if previous.DeploymentID != deploymentID || previous.ImageID != container.ImageID {
-				return nil, ErrContainerInspection
-			}
-			continue
-		}
 		seenRefs[key] = ManagedAppImageReference{DeploymentID: deploymentID, ImageID: container.ImageID}
+	}
+	if len(seenIDs) != len(expected) {
+		return nil, ErrContainerInspection
 	}
 	refs := make([]ManagedAppImageReference, 0, len(seenRefs))
 	for _, ref := range seenRefs {
 		refs = append(refs, ref)
 	}
+	sortManagedAppImageReferences(refs)
+	return refs, nil
+}
+
+func sortManagedAppImageReferences(refs []ManagedAppImageReference) {
 	slices.SortFunc(refs, func(left, right ManagedAppImageReference) int {
 		if comparison := strings.Compare(left.DeploymentID.String(), right.DeploymentID.String()); comparison != 0 {
 			return comparison
 		}
 		return strings.Compare(left.ImageID, right.ImageID)
 	})
-	return refs, nil
 }

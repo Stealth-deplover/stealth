@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const runtimeImageCachePressureRetryInterval = time.Minute
+
 func (w *Worker) pruneCleanupHistoryIfDue(ctx context.Context) {
 	now := time.Now()
 	if !w.lastCleanupRetentionSweep.IsZero() && now.Sub(w.lastCleanupRetentionSweep) < defaultCleanupRetentionInterval {
@@ -103,10 +105,11 @@ func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploym
 	})
 
 	attempted := 0
+	removed := 0
 	var reclaimedBytes int64
 	removalFailed := false
 	for _, entry := range ordered {
-		if cacheBytes <= w.imageCacheTargetBytes() || attempted >= maxRuntimeImageCacheRemovals {
+		if cacheBytes <= w.imageCacheTargetBytes() || attempted >= maxRuntimeImageGCRemovalsPerSweep {
 			break
 		}
 		if _, isProtected := protected[entry.DeploymentID]; isProtected {
@@ -116,12 +119,12 @@ func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploym
 		// A deployment may have become desired after the initial inventory.
 		latestIDs, leaseActive, err := w.Store.ListProtectedAppRuntimeDeploymentIDs(ctx, []uuid.UUID{entry.DeploymentID})
 		if err != nil {
-			w.reportRuntimeImageCacheSweep("error", reclaimedBytes, cacheBytes, true, err)
+			w.reportRuntimeImageCacheSweepWithProgress("error", reclaimedBytes, cacheBytes, true, err, removed > 0)
 			return
 		}
 		if leaseActive {
 			w.Logger.Warn("Stealth App runtime image cache exceeds its limit while runtime work is protected", "cache_bytes", cacheBytes, "limit_bytes", maxBytes)
-			w.reportRuntimeImageCacheSweep("pressure", reclaimedBytes, cacheBytes, true, nil)
+			w.reportRuntimeImageCacheSweepWithProgress("pressure", reclaimedBytes, cacheBytes, true, nil, removed > 0)
 			return
 		}
 		latestProtected := false
@@ -141,6 +144,7 @@ func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploym
 			w.Logger.Warn("Stealth App runtime image cache entry could not be removed", "deployment_id", entry.DeploymentID, "reason", safeRuntimeError(err))
 			continue
 		}
+		removed++
 		remaining := make([]RuntimeImageCacheEntry, 0, len(entries))
 		for _, candidate := range entries {
 			if candidate.Reference != entry.Reference {
@@ -150,7 +154,7 @@ func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploym
 		entries = remaining
 		cacheBytes, err = runtimeImageCacheSizeBytes(entries)
 		if err != nil {
-			w.reportRuntimeImageCacheSweep("error", reclaimedBytes, beforeBytes, true, err)
+			w.reportRuntimeImageCacheSweepWithProgress("error", reclaimedBytes, beforeBytes, true, err, removed > 0)
 			return
 		}
 		if cacheBytes < beforeBytes {
@@ -172,7 +176,7 @@ func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploym
 		}
 		w.Logger.Warn("Stealth App runtime image cache remains above its configured limit", "cache_bytes", cacheBytes, "limit_bytes", maxBytes)
 	}
-	w.reportRuntimeImageCacheSweep(result, reclaimedBytes, cacheBytes, pressure, nil)
+	w.reportRuntimeImageCacheSweepWithProgress(result, reclaimedBytes, cacheBytes, pressure, nil, removed > 0)
 }
 
 func (w *Worker) imageCacheMaxBytes() int64 {
@@ -191,9 +195,6 @@ func (w *Worker) imageCacheTargetBytes() int64 {
 }
 
 func validateRuntimeImageCacheEntries(entries []RuntimeImageCacheEntry) error {
-	if len(entries) > maxRuntimeImageCacheEntries {
-		return ErrDockerOutputTooLarge
-	}
 	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		deploymentID, ok := ParseRuntimeImageReference(entry.Reference)
@@ -263,6 +264,10 @@ func (w *Worker) imageCacheSweepInterval() time.Duration {
 }
 
 func (w *Worker) reportRuntimeImageCacheSweep(result string, reclaimedBytes, cacheBytes int64, pressure bool, err error) {
+	w.reportRuntimeImageCacheSweepWithProgress(result, reclaimedBytes, cacheBytes, pressure, err, false)
+}
+
+func (w *Worker) reportRuntimeImageCacheSweepWithProgress(result string, reclaimedBytes, cacheBytes int64, pressure bool, err error, madeProgress bool) {
 	if result != "completed" && result != "error" && result != "pressure" {
 		result = "error"
 	}
@@ -273,10 +278,17 @@ func (w *Worker) reportRuntimeImageCacheSweep(result string, reclaimedBytes, cac
 			w.imageCacheFailureCount++
 		}
 		delay := boundedMaintenanceBackoff(interval, w.imageCacheFailureCount, maxRuntimeImageGCBackoff)
+		if pressure && madeProgress {
+			delay = runtimeImageCachePressureRetryInterval
+		}
 		w.nextImageCacheSweep = now.Add(delay)
 	} else {
 		w.imageCacheFailureCount = 0
-		w.nextImageCacheSweep = now.Add(interval)
+		delay := interval
+		if pressure && madeProgress {
+			delay = runtimeImageCachePressureRetryInterval
+		}
+		w.nextImageCacheSweep = now.Add(delay)
 	}
 	if w.Metrics != nil {
 		w.Metrics.AppRuntimeImageGCTotal.WithLabelValues(result).Inc()

@@ -115,8 +115,8 @@ func TestRuntimeImageCacheSweepBoundsRemovalsAndFailsClosed(t *testing.T) {
 		driver.runtimeImageCache = append(driver.runtimeImageCache, entry)
 	}
 	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
-	if len(driver.removedImageTags) != maxRuntimeImageCacheRemovals {
-		t.Fatalf("image removals in one sweep = %d, want at most %d", len(driver.removedImageTags), maxRuntimeImageCacheRemovals)
+	if len(driver.removedImageTags) != maxRuntimeImageGCRemovalsPerSweep {
+		t.Fatalf("image removals in one sweep = %d, want at most %d", len(driver.removedImageTags), maxRuntimeImageGCRemovalsPerSweep)
 	}
 
 	worker, store, driver = newImageCacheWorker(t)
@@ -143,6 +143,115 @@ func TestRuntimeImageCacheSweepBoundsRemovalsAndFailsClosed(t *testing.T) {
 	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
 	if len(driver.removedImageTags) != 0 {
 		t.Fatalf("Docker inventory failure removed an image: %#v", driver.removedImageTags)
+	}
+}
+
+func TestRuntimeImageCacheSweepMakesBoundedProgressAcrossHighCardinalitySweeps(t *testing.T) {
+	worker, store, driver := newImageCacheWorker(t)
+	worker.ImageCacheMaxBytes = 500 << 20
+	worker.ImageCacheTargetBytes = 400 << 20
+	worker.ImageCacheGCSweepInterval = 15 * time.Minute
+	now := time.Now().UTC()
+	entries := make([]RuntimeImageCacheEntry, 1000)
+	for index := range entries {
+		id := newCacheDeploymentID(t)
+		entry := cacheEntry(t, id, 'a', 1<<20, now.Add(-time.Duration(index)*time.Minute))
+		entry.ImageID = fmt.Sprintf("sha256:%064x", index+1)
+		entries[index] = entry
+	}
+	driver.runtimeImageCache = slices.Clone(entries)
+	currentID := entries[4].DeploymentID
+	desiredID := entries[8].DeploymentID
+	containerID := entries[12].DeploymentID
+	store.protectedDeployments = []uuid.UUID{desiredID}
+	driver.containerImageRefs = []ManagedAppImageReference{{DeploymentID: containerID, ImageID: entries[12].ImageID}}
+
+	ordered := slices.Clone(entries)
+	slices.SortFunc(ordered, func(left, right RuntimeImageCacheEntry) int {
+		return strings.Compare(left.DeploymentID.String(), right.DeploymentID.String())
+	})
+	var wantRemovals []string
+	for _, entry := range ordered {
+		if entry.DeploymentID == currentID || entry.DeploymentID == desiredID || entry.DeploymentID == containerID {
+			continue
+		}
+		wantRemovals = append(wantRemovals, entry.Reference)
+		if len(wantRemovals) == 8 {
+			break
+		}
+	}
+
+	firstSweepAt := time.Now()
+	worker.sweepRuntimeImageCacheIfDue(context.Background(), currentID)
+	if len(driver.removedImageTags) != maxRuntimeImageGCRemovalsPerSweep || !slices.Equal(driver.removedImageTags, wantRemovals[:4]) {
+		t.Fatalf("first high-cardinality sweep removed %v; want oldest safe four %v", driver.removedImageTags, wantRemovals[:4])
+	}
+	if !worker.nextImageCacheSweep.After(firstSweepAt) || worker.nextImageCacheSweep.After(firstSweepAt.Add(2*time.Minute)) {
+		t.Fatalf("pressure recovery cadence = %s, want a bounded one-minute retry", worker.nextImageCacheSweep.Sub(firstSweepAt))
+	}
+	var pressure dto.Metric
+	if err := worker.Metrics.AppRuntimeImageCachePressure.Write(&pressure); err != nil || pressure.GetGauge().GetValue() != 1 {
+		t.Fatalf("large cache pressure after partial progress = %v, %v", pressure.GetGauge(), err)
+	}
+	for _, protectedID := range []uuid.UUID{currentID, desiredID, containerID} {
+		if slices.Contains(driver.removedImageTags, ImageTag(protectedID)) {
+			t.Fatalf("protected deployment %s was removed during high-cardinality sweep", protectedID)
+		}
+	}
+
+	worker.nextImageCacheSweep = time.Time{}
+	worker.sweepRuntimeImageCacheIfDue(context.Background(), currentID)
+	if len(driver.removedImageTags) != 2*maxRuntimeImageGCRemovalsPerSweep || !slices.Equal(driver.removedImageTags[4:], wantRemovals[4:8]) {
+		t.Fatalf("second due sweep did not continue deterministic bounded progress: %v", driver.removedImageTags)
+	}
+	if len(driver.runtimeImageCache) != len(entries)-2*maxRuntimeImageGCRemovalsPerSweep {
+		t.Fatalf("remaining runtime cache tags = %d, want %d", len(driver.runtimeImageCache), len(entries)-2*maxRuntimeImageGCRemovalsPerSweep)
+	}
+	if len(store.protectedQuerySizes) == 0 || store.protectedQuerySizes[0] != len(entries) {
+		t.Fatalf("worker did not provide the full candidate set for repository batching: %#v", store.protectedQuerySizes)
+	}
+}
+
+func TestRuntimeImageCacheSweepReportsPressureForLargeAllProtectedInventory(t *testing.T) {
+	worker, store, driver := newImageCacheWorker(t)
+	worker.ImageCacheMaxBytes = 100 << 20
+	worker.ImageCacheTargetBytes = 50 << 20
+	worker.ImageCacheGCSweepInterval = 15 * time.Minute
+	for index := range 500 {
+		id := newCacheDeploymentID(t)
+		entry := cacheEntry(t, id, 'b', 1<<20, time.Now().UTC())
+		entry.ImageID = fmt.Sprintf("sha256:%064x", index+1)
+		driver.runtimeImageCache = append(driver.runtimeImageCache, entry)
+		store.protectedDeployments = append(store.protectedDeployments, id)
+	}
+	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
+	if len(driver.removedImageTags) != 0 || worker.imageCacheFailureCount != 0 {
+		t.Fatalf("large all-protected inventory was not safely retained: removals=%d failures=%d", len(driver.removedImageTags), worker.imageCacheFailureCount)
+	}
+	var pressure dto.Metric
+	if err := worker.Metrics.AppRuntimeImageCachePressure.Write(&pressure); err != nil || pressure.GetGauge().GetValue() != 1 {
+		t.Fatalf("all-protected cache pressure = %v, %v", pressure.GetGauge(), err)
+	}
+	if len(store.protectedQuerySizes) == 0 || store.protectedQuerySizes[0] != 500 {
+		t.Fatalf("all-protected candidates were not presented for batched query: %#v", store.protectedQuerySizes)
+	}
+}
+
+func TestRuntimeImageCacheSweepDeletesNothingWhenContainerProtectionInventoryFails(t *testing.T) {
+	worker, store, driver := newImageCacheWorker(t)
+	driver.listImageRefsErr = ErrRuntimeOwnershipConflict
+	for index := range 20 {
+		id := newCacheDeploymentID(t)
+		entry := cacheEntry(t, id, 'c', 1<<20, time.Now().UTC())
+		entry.ImageID = fmt.Sprintf("sha256:%064x", index+1)
+		driver.runtimeImageCache = append(driver.runtimeImageCache, entry)
+	}
+	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
+	if len(driver.removedImageTags) != 0 || store.failureCalls != 0 {
+		t.Fatalf("incomplete container protection caused deletion or App failure: removed=%d App failures=%d", len(driver.removedImageTags), store.failureCalls)
+	}
+	if worker.imageCacheFailureCount != 1 {
+		t.Fatalf("container protection inventory failure count = %d, want one bounded maintenance retry", worker.imageCacheFailureCount)
 	}
 }
 

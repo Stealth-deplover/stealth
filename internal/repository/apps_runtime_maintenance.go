@@ -2,16 +2,21 @@ package repository
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 )
 
+const protectionQueryBatchSize = 256
+
 // ListProtectedAppRuntimeDeploymentIDs returns selected candidate deployments,
 // including deployments selected by disabled Apps, plus whether a live runtime
-// lease may be importing a stale job snapshot. Results are limited to the
-// bounded cache inventory; a live lease makes collection skip its whole pass.
+// lease may be importing a stale job snapshot. Candidate deployment IDs are
+// queried in bounded batches; a live lease makes collection skip its whole
+// pass.
 func (r *Repository) ListProtectedAppRuntimeDeploymentIDs(ctx context.Context, candidates []uuid.UUID) ([]uuid.UUID, bool, error) {
-	if r == nil || r.pool == nil || len(candidates) < 1 || len(candidates) > 256 {
+	if r == nil || r.pool == nil || len(candidates) < 1 {
 		return nil, false, ErrInvalidAppRuntimeJob
 	}
 	seen := make(map[uuid.UUID]struct{}, len(candidates))
@@ -26,34 +31,44 @@ func (r *Repository) ListProtectedAppRuntimeDeploymentIDs(ctx context.Context, c
 		seen[id] = struct{}{}
 		candidateStrings = append(candidateStrings, id.String())
 	}
-	rows, err := r.pool.Query(ctx, `
-		SELECT DISTINCT desired_deployment_id
-		FROM project_apps
-		WHERE desired_deployment_id = ANY($1::uuid[])
-		ORDER BY desired_deployment_id`, candidateStrings)
-	if err != nil {
-		return nil, false, err
-	}
-	ids := make([]uuid.UUID, 0)
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+	protected := make(map[uuid.UUID]struct{})
+	for start := 0; start < len(candidateStrings); start += protectionQueryBatchSize {
+		end := min(start+protectionQueryBatchSize, len(candidateStrings))
+		rows, err := r.pool.Query(ctx, `
+			SELECT DISTINCT desired_deployment_id
+			FROM project_apps
+			WHERE desired_deployment_id = ANY($1::uuid[])
+			ORDER BY desired_deployment_id`, candidateStrings[start:end])
+		if err != nil {
+			return nil, false, err
+		}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, false, err
+			}
+			if id == uuid.Nil || id.Version() != uuid.Version(7) {
+				rows.Close()
+				return nil, false, ErrInvalidAppRuntimeJob
+			}
+			protected[id] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return nil, false, err
 		}
-		if id == uuid.Nil {
-			rows.Close()
-			return nil, false, ErrInvalidAppRuntimeJob
-		}
+		rows.Close()
+	}
+	ids := make([]uuid.UUID, 0, len(protected))
+	for id := range protected {
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, false, err
-	}
-	rows.Close()
+	slices.SortFunc(ids, func(left, right uuid.UUID) int {
+		return strings.Compare(left.String(), right.String())
+	})
 	var liveRuntimeLease bool
-	err = r.pool.QueryRow(ctx, `
+	err := r.pool.QueryRow(ctx, `
 		SELECT EXISTS(
 		  SELECT 1 FROM app_runtime_state
 		  WHERE worker_id IS NOT NULL AND lease_token IS NOT NULL AND lease_expires_at>now()

@@ -202,11 +202,16 @@ Production acceptance targets cgroup v2.
 
 Stealth manages only exact `stealth-app/<deployment-uuid>:runtime` Docker tags
 as the recoverable App runtime image cache. By default, when the estimated
-cache exceeds 20 GiB, a bounded worker sweep removes up to four oldest safe
-tags until the estimate reaches 16 GiB. Selected deployments (including
+cache exceeds 20 GiB, a worker sweep processes the byte-bounded inventory in
+batches of 128 image IDs, with container ownership inspected in batches of
+128 and selected deployment protection queried in batches of 256. There is no
+low lifetime tag-count ceiling that disables maintenance. Each sweep removes
+at most four oldest safe tags; if pressure remains after successful progress,
+the next sweep is scheduled one minute later. Selected deployments (including
 disabled Apps), deployments named by verified managed containers, and any
 deployment protected by a live runtime lease are retained. Removal uses the
-exact validated Stealth tag; Stealth never runs global Docker prune commands.
+exact validated Stealth tag; malformed ownership fails closed, Docker output
+remains byte-bounded, and Stealth never runs global Docker prune commands.
 The estimate sums Docker image sizes once per image ID. Docker layers shared
 across different image IDs can make it overstate disk use and reclaimed host
 space; the metrics are cache-accounting estimates, not filesystem accounting.

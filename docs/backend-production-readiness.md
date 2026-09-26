@@ -79,10 +79,15 @@ metrics. `APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
 `APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`, and
 `APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` set validated runtime bounds. The
 recoverable Docker image cache has validated max/target/interval settings:
-20 GiB, 16 GiB, and 15 minutes by default. A sweep inventories at most 256
-strictly owned Stealth runtime tags and removes at most four safe entries.
-It protects selected deployments, verified managed container references, and
-live runtime leases; inventory or ownership failures fail closed. Cache
+20 GiB, 16 GiB, and 15 minutes by default. Docker list output remains byte
+bounded, while valid lifetime inventory count is not capped. Unique image IDs
+are inspected in batches of 128, managed container IDs in batches of 128, and
+deployment protection candidates in PostgreSQL batches of 256. Each sweep
+removes at most four safe tags in deterministic UUIDv7 order. It protects
+selected deployments, verified managed container references, and live runtime
+leases; malformed ownership or truncated output fails closed. After successful
+removals with pressure remaining, the next sweep is scheduled one minute later;
+otherwise the normal interval or bounded failure backoff applies. Cache
 maintenance does not change App desired state or fail unrelated Apps.
 Docker daemon or bridge ownership errors do not terminate unrelated worker
 loops.

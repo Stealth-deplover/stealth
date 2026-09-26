@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -108,7 +110,7 @@ func TestMobyRuntimeImageCacheInventoryIsStrictBoundedAndTyped(t *testing.T) {
 	imageID := "sha256:" + strings.Repeat("b", 64)
 	created := time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)
 	runner := &scriptedRuntimeRunner{results: []CommandResult{
-		{Stdout: []byte(reference + "\n")},
+		{Stdout: []byte(reference + "\t" + imageID + "\n")},
 		{Stdout: []byte(fmt.Sprintf("%s\t%s\t4096\t%s\n", imageID, created.Format(time.RFC3339Nano), reference))},
 	}}
 	moby, err := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
@@ -159,8 +161,9 @@ func TestMobyRuntimeImageCacheInventoryRejectsMalformedAndTruncatedData(t *testi
 	}
 	deploymentID := newCacheDeploymentID(t)
 	reference := ImageTag(deploymentID)
+	imageID := "sha256:" + strings.Repeat("c", 64)
 	truncatedInspect := &scriptedRuntimeRunner{
-		results: []CommandResult{{Stdout: []byte(reference + "\n")}, {Stdout: []byte("partial"), StdoutTruncated: true}},
+		results: []CommandResult{{Stdout: []byte(reference + "\t" + imageID + "\n")}, {Stdout: []byte("partial"), StdoutTruncated: true}},
 	}
 	truncatedMoby, _ := NewMoby(truncatedInspect, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
 	_, err := truncatedMoby.ListRuntimeImageCache(context.Background())
@@ -170,15 +173,130 @@ func TestMobyRuntimeImageCacheInventoryRejectsMalformedAndTruncatedData(t *testi
 	if safeRuntimeError(err) != "runtime image inspection exceeded bounds" {
 		t.Fatalf("truncated inspect diagnostic = %q", safeRuntimeError(err))
 	}
+}
 
-	ids := make([]string, maxRuntimeImageCacheEntries+1)
-	for index := range ids {
-		ids[index] = ImageTag(newCacheDeploymentID(t))
+func runtimeImageCacheDockerFixtures(t *testing.T, tagCount, imageCount int) ([]byte, []CommandResult, []RuntimeImageCacheEntry) {
+	t.Helper()
+	if imageCount < 1 || imageCount > tagCount {
+		t.Fatalf("invalid fixture counts: tags=%d images=%d", tagCount, imageCount)
 	}
-	runner := &scriptedRuntimeRunner{results: []CommandResult{{Stdout: []byte(strings.Join(ids, "\n") + "\n")}}}
+	created := time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)
+	tagsByImage := make(map[string][]string, imageCount)
+	metadataByImage := make(map[string]RuntimeImageCacheEntry, imageCount)
+	var listing strings.Builder
+	entries := make([]RuntimeImageCacheEntry, 0, tagCount)
+	for index := 0; index < tagCount; index++ {
+		deploymentID := newCacheDeploymentID(t)
+		reference := ImageTag(deploymentID)
+		imageNumber := index % imageCount
+		imageID := fmt.Sprintf("sha256:%064x", imageNumber+1)
+		entry := RuntimeImageCacheEntry{
+			DeploymentID: deploymentID,
+			Reference:    reference,
+			ImageID:      imageID,
+			SizeBytes:    int64(imageNumber+1) * 1024,
+			CreatedAt:    created.Add(time.Duration(imageNumber) * time.Second),
+		}
+		entries = append(entries, entry)
+		tagsByImage[imageID] = append(tagsByImage[imageID], reference)
+		metadataByImage[imageID] = entry
+		listing.WriteString(reference)
+		listing.WriteByte('\t')
+		listing.WriteString(imageID)
+		listing.WriteByte('\n')
+	}
+	imageIDs := make([]string, 0, imageCount)
+	for imageID := range tagsByImage {
+		imageIDs = append(imageIDs, imageID)
+	}
+	slices.Sort(imageIDs)
+	results := make([]CommandResult, 0, (imageCount+runtimeImageInspectBatchSize-1)/runtimeImageInspectBatchSize)
+	for start := 0; start < len(imageIDs); start += runtimeImageInspectBatchSize {
+		end := min(start+runtimeImageInspectBatchSize, len(imageIDs))
+		var inspect strings.Builder
+		for _, imageID := range imageIDs[start:end] {
+			entry := metadataByImage[imageID]
+			tags := slices.Clone(tagsByImage[imageID])
+			slices.Sort(tags)
+			inspect.WriteString(fmt.Sprintf("%s\t%s\t%d\t%s\n", imageID, entry.CreatedAt.Format(time.RFC3339Nano), entry.SizeBytes, strings.Join(tags, ",")))
+		}
+		results = append(results, CommandResult{Stdout: []byte(inspect.String())})
+	}
+	return []byte(listing.String()), results, entries
+}
+
+func TestMobyRuntimeImageCacheInventoryAcceptsHighCardinalityAndBatchesInspect(t *testing.T) {
+	for _, count := range []int{runtimeImageInspectBatchSize - 1, runtimeImageInspectBatchSize, runtimeImageInspectBatchSize + 1, 257, 512, 1000} {
+		t.Run(fmt.Sprintf("tags_%d", count), func(t *testing.T) {
+			listing, inspectResults, wantEntries := runtimeImageCacheDockerFixtures(t, count, count)
+			results := append([]CommandResult{{Stdout: listing}}, inspectResults...)
+			runner := &scriptedRuntimeRunner{results: results}
+			moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+			entries, err := moby.ListRuntimeImageCache(context.Background())
+			if err != nil {
+				t.Fatalf("high-cardinality inventory failed: %v", err)
+			}
+			if len(entries) != count {
+				t.Fatalf("inventory contains %d tags, want %d", len(entries), count)
+			}
+			sortRuntimeImageCacheEntries(wantEntries)
+			if !slices.Equal(entries, wantEntries) {
+				t.Fatal("inventory metadata or deterministic order differs from Docker fixtures")
+			}
+			wantInspectCalls := (count + runtimeImageInspectBatchSize - 1) / runtimeImageInspectBatchSize
+			if len(runner.calls) != 1+wantInspectCalls {
+				t.Fatalf("Docker calls = %d, want image list plus %d bounded inspections", len(runner.calls), wantInspectCalls)
+			}
+			for _, call := range runner.calls[1:] {
+				if len(call.args)-4 > runtimeImageInspectBatchSize {
+					t.Fatalf("image inspect argv has %d IDs, batch limit is %d", len(call.args)-4, runtimeImageInspectBatchSize)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeImageCacheInventoryAndAccountingHandleManySharedTags(t *testing.T) {
+	listing, inspectResults, wantEntries := runtimeImageCacheDockerFixtures(t, 1000, 100)
+	results := append([]CommandResult{{Stdout: listing}}, inspectResults...)
+	runner := &scriptedRuntimeRunner{results: results}
 	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
-	if _, err := moby.ListRuntimeImageCache(context.Background()); !errors.Is(err, ErrDockerOutputTooLarge) {
-		t.Fatalf("oversized inventory = %v, want bounded-output error", err)
+	actual, err := moby.ListRuntimeImageCache(context.Background())
+	if err != nil || len(actual) != 1000 {
+		t.Fatalf("shared-tag cache inventory = %d entries, %v", len(actual), err)
+	}
+	wantBytes, err := runtimeImageCacheSizeBytes(wantEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotBytes, err := runtimeImageCacheSizeBytes(actual)
+	if err != nil || gotBytes != wantBytes {
+		t.Fatalf("shared image cache estimate = %d, %v; want %d", gotBytes, err, wantBytes)
+	}
+	sharedImageID := actual[0].ImageID
+	remaining := slices.Clone(actual)
+	for index, entry := range remaining {
+		if entry.ImageID == sharedImageID {
+			remaining = append(remaining[:index], remaining[index+1:]...)
+			break
+		}
+	}
+	afterOneAlias, err := runtimeImageCacheSizeBytes(remaining)
+	if err != nil || afterOneAlias != wantBytes {
+		t.Fatalf("removing one of several shared tags changed accounting: %d, %v; want %d", afterOneAlias, err, wantBytes)
+	}
+}
+
+func TestMobyRuntimeImageCacheRejectsMalformedOwnershipInLargeInventory(t *testing.T) {
+	listing, _, _ := runtimeImageCacheDockerFixtures(t, 999, 999)
+	listing = append(listing, []byte("stealth-app/not-a-uuid:runtime\tsha256:"+strings.Repeat("f", 64)+"\n")...)
+	runner := &scriptedRuntimeRunner{results: []CommandResult{{Stdout: listing}}}
+	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	if _, err := moby.ListRuntimeImageCache(context.Background()); !errors.Is(err, ErrImageVerification) {
+		t.Fatalf("large inventory with malformed Stealth reference = %v, want verification failure", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("malformed large inventory reached image inspect: %d Docker calls", len(runner.calls))
 	}
 }
 
@@ -187,7 +305,7 @@ func TestMobyRuntimeImageCacheInspectionFailureHasBoundedSafeReason(t *testing.T
 	reference := ImageTag(deploymentID)
 	imageID := "sha256:" + strings.Repeat("a", 64)
 	runner := &scriptedRuntimeRunner{results: []CommandResult{
-		{Stdout: []byte(reference + "\n")},
+		{Stdout: []byte(reference + "\t" + imageID + "\n")},
 		{Stdout: []byte(imageID + "\tnot-a-time\t4096\t" + reference + "\n")},
 	}}
 	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
@@ -205,7 +323,7 @@ func TestMobyRuntimeImageCacheRejectsUnavailableImageSize(t *testing.T) {
 	reference := ImageTag(deploymentID)
 	imageID := "sha256:" + strings.Repeat("a", 64)
 	runner := &scriptedRuntimeRunner{results: []CommandResult{
-		{Stdout: []byte(reference + "\n")},
+		{Stdout: []byte(reference + "\t" + imageID + "\n")},
 		{Stdout: []byte(imageID + "\t2026-09-26T08:00:00Z\t-1\t" + reference + "\n")},
 	}}
 	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
@@ -307,13 +425,115 @@ func TestMobyManagedAppImageReferenceInventoryIsBoundedAndOwnershipChecked(t *te
 		t.Fatalf("malformed managed labels inventory = %v, want fail-closed ownership conflict", err)
 	}
 
-	ids := make([]string, maxRuntimeImageProtectionContainers+1)
-	for index := range ids {
-		ids[index] = fmt.Sprintf("%064x", index+1)
+}
+
+type managedContainerDockerFixture struct {
+	id     string
+	output string
+	ref    ManagedAppImageReference
+}
+
+func managedContainerDockerFixtures(t *testing.T, count, malformedIndex int) ([]byte, []CommandResult, []ManagedAppImageReference) {
+	t.Helper()
+	fixtures := make([]managedContainerDockerFixture, 0, count)
+	for index := 0; index < count; index++ {
+		job := runtimeTestJob()
+		appID, projectID, deploymentID, routeID := newCacheDeploymentID(t), newCacheDeploymentID(t), newCacheDeploymentID(t), newCacheDeploymentID(t)
+		job.App.ID = appID.String()
+		job.App.ProjectID = projectID.String()
+		deploymentString := deploymentID.String()
+		job.App.DesiredDeploymentID = &deploymentString
+		job.App.DesiredGeneration = int64(index + 1)
+		job.RouteIdentity = routeID
+		job.ContainerName = repository.AppRuntimeContainerNameForIncarnation(appID, routeID)
+		labels, err := ContainerLabels(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == malformedIndex {
+			labels["stealth.project_id"] = "not-a-uuid"
+		}
+		encodedLabels, err := json.Marshal(labels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		containerID := fmt.Sprintf("%064x", index+1)
+		imageID := fmt.Sprintf("sha256:%064x", index+1)
+		line := fmt.Sprintf("%s\t%s\t/%s\t%s\n", containerID, imageID, job.ContainerName, encodedLabels)
+		fixtures = append(fixtures, managedContainerDockerFixture{
+			id: containerID, output: line,
+			ref: ManagedAppImageReference{DeploymentID: deploymentID, ImageID: imageID},
+		})
 	}
-	boundedRunner := &scriptedRuntimeRunner{results: []CommandResult{{Stdout: []byte(strings.Join(ids, "\n") + "\n")}}}
-	boundedMoby, _ := NewMoby(boundedRunner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
-	if _, err := boundedMoby.ListManagedAppImageReferences(context.Background()); !errors.Is(err, ErrDockerOutputTooLarge) || len(boundedRunner.calls) != 1 {
-		t.Fatalf("oversized managed container inventory = %v, calls=%d", err, len(boundedRunner.calls))
+	slices.SortFunc(fixtures, func(left, right managedContainerDockerFixture) int { return strings.Compare(left.id, right.id) })
+	var listing strings.Builder
+	byID := make(map[string]managedContainerDockerFixture, count)
+	refs := make([]ManagedAppImageReference, 0, count)
+	for _, fixture := range fixtures {
+		listing.WriteString(fixture.id)
+		listing.WriteByte('\n')
+		byID[fixture.id] = fixture
+		refs = append(refs, fixture.ref)
+	}
+	results := make([]CommandResult, 0, (count+managedContainerInspectBatchSize-1)/managedContainerInspectBatchSize)
+	ids := make([]string, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		ids = append(ids, fixture.id)
+	}
+	for start := 0; start < len(ids); start += managedContainerInspectBatchSize {
+		end := min(start+managedContainerInspectBatchSize, len(ids))
+		var output strings.Builder
+		for _, id := range ids[start:end] {
+			output.WriteString(byID[id].output)
+		}
+		results = append(results, CommandResult{Stdout: []byte(output.String())})
+	}
+	return []byte(listing.String()), results, refs
+}
+
+func TestMobyManagedAppImageReferencesInventoryBatchesAndAcceptsLargeHosts(t *testing.T) {
+	for _, count := range []int{managedContainerInspectBatchSize - 1, managedContainerInspectBatchSize, managedContainerInspectBatchSize + 1, 2*managedContainerInspectBatchSize + 1, 600} {
+		t.Run(fmt.Sprintf("containers_%d", count), func(t *testing.T) {
+			listing, inspectResults, wantRefs := managedContainerDockerFixtures(t, count, -1)
+			results := append([]CommandResult{{Stdout: listing}}, inspectResults...)
+			runner := &scriptedRuntimeRunner{results: results}
+			moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+			refs, err := moby.ListManagedAppImageReferences(context.Background())
+			if err != nil {
+				t.Fatalf("managed container inventory of %d failed: %v", count, err)
+			}
+			sortManagedAppImageReferences(wantRefs)
+			if !slices.Equal(refs, wantRefs) {
+				t.Fatalf("verified refs = %d, want %d complete ownership records", len(refs), len(wantRefs))
+			}
+			wantCalls := 1 + (count+managedContainerInspectBatchSize-1)/managedContainerInspectBatchSize
+			if len(runner.calls) != wantCalls {
+				t.Fatalf("Docker calls = %d, want %d bounded inventory calls", len(runner.calls), wantCalls)
+			}
+			for _, call := range runner.calls[1:] {
+				if len(call.args)-4 > managedContainerInspectBatchSize {
+					t.Fatalf("container inspect argv has %d IDs, batch limit is %d", len(call.args)-4, managedContainerInspectBatchSize)
+				}
+			}
+		})
+	}
+}
+
+func TestMobyManagedAppImageReferencesFailsClosedOnMalformedLaterBatch(t *testing.T) {
+	listing, inspectResults, _ := managedContainerDockerFixtures(t, 2*managedContainerInspectBatchSize+1, 2*managedContainerInspectBatchSize)
+	results := append([]CommandResult{{Stdout: listing}}, inspectResults...)
+	runner := &scriptedRuntimeRunner{results: results}
+	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	if _, err := moby.ListManagedAppImageReferences(context.Background()); !errors.Is(err, ErrRuntimeOwnershipConflict) {
+		t.Fatalf("malformed later-batch ownership = %v, want ownership conflict", err)
+	}
+	wantCalls := 1 + (2*managedContainerInspectBatchSize+1+managedContainerInspectBatchSize-1)/managedContainerInspectBatchSize
+	if len(runner.calls) != wantCalls {
+		t.Fatalf("malformed later batch caused %d calls, want stop after %d", len(runner.calls), wantCalls)
+	}
+	for _, call := range runner.calls {
+		if slices.Contains(call.args, "rm") || strings.Contains(strings.Join(call.args, " "), "prune") {
+			t.Fatalf("failed ownership inventory issued a destructive Docker command: %#v", call.args)
+		}
 	}
 }

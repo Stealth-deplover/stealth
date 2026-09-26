@@ -323,14 +323,21 @@ values stop configuration loading with an error.
 When the cache estimate exceeds its maximum, the worker inventories only
 strictly validated `stealth-app/<deployment-uuid>:runtime` tags, protects all
 selected deployments (including disabled Apps), verified container references,
-and live fenced runtime work, then removes up to four oldest safe tags in one
-sweep until it reaches the target. Ties use deployment UUID ordering. A Docker
-image is removed by its exact Stealth tag; Stealth never runs `docker system
-prune`, `docker image prune`, `docker builder prune`, or `docker volume prune`.
-The inventory is capped at 256 entries. Cache pressure, inventory availability,
-GC outcome, and estimated reclaimed bytes are exported as low-cardinality
-worker metrics. A failed or unsafe cache operation skips deletion and does not
-fail an unrelated App; unresolved pressure is logged and retried later.
+and live fenced runtime work, then removes at most four oldest safe tags per
+sweep. Ties use deployment UUID ordering. Image IDs are inspected in batches
+of 128, managed container IDs in batches of 128, and PostgreSQL protection
+candidates in batches of 256. Docker output remains byte-bounded, but a large
+valid lifetime tag count does not disable cache maintenance. Malformed
+Stealth-looking ownership or truncated output fails closed before deletion.
+When successful removals leave the cache above its maximum, the next sweep is
+scheduled one minute later; each worker turn remains bounded so App
+reconciliation, health checks, and cleanup continue to run. A Docker image is
+removed by its exact Stealth tag; Stealth never runs `docker system prune`,
+`docker image prune`, `docker builder prune`, or `docker volume prune`. Cache
+pressure, inventory availability, GC outcome, and estimated reclaimed bytes
+are exported as low-cardinality worker metrics. A failed or unsafe cache
+operation skips deletion and does not fail an unrelated App; unresolved
+pressure is logged and retried later.
 
 Accounting uses Docker's per-image size once per image ID. Images with shared
 layers under different IDs can count shared layers more than once, so cache
