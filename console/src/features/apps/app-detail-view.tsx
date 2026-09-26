@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AppEditorDialog } from "@/features/apps/app-editor-dialog";
 import { AppDeploymentDialog } from "@/features/apps/app-deployment-dialog";
+import { AppEnvironmentVariablesPanel } from "@/features/apps/app-environment-variables-panel";
 import { updateAppPayload, type AppFormValues } from "@/features/apps/app-form";
 import { BackLink } from "@/features/resources/detail-shared";
 import type { AppDeployment } from "@/api/types";
@@ -322,6 +323,8 @@ export function AppDetailView({
           />
         )}
       </Card>
+
+      <AppEnvironmentVariablesPanel projectId={projectId} appId={appId} />
 
       <LogViewer
         key={`runtime:${app.id}`}

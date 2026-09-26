@@ -18,6 +18,9 @@ func main() {
 	case len(os.Args) == 2 && os.Args[1] == "verify-runtime":
 		verifyRuntime()
 		return
+	case len(os.Args) == 2 && os.Args[1] == "verify-runtime-secret-v2":
+		verifyRuntimeSecretReplacement()
+		return
 	case len(os.Args) == 2 && os.Args[1] == "set-unhealthy":
 		if err := os.WriteFile("/tmp/stealth-health-unhealthy", []byte("unhealthy\n"), 0o600); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, "could not set health fixture state")
@@ -38,6 +41,12 @@ func main() {
 }
 
 func verifyBuildKitSecrets() {
+	for _, name := range []string{"APP_RUNTIME_SMOKE_MODE", "APP_RUNTIME_SMOKE_SECRET", "APPS_SECRET_KEY"} {
+		if _, ok := os.LookupEnv(name); ok {
+			_, _ = fmt.Fprintf(os.Stderr, "STEALTH_BUILDKIT_MTLS_PROBE: runtime-only environment variable %s is visible during build\n", name)
+			os.Exit(30)
+		}
+	}
 	for index, path := range []string{
 		"/run/secrets/stealth-buildkit/ca.pem",
 		"/run/secrets/stealth-buildkit/client-cert.pem",
@@ -81,6 +90,16 @@ func serve() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("app-runtime-smoke-ok\n"))
 	})
+	http.HandleFunc("/configuration", func(w http.ResponseWriter, _ *http.Request) {
+		mode := os.Getenv("APP_RUNTIME_SMOKE_MODE")
+		secret := os.Getenv("APP_RUNTIME_SMOKE_SECRET")
+		if version := runtimeConfigurationVersion(mode, secret); version != "" {
+			_, _ = fmt.Fprintf(w, "app-config-%s\n", version)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("app-config-unavailable\n"))
+		}
+	})
 	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "app runtime smoke server failed: %v\n", err)
 		os.Exit(1)
@@ -94,6 +113,7 @@ func verifyRuntime() {
 		"FUNCTIONS_SECRET_KEY",
 		"CLOUDFLARE_API_TOKEN",
 		"APPS_BUILDKIT_CLIENT_KEY",
+		"APPS_SECRET_KEY",
 	} {
 		if _, ok := os.LookupEnv(name); ok {
 			_, _ = fmt.Fprintf(os.Stderr, "runtime smoke found forbidden environment variable %s\n", name)
@@ -141,4 +161,26 @@ func verifyRuntime() {
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", lastErr)
 	os.Exit(6)
+}
+
+func runtimeConfigurationVersion(mode, secret string) string {
+	switch {
+	case mode == "v1" && secret == "fake-smoke-secret-not-real-v1":
+		return "v1"
+	case mode == "v1" && secret == "fake-smoke-secret-not-real-v2":
+		return "v2"
+	default:
+		return ""
+	}
+}
+
+func verifyRuntimeSecretReplacement() {
+	if os.Getenv("APP_RUNTIME_SMOKE_MODE") != "v1" {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke baseline variable is missing from the current App container")
+		os.Exit(11)
+	}
+	if os.Getenv("APP_RUNTIME_SMOKE_SECRET") != "fake-smoke-secret-not-real-v2" {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke encrypted value replacement is missing from the current App container")
+		os.Exit(12)
+	}
 }

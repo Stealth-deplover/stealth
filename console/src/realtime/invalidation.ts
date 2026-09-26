@@ -58,6 +58,7 @@ const projectRealtimeEventTypes = [
   "app_deployment.delete",
   "app_deployment.updated",
   "app.runtime.updated",
+  "app.environment_variable.updated",
   "site_domain.create",
   "site_domain.delete",
   "site_domain.verify",
@@ -373,6 +374,10 @@ export function realtimeCacheChanges(
 
   if (type.startsWith("site.")) {
     return [{ kind: "site", projectId, siteId: resourceId(event) }];
+  }
+  if (type.startsWith("app.environment_variable.")) {
+    const appId = resourceId(event);
+    return appId ? [{ kind: "app-environment-variable", projectId, appId }] : [];
   }
   if (type.startsWith("app.")) {
     return [{ kind: "app", projectId, appId: resourceId(event) }];

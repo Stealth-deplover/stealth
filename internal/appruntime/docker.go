@@ -736,12 +736,35 @@ func (m *Moby) inspectContainer(ctx context.Context, identifier string) (Contain
 	return container, true, nil
 }
 
-func (m *Moby) CreateApp(ctx context.Context, job repository.AppRuntimeJob, image Image) (Container, error) {
-	args, err := ContainerCreateArgs(job, image.Tag, m.NetworkName, m.Security)
+func (m *Moby) CreateApp(ctx context.Context, job repository.AppRuntimeJob, image Image, environment []RuntimeEnvironmentVariable) (Container, error) {
+	environmentFile := ""
+	var cleanupEnvironment func() error
+	if len(environment) > 0 {
+		var err error
+		environmentFile, cleanupEnvironment, err = writeRuntimeEnvironmentFile(environment)
+		if err != nil {
+			return Container{}, ErrContainerCreate
+		}
+	}
+	if cleanupEnvironment != nil {
+		defer func() {
+			if cleanupEnvironment != nil {
+				_ = cleanupEnvironment()
+			}
+		}()
+	}
+	args, err := containerCreateArgsWithEnvironmentFile(job, image.Tag, m.NetworkName, m.Security, environmentFile)
 	if err != nil {
 		return Container{}, err
 	}
 	_, createErr := m.runAction(ctx, args, nil)
+	if cleanupEnvironment != nil {
+		cleanupErr := cleanupEnvironment()
+		if cleanupErr != nil {
+			return Container{}, cleanupErr
+		}
+		cleanupEnvironment = nil
+	}
 	container, found, inspectErr := m.InspectApp(ctx, uuid.MustParse(job.App.ID))
 	if inspectErr != nil {
 		return Container{}, inspectErr
@@ -973,6 +996,10 @@ func dockerNotFound(err error) bool {
 }
 
 func ContainerCreateArgs(job repository.AppRuntimeJob, imageRef, networkName string, profile RuntimeSecurityProfile) ([]string, error) {
+	return containerCreateArgsWithEnvironmentFile(job, imageRef, networkName, profile, "")
+}
+
+func containerCreateArgsWithEnvironmentFile(job repository.AppRuntimeJob, imageRef, networkName string, profile RuntimeSecurityProfile, environmentFile string) ([]string, error) {
 	appID, err := uuid.Parse(job.App.ID)
 	if err != nil || appID == uuid.Nil {
 		return nil, ErrContainerCreate
@@ -985,6 +1012,9 @@ func ContainerCreateArgs(job repository.AppRuntimeJob, imageRef, networkName str
 		return nil, ErrContainerCreate
 	}
 	if profile.Runtime != "" && !validDockerName(profile.Runtime) {
+		return nil, ErrContainerCreate
+	}
+	if environmentFile != "" && !validRuntimeEnvironmentFilePath(environmentFile) {
 		return nil, ErrContainerCreate
 	}
 	spec, err := workloadspec.Normalize(job.App.Workload)
@@ -1027,6 +1057,9 @@ func ContainerCreateArgs(job repository.AppRuntimeJob, imageRef, networkName str
 	}
 	if spec.WorkingDirectory != nil {
 		args = append(args, "--workdir", *spec.WorkingDirectory)
+	}
+	if environmentFile != "" {
+		args = append(args, "--env-file", environmentFile)
 	}
 	args = append(args, imageRef)
 	args = append(args, spec.Command...)
@@ -1092,8 +1125,12 @@ func ContainerMatchesDesiredExceptName(container Container, job repository.AppRu
 	if job.App.Workload.WorkingDirectory != nil {
 		workingDir = *job.App.Workload.WorkingDirectory
 	}
+	// Docker merges the worker-supplied App environment into Config.Env. Runtime
+	// values are fenced by the generation labels and change only when the
+	// worker creates a new container, so Config.Env cannot be compared directly
+	// with the image defaults here.
 	return slices.Equal(container.Config.Cmd, command) && slices.Equal(container.Config.Entrypoint, image.Entrypoint) &&
-		slices.Equal(container.Config.Env, image.Environment) && container.Config.WorkingDir == workingDir && container.Config.User == image.User
+		container.Config.WorkingDir == workingDir && container.Config.User == image.User
 }
 
 func managedAppContainer(container Container) bool {

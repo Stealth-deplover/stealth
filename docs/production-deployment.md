@@ -253,7 +253,7 @@ backoff.
 The worker creates and owns the local bridge named by
 `APPS_RUNTIME_NETWORK_NAME` (default `stealth_app_runtime`). App containers
 have no host-published ports, no extra network attachments, no host mounts or
-devices, and no backend environment variables. Their filesystem root is
+devices, and no Stealth backend credentials. Their filesystem root is
 read-only, Linux capabilities are dropped, `no-new-privileges` is enabled, and
 CPU, memory/swap, process count, `/tmp`, logs, and ulimits are bounded by
 Stealth-owned values. The trusted worker and hardened Traefik join this bridge
@@ -276,9 +276,19 @@ read-only, `/tmp` is a bounded tmpfs, and image-declared Dockerfile `VOLUME`
 paths are rejected before import so Docker cannot create hidden anonymous
 storage. App writes outside `/tmp` fail; `/tmp` contents disappear when the
 container is replaced. Persistent App storage is future work. Image-defined
-environment values remain part of the selected image. Stealth does not inject
-platform secrets, and image configuration is not returned by the App API; do
-not bake secrets into Dockerfile `ENV` instructions.
+environment values remain part of the selected image. App environment values
+are configured after build through the App API. Their values are write-only,
+encrypted in PostgreSQL using `APPS_SECRET_KEY`, and never sent to BuildKit.
+The worker decrypts them just before container creation and passes a
+short-lived, mode-0600 env file in `/dev/shm`; it removes that file after the
+Docker command. Docker retains the effective environment in its container
+configuration while the container exists, so a host operator with Docker
+access can inspect it. The API does not return image configuration or
+configured values; do not bake secrets into Dockerfile `ENV` instructions.
+Each configured value is limited to 65,536 UTF-8 bytes and configured values
+are limited to 512 KiB total per App. NUL and CR/LF are unsupported because
+the current Docker `--env-file` transport is line-based; multiline values are
+not supported.
 
 The runtime image cache lives in the host Docker data root and may grow as
 deployments change. Stealth does not run automatic image garbage collection;
@@ -306,7 +316,8 @@ Collector, stored in ClickHouse, and read through a bounded project-scoped API.
 PostgreSQL stores verified App-to-container mapping metadata only. Docker local
 rotation and ClickHouse retention are independent; historical logs are
 available only while ClickHouse retains them. A telemetry outage degrades log
-reads but does not stop Apps. Encrypted App secrets remain unimplemented.
+reads but does not stop Apps. Configured App variables and secrets are
+encrypted with `APPS_SECRET_KEY`; database restore requires the matching key.
 
 ### Manual host-reboot acceptance
 
@@ -336,6 +347,11 @@ Required production values:
   shown in [`.env.production.example`](../.env.production.example).
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `REDIS_PASSWORD`.
 - `FUNCTIONS_SECRET_KEY`, generated with `openssl rand -base64 32`.
+- `APPS_SECRET_KEY`, a separate 32-byte key (`openssl rand -base64 32` for
+  manual Compose setup) generated and preserved by the installer. Keep it in
+  the protected installation `config.env` and include it in encrypted operator
+  backups; it is required to decrypt App values after restoring PostgreSQL.
+  It is delivered only to API and worker services.
 - `BOOTSTRAP_CLI_KEY`, generated with `openssl rand -base64 32`; this is the
   dedicated local-CLI proof key for first-run Instance Owner onboarding and
   encryption of short-lived GitHub browser-authorization state. It is never

@@ -101,6 +101,75 @@ func TestContainerCreateArgsKeepsTenantCommandAsArgumentsAndAppliesIsolation(t *
 	}
 }
 
+func TestRuntimeEnvironmentFileIsTemporaryAndValuesStayOutOfDockerArgv(t *testing.T) {
+	job := runtimeTestJob()
+	secret := "smoke-secret-value"
+	path, cleanup, err := writeRuntimeEnvironmentFile([]RuntimeEnvironmentVariable{{Key: "TOKEN", Value: []byte(secret)}, {Key: "MODE", Value: []byte("test")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 || !strings.HasPrefix(path, "/dev/shm/.stealth-app-env-") {
+		t.Fatalf("environment file permissions/path = %o %q", info.Mode().Perm(), path)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "MODE=test\nTOKEN="+secret+"\n" {
+		t.Fatalf("environment file contents = %q", contents)
+	}
+	args, err := containerCreateArgsWithEnvironmentFile(job, "stealth-app/test:runtime", "stealth_app_runtime", RuntimeSecurityProfile{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasSubsequence(args, []string{"--env-file", path}) || slices.Contains(args, secret) {
+		t.Fatalf("environment CLI arguments leaked a value or omitted file: %#v", args)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temporary environment file remains after cleanup: %v", err)
+	}
+}
+
+func TestRuntimeEnvironmentFileRejectsLineInjectionAndDuplicateKeys(t *testing.T) {
+	for _, values := range [][]RuntimeEnvironmentVariable{
+		{{Key: "TOKEN", Value: []byte("one\nOTHER=two")}},
+		{{Key: "TOKEN", Value: []byte("one")}, {Key: "TOKEN", Value: []byte("two")}},
+		{{Key: "TOKEN", Value: []byte("one\x00two")}},
+	} {
+		if path, cleanup, err := writeRuntimeEnvironmentFile(values); err == nil {
+			_ = cleanup()
+			t.Fatalf("invalid environment accepted at %q", path)
+		}
+	}
+}
+
+func TestRuntimeEnvironmentFileUsesAggregateProductLimit(t *testing.T) {
+	value := bytes.Repeat([]byte("v"), repository.AppEnvironmentVariableMaxValueBytes)
+	values := make([]RuntimeEnvironmentVariable, 0, 9)
+	for index := 0; index < 8; index++ {
+		values = append(values, RuntimeEnvironmentVariable{Key: fmt.Sprintf("VALUE_%d", index), Value: append([]byte(nil), value...)})
+	}
+	_, cleanup, err := writeRuntimeEnvironmentFile(values)
+	if err != nil {
+		t.Fatalf("write exactly-at-limit environment: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	values = append(values, RuntimeEnvironmentVariable{Key: "VALUE_EXTRA", Value: []byte("x")})
+	if path, cleanup, err := writeRuntimeEnvironmentFile(values); err == nil {
+		_ = cleanup()
+		t.Fatalf("aggregate over-limit environment was written to %q", path)
+	}
+}
+
 func TestExecCommandRunnerPassesArgvWithoutShellExpansionAndBoundsOutput(t *testing.T) {
 	printf, err := exec.LookPath("printf")
 	if err != nil {
@@ -650,6 +719,11 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 	}
 	if !ContainerMatchesDesired(container, job, image, "stealth_app_runtime") {
 		t.Fatal("complete isolated container did not match desired state")
+	}
+	withAppEnvironment := container
+	withAppEnvironment.Config.Env = append(slices.Clone(image.Environment), "TOKEN=fake-runtime-value")
+	if !ContainerMatchesDesired(withAppEnvironment, job, image, "stealth_app_runtime") {
+		t.Fatal("managed App environment was incorrectly treated as image drift")
 	}
 	mutations := []struct {
 		name   string

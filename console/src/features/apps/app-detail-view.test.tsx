@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   app: null as StealthApp | null,
   deployments: [] as AppDeployment[],
   canManage: false,
+  appVariables: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,6 +42,18 @@ vi.mock("@/api/queries", () => ({
     isFetching: false,
     refetch: vi.fn(),
   }),
+  useAppEnvironmentVariables: () => ({
+    data: {
+      variables: mocks.appVariables,
+      pagination: { next_cursor: null },
+      can_manage: mocks.canManage,
+    },
+    error: null,
+    isError: false,
+    isLoading: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("@/api/mutations", () => ({
@@ -48,6 +61,9 @@ vi.mock("@/api/mutations", () => ({
   useDeleteApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSelectAppDeployment: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useCreateAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useUpdateAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useDeleteAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 
 vi.mock("@/components/log-viewer", async () => {
@@ -150,6 +166,7 @@ describe("AppDetailView", () => {
     mocks.app = makeApp();
     mocks.deployments = [];
     mocks.canManage = false;
+    mocks.appVariables = [];
   });
 
   it("states that the App has no deployment and offers no fake deploy action", () => {
@@ -164,6 +181,7 @@ describe("AppDetailView", () => {
     expect(
       screen.getByText("No deployment has been created for this App yet."),
     ).toBeInTheDocument();
+    expect(screen.getByText("Environment variables")).toBeInTheDocument();
     expect(screen.getAllByText("Not deployed")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /deploy/i })).toBeNull();
   });

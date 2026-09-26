@@ -116,6 +116,10 @@ claim a full browser/provider installation or run a full production stack.
       installation backups. Confirm a legacy `state/buildkit-mtls` is
       relocated intact and no runtime service sees the CA key. Completed OCI
       artifacts must remain valid if the BuildKit PKI is lost.
+- [ ] Verify install generates a dedicated `APPS_SECRET_KEY`, and upgrade and
+      repair preserve an existing valid key without rotating it. Include the
+      key in protected backups with PostgreSQL; confirm only API and worker
+      receive it and no App container or BuildKit build receives it.
 - [ ] Confirm `cloudflare-state-init` receives only the narrow named-volume
       setup input and the Cloudflare import output. It must not mount the
       complete `state/` directory or any part of `private/`.
@@ -131,6 +135,9 @@ claim a full browser/provider installation or run a full production stack.
       in the App. Confirm unique App stdout/stderr markers are returned by the
       project-scoped runtime-log API, response lines omit container IDs, and
       same-container restart plus container recreation retain verified history.
+      Confirm the App receives a configured variable and encrypted secret,
+      then receives a replacement secret only after runtime replacement and
+      fresh health convergence.
 - [ ] Confirm the Compose smoke covers disable/enable reuse, CPU replacement,
       v2 image selection, worker restart, deleted container recovery, unexpected
       exit recovery, incarnation-specific target rotation, stale retired-name

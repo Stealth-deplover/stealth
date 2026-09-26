@@ -174,10 +174,15 @@ validating bridge ownership and the current Compose peer identity; API,
 Console, BuildKit, and the remaining backend services stay off it. App
 containers have no host-published ports, host mounts, host networking, host
 PID/IPC, added Linux capabilities, privileged mode, Docker socket, backend
-credentials, or Stealth storage. The image's own environment is preserved;
-Stealth injects no environment values. The current runtime uses Moby directly;
-gVisor is not configured yet. Secret values have a separate future encrypted
-lifecycle and never belong in WorkloadSpec.
+credentials, or Stealth storage. Image-defined environment values are
+preserved. App variables and secrets are configured after build, encrypted in
+PostgreSQL with `APPS_SECRET_KEY`, and decrypted by the trusted worker only for
+container creation; they are never sent to BuildKit. The worker uses a
+short-lived mode-0600 environment file in `/dev/shm` and removes it after the
+Docker command. Docker retains the effective environment in its container
+configuration while the container exists, so host operators with Docker access
+can inspect it. The current runtime uses Moby directly; gVisor is not
+configured yet.
 
 All Apps currently share the runtime bridge with Traefik, so one App may be
 able to reach another App and services listening on Traefik. This is not
@@ -224,7 +229,14 @@ resolves those trusted sources before querying bounded ClickHouse history;
 the Console uses its shared log viewer. Logs remain subject to Docker local
 rotation and ClickHouse telemetry retention, which are separate limits.
 Telemetry outages affect log retrieval, not App reconciliation or routing.
-Encrypted App secrets remain deferred.
+App environment variables and secrets are write-only through the API and
+Console; configured values are encrypted in PostgreSQL with a dedicated
+operator key. The trusted worker decrypts values only for container creation,
+using a short-lived memory-backed env file that is removed after the Docker
+command. Runtime values are not sent to BuildKit. The operator key is required
+to recover encrypted values from a database backup. Configured values are
+limited to 65,536 bytes each and 512 KiB total per App. NUL and line breaks
+are unsupported by the current line-based Docker env-file transport.
 
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no

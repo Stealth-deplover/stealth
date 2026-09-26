@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"net/mail"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/secretkey"
 )
 
 type Config struct {
@@ -77,6 +78,8 @@ type Config struct {
 	FunctionsMaxArtifactSize   int64
 	FunctionsDefaultQuotaBytes int64
 	FunctionsSecretKey         []byte
+	// AppsSecretKey is a dedicated operator key for App environment values.
+	AppsSecretKey []byte
 	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
 	// a first-run setup session and encrypts short-lived GitHub authorization state.
 	// It is a separate security domain from FunctionsSecretKey.
@@ -267,12 +270,8 @@ func boundedInt32(name, fallback string, minimum, maximum int32) (int32, error) 
 }
 
 func decodeSecretKey(raw, name string) ([]byte, error) {
-	key, err := base64.StdEncoding.DecodeString(raw)
+	key, err := secretkey.Decode32ByteKey(raw)
 	if err != nil {
-		// Raw URL encoding is convenient for env files that avoid '='.
-		key, err = base64.RawURLEncoding.DecodeString(raw)
-	}
-	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("%s must be base64-encoded 32 bytes", name)
 	}
 	return key, nil
@@ -378,6 +377,15 @@ func (c Config) ValidateApps() error {
 		c.AppsRuntimeActionTimeout < 5*time.Second || c.AppsRuntimeActionTimeout > 2*time.Minute ||
 		c.AppsRuntimeImageImportTimeout < time.Minute || c.AppsRuntimeImageImportTimeout > 30*time.Minute {
 		return fmt.Errorf("App runtime network, poll, lease, or Docker timeout settings are invalid")
+	}
+	return nil
+}
+
+// ValidateAppSecrets is a production startup gate for the dedicated key used
+// to encrypt and decrypt persisted App environment values.
+func (c Config) ValidateAppSecrets() error {
+	if len(c.AppsSecretKey) != 32 {
+		return fmt.Errorf("APPS_SECRET_KEY must be configured as base64-encoded 32 bytes")
 	}
 	return nil
 }

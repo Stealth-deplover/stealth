@@ -48,6 +48,7 @@ platform_app_id=""
 platform_app_no_image_id=""
 platform_app_disabled_id=""
 platform_app_deployment_id=""
+platform_app_secret_variable_id=""
 platform_disabled_deployment_id=""
 platform_host=""
 platform_app_host=""
@@ -1442,7 +1443,7 @@ wait_for_app_runtime() {
 }
 
 wait_for_app_health_state() {
-	local wanted_health="$1" wanted_route="$2" app_id="${3:-$platform_app_id}" health route runtime desired observed
+	local wanted_health="$1" wanted_route="$2" app_id="${3:-$platform_app_id}" allow_transient_degraded="${4:-false}" health route runtime desired observed
 	for attempt in $(seq 1 "${APP_RUNTIME_SMOKE_ATTEMPTS:-90}"); do
 		if fetch_app_runtime "$app_id"; then
 			health="$(platform_json_field "$platform_response" app.health_status)"
@@ -1453,7 +1454,7 @@ wait_for_app_health_state() {
 			if [ "$health" = "$wanted_health" ] && [ "$route" = "$wanted_route" ] && [ -n "$desired" ] && [ "$observed" = "$desired" ]; then
 				return 0
 			fi
-			if [ "$runtime" = 'failed' ] || [ "$runtime" = 'degraded' ]; then
+			if [ "$runtime" = 'failed' ] || { [ "$runtime" = 'degraded' ] && [ "$allow_transient_degraded" != 'true' ]; }; then
 				printf 'App runtime entered %s while waiting for health=%s route=%s\n' "$runtime" "$wanted_health" "$wanted_route" >&2
 				return 1
 			fi
@@ -1488,6 +1489,22 @@ wait_for_app_public_route() {
 		sleep "${SMOKE_INTERVAL_SECONDS:-2}"
 	done
 	return 1
+}
+
+app_public_route_body() {
+	local path="$1"
+	"${compose[@]}" exec -T api sh -ec \
+		'wget -qO- --timeout=8 --header "Host: $1" "http://traefik:8080$2" || true' \
+		sh "$platform_app_host" "$path"
+}
+
+assert_app_runtime_configuration() {
+	local expected="$1" body
+	body="$(app_public_route_body /configuration)"
+	if [ "$body" != "$expected" ]; then
+		printf 'App runtime configuration mismatch: expected=%s received=%q\n' "$expected" "$body" >&2
+		return 1
+	fi
 }
 
 fetch_app_runtime_logs() {
@@ -1900,7 +1917,7 @@ host = container.get("HostConfig") or {}
 state = container.get("State") or {}
 mounts = container.get("Mounts") or []
 networks = container.get("NetworkSettings", {}).get("Networks") or {}
-forbidden_env = {"DATABASE_URL", "REDIS_URL", "FUNCTIONS_SECRET_KEY", "CLOUDFLARE_API_TOKEN", "APPS_BUILDKIT_CLIENT_KEY"}
+forbidden_env = {"DATABASE_URL", "REDIS_URL", "FUNCTIONS_SECRET_KEY", "APPS_SECRET_KEY", "CLOUDFLARE_API_TOKEN", "APPS_BUILDKIT_CLIENT_KEY"}
 env_names = {entry.split("=", 1)[0] for entry in container.get("Config", {}).get("Env", [])}
 expected_image = f"stealth-app/{deployment_id}:runtime"
 errors = []
@@ -2032,7 +2049,10 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
-	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":20}}}' "$platform_response")"
+	# The CI smoke reconciles platform routes every 30 seconds. Keep this first
+	# process pending through one route snapshot so the withheld-route assertion
+	# cannot race with the initial health probe.
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":45}}}' "$platform_response")"
 	if [ "$app_status" != '201' ]; then
 		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
 		sed -n '1,80p' "$platform_response" >&2
@@ -2042,6 +2062,25 @@ PY
 	platform_app_host="$(platform_json_field "$platform_response" app.platform_hostname)"
 	if [ -z "$platform_app_id" ] || [ -z "$platform_app_host" ]; then
 		printf '%s\n' 'platform smoke App response did not contain its id and reserved hostname' >&2
+		return 1
+	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/variables" '{"key":"APP_RUNTIME_SMOKE_MODE","value":"v1"}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'App smoke variable creation returned HTTP %s\n' "$app_status" >&2
+		return 1
+	fi
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/variables" '{"key":"APP_RUNTIME_SMOKE_SECRET","value":"fake-smoke-secret-not-real-v1","is_secret":true}' "$platform_response")"
+	if [ "$app_status" != '201' ]; then
+		printf 'App smoke secret creation returned HTTP %s\n' "$app_status" >&2
+		return 1
+	fi
+	if grep -Fq -- 'fake-smoke-secret-not-real-v1' "$platform_response"; then
+		printf '%s\n' 'App smoke secret creation response exposed the submitted value' >&2
+		return 1
+	fi
+	platform_app_secret_variable_id="$(platform_json_field "$platform_response" variable.id)"
+	if [ -z "$platform_app_secret_variable_id" ]; then
+		printf '%s\n' 'App smoke secret response did not contain safe variable metadata' >&2
 		return 1
 	fi
 	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"no-image-smoke","enabled":true}' "$platform_response")"
@@ -2233,6 +2272,43 @@ PY
 	wait_for_app_route_snapshot true
 	assert_app_route_uses_container_dns_name
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	local config_body initial_generation updated_generation
+	config_body="$(app_public_route_body /configuration)"
+	if [ "$config_body" != 'app-config-v1' ]; then
+		printf 'App runtime did not receive the initial variable and encrypted secret: response=%q\n' "$config_body" >&2
+		return 1
+	fi
+	fetch_app_runtime
+	initial_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}/variables/${platform_app_secret_variable_id}" '{"value":"fake-smoke-secret-not-real-v2"}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'App smoke secret replacement returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	if grep -Fq -- 'fake-smoke-secret-not-real-v2' "$platform_response"; then
+		printf '%s\n' 'App smoke secret replacement response exposed the submitted value' >&2
+		return 1
+	fi
+	fetch_app_runtime
+	updated_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	if [ -z "$initial_generation" ] || [ -z "$updated_generation" ] || [ "$updated_generation" -le "$initial_generation" ]; then
+		printf 'App secret replacement did not advance desired generation: before=%s after=%s\n' "$initial_generation" "$updated_generation" >&2
+		return 1
+	fi
+	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_route_snapshot false
+	wait_for_app_health_state healthy active
+	fetch_app_runtime
+	runtime_container_id="$(app_runtime_container_id)"
+	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime-secret-v2
+	wait_for_app_route_snapshot true
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	config_body="$(app_public_route_body /configuration)"
+	if [ "$config_body" != 'app-config-v2' ]; then
+		printf 'App runtime did not receive the replacement secret after fresh health convergence: response=%q\n' "$config_body" >&2
+		return 1
+	fi
+	printf 'App runtime received variable/secret configuration and a replaced secret on generation %s\n' "$updated_generation"
 	wait_for_app_runtime_log_markers "$smoke_marker" 1 "$runtime_container_id"
 	local runtime_log_counts_before runtime_log_counts_after
 	runtime_log_counts_before="$(app_runtime_log_counts "$smoke_marker")"
@@ -2391,6 +2467,7 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 500
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'App re-enable restored the selected image at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2414,6 +2491,7 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'App CPU update replaced the container and converged at generation %s\n' "$generation"
 
 	old_container="$new_container"
@@ -2504,6 +2582,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 2 "$new_container"
 	assert_app_runtime_log_ids_retained "${smoke_marker}-app-v2" "$old_v2_stdout_id" "$old_v2_stderr_id"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	if [ "$(docker inspect --format '{{.State.Running}}' "$buildkit_container")" != 'false' ]; then
 		printf '%s\n' 'BuildKit restarted during the OCI reimport test' >&2
 		return 1
@@ -2517,6 +2596,7 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'worker restart recovered exactly one App container (id=%s)\n' "$new_container"
 
 	old_container="$new_container"
@@ -2538,6 +2618,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_route_target "$new_route_target"
 	assert_app_route_uses_container_dns_name "$new_route_target"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'deleted App container was recreated with target %s -> %s (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	old_container="$new_container"
@@ -2562,7 +2643,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	start_platform_route_reconcile_lock
 	docker stop --time 1 "$old_container" >/dev/null
-	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_health_state pending waiting_for_health "$platform_app_id" true
 	new_container="$(wait_for_running_app_runtime_container)"
 	if [ "$new_container" != "$old_container" ]; then
 		printf 'same-container process restart changed container ID: before=%s after=%s\n' "$old_container" "$new_container" >&2
@@ -2571,7 +2652,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_runtime running
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 3 "$new_container"
-	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_health_state pending waiting_for_health "$platform_app_id" true
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 1 "$new_container" "$old_restart_cursor"
 	read -r resume_stdout_count resume_stderr_count <<<"$(app_runtime_log_counts "${smoke_marker}-app-v2")"
 	if [ "$resume_stdout_count" -lt 1 ] || [ "$resume_stderr_count" -lt 1 ]; then
@@ -2609,6 +2690,7 @@ verify_app_runtime_lifecycle() {
 	wait_for_app_route_target "$new_route_target"
 	assert_app_route_uses_container_dns_name "$new_route_target"
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'same-container restart kept stale target %s unusable while pending, then published %s after health (id=%s)\n' "$old_route_target" "$new_route_target" "$new_container"
 
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
@@ -2650,6 +2732,7 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	printf 'deleted App runtime bridge was recreated with owned labels\n'
 	runtime_name="$(app_runtime_name)"
 	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"enabled":false}' "$platform_response")"
@@ -2690,6 +2773,7 @@ verify_app_runtime_lifecycle() {
 	fi
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 	docker rm "$app_runtime_foreign_container" >/dev/null
 	app_runtime_foreign_container=""
 	printf 'stale target %s remained untouched while App recovered under new target %s\n' "$runtime_name" "$new_runtime_name"
@@ -2720,6 +2804,7 @@ verify_app_runtime_lifecycle() {
 
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
 }
 
 clear_platform_route_smoke() {

@@ -1,7 +1,9 @@
 package installengine
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -208,6 +210,25 @@ func TestTraefikReleaseConfigKeepsProviderAndNetworkBoundaries(t *testing.T) {
 	}
 }
 
+func TestGenerateConfigUsesDedicatedAppSecretKey(t *testing.T) {
+	contents, err := GenerateConfig(ConfigOptions{Version: "v1.2.3", PublicURL: "https://console.example.test", GitHubAppClientID: "Iv1.test-client-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appsKey, appsErr := base64.StdEncoding.DecodeString(values["APPS_SECRET_KEY"])
+	functionsKey, functionsErr := base64.StdEncoding.DecodeString(values["FUNCTIONS_SECRET_KEY"])
+	if appsErr != nil || functionsErr != nil || len(appsKey) != 32 || len(functionsKey) != 32 {
+		t.Fatalf("generated encryption key lengths Apps=%d Functions=%d errors=%v/%v", len(appsKey), len(functionsKey), appsErr, functionsErr)
+	}
+	if values["APPS_SECRET_KEY"] == values["FUNCTIONS_SECRET_KEY"] {
+		t.Fatal("App and Function encryption keys were reused")
+	}
+}
+
 func TestGenerateConfigPinsTraefikAndTrustedIngressPeer(t *testing.T) {
 	config, err := GenerateConfig(ConfigOptions{
 		Version:           "v1.2.3",
@@ -285,6 +306,56 @@ func TestMigrateReleaseConfigAddsOrPreservesBuildKitAppArmorProfile(t *testing.T
 		if err != nil || values["APPS_BUILDKIT_APPARMOR_PROFILE"] != profile {
 			t.Fatalf("explicit profile = %q, %v; want %q", values["APPS_BUILDKIT_APPARMOR_PROFILE"], err, profile)
 		}
+	}
+}
+
+func TestAppSecretKeyIsGeneratedOncePreservedAndNeverSilentlyReplaced(t *testing.T) {
+	generated, err := MigrateReleaseConfig(map[string]string{}, "v1.2.3", "v1.2.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := ParseEnvContents(generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := base64.StdEncoding.DecodeString(values["APPS_SECRET_KEY"])
+	if err != nil || len(key) != 32 {
+		t.Fatalf("upgrade-generated App key length=%d err=%v", len(key), err)
+	}
+	repeated, err := MigrateReleaseConfig(values, "v1.2.4", "v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeatedValues, err := ParseEnvContents(repeated)
+	if err != nil || repeatedValues["APPS_SECRET_KEY"] != values["APPS_SECRET_KEY"] {
+		t.Fatalf("repeated migration changed generated App key: got=%q want=%q err=%v", repeatedValues["APPS_SECRET_KEY"], values["APPS_SECRET_KEY"], err)
+	}
+
+	for name, encoded := range map[string]string{
+		"standard base64": values["APPS_SECRET_KEY"],
+		"raw url base64":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x93}, 32)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			contents, err := MigrateReleaseConfig(map[string]string{"APPS_SECRET_KEY": encoded}, "v1.2.4", "v1.2.3")
+			if err != nil {
+				t.Fatalf("valid existing key was rejected: %v", err)
+			}
+			migrated, err := ParseEnvContents(contents)
+			if err != nil || migrated["APPS_SECRET_KEY"] != encoded {
+				t.Fatalf("existing App key changed: got=%q want=%q err=%v", migrated["APPS_SECRET_KEY"], encoded, err)
+			}
+		})
+	}
+
+	for name, invalid := range map[string]string{
+		"invalid base64":       "invalid-existing-key",
+		"wrong decoded length": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x93}, 31)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := MigrateReleaseConfig(map[string]string{"APPS_SECRET_KEY": invalid}, "v1.2.3", "v1.2.2"); err == nil || !strings.Contains(err.Error(), "refusing to replace it") {
+				t.Fatalf("invalid existing App key was not rejected safely: %v", err)
+			}
+		})
 	}
 }
 

@@ -50,6 +50,7 @@ export type CacheChange =
     }
   | { kind: "site"; projectId: string; siteId?: string }
   | { kind: "app"; projectId: string; appId?: string }
+  | { kind: "app-environment-variable"; projectId: string; appId: string }
   | {
       kind: "app-deployment";
       projectId: string;
@@ -257,6 +258,11 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
           ),
         );
       }
+      return keys;
+
+    case "app-environment-variable":
+      addKey(keys, queryKeys.app(change.projectId, change.appId));
+      addKey(keys, queryKeys.appEnvironmentVariables(change.projectId, change.appId));
       return keys;
 
     case "site-deployment":

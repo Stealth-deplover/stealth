@@ -3,6 +3,7 @@
 package appruntime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,10 +11,12 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appsecret"
 	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/observability"
 	"github.com/Stealth-deplover/stealth/internal/ociartifact"
@@ -35,12 +38,15 @@ const (
 var (
 	ErrImageArtifactUnavailable   = errors.New("App image artifact is unavailable")
 	ErrUnsupportedRuntimePlatform = errors.New("App runtime platform is unsupported")
+	ErrAppEnvironmentDecryption   = errors.New("App runtime environment could not be decrypted")
+	appRuntimeEnvironmentKey      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,119}$`)
 )
 
 type Persistence interface {
 	ScheduleAppRuntimeStartupSweep(context.Context) error
 	RequeueStaleAppRuntimeLeases(context.Context) (int64, error)
 	ClaimNextAppRuntime(context.Context, string, time.Duration) (repository.AppRuntimeJob, error)
+	ListAppRuntimeEnvironment(context.Context, repository.AppRuntimeJob) ([]repository.AppRuntimeEnvironmentCiphertext, error)
 	RenewAppRuntimeLease(context.Context, uuid.UUID, string, uuid.UUID, time.Duration) error
 	IsAppRuntimeJobCurrent(context.Context, repository.AppRuntimeJob) (bool, error)
 	ReleaseAppRuntimeJob(context.Context, repository.AppRuntimeJob) error
@@ -69,7 +75,7 @@ type Runtime interface {
 	EnsureImage(context.Context, ociartifact.ImageInfo, io.ReadSeeker, string) (Image, error)
 	InspectApp(context.Context, uuid.UUID) (Container, bool, error)
 	ProbeApp(context.Context, repository.AppHealthCheckJob, Container) error
-	CreateApp(context.Context, repository.AppRuntimeJob, Image) (Container, error)
+	CreateApp(context.Context, repository.AppRuntimeJob, Image, []RuntimeEnvironmentVariable) (Container, error)
 	RenameApp(context.Context, repository.AppRuntimeJob, string, string) (Container, error)
 	StartApp(context.Context, repository.AppRuntimeJob, string) (Container, error)
 	RemoveApp(context.Context, repository.AppRuntimeJob, string) error
@@ -81,6 +87,7 @@ type Worker struct {
 	Store             Persistence
 	Artifacts         *appstore.Store
 	Runtime           Runtime
+	AppSecretsCipher  *appsecret.Cipher
 	WorkerID          string
 	PollInterval      time.Duration
 	LeaseAge          time.Duration
@@ -92,6 +99,11 @@ type Worker struct {
 	networkRetryAfter time.Time
 	lastOrphanSweep   time.Time
 	startupSweepMutex sync.Mutex
+}
+
+type RuntimeEnvironmentVariable struct {
+	Key   string
+	Value []byte
 }
 
 func New(store Persistence, artifacts *appstore.Store, runtime Runtime, workerID string, pollInterval, leaseAge time.Duration, maxImageBytes int64, logger *slog.Logger) (*Worker, error) {
@@ -526,7 +538,12 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 	if err := w.requireCurrent(ctx, job); err != nil {
 		return err
 	}
-	container, err = w.Runtime.CreateApp(ctx, job, image)
+	runtimeEnvironment, err := w.runtimeEnvironment(ctx, job)
+	if err != nil {
+		return err
+	}
+	defer wipeRuntimeEnvironment(runtimeEnvironment)
+	container, err = w.Runtime.CreateApp(ctx, job, image, runtimeEnvironment)
 	if err != nil {
 		return err
 	}
@@ -550,6 +567,62 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 		return ErrContainerStart
 	}
 	return w.completeRunning(ctx, job, container, imageInfo, runtimeTag)
+}
+
+func (w *Worker) runtimeEnvironment(ctx context.Context, job repository.AppRuntimeJob) ([]RuntimeEnvironmentVariable, error) {
+	encrypted, err := w.Store.ListAppRuntimeEnvironment(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	if len(encrypted) > repository.AppEnvironmentVariableMaxCount {
+		return nil, ErrAppEnvironmentDecryption
+	}
+	if len(encrypted) == 0 {
+		return nil, nil
+	}
+	if w.AppSecretsCipher == nil {
+		return nil, ErrAppEnvironmentDecryption
+	}
+	projectID, projectErr := uuid.Parse(job.App.ProjectID)
+	appID, appErr := uuid.Parse(job.App.ID)
+	if projectErr != nil || appErr != nil || projectID == uuid.Nil || appID == uuid.Nil {
+		return nil, ErrAppEnvironmentDecryption
+	}
+	values := make([]RuntimeEnvironmentVariable, 0, len(encrypted))
+	seen := make(map[string]struct{}, len(encrypted))
+	totalValueBytes := 0
+	for _, item := range encrypted {
+		if item.ID == uuid.Nil || !appRuntimeEnvironmentKey.MatchString(item.Key) {
+			wipeRuntimeEnvironment(values)
+			return nil, ErrAppEnvironmentDecryption
+		}
+		if _, duplicate := seen[item.Key]; duplicate {
+			wipeRuntimeEnvironment(values)
+			return nil, ErrAppEnvironmentDecryption
+		}
+		seen[item.Key] = struct{}{}
+		plaintext, decryptErr := w.AppSecretsCipher.Decrypt(projectID, appID, item.ID, item.Ciphertext)
+		if decryptErr != nil || len(plaintext) > repository.AppEnvironmentVariableMaxValueBytes || bytes.IndexAny(plaintext, "\x00\r\n") >= 0 {
+			clear(plaintext)
+			wipeRuntimeEnvironment(values)
+			return nil, ErrAppEnvironmentDecryption
+		}
+		if len(plaintext) > repository.AppEnvironmentVariableMaxTotalValueBytes-totalValueBytes {
+			clear(plaintext)
+			wipeRuntimeEnvironment(values)
+			return nil, ErrAppEnvironmentDecryption
+		}
+		totalValueBytes += len(plaintext)
+		values = append(values, RuntimeEnvironmentVariable{Key: item.Key, Value: plaintext})
+	}
+	return values, nil
+}
+
+func wipeRuntimeEnvironment(values []RuntimeEnvironmentVariable) {
+	for index := range values {
+		clear(values[index].Value)
+		values[index].Value = nil
+	}
 }
 
 func (w *Worker) completeRunning(ctx context.Context, job repository.AppRuntimeJob, container Container, imageInfo ociartifact.ImageInfo, runtimeTag string) error {

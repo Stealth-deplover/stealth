@@ -1019,6 +1019,20 @@ type App struct {
 	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
+// AppEnvironmentVariable is a safe metadata projection. Values are
+// write-only and ciphertext never crosses the repository HTTP boundary.
+type AppEnvironmentVariable struct {
+	ID          string    `json:"id"`
+	AppID       string    `json:"app_id"`
+	ProjectID   string    `json:"project_id"`
+	Key         string    `json:"key"`
+	IsSecret    bool      `json:"is_secret"`
+	HasValue    bool      `json:"has_value"`
+	Description *string   `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // AppDeployment is the immutable build identity and verified output for one
 // App release. Private source and image storage locators and worker lease IDs
 // are intentionally absent from this public projection.

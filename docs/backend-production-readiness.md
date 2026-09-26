@@ -163,9 +163,14 @@ generation, selected deployment, and container. Only an enabled App with a
 ready selected deployment, matching desired/observed generations, current
 runtime identity, and healthy probes is eligible for its platform route.
 Runtime stdout/stderr logs are available through the project-scoped API and
-follow telemetry retention. Encrypted App secrets, gVisor, and per-App network
-isolation remain unimplemented. App container outbound access follows Docker's
-bridge and host firewall policy.
+follow telemetry retention. App environment values are write-only through the
+API and Console and stored as ciphertext in PostgreSQL with the dedicated
+`APPS_SECRET_KEY`. The trusted worker decrypts them only for container creation
+and does not pass them to BuildKit. Docker retains the effective environment in
+container configuration while the container exists; a host operator with
+Docker access can inspect it. gVisor and per-App network isolation remain
+unimplemented.
+App container outbound access follows Docker's bridge and host firewall policy.
 
 The Go API owns sessions and uses HttpOnly cookies with `Secure` and
 `SameSite=None` for explicitly configured cross-origin HTTPS console requests;
@@ -189,11 +194,14 @@ These are intentional boundaries, not hidden reliability claims:
 
 - App health convergence, health-gated public routing, and runtime stdout/stderr
   log viewing through the existing Collector/ClickHouse pipeline are
-  implemented. Encrypted App secrets, gVisor isolation, and per-App network
-  isolation remain deferred. The current Moby `running` status confirms
-  process liveness only; `healthy` confirms the configured probe, and route
-  eligibility additionally requires the current enabled desired generation and
-  inspected runtime identity.
+  implemented. App environment values use dedicated-key authenticated
+  encryption at rest and are injected by the runtime worker; gVisor isolation
+  and per-App network isolation remain deferred. The current Moby `running`
+  status confirms process liveness only; `healthy` confirms the configured
+  probe, and route eligibility additionally requires the current enabled
+  desired generation and inspected runtime identity. Values are limited to
+  65,536 bytes each and 512 KiB total per App. NUL and CR/LF are rejected
+  because Docker `--env-file` is line-based; multiline values are unsupported.
 
 - External provider side effects cannot be made exactly-once by PostgreSQL.
   Webhook consumers have a stable delivery ID, and messaging has database
