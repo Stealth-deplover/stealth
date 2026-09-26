@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteApp, useUpdateApp } from "@/api/mutations";
-import { useApp, useAppDeployments, useApps } from "@/api/queries";
+import {
+  useApp,
+  useAppDeployments,
+  useAppDiagnostics,
+  useApps,
+} from "@/api/queries";
 import { createLogSource, LogViewer } from "@/components/log-viewer";
 import { formatDate } from "@/lib/format";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -25,6 +30,7 @@ import {
 import { AppEditorDialog } from "@/features/apps/app-editor-dialog";
 import { AppEnvironmentVariablesPanel } from "@/features/apps/app-environment-variables-panel";
 import { AppOverviewPanel } from "@/features/apps/app-overview-panel";
+import { AppDiagnosticsPanel } from "@/features/apps/app-diagnostics-panel";
 import { AppDeploymentsPanel } from "@/features/apps/app-deployments-panel";
 import { AppDeploymentDetailPanel } from "@/features/apps/app-deployment-detail-panel";
 import { updateAppPayload, type AppFormValues } from "@/features/apps/app-form";
@@ -42,6 +48,7 @@ export function AppDetailView({
 }) {
   const router = useRouter();
   const query = useApp(projectId, appId);
+  const diagnostics = useAppDiagnostics(projectId, appId);
   const access = useApps(projectId, { limit: 1 });
   const deploymentNavigation = useCursorPagination("app_deployments_cursor");
   const deployments = useAppDeployments(projectId, appId, {
@@ -141,10 +148,19 @@ export function AppDetailView({
         deploymentsPending={deployments.isPending}
       />
 
+      <AppDiagnosticsPanel
+        diagnostics={diagnostics.data}
+        isPending={diagnostics.isPending}
+        error={diagnostics.error}
+        isError={diagnostics.isError}
+        retry={() => void diagnostics.refetch()}
+      />
+
       <AppDeploymentsPanel
         projectId={projectId}
         appId={appId}
         app={app}
+        diagnostics={diagnostics.data}
         deployments={deployments}
         deploymentNavigation={deploymentNavigation}
         inspectedDeploymentId={inspectedDeploymentId}

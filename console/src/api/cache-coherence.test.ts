@@ -41,6 +41,7 @@ describe("cache coherence", () => {
     ).toEqual([
       ["apps", "project-1"],
       ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
     ]);
   });
 
@@ -53,7 +54,25 @@ describe("cache coherence", () => {
       }),
     ).toEqual([
       ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
       ["app-environment-variables", "project-1", "app-1"],
+    ]);
+  });
+
+  it("refreshes diagnostics after a deployment selection or rollback", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "app-deployment",
+        projectId: "project-1",
+        appId: "app-1",
+        deploymentId: "deployment-3",
+      }),
+    ).toEqual([
+      ["apps", "project-1"],
+      ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
+      ["app-deployments", "project-1", "app-1"],
+      ["app-deployment", "project-1", "app-1", "deployment-3"],
     ]);
   });
 

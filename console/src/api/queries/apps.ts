@@ -59,6 +59,31 @@ export function useApp(
   });
 }
 
+export function useAppDiagnostics(
+  projectId: string | undefined,
+  appId: string | undefined,
+) {
+  return useQuery({
+    queryKey: queryKeys.appDiagnostics(projectId ?? "", appId ?? ""),
+    enabled: Boolean(projectId && appId),
+    queryFn: async ({ signal }) => {
+      const response = await api.GET(
+        "/v1/projects/{projectID}/apps/{appID}/diagnostics",
+        {
+          params: { path: { projectID: projectId!, appID: appId! } },
+          signal,
+        },
+      );
+      const diagnostics = await unwrap(response);
+      if (!diagnostics)
+        throw new Error("The App diagnostics response was empty.");
+      return diagnostics;
+    },
+    refetchInterval: (current) =>
+      current.state.data?.convergence_status === "reconciling" ? 2_000 : false,
+  });
+}
+
 export function useAppDeployments(
   projectId: string | undefined,
   appId: string | undefined,

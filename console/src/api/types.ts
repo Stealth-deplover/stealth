@@ -23,6 +23,7 @@ export type FunctionVariable = components["schemas"]["FunctionVariable"];
 export type Site = components["schemas"]["Site"];
 export type StealthApp = components["schemas"]["App"];
 export type AppDeployment = components["schemas"]["AppDeployment"];
+export type AppDiagnostics = components["schemas"]["AppDiagnostics"];
 export type AppBuildLog = components["schemas"]["AppBuildLog"];
 export type AppRuntimeLog = components["schemas"]["AppRuntimeLog"];
 export type AppRuntimeLogsResponse =

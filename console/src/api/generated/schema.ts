@@ -2691,6 +2691,23 @@ export interface paths {
         patch: operations["updateApp"];
         trace?: never;
     };
+    "/v1/projects/{projectID}/apps/{appID}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Return bounded diagnostics from PostgreSQL only. Desired is the App release selected now; Applied is the release last confirmed by the trusted worker. Runtime/container identity, worker lease data, artifact paths, environment values, and secrets are never returned. API-key callers require apps.read. */
+        get: operations["getAppDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{projectID}/apps/{appID}/logs": {
         parameters: {
             query?: never;
@@ -2791,6 +2808,23 @@ export interface paths {
         put?: never;
         /** @description Select a ready verified immutable image as desired state. This advances desired_generation only when selection changes; the trusted runtime reconciler then creates or replaces the persistent App container. The response does not wait for that reconciliation; observed_generation and runtime_status report its progress. API-key callers require apps.write. */
         post: operations["selectAppDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roll back to an older ready deployment with verified immutable OCI metadata. This atomically selects its image and restores its captured WorkloadSpec as current desired runtime configuration, then advances desired_generation once for asynchronous worker convergence. Current App environment variables and secrets, name, enabled state, artifact quota, and hostname are kept as-is. Routing remains unavailable until the rolled-back generation passes fresh health checks. API-key callers require apps.write. */
+        post: operations["rollbackAppDeployment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5521,6 +5555,74 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        /** @description Safe release identity for desired or last-applied state. */
+        AppDiagnosticDeploymentRef: {
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            version: number;
+        };
+        AppDiagnosticIssue: {
+            /** @enum {string} */
+            code: AppDiagnosticIssueCode;
+            /** @enum {string} */
+            severity: AppDiagnosticIssueSeverity;
+            message: string;
+        };
+        /** @description PostgreSQL-only diagnostic projection. Container IDs/names/addresses */
+        AppDiagnostics: {
+            /** Format: uuid */
+            app_id: string;
+            /** Format: uuid */
+            project_id: string;
+            /** @enum {string} */
+            convergence_status: AppDiagnosticsConvergence_status;
+            /** Format: int64 */
+            desired_generation: number;
+            /** Format: int64 */
+            observed_generation: number;
+            /**
+             * Format: int64
+             * @description Last generation recorded by the trusted runtime worker.
+             */
+            applied_generation: number | null;
+            desired_deployment: components["schemas"]["AppDiagnosticDeploymentRef"] | null;
+            applied_deployment: components["schemas"]["AppDiagnosticDeploymentRef"] | null;
+            /** @description PostgreSQL metadata indicates a verified ready deployment and a structurally valid private artifact locator; the API does not inspect the artifact file. */
+            desired_artifact_ready: boolean;
+            /** @enum {string} */
+            runtime_status: AppDiagnosticsRuntime_status;
+            /** @description Existing sanitized runtime failure classification only. */
+            runtime_error: string | null;
+            /**
+             * @description Uses the same generation and runtime identity projection as the App API.
+             * @enum {string}
+             */
+            health_status: AppDiagnosticsHealth_status;
+            /** @enum {string} */
+            route_status: AppDiagnosticsRoute_status;
+            failure_count: number;
+            /** Format: date-time */
+            next_retry_at: string | null;
+            /** Format: date-time */
+            last_failure_at: string | null;
+            /** Format: date-time */
+            last_inspected_at: string | null;
+            /** Format: date-time */
+            last_transition_at: string | null;
+            /** Format: date-time */
+            last_started_at: string | null;
+            /** Format: date-time */
+            last_stopped_at: string | null;
+            /** Format: date-time */
+            health_checked_at: string | null;
+            issues: components["schemas"]["AppDiagnosticIssue"][];
+        };
+        /** @description Desired-state rollback acceptance; runtime convergence remains asynchronous. */
+        AppRollbackResponse: {
+            app: components["schemas"]["App"];
+            deployment: components["schemas"]["AppDeployment"];
         };
         CreateAppRequest: {
             name: components["schemas"]["Slug"];
@@ -13619,6 +13721,34 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getAppDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe persisted App convergence state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppDiagnostics"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listAppRuntimeLogs: {
         parameters: {
             query?: {
@@ -13936,6 +14066,37 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    rollbackAppDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                deploymentID: components["parameters"]["DeploymentID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Desired release and App configuration accepted for rollback convergence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppRollbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["ValidationError"];
+            500: components["responses"]["InternalError"];
         };
     };
     listAppBuildLogs: {
@@ -15759,6 +15920,52 @@ export enum AppHealth_status {
     unhealthy = "unhealthy"
 }
 export enum AppRoute_status {
+    not_available = "not_available",
+    waiting_for_runtime = "waiting_for_runtime",
+    waiting_for_health = "waiting_for_health",
+    active = "active"
+}
+export enum AppDiagnosticIssueCode {
+    generation_pending = "generation_pending",
+    deployment_pending = "deployment_pending",
+    runtime_failed = "runtime_failed",
+    runtime_degraded = "runtime_degraded",
+    health_pending = "health_pending",
+    health_unhealthy = "health_unhealthy",
+    route_waiting_runtime = "route_waiting_runtime",
+    route_waiting_health = "route_waiting_health",
+    retry_scheduled = "retry_scheduled",
+    desired_artifact_unavailable = "desired_artifact_unavailable",
+    disabled = "disabled",
+    not_deployed = "not_deployed"
+}
+export enum AppDiagnosticIssueSeverity {
+    info = "info",
+    warning = "warning",
+    error = "error"
+}
+export enum AppDiagnosticsConvergence_status {
+    converged = "converged",
+    reconciling = "reconciling",
+    degraded = "degraded",
+    failed = "failed",
+    stopped = "stopped",
+    not_deployed = "not_deployed"
+}
+export enum AppDiagnosticsRuntime_status {
+    not_deployed = "not_deployed",
+    pending = "pending",
+    running = "running",
+    degraded = "degraded",
+    stopped = "stopped",
+    failed = "failed"
+}
+export enum AppDiagnosticsHealth_status {
+    pending = "pending",
+    healthy = "healthy",
+    unhealthy = "unhealthy"
+}
+export enum AppDiagnosticsRoute_status {
     not_available = "not_available",
     waiting_for_runtime = "waiting_for_runtime",
     waiting_for_health = "waiting_for_health",
