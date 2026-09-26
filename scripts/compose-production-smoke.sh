@@ -2299,6 +2299,7 @@ PY
 	wait_for_app_route_snapshot false
 	wait_for_app_health_state healthy active
 	wait_for_app_route_snapshot true
+	wait_for_app_public_route 'app-runtime-smoke-ok'
 	config_body="$(app_public_route_body /configuration)"
 	if [ "$config_body" != 'app-config-v2' ]; then
 		printf 'App runtime did not receive the replacement secret after fresh health convergence: response=%q\n' "$config_body" >&2
