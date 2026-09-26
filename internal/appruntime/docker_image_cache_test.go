@@ -63,6 +63,23 @@ func TestParseRuntimeImageInspectDeduplicatesSharedImageAccounting(t *testing.T)
 	}
 }
 
+func TestParseRuntimeImageInspectIncludesOtherValidatedStealthTagsOnImage(t *testing.T) {
+	requestedID := newCacheDeploymentID(t)
+	discoveredID := newCacheDeploymentID(t)
+	requestedReference := ImageTag(requestedID)
+	discoveredReference := ImageTag(discoveredID)
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	created := time.Date(2026, 9, 26, 8, 0, 0, 0, time.UTC)
+	output := []byte(fmt.Sprintf("%s\t%s\t3145728\t%s,%s,postgres:17-alpine\n", imageID, created.Format(time.RFC3339Nano), requestedReference, discoveredReference))
+	entries, err := parseRuntimeImageInspect(output, []string{requestedReference})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Reference != requestedReference || entries[1].Reference != discoveredReference {
+		t.Fatalf("runtime image tags discovered from inspect = %#v", entries)
+	}
+}
+
 func TestParseRuntimeImageInspectRejectsMalformedOrIncompleteDockerRows(t *testing.T) {
 	deploymentID := newCacheDeploymentID(t)
 	reference := ImageTag(deploymentID)
@@ -159,6 +176,24 @@ func TestMobyRuntimeImageCacheInventoryRejectsMalformedAndTruncatedData(t *testi
 	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
 	if _, err := moby.ListRuntimeImageCache(context.Background()); !errors.Is(err, ErrDockerOutputTooLarge) {
 		t.Fatalf("oversized inventory = %v, want bounded-output error", err)
+	}
+}
+
+func TestMobyRuntimeImageCacheInspectionFailureHasBoundedSafeReason(t *testing.T) {
+	deploymentID := newCacheDeploymentID(t)
+	reference := ImageTag(deploymentID)
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	runner := &scriptedRuntimeRunner{results: []CommandResult{
+		{Stdout: []byte(reference + "\n")},
+		{Stdout: []byte(imageID + "\tnot-a-time\t4096\t" + reference + "\n")},
+	}}
+	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	_, err := moby.ListRuntimeImageCache(context.Background())
+	if !errors.Is(err, ErrImageVerification) {
+		t.Fatalf("malformed image metadata error = %v, want image verification failure", err)
+	}
+	if got := safeRuntimeError(err); got != "runtime image creation time malformed" {
+		t.Fatalf("malformed image metadata diagnostic = %q", got)
 	}
 }
 

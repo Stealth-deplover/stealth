@@ -86,6 +86,10 @@ func safeRuntimeError(err error) string {
 			return "runtime image inventory unavailable"
 		}
 	case errors.Is(err, errRuntimeImageCacheInspection):
+		var inspectionFailure runtimeImageCacheInspectionFailure
+		if errors.As(err, &inspectionFailure) {
+			return string(inspectionFailure)
+		}
 		switch {
 		case errors.Is(err, ErrImageVerification):
 			return "runtime image metadata verification failed"
