@@ -63,6 +63,10 @@ The backend uses Go 1.26, PostgreSQL, and Redis:
 
 ```bash
 cp .env.example .env
+# Generate a local key once, save it as APPS_SECRET_KEY in .env, and keep it
+# unchanged for the lifetime of this local database.
+openssl rand -base64 32
+set -a; . ./.env; set +a
 go run ./cmd/api       # API on http://localhost:8080
 go run ./cmd/worker
 go vet ./...

@@ -77,6 +77,8 @@ type Config struct {
 	FunctionsMaxArtifactSize   int64
 	FunctionsDefaultQuotaBytes int64
 	FunctionsSecretKey         []byte
+	// AppsSecretKey is a dedicated operator key for App environment values.
+	AppsSecretKey []byte
 	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
 	// a first-run setup session and encrypts short-lived GitHub authorization state.
 	// It is a separate security domain from FunctionsSecretKey.
@@ -378,6 +380,15 @@ func (c Config) ValidateApps() error {
 		c.AppsRuntimeActionTimeout < 5*time.Second || c.AppsRuntimeActionTimeout > 2*time.Minute ||
 		c.AppsRuntimeImageImportTimeout < time.Minute || c.AppsRuntimeImageImportTimeout > 30*time.Minute {
 		return fmt.Errorf("App runtime network, poll, lease, or Docker timeout settings are invalid")
+	}
+	return nil
+}
+
+// ValidateAppSecrets is a production startup gate for the dedicated key used
+// to encrypt and decrypt persisted App environment values.
+func (c Config) ValidateAppSecrets() error {
+	if len(c.AppsSecretKey) != 32 {
+		return fmt.Errorf("APPS_SECRET_KEY must be configured as base64-encoded 32 bytes")
 	}
 	return nil
 }

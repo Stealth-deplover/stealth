@@ -94,6 +94,62 @@ export function useSelectAppDeployment(projectId: string, appId: string) {
   });
 }
 
+export function useCreateAppEnvironmentVariable(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: components["schemas"]["CreateAppEnvironmentVariableRequest"]) =>
+      unwrap(
+        await api.POST("/v1/projects/{projectID}/apps/{appID}/variables", {
+          params: { path: { projectID: projectId, appID: appId } },
+          body,
+        }),
+      ),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-environment-variable", projectId, appId },
+      ]),
+  });
+}
+
+export function useUpdateAppEnvironmentVariable(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      variableId,
+      body,
+    }: {
+      variableId: string;
+      body: components["schemas"]["UpdateAppEnvironmentVariableRequest"];
+    }) =>
+      unwrap(
+        await api.PATCH("/v1/projects/{projectID}/apps/{appID}/variables/{variableID}", {
+          params: { path: { projectID: projectId, appID: appId, variableID: variableId } },
+          body,
+        }),
+      ),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-environment-variable", projectId, appId },
+      ]),
+  });
+}
+
+export function useDeleteAppEnvironmentVariable(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (variableId: string) =>
+      unwrap(
+        await api.DELETE("/v1/projects/{projectID}/apps/{appID}/variables/{variableID}", {
+          params: { path: { projectID: projectId, appID: appId, variableID: variableId } },
+        }),
+      ),
+    onSuccess: () =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-environment-variable", projectId, appId },
+      ]),
+  });
+}
+
 export function useDeleteAppDeployment(projectId: string, appId: string) {
   const queryClient = useQueryClient();
   return useMutation({

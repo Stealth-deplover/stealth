@@ -46,7 +46,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.appsReady || s.apps == nil || s.apps.Sources == nil || s.apps.Images == nil {
-		writeError(w, http.StatusServiceUnavailable, "not_ready", "App artifact storage is not ready")
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "App services are not ready")
 		return
 	}
 	if err := s.limiter.Ping(r.Context()); err != nil {

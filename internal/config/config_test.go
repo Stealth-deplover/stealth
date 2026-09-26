@@ -51,6 +51,18 @@ func TestValidateFunctionsFailsClosedWithoutSecretKey(t *testing.T) {
 	}
 }
 
+func TestValidateAppSecretsRequiresDedicated32ByteKey(t *testing.T) {
+	if err := (Config{}).ValidateAppSecrets(); err == nil || !strings.Contains(err.Error(), "APPS_SECRET_KEY") {
+		t.Fatalf("missing Apps key returned %v", err)
+	}
+	if err := (Config{AppsSecretKey: []byte(strings.Repeat("x", 31))}).ValidateAppSecrets(); err == nil {
+		t.Fatal("short Apps key was accepted")
+	}
+	if err := (Config{AppsSecretKey: []byte(strings.Repeat("x", 32))}).ValidateAppSecrets(); err != nil {
+		t.Fatalf("valid Apps key returned %v", err)
+	}
+}
+
 func TestValidateBootstrapRequiresDedicatedKeyAndGitHubClientID(t *testing.T) {
 	cfg := Config{FunctionsSecretKey: []byte(strings.Repeat("f", 32))}
 	if err := cfg.ValidateBootstrap(); err == nil || !strings.Contains(err.Error(), "BOOTSTRAP_CLI_KEY") {

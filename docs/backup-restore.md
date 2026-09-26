@@ -24,6 +24,16 @@ pg_dump --format=custom --file=stealth-$(date -u +%Y%m%dT%H%M%SZ).dump "$DATABAS
 Use the matching `pg_restore` procedure in an isolated database. Do not run a
 restore over the live database without an explicit maintenance plan.
 
+App environment values are stored as authenticated ciphertext in PostgreSQL.
+Back up the installation's protected `config.env` together with the database,
+and preserve the matching `APPS_SECRET_KEY` independently in the operator's
+encrypted backup set. Restoring the database without that exact key leaves
+the App values undecryptable; generating a replacement key does not recover
+them. Installer upgrade and repair preserve an existing valid key and create
+one only when it is missing. Docker also retains a running container's
+effective environment in its own container configuration; host operators with
+Docker access are inside that trust boundary.
+
 ## Object storage
 
 When `STORAGE_DRIVER=s3`, enable the provider's versioning, replication, or

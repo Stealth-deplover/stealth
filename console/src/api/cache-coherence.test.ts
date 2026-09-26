@@ -44,6 +44,19 @@ describe("cache coherence", () => {
     ]);
   });
 
+  it("refreshes App state and variable metadata after an environment change", () => {
+    expect(
+      invalidationKeysFor({
+        kind: "app-environment-variable",
+        projectId: "project-1",
+        appId: "app-1",
+      }),
+    ).toEqual([
+      ["app", "project-1", "app-1"],
+      ["app-environment-variables", "project-1", "app-1"],
+    ]);
+  });
+
   it("refreshes the parent Agent when a run can change its derived status", () => {
     expect(
       invalidationKeysFor({

@@ -26,6 +26,7 @@ export type AppDeployment = components["schemas"]["AppDeployment"];
 export type AppBuildLog = components["schemas"]["AppBuildLog"];
 export type AppRuntimeLog = components["schemas"]["AppRuntimeLog"];
 export type AppRuntimeLogsResponse = components["schemas"]["AppRuntimeLogsResponse"];
+export type AppEnvironmentVariable = components["schemas"]["AppEnvironmentVariable"];
 export type SiteDeployment = components["schemas"]["SiteDeployment"];
 export type SiteBuildLog = components["schemas"]["SiteBuildLog"];
 export type Database = components["schemas"]["ProjectDatabase"];

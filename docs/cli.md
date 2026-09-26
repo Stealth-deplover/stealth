@@ -322,8 +322,8 @@ data, `stealth_storage`, function-runner staging, `config.env`, the Compose/prox
 assets, `VERSION`, and CLI recovery files. The middle interactive mode also
 preserves App containers/network while removing the generated Compose,
 proxy, `VERSION`, and `state/` runtime files, but deliberately keeps
-`config.env`: it contains `FUNCTIONS_SECRET_KEY` and database credentials
-needed to recover preserved encrypted data.
+`config.env`: it contains `FUNCTIONS_SECRET_KEY`, `APPS_SECRET_KEY`, and
+database credentials needed to recover preserved encrypted data.
 
 Purge first validates that the local Compose file declares exactly the
 installation's configured named volumes and that any existing volumes carry

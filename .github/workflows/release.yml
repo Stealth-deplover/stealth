@@ -243,6 +243,7 @@ jobs:
           redis_password="$(openssl rand -hex 24)"
           clickhouse_password="$(openssl rand -hex 24)"
           functions_secret_key="$(openssl rand -base64 32 | tr -d '\n')"
+          apps_secret_key="$(openssl rand -base64 32 | tr -d '\n')"
           bootstrap_cli_key="$(openssl rand -base64 32 | tr -d '\n')"
           metrics_token="$(openssl rand -hex 32)"
           docker_gid="$(stat -c '%g' /var/run/docker.sock)"
@@ -267,6 +268,7 @@ jobs:
           CLICKHOUSE_USER=stealth
           CLICKHOUSE_PASSWORD=${clickhouse_password}
           FUNCTIONS_SECRET_KEY=${functions_secret_key}
+          APPS_SECRET_KEY=${apps_secret_key}
           BOOTSTRAP_CLI_KEY=${bootstrap_cli_key}
           GITHUB_APP_CLIENT_ID=smoke-client-id
           PUBLIC_APP_URL=http://127.0.0.1:13000

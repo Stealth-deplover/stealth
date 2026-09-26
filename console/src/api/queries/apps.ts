@@ -87,3 +87,28 @@ export function useAppDeployments(
         : false,
   });
 }
+
+export function useAppEnvironmentVariables(
+  projectId: string | undefined,
+  appId: string | undefined,
+  query?: CursorQuery,
+) {
+  const params = withCursorPage(query);
+  return useQuery({
+    queryKey: [...queryKeys.appEnvironmentVariables(projectId ?? "", appId ?? ""), params],
+    enabled: Boolean(projectId && appId),
+    queryFn: async ({ signal }) => {
+      const response = await api.GET("/v1/projects/{projectID}/apps/{appID}/variables", {
+        params: {
+          path: { projectID: projectId!, appID: appId! },
+          query: params,
+        },
+        signal,
+      });
+      const page = await unwrap(response);
+      if (!page) throw new Error("The App environment response was empty.");
+      return page;
+    },
+    placeholderData: keepPreviousData,
+  });
+}

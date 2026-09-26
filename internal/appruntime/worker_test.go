@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stealth-deplover/stealth/internal/appsecret"
 	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/domain"
 	"github.com/Stealth-deplover/stealth/internal/ociartifact"
@@ -45,6 +47,7 @@ type runtimeTestStore struct {
 	resetIdentity       uuid.UUID
 	createIdentity      uuid.UUID
 	runtimeContainerID  string
+	environment         []repository.AppRuntimeEnvironmentCiphertext
 }
 
 func (s *runtimeTestStore) ScheduleAppRuntimeStartupSweep(context.Context) error { return nil }
@@ -53,6 +56,9 @@ func (s *runtimeTestStore) RequeueStaleAppRuntimeLeases(context.Context) (int64,
 }
 func (s *runtimeTestStore) ClaimNextAppRuntime(context.Context, string, time.Duration) (repository.AppRuntimeJob, error) {
 	return repository.AppRuntimeJob{}, repository.ErrNoAppRuntimeJob
+}
+func (s *runtimeTestStore) ListAppRuntimeEnvironment(context.Context, repository.AppRuntimeJob) ([]repository.AppRuntimeEnvironmentCiphertext, error) {
+	return s.environment, nil
 }
 func (s *runtimeTestStore) RenewAppRuntimeLease(context.Context, uuid.UUID, string, uuid.UUID, time.Duration) error {
 	return nil
@@ -131,35 +137,69 @@ func (s *runtimeTestStore) FailAppRuntimeCleanup(context.Context, repository.App
 	return nil
 }
 
+func TestRuntimeEnvironmentDecryptsOnlyAppBoundCiphertextAndClearsPlaintext(t *testing.T) {
+	job := runtimeTestJob()
+	projectID := uuid.MustParse(job.App.ProjectID)
+	appID := uuid.MustParse(job.App.ID)
+	variableID := uuid.Must(uuid.NewV7())
+	cipher, err := appsecret.New(bytes.Repeat([]byte{0x5a}, appsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := []byte("runtime-value")
+	ciphertext, err := cipher.Encrypt(projectID, appID, variableID, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &runtimeTestStore{environment: []repository.AppRuntimeEnvironmentCiphertext{{ID: variableID, Key: "API_TOKEN", Ciphertext: ciphertext}}}
+	worker := &Worker{Store: store, AppSecretsCipher: cipher}
+	values, err := worker.runtimeEnvironment(context.Background(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 || values[0].Key != "API_TOKEN" || string(values[0].Value) != string(secret) {
+		t.Fatalf("decrypted environment = %#v", values)
+	}
+	wipeRuntimeEnvironment(values)
+	if len(values[0].Value) != 0 {
+		t.Fatal("plaintext buffer remained available after cleanup")
+	}
+	store.environment[0].Ciphertext[len(store.environment[0].Ciphertext)-1] ^= 1
+	if _, err := worker.runtimeEnvironment(context.Background(), job); !errors.Is(err, ErrAppEnvironmentDecryption) {
+		t.Fatalf("tampered ciphertext error = %v", err)
+	}
+}
+
 type runtimeTestDriver struct {
-	store             *runtimeTestStore
-	image             Image
-	container         Container
-	found             bool
-	ensureNetworkErr  error
-	ensureImageErr    error
-	inspectErr        error
-	createErr         error
-	startErr          error
-	removeErr         error
-	ensureImageCalls  int
-	createCalls       int
-	startCalls        int
-	startResetCalls   int
-	startedContainer  string
-	renameCalls       int
-	renamedFrom       string
-	renamedTo         string
-	removeCalls       int
-	removeTargets     []string
-	networkCalls      int
-	createJob         repository.AppRuntimeJob
-	loadedBytes       []byte
-	onCreate          func()
-	onRename          func()
-	nextContainerID   string
-	listedContainers  []Container
-	removeCleanupCall int
+	store              *runtimeTestStore
+	image              Image
+	container          Container
+	found              bool
+	ensureNetworkErr   error
+	ensureImageErr     error
+	inspectErr         error
+	createErr          error
+	startErr           error
+	removeErr          error
+	ensureImageCalls   int
+	createCalls        int
+	startCalls         int
+	startResetCalls    int
+	startedContainer   string
+	renameCalls        int
+	renamedFrom        string
+	renamedTo          string
+	removeCalls        int
+	removeTargets      []string
+	networkCalls       int
+	createJob          repository.AppRuntimeJob
+	createdEnvironment []RuntimeEnvironmentVariable
+	loadedBytes        []byte
+	onCreate           func()
+	onRename           func()
+	nextContainerID    string
+	listedContainers   []Container
+	removeCleanupCall  int
 }
 
 func (r *runtimeTestDriver) EnsureNetwork(context.Context) error {
@@ -191,9 +231,13 @@ func (r *runtimeTestDriver) InspectApp(context.Context, uuid.UUID) (Container, b
 func (r *runtimeTestDriver) ProbeApp(context.Context, repository.AppHealthCheckJob, Container) error {
 	return nil
 }
-func (r *runtimeTestDriver) CreateApp(_ context.Context, job repository.AppRuntimeJob, image Image) (Container, error) {
+func (r *runtimeTestDriver) CreateApp(_ context.Context, job repository.AppRuntimeJob, image Image, environment []RuntimeEnvironmentVariable) (Container, error) {
 	r.createCalls++
 	r.createJob = job
+	r.createdEnvironment = make([]RuntimeEnvironmentVariable, len(environment))
+	for index, item := range environment {
+		r.createdEnvironment[index] = RuntimeEnvironmentVariable{Key: item.Key, Value: append([]byte(nil), item.Value...)}
+	}
 	if r.createErr != nil {
 		return Container{}, r.createErr
 	}

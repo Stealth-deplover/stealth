@@ -175,8 +175,10 @@ stealth setup --adopt-owner
 The command requires the dedicated `BOOTSTRAP_CLI_KEY`, lists existing account
 identities locally, and requires the exact `ADOPT <account-id>` confirmation.
 The assignment is audited and does not grant organization membership. Add the
-dedicated `BOOTSTRAP_CLI_KEY` and `GITHUB_APP_CLIENT_ID` to `config.env` before
-starting an upgraded API; neither falls back to `FUNCTIONS_SECRET_KEY`.
+dedicated `BOOTSTRAP_CLI_KEY`, `APPS_SECRET_KEY`, and `GITHUB_APP_CLIENT_ID` to
+`config.env` before starting an upgraded API; the installer preserves a valid
+App key and generates one only when missing. The App key is not interchangeable
+with `FUNCTIONS_SECRET_KEY`.
 Stop or coordinate the old application processes before applying migrations.
 
 ## Rollback boundary

@@ -93,6 +93,7 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		AppsMaxSourceFiles:            8192,
 		AppsMaxImageArchiveBytes:      2 << 30,
 		AppsDefaultArtifactQuotaBytes: 5 << 30,
+		AppsSecretKey:                 []byte(strings.Repeat("a", 32)),
 		SessionCookieName:             "stealth_session",
 		SessionTTL:                    time.Hour,
 		AppSessionTTL:                 2 * time.Hour,
@@ -211,6 +212,62 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	if created.App.ID == "" || created.App.RuntimeStatus != "not_deployed" || created.App.DesiredGeneration != 1 || created.App.ObservedGeneration != 0 || created.App.RuntimeError != nil {
 		t.Fatalf("created App fabricated runtime state: %+v", created.App)
 	}
+	variablesURL := projectURL + "/apps/" + created.App.ID + "/variables"
+	requestJSON(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusUnauthorized, nil)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusForbidden, writeHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/variables", nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSON(t, ownerClient, http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/variables", nil, http.StatusNotFound, nil)
+	secretValue := "API-SECRET-HTTP-NEVER-RETURN-THIS"
+	variableBody := requestJSONRaw(t, ownerClient, http.MethodPost, variablesURL, map[string]any{
+		"key": "PROVIDER_TOKEN", "is_secret": true, "value": secretValue, "description": "provider access token",
+	}, http.StatusCreated)
+	if strings.Contains(string(variableBody), secretValue) || strings.Contains(string(variableBody), "ciphertext") || strings.Contains(string(variableBody), "nonce") {
+		t.Fatalf("App environment mutation response exposed plaintext or crypto fields: %s", variableBody)
+	}
+	var variableResponse struct {
+		Variable domain.AppEnvironmentVariable `json:"variable"`
+	}
+	if err := json.Unmarshal(variableBody, &variableResponse); err != nil {
+		t.Fatal(err)
+	}
+	if variableResponse.Variable.Key != "PROVIDER_TOKEN" || !variableResponse.Variable.IsSecret || !variableResponse.Variable.HasValue || variableResponse.Variable.ID == "" {
+		t.Fatalf("App environment response metadata = %+v", variableResponse.Variable)
+	}
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, variablesURL, map[string]any{"key": "READ_DENIED", "value": "x"}, http.StatusForbidden, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, variablesURL, map[string]any{"key": "WRITE_ALLOWED", "value": "written-by-key"}, http.StatusCreated, writeHeaders)
+	listBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusOK, readHeaders)
+	if strings.Contains(string(listBody), secretValue) || strings.Contains(string(listBody), "ciphertext") {
+		t.Fatalf("App environment list exposed plaintext or ciphertext: %s", listBody)
+	}
+	var variablesPage struct {
+		Variables []domain.AppEnvironmentVariable `json:"variables"`
+		CanManage bool                            `json:"can_manage"`
+	}
+	if err := json.Unmarshal(listBody, &variablesPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(variablesPage.Variables) != 2 || variablesPage.CanManage {
+		t.Fatalf("apps.read variable page = %+v", variablesPage)
+	}
+	oldGeneration := created.App.DesiredGeneration
+	requestJSON(t, ownerClient, http.MethodPatch, variablesURL+"/"+variableResponse.Variable.ID, map[string]any{"description": "rotated by ops"}, http.StatusOK, nil)
+	var updatedApp struct {
+		App domain.App `json:"app"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, &updatedApp)
+	if updatedApp.App.DesiredGeneration != oldGeneration+2 {
+		t.Fatalf("metadata-only edit advanced desired generation; current=%d prior=%d", updatedApp.App.DesiredGeneration, oldGeneration)
+	}
+	newSecretValue := "APP-SECRET-REPLACED"
+	requestJSON(t, ownerClient, http.MethodPatch, variablesURL+"/"+variableResponse.Variable.ID, map[string]any{"value": newSecretValue}, http.StatusOK, nil)
+	var auditMetadata string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(string_agg(metadata::text,' '),'') FROM audit_events WHERE target_id=$1`, created.App.ID).Scan(&auditMetadata); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(auditMetadata, secretValue) || strings.Contains(auditMetadata, newSecretValue) {
+		t.Fatalf("App environment plaintext appeared in audit metadata: %s", auditMetadata)
+	}
+	requestJSON(t, ownerClient, http.MethodDelete, variablesURL+"/"+variableResponse.Variable.ID, nil, http.StatusNoContent, nil)
 	if created.App.Workload.SchemaVersion != "v1" || created.App.Workload.Port != 8080 || created.App.Workload.Resources.MemoryBytes != 536870912 || created.App.Workload.RestartPolicy != "always" {
 		t.Fatalf("created App did not return complete normalized WorkloadSpec: %+v", created.App.Workload)
 	}

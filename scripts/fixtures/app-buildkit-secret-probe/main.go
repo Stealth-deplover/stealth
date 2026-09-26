@@ -38,6 +38,12 @@ func main() {
 }
 
 func verifyBuildKitSecrets() {
+	for _, name := range []string{"APP_RUNTIME_SMOKE_MODE", "APP_RUNTIME_SMOKE_SECRET", "APPS_SECRET_KEY"} {
+		if _, ok := os.LookupEnv(name); ok {
+			_, _ = fmt.Fprintf(os.Stderr, "STEALTH_BUILDKIT_MTLS_PROBE: runtime-only environment variable %s is visible during build\n", name)
+			os.Exit(30)
+		}
+	}
 	for index, path := range []string{
 		"/run/secrets/stealth-buildkit/ca.pem",
 		"/run/secrets/stealth-buildkit/client-cert.pem",
@@ -81,6 +87,19 @@ func serve() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("app-runtime-smoke-ok\n"))
 	})
+	http.HandleFunc("/configuration", func(w http.ResponseWriter, _ *http.Request) {
+		mode := os.Getenv("APP_RUNTIME_SMOKE_MODE")
+		secret := os.Getenv("APP_RUNTIME_SMOKE_SECRET")
+		switch {
+		case mode == "v1" && secret == "fake-smoke-secret-not-real-v1":
+			_, _ = w.Write([]byte("app-config-v1\n"))
+		case mode == "v2" && secret == "fake-smoke-secret-not-real-v2":
+			_, _ = w.Write([]byte("app-config-v2\n"))
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("app-config-unavailable\n"))
+		}
+	})
 	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "app runtime smoke server failed: %v\n", err)
 		os.Exit(1)
@@ -94,6 +113,7 @@ func verifyRuntime() {
 		"FUNCTIONS_SECRET_KEY",
 		"CLOUDFLARE_API_TOKEN",
 		"APPS_BUILDKIT_CLIENT_KEY",
+		"APPS_SECRET_KEY",
 	} {
 		if _, ok := os.LookupEnv(name); ok {
 			_, _ = fmt.Fprintf(os.Stderr, "runtime smoke found forbidden environment variable %s\n", name)

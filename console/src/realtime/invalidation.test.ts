@@ -61,6 +61,19 @@ describe("realtime query invalidation", () => {
     ]);
   });
 
+  it("refetches App state and variable metadata after an environment change", () => {
+    expect(
+      realtimeInvalidationKeys("project-1", {
+        type: "app.environment_variable.updated",
+        resource_id: "app-1",
+        payload: { key: "PAYMENT_TOKEN", has_value: false },
+      }),
+    ).toEqual([
+      ["app", "project-1", "app-1"],
+      ["app-environment-variables", "project-1", "app-1"],
+    ]);
+  });
+
   it("maps database row and storage file notifications to scoped caches", () => {
     expect(
       realtimeInvalidationKeys("project-1", {
@@ -231,6 +244,7 @@ describe("realtime query invalidation", () => {
         "app.create",
         "app.update",
         "app.delete",
+        "app.environment_variable.updated",
       ]),
     );
   });

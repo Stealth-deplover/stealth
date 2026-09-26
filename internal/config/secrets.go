@@ -11,6 +11,7 @@ import (
 // production entrypoints enforce their required security gates separately.
 type secretSettings struct {
 	functionsSecretKey []byte
+	appsSecretKey      []byte
 	bootstrapCLIKey    []byte
 	githubAppClientID  string
 }
@@ -20,12 +21,17 @@ func loadSecretSettings() (secretSettings, error) {
 	if err != nil {
 		return secretSettings{}, err
 	}
+	appsSecretKey, err := loadOptionalSecretKey("APPS_SECRET_KEY")
+	if err != nil {
+		return secretSettings{}, err
+	}
 	bootstrapCLIKey, err := loadOptionalSecretKey("BOOTSTRAP_CLI_KEY")
 	if err != nil {
 		return secretSettings{}, err
 	}
 	return secretSettings{
 		functionsSecretKey: functionsSecretKey,
+		appsSecretKey:      appsSecretKey,
 		bootstrapCLIKey:    bootstrapCLIKey,
 		githubAppClientID:  strings.TrimSpace(os.Getenv("GITHUB_APP_CLIENT_ID")),
 	}, nil
@@ -41,6 +47,7 @@ func loadOptionalSecretKey(name string) ([]byte, error) {
 
 func (s secretSettings) apply(c *Config) {
 	c.FunctionsSecretKey = cloneBytes(s.functionsSecretKey)
+	c.AppsSecretKey = cloneBytes(s.appsSecretKey)
 	c.BootstrapCLIKey = cloneBytes(s.bootstrapCLIKey)
 	c.GitHubAppClientID = s.githubAppClientID
 }

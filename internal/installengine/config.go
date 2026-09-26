@@ -106,6 +106,10 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	appsKey, err := randomBase64(32)
+	if err != nil {
+		return "", err
+	}
 	bootstrapKey, err := randomBase64(32)
 	if err != nil {
 		return "", err
@@ -160,6 +164,7 @@ func GenerateConfig(options ConfigOptions) (string, error) {
 		"REDIS_PASSWORD":                        redisPassword,
 		"REDIS_URL":                             redisURL,
 		"FUNCTIONS_SECRET_KEY":                  functionsKey,
+		"APPS_SECRET_KEY":                       appsKey,
 		"BOOTSTRAP_CLI_KEY":                     bootstrapKey,
 		"GITHUB_APP_CLIENT_ID":                  strings.TrimSpace(options.GitHubAppClientID),
 		"PUBLIC_APP_URL":                        publicURL,
@@ -356,6 +361,18 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 			return "", fmt.Errorf("generate ClickHouse password: %w", err)
 		}
 		updates["CLICKHOUSE_PASSWORD"] = password
+	}
+	if strings.TrimSpace(result["APPS_SECRET_KEY"]) == "" {
+		key, err := randomBase64(32)
+		if err != nil {
+			return "", fmt.Errorf("generate App encryption key: %w", err)
+		}
+		updates["APPS_SECRET_KEY"] = key
+	} else {
+		key, err := base64.StdEncoding.DecodeString(result["APPS_SECRET_KEY"])
+		if err != nil || len(key) != 32 {
+			return "", errorsf("existing APPS_SECRET_KEY must be base64-encoded 32 bytes; refusing to replace it")
+		}
 	}
 	return MergeEnv(result, updates)
 }

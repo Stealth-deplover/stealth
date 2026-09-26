@@ -101,6 +101,55 @@ func TestContainerCreateArgsKeepsTenantCommandAsArgumentsAndAppliesIsolation(t *
 	}
 }
 
+func TestRuntimeEnvironmentFileIsTemporaryAndValuesStayOutOfDockerArgv(t *testing.T) {
+	job := runtimeTestJob()
+	secret := "smoke-secret-value"
+	path, cleanup, err := writeRuntimeEnvironmentFile([]RuntimeEnvironmentVariable{{Key: "TOKEN", Value: []byte(secret)}, {Key: "MODE", Value: []byte("test")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 || !strings.HasPrefix(path, "/dev/shm/.stealth-app-env-") {
+		t.Fatalf("environment file permissions/path = %o %q", info.Mode().Perm(), path)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "MODE=test\nTOKEN="+secret+"\n" {
+		t.Fatalf("environment file contents = %q", contents)
+	}
+	args, err := containerCreateArgsWithEnvironmentFile(job, "stealth-app/test:runtime", "stealth_app_runtime", RuntimeSecurityProfile{}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasSubsequence(args, []string{"--env-file", path}) || slices.Contains(args, secret) {
+		t.Fatalf("environment CLI arguments leaked a value or omitted file: %#v", args)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("temporary environment file remains after cleanup: %v", err)
+	}
+}
+
+func TestRuntimeEnvironmentFileRejectsLineInjectionAndDuplicateKeys(t *testing.T) {
+	for _, values := range [][]RuntimeEnvironmentVariable{
+		{{Key: "TOKEN", Value: []byte("one\nOTHER=two")}},
+		{{Key: "TOKEN", Value: []byte("one")}, {Key: "TOKEN", Value: []byte("two")}},
+		{{Key: "TOKEN", Value: []byte("one\x00two")}},
+	} {
+		if path, cleanup, err := writeRuntimeEnvironmentFile(values); err == nil {
+			_ = cleanup()
+			t.Fatalf("invalid environment accepted at %q", path)
+		}
+	}
+}
+
 func TestExecCommandRunnerPassesArgvWithoutShellExpansionAndBoundsOutput(t *testing.T) {
 	printf, err := exec.LookPath("printf")
 	if err != nil {

@@ -45,6 +45,8 @@ export const queryKeys = {
     ["site", projectId, siteId] as const,
   apps: (projectId: string) => ["apps", projectId] as const,
   app: (projectId: string, appId: string) => ["app", projectId, appId] as const,
+  appEnvironmentVariables: (projectId: string, appId: string) =>
+    ["app-environment-variables", projectId, appId] as const,
   appDeployments: (projectId: string, appId: string) =>
     ["app-deployments", projectId, appId] as const,
   appDeployment: (projectId: string, appId: string, deploymentId: string) =>

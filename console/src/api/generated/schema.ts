@@ -2708,6 +2708,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{projectID}/apps/{appID}/variables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description List bounded App environment variable metadata. Values are write-only and never returned. API-key callers require apps.read. */
+        get: operations["listAppEnvironmentVariables"];
+        put?: never;
+        /** @description Create an App environment variable or secret. Plaintext value is write-only, encrypted before PostgreSQL persistence, and never returned. Setting a value advances desired_generation; metadata-only creation does not restart the App. API-key callers require apps.write. */
+        post: operations["createAppEnvironmentVariable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{projectID}/apps/{appID}/variables/{variableID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Delete App environment metadata and its encrypted value. Removing a configured value advances desired_generation and replaces the runtime. API-key callers require apps.write. */
+        delete: operations["deleteAppEnvironmentVariable"];
+        options?: never;
+        head?: never;
+        /** @description Replace write-only App environment value or edit safe metadata. A runtime-affecting change advances desired_generation and causes container replacement; metadata-only edits do not. API-key callers require apps.write. */
+        patch: operations["updateAppEnvironmentVariable"];
+        trace?: never;
+    };
     "/v1/projects/{projectID}/apps/{appID}/deployments": {
         parameters: {
             query?: never;
@@ -5504,6 +5540,49 @@ export interface components {
         };
         AppsPage: {
             apps: components["schemas"]["App"][];
+            pagination: components["schemas"]["Pagination"];
+            can_manage: boolean;
+        };
+        /** @description Safe metadata projection. Plaintext */
+        AppEnvironmentVariable: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            app_id: string;
+            /** Format: uuid */
+            project_id: string;
+            key: string;
+            is_secret: boolean;
+            /** @description Whether a write-only value is currently configured. */
+            has_value: boolean;
+            description?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CreateAppEnvironmentVariableRequest: {
+            key: string;
+            /** @default false */
+            is_secret: boolean;
+            /** @description Plaintext is accepted only for this mutation and encrypted before durable persistence. */
+            value?: string;
+            description?: string;
+        };
+        UpdateAppEnvironmentVariableRequest: {
+            key?: string;
+            is_secret?: boolean;
+            /** @description Replacement plaintext is never returned. */
+            value?: string;
+            /** @description Remove the configured value without deleting its metadata. Cannot be combined with value. */
+            clear_value?: boolean;
+            description?: string;
+        };
+        AppEnvironmentVariableResponse: {
+            variable: components["schemas"]["AppEnvironmentVariable"];
+        };
+        AppEnvironmentVariablesPage: {
+            variables: components["schemas"]["AppEnvironmentVariable"][];
             pagination: components["schemas"]["Pagination"];
             can_manage: boolean;
         };
@@ -13576,6 +13655,135 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    listAppEnvironmentVariables: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe App environment metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppEnvironmentVariablesPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createAppEnvironmentVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAppEnvironmentVariableRequest"];
+            };
+        };
+        responses: {
+            /** @description Safe App environment variable metadata */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppEnvironmentVariableResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    deleteAppEnvironmentVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                variableID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description App environment variable deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateAppEnvironmentVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectID: components["parameters"]["ProjectID"];
+                appID: components["parameters"]["AppID"];
+                variableID: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAppEnvironmentVariableRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated safe App environment metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppEnvironmentVariableResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationError"];
             503: components["responses"]["ServiceUnavailable"];
         };
     };

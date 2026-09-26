@@ -20,6 +20,7 @@ import (
 	"github.com/Stealth-deplover/stealth/internal/agentrunner"
 	"github.com/Stealth-deplover/stealth/internal/appbuilder"
 	"github.com/Stealth-deplover/stealth/internal/appruntime"
+	"github.com/Stealth-deplover/stealth/internal/appsecret"
 	"github.com/Stealth-deplover/stealth/internal/appstore"
 	"github.com/Stealth-deplover/stealth/internal/artifactcleanup"
 	"github.com/Stealth-deplover/stealth/internal/buildinfo"
@@ -63,6 +64,15 @@ func main() {
 	}
 	if err := cfg.ValidateApps(); err != nil {
 		logger.Error("Apps configuration error", "error", err)
+		os.Exit(1)
+	}
+	if err := cfg.ValidateAppSecrets(); err != nil {
+		logger.Error("App environment encryption configuration error", "error", err)
+		os.Exit(1)
+	}
+	appSecretsCipher, err := appsecret.New(cfg.AppsSecretKey)
+	if err != nil {
+		logger.Error("App environment encryption configuration error", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("starting worker", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
@@ -252,6 +262,7 @@ func main() {
 		logger.Error("App runtime worker configuration error", "error", err)
 		os.Exit(1)
 	}
+	appRuntimeWorker.AppSecretsCipher = appSecretsCipher
 	var agentWorker *agentrunner.Worker
 	if cfg.AgentRunnerEnabled {
 		// Provider adapters are deliberately opt-in and process-local. This

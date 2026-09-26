@@ -57,6 +57,10 @@ func main() {
 		logger.Error("Apps configuration error", "error", err)
 		os.Exit(1)
 	}
+	if err := cfg.ValidateAppSecrets(); err != nil {
+		logger.Error("App environment encryption configuration error", "error", err)
+		os.Exit(1)
+	}
 	logger.Info("starting API", "version", buildinfo.Version, "commit", buildinfo.Commit, "build_time", buildinfo.BuildTime)
 	telemetryShutdown, err := observability.Setup(context.Background(), observability.TracerConfig{
 		Endpoint:    cfg.TelemetryOTLPEndpoint,

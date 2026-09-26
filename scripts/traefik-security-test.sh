@@ -179,7 +179,7 @@ if [ "$source_cap_drops" != 'ALL' ] && ! printf '%s\n' "$cloudflare_source_init_
 	printf 'Cloudflare source handoff must drop all capabilities; found: %s\n' "$(printf '%s\n' "$source_cap_drops" | paste -sd, -)" >&2
 	exit 1
 fi
-if printf '%s\n' "$cloudflare_source_init_block" | grep -Eqi 'environment:|FUNCTIONS_SECRET_KEY|DATABASE_URL|REDIS_URL|CLOUDFLARE_API_TOKEN|/var/run/docker.sock|private|buildkit-mtls|ca-key[.]pem|networks:|privileged:|cap_add:.*(ALL|DAC_OVERRIDE|SYS_ADMIN)'; then
+if printf '%s\n' "$cloudflare_source_init_block" | grep -Eqi 'environment:|FUNCTIONS_SECRET_KEY|APPS_SECRET_KEY|DATABASE_URL|REDIS_URL|CLOUDFLARE_API_TOKEN|/var/run/docker.sock|private|buildkit-mtls|ca-key[.]pem|networks:|privileged:|cap_add:.*(ALL|DAC_OVERRIDE|SYS_ADMIN)'; then
 	printf '%s\n' 'Cloudflare source handoff can see credentials or has broader authority than read-only copy access' >&2
 	exit 1
 fi
@@ -597,7 +597,7 @@ if ! printf '%s\n' "$buildkit_block" | grep -Fq '/run/secrets/stealth-buildkit/h
 	printf '%s\n' 'BuildKit healthcheck does not authenticate with the health-only identity' >&2
 	exit 1
 fi
-for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'CLOUDFLARE'; do
+for forbidden in '/var/run/docker.sock' 'privileged:' 'network_mode: host' 'pid: host' 'ipc: host' 'ports:' 'stealth:' 'telemetry_store:' 'ingress_control_db:' 'stealth_storage:' 'app_build_staging:' 'DATABASE_URL' 'REDIS_URL' 'FUNCTIONS_SECRET_KEY' 'APPS_SECRET_KEY' 'CLOUDFLARE'; do
 	if printf '%s\n' "$buildkit_block" | grep -Fqi -- "$forbidden"; then
 		printf 'App BuildKit service contains forbidden setting: %s\n' "$forbidden" >&2
 		exit 1
