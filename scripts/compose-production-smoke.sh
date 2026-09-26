@@ -2049,7 +2049,10 @@ PY
 		printf '%s\n' 'platform smoke Site response did not expose platform_hostname' >&2
 		return 1
 	fi
-	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":20}}}' "$platform_response")"
+	# The CI smoke reconciles platform routes every 30 seconds. Keep this first
+	# process pending through one route snapshot so the withheld-route assertion
+	# cannot race with the initial health probe.
+	app_status="$(platform_request POST "/v1/projects/${platform_project_id}/apps" '{"name":"buildkit-smoke-app","enabled":true,"workload":{"health_check":{"protocol":"http","path":"/healthz","initial_delay_seconds":45}}}' "$platform_response")"
 	if [ "$app_status" != '201' ]; then
 		printf 'platform smoke App creation returned HTTP %s\n' "$app_status" >&2
 		sed -n '1,80p' "$platform_response" >&2
