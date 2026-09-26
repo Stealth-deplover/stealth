@@ -344,9 +344,14 @@ This archive remains the recovery source and supports future rollback.
 Orphan cleanup stays ownership-validated and durable. Completed cleanup rows
 are retained for 14 days and terminal failures for 90 days; at most 100 old
 terminal rows are pruned hourly. Runtime retries use bounded exponential
-backoff capped at one minute; cleanup retries stop after 20 attempts, while
-ownership conflicts fail terminally. Production acceptance targets Docker
-Engine with Compose v2 and cgroup v2 resource accounting; verify the host with
+backoff capped at one minute; orphan-inventory errors back off from the sweep
+interval up to one hour, and runtime-image GC errors back off from the
+configured interval up to 24 hours. Successful maintenance resets its backoff.
+Cleanup retries stop after 20 attempts, while ownership conflicts fail
+terminally. Health probes continue at the WorkloadSpec interval, bounded to
+5–300 seconds; this configured probe cadence is not an immediate retry loop.
+Production acceptance targets Docker Engine with Compose v2 and cgroup v2
+resource accounting; verify the host with
 `docker info --format '{{.CgroupVersion}}'`.
 
 `running` means Moby reports the current expected container process running.

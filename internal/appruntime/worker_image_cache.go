@@ -22,15 +22,10 @@ func (w *Worker) pruneCleanupHistoryIfDue(ctx context.Context) {
 }
 
 func (w *Worker) sweepRuntimeImageCacheIfDue(ctx context.Context, currentDeploymentID uuid.UUID) {
-	interval := w.ImageCacheGCSweepInterval
-	if interval < time.Minute || interval > 24*time.Hour {
-		interval = defaultRuntimeImageGCSweepInterval
-	}
 	now := time.Now()
-	if !w.lastImageCacheSweep.IsZero() && now.Sub(w.lastImageCacheSweep) < interval {
+	if !w.nextImageCacheSweep.IsZero() && now.Before(w.nextImageCacheSweep) {
 		return
 	}
-	w.lastImageCacheSweep = now
 	if w.Metrics != nil {
 		w.Metrics.AppRuntimeImageCacheLimitBytes.Set(float64(w.imageCacheMaxBytes()))
 	}
@@ -237,9 +232,51 @@ func runtimeImageCacheSizeBytes(entries []RuntimeImageCacheEntry) (int64, error)
 	return total, nil
 }
 
+func boundedMaintenanceBackoff(base time.Duration, attempt int, maximum time.Duration) time.Duration {
+	if base <= 0 {
+		base = time.Second
+	}
+	if maximum < base {
+		maximum = base
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := base
+	for index := 1; index < attempt && delay < maximum; index++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
+}
+
+func (w *Worker) imageCacheSweepInterval() time.Duration {
+	if w.ImageCacheGCSweepInterval < time.Minute || w.ImageCacheGCSweepInterval > 24*time.Hour {
+		return defaultRuntimeImageGCSweepInterval
+	}
+	return w.ImageCacheGCSweepInterval
+}
+
 func (w *Worker) reportRuntimeImageCacheSweep(result string, reclaimedBytes, cacheBytes int64, pressure bool, err error) {
 	if result != "completed" && result != "error" && result != "pressure" {
 		result = "error"
+	}
+	interval := w.imageCacheSweepInterval()
+	now := time.Now()
+	if result == "error" {
+		if w.imageCacheFailureCount < 32 {
+			w.imageCacheFailureCount++
+		}
+		delay := boundedMaintenanceBackoff(interval, w.imageCacheFailureCount, maxRuntimeImageGCBackoff)
+		w.nextImageCacheSweep = now.Add(delay)
+	} else {
+		w.imageCacheFailureCount = 0
+		w.nextImageCacheSweep = now.Add(interval)
 	}
 	if w.Metrics != nil {
 		w.Metrics.AppRuntimeImageGCTotal.WithLabelValues(result).Inc()

@@ -28,6 +28,8 @@ const (
 	defaultRuntimeImageGCSweepInterval  = 15 * time.Minute
 	defaultCleanupRetentionInterval     = time.Hour
 	cleanupHistoryBatchSize             = 100
+	maxOrphanSweepBackoff               = time.Hour
+	maxRuntimeImageGCBackoff            = 24 * time.Hour
 	maxRuntimeRetry                     = time.Minute
 	maxCleanupAttempts                  = 20
 )
@@ -103,10 +105,12 @@ type Worker struct {
 	startSweepDone            bool
 	cleanupTurn               bool
 	networkRetryAfter         time.Time
-	lastOrphanSweep           time.Time
-	lastImageCacheSweep       time.Time
+	nextOrphanSweep           time.Time
+	nextImageCacheSweep       time.Time
 	lastCleanupRetentionSweep time.Time
 	networkFailureCount       int
+	orphanFailureCount        int
+	imageCacheFailureCount    int
 	startupSweepMutex         sync.Mutex
 }
 

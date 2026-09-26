@@ -153,9 +153,17 @@ func TestRuntimeImageCacheRemovalFailureIsMaintenanceOnlyAndRetriesLater(t *test
 	driver.runtimeImageCache = []RuntimeImageCacheEntry{entry}
 	driver.removeImageTagErr = ErrRuntimeUnavailable
 
+	before := time.Now()
 	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
 	if len(driver.removedImageTags) != 1 || store.failureCalls != 0 {
 		t.Fatalf("cache removal failure changed App state: removals=%v app failures=%d", driver.removedImageTags, store.failureCalls)
+	}
+	if worker.imageCacheFailureCount != 1 || !worker.nextImageCacheSweep.After(before) {
+		t.Fatalf("cache failure did not schedule a bounded retry: count=%d at=%s", worker.imageCacheFailureCount, worker.nextImageCacheSweep)
+	}
+	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
+	if len(driver.removedImageTags) != 1 {
+		t.Fatalf("cache sweep retried before its backoff: removals=%v", driver.removedImageTags)
 	}
 	var pressure dto.Metric
 	pressureErr := worker.Metrics.AppRuntimeImageCachePressure.Write(&pressure)
@@ -168,10 +176,13 @@ func TestRuntimeImageCacheRemovalFailureIsMaintenanceOnlyAndRetriesLater(t *test
 	}
 
 	driver.removeImageTagErr = nil
-	worker.lastImageCacheSweep = time.Time{}
+	worker.nextImageCacheSweep = time.Time{}
 	worker.sweepRuntimeImageCacheIfDue(context.Background(), uuid.Nil)
 	if len(driver.removedImageTags) != 2 || store.failureCalls != 0 {
 		t.Fatalf("later cache sweep did not retry independently of App state: removals=%v app failures=%d", driver.removedImageTags, store.failureCalls)
+	}
+	if worker.imageCacheFailureCount != 0 {
+		t.Fatalf("successful cache sweep did not reset failure count: %d", worker.imageCacheFailureCount)
 	}
 	pressureErr = worker.Metrics.AppRuntimeImageCachePressure.Write(&pressure)
 	pressureValue = -1
@@ -199,6 +210,22 @@ func TestRuntimeImageCacheRemovalFailureIsMaintenanceOnlyAndRetriesLater(t *test
 		return
 	}
 	t.Fatal("runtime image GC counter family was not registered")
+}
+
+func TestMaintenanceBackoffIsExponentialAndBounded(t *testing.T) {
+	want := []time.Duration{
+		time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 16 * time.Minute,
+		32 * time.Minute, 64 * time.Minute, 128 * time.Minute, 256 * time.Minute,
+		512 * time.Minute, 1024 * time.Minute, maxRuntimeImageGCBackoff,
+	}
+	for attempt, expected := range want {
+		if got := boundedMaintenanceBackoff(time.Minute, attempt+1, maxRuntimeImageGCBackoff); got != expected {
+			t.Fatalf("maintenance retry %d = %s, want %s", attempt+1, got, expected)
+		}
+	}
+	if got := boundedMaintenanceBackoff(0, 0, maxOrphanSweepBackoff); got != time.Second {
+		t.Fatalf("zero base/attempt backoff = %s, want nonzero safe minimum", got)
+	}
 }
 
 func TestRuntimeImageCacheSweepCountsSharedImageIDOnce(t *testing.T) {

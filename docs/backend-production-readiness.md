@@ -107,9 +107,11 @@ runtime image GC never deletes them. Reconciliation verifies and imports an
 evicted selected deployment from its persisted OCI archive. Stealth never runs
 global Docker prune commands. Cleanup history is bounded by retaining
 completed rows for 14 days and terminal failures for 90 days, pruning at most
-100 terminal rows per hourly pass. Runtime exponential retry delay is capped
-at one minute; cleanup stops after 20 attempts and ownership conflicts are
-terminal.
+100 terminal rows per hourly pass. Runtime retries use exponential backoff
+capped at one minute; orphan inventory backs off to one hour and runtime-image
+GC failures to 24 hours, resetting after successful maintenance. Health probes
+follow the WorkloadSpec's bounded 5–300 second cadence. Cleanup stops after 20
+attempts and ownership conflicts are terminal.
 
 When an inspected App container is stopped and restarted in place, the worker
 fences a durable health reset before `docker start`: the old probe identity,

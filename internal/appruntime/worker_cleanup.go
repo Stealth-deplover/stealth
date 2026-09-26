@@ -22,14 +22,18 @@ func (w *Worker) ensureStartupSweep(ctx context.Context) error {
 
 func (w *Worker) sweepOrphansIfDue(ctx context.Context) error {
 	interval := w.OrphanSweepEvery
-	if interval <= 0 {
+	if interval < time.Minute || interval > 24*time.Hour {
 		interval = defaultOrphanSweepEvery
 	}
-	if !w.lastOrphanSweep.IsZero() && time.Since(w.lastOrphanSweep) < interval {
+	now := time.Now()
+	if !w.nextOrphanSweep.IsZero() && now.Before(w.nextOrphanSweep) {
 		return nil
 	}
 	containers, err := w.Runtime.ListManagedAppContainers(ctx)
 	if err != nil {
+		if ctx.Err() == nil {
+			w.deferOrphanSweep(time.Now(), interval)
+		}
 		return err
 	}
 	for _, container := range containers {
@@ -43,6 +47,9 @@ func (w *Worker) sweepOrphansIfDue(ctx context.Context) error {
 		}
 		exists, err := w.Store.AppRuntimeContainerExists(ctx, projectID, appID, container.ID)
 		if err != nil {
+			if ctx.Err() == nil {
+				w.deferOrphanSweep(time.Now(), interval)
+			}
 			return err
 		}
 		if exists {
@@ -50,14 +57,25 @@ func (w *Worker) sweepOrphansIfDue(ctx context.Context) error {
 		}
 		projectCopy := projectID
 		if err := w.Store.QueueAppRuntimeCleanup(ctx, &projectCopy, appID, container.ID, container.Name, 15); err != nil {
+			if ctx.Err() == nil {
+				w.deferOrphanSweep(time.Now(), interval)
+			}
 			return err
 		}
 		if w.Metrics != nil {
 			w.Metrics.AppRuntimeOrphansQueued.Inc()
 		}
 	}
-	w.lastOrphanSweep = time.Now()
+	w.orphanFailureCount = 0
+	w.nextOrphanSweep = time.Now().Add(interval)
 	return nil
+}
+
+func (w *Worker) deferOrphanSweep(now time.Time, interval time.Duration) {
+	if w.orphanFailureCount < 32 {
+		w.orphanFailureCount++
+	}
+	w.nextOrphanSweep = now.Add(boundedMaintenanceBackoff(interval, w.orphanFailureCount, maxOrphanSweepBackoff))
 }
 
 func (w *Worker) processCleanup(parent context.Context, job repository.AppRuntimeCleanupJob) error {

@@ -260,6 +260,8 @@ type runtimeTestDriver struct {
 	onRename           func()
 	nextContainerID    string
 	listedContainers   []Container
+	listContainersErr  error
+	listContainersCall int
 	runtimeImageCache  []RuntimeImageCacheEntry
 	containerImageRefs []ManagedAppImageReference
 	removedImageTags   []string
@@ -364,7 +366,8 @@ func (r *runtimeTestDriver) RemoveCleanupTarget(context.Context, repository.AppR
 	return nil
 }
 func (r *runtimeTestDriver) ListManagedAppContainers(context.Context) ([]Container, error) {
-	return append([]Container(nil), r.listedContainers...), nil
+	r.listContainersCall++
+	return append([]Container(nil), r.listedContainers...), r.listContainersErr
 }
 func (r *runtimeTestDriver) ListRuntimeImageCache(context.Context) ([]RuntimeImageCacheEntry, error) {
 	return append([]RuntimeImageCacheEntry(nil), r.runtimeImageCache...), r.listImageCacheErr
@@ -636,13 +639,41 @@ func TestOrphanSweepCleansDuplicateManagedContainerForLiveApp(t *testing.T) {
 		t.Fatalf("live App duplicate was not durably queued by validated Docker identity: %+v", store)
 	}
 
-	worker.lastOrphanSweep = time.Time{}
+	worker.nextOrphanSweep = time.Time{}
 	driver.listedContainers = []Container{runtimeTestContainer(job, driver.image, true, strings.Repeat("8", 64))}
 	if err := worker.sweepOrphansIfDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if store.queueCalls != 1 {
 		t.Fatalf("canonical live App runtime was queued as an orphan: calls=%d", store.queueCalls)
+	}
+}
+
+func TestOrphanSweepFailureUsesBoundedBackoff(t *testing.T) {
+	worker, _, driver, _, _ := newRuntimeWorkerFixture(t, false)
+	driver.listContainersErr = ErrRuntimeUnavailable
+	now := time.Now()
+	if err := worker.sweepOrphansIfDue(context.Background()); !errors.Is(err, ErrRuntimeUnavailable) {
+		t.Fatalf("orphan inventory failure = %v", err)
+	}
+	if worker.orphanFailureCount != 1 || !worker.nextOrphanSweep.After(now) {
+		t.Fatalf("orphan failure backoff state = count %d retry %s", worker.orphanFailureCount, worker.nextOrphanSweep)
+	}
+	if err := worker.sweepOrphansIfDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if driver.listContainersCall != 1 {
+		t.Fatalf("orphan failure retried before its backoff: list calls=%d", driver.listContainersCall)
+	}
+	worker.nextOrphanSweep = time.Time{}
+	if err := worker.sweepOrphansIfDue(context.Background()); !errors.Is(err, ErrRuntimeUnavailable) {
+		t.Fatalf("second orphan inventory failure = %v", err)
+	}
+	if worker.orphanFailureCount != 2 {
+		t.Fatalf("orphan failure count = %d, want 2", worker.orphanFailureCount)
+	}
+	if delay := boundedMaintenanceBackoff(time.Minute, 32, maxOrphanSweepBackoff); delay != maxOrphanSweepBackoff {
+		t.Fatalf("orphan sweep backoff = %s, want cap %s", delay, maxOrphanSweepBackoff)
 	}
 }
 
