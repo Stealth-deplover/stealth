@@ -241,12 +241,14 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
       addKey(keys, queryKeys.apps(change.projectId));
       if (change.appId) {
         addKey(keys, queryKeys.app(change.projectId, change.appId));
+        addKey(keys, queryKeys.appDiagnostics(change.projectId, change.appId));
       }
       return keys;
 
     case "app-deployment":
       addKey(keys, queryKeys.apps(change.projectId));
       addKey(keys, queryKeys.app(change.projectId, change.appId));
+      addKey(keys, queryKeys.appDiagnostics(change.projectId, change.appId));
       addKey(keys, queryKeys.appDeployments(change.projectId, change.appId));
       if (change.deploymentId) {
         addKey(
@@ -262,6 +264,7 @@ export function invalidationKeysFor(change: CacheChange): CacheQueryKey[] {
 
     case "app-environment-variable":
       addKey(keys, queryKeys.app(change.projectId, change.appId));
+      addKey(keys, queryKeys.appDiagnostics(change.projectId, change.appId));
       addKey(
         keys,
         queryKeys.appEnvironmentVariables(change.projectId, change.appId),

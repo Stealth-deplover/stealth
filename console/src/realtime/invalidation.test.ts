@@ -45,6 +45,7 @@ describe("realtime query invalidation", () => {
     ).toEqual([
       ["apps", "project-1"],
       ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
     ]);
   });
 
@@ -58,6 +59,7 @@ describe("realtime query invalidation", () => {
     ).toEqual([
       ["apps", "project-1"],
       ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
     ]);
   });
 
@@ -70,6 +72,7 @@ describe("realtime query invalidation", () => {
       }),
     ).toEqual([
       ["app", "project-1", "app-1"],
+      ["app-diagnostics", "project-1", "app-1"],
       ["app-environment-variables", "project-1", "app-1"],
     ]);
   });

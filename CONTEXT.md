@@ -268,6 +268,18 @@ to recover encrypted values from a database backup. Configured values are
 limited to 65,536 bytes each and 512 KiB total per App. NUL and line breaks
 are unsupported by the current line-based Docker env-file transport.
 
+App deployment rows are the immutable release history. The `select` operation
+sets a desired image; the explicit rollback operation targets an older ready
+release, restores that release's captured WorkloadSpec, and creates one new
+desired generation. Rollback keeps current App name, enabled state, hostname,
+quota, environment variables, and secrets. The persisted OCI archive and its
+checksum are the recovery source if A6 evicted the Docker runtime cache tag.
+Applied identifies the deployment last confirmed by the trusted worker;
+Desired identifies the release selected now. The diagnostics endpoint reads
+PostgreSQL state only and omits Docker identities, worker leases, artifact
+paths, and environment/secret data. Rollback is an explicit operator action;
+runtime failures do not trigger automatic rollback.
+
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no
 Docker socket, backend network, platform credentials, SSH forwarding, build

@@ -3,6 +3,7 @@ import { FileUp } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateAppDeployment,
+  useRollbackAppDeployment,
   useSelectAppDeployment,
 } from "@/api/mutations";
 import { nextCursor } from "@/api/pagination";
@@ -14,7 +15,8 @@ import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppDeploymentDialog } from "@/features/apps/app-deployment-dialog";
-import type { AppDeployment, StealthApp } from "@/api/types";
+import { AppRollbackDialog } from "@/features/apps/app-rollback-dialog";
+import type { AppDeployment, AppDiagnostics, StealthApp } from "@/api/types";
 import { pageControls } from "@/lib/pagination";
 import type { useCursorPagination } from "@/hooks/use-cursor-pagination";
 
@@ -25,6 +27,7 @@ export function AppDeploymentsPanel({
   projectId,
   appId,
   app,
+  diagnostics,
   deployments,
   deploymentNavigation,
   inspectedDeploymentId,
@@ -34,6 +37,7 @@ export function AppDeploymentsPanel({
   projectId: string;
   appId: string;
   app: StealthApp;
+  diagnostics: AppDiagnostics | undefined;
   deployments: DeploymentsQuery;
   deploymentNavigation: DeploymentNavigation;
   inspectedDeploymentId: string | null;
@@ -42,7 +46,11 @@ export function AppDeploymentsPanel({
 }) {
   const createDeployment = useCreateAppDeployment(projectId, appId);
   const selectDeployment = useSelectAppDeployment(projectId, appId);
+  const rollbackDeployment = useRollbackAppDeployment(projectId, appId);
   const [deploymentOpen, setDeploymentOpen] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<AppDeployment | null>(
+    null,
+  );
   const deploymentItems = deployments.data?.deployments ?? [];
 
   const onCreateDeployment = async (form: FormData) => {
@@ -63,16 +71,30 @@ export function AppDeploymentsPanel({
       );
     }
   };
+  const onRollbackDeployment = async () => {
+    if (!rollbackTarget) return;
+    try {
+      await rollbackDeployment.mutateAsync(rollbackTarget.id);
+      toast.success(
+        `Rollback to v${rollbackTarget.version} selected; runtime convergence has started.`,
+      );
+      setRollbackTarget(null);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not roll back release",
+      );
+    }
+  };
 
   return (
     <>
       <Card className="mt-5">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Build deployments</CardTitle>
+            <CardTitle>Deployment history</CardTitle>
             <p className="mt-1 text-xs leading-5 text-fog">
-              Immutable OCI build artifacts and their captured WorkloadSpec
-              snapshots. A ready image is not a running App.
+              Immutable releases with separate Desired and Applied states. A
+              ready image is not a running App.
             </p>
           </div>
           {canManage ? (
@@ -95,11 +117,14 @@ export function AppDeploymentsPanel({
             data={deploymentItems}
             columns={deploymentColumns(
               app.desired_deployment_id,
+              diagnostics?.desired_deployment?.version ?? null,
+              diagnostics?.applied_deployment?.id ?? null,
               inspectedDeploymentId,
               setInspectedDeploymentId,
               canManage,
-              selectDeployment.isPending,
+              selectDeployment.isPending || rollbackDeployment.isPending,
               onSelectDeployment,
+              (deployment) => setRollbackTarget(deployment),
             )}
             loading={deployments.isPending}
             empty="No build deployments have been created yet."
@@ -118,17 +143,33 @@ export function AppDeploymentsPanel({
         pending={createDeployment.isPending}
         onSubmit={onCreateDeployment}
       />
+      {rollbackTarget && diagnostics?.desired_deployment ? (
+        <AppRollbackDialog
+          appName={app.name}
+          currentVersion={diagnostics.desired_deployment.version}
+          targetVersion={rollbackTarget.version}
+          open
+          pending={rollbackDeployment.isPending}
+          onOpenChange={(open) => {
+            if (!open && !rollbackDeployment.isPending) setRollbackTarget(null);
+          }}
+          onConfirm={() => void onRollbackDeployment()}
+        />
+      ) : null}
     </>
   );
 }
 
 function deploymentColumns(
   desiredDeploymentId: string | null,
+  desiredVersion: number | null,
+  appliedDeploymentId: string | null,
   inspectedDeploymentId: string | null,
   setInspectedDeploymentId: (id: string | null) => void,
   canManage: boolean,
-  selectionPending: boolean,
+  releaseActionPending: boolean,
   onSelect: (id: string) => Promise<void>,
+  onRollback: (deployment: AppDeployment) => void,
 ): DataTableColumnDef<AppDeployment>[] {
   return [
     {
@@ -155,7 +196,7 @@ function deploymentColumns(
     },
     {
       id: "image",
-      header: "Image artifact",
+      header: "Image digest",
       cell: ({ row }) => (
         <div className="max-w-56 space-y-1">
           <span
@@ -174,13 +215,21 @@ function deploymentColumns(
     },
     {
       id: "selection",
-      header: "Desired image",
-      cell: ({ row }) =>
-        desiredDeploymentId === row.original.id ? (
-          <Badge variant="success">Selected</Badge>
-        ) : (
-          <Badge variant="neutral">Not selected</Badge>
-        ),
+      header: "Release state",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap gap-1.5">
+          {desiredDeploymentId === row.original.id ? (
+            <Badge variant="success">Desired</Badge>
+          ) : null}
+          {appliedDeploymentId === row.original.id ? (
+            <Badge variant="default">Applied</Badge>
+          ) : null}
+          {desiredDeploymentId !== row.original.id &&
+          appliedDeploymentId !== row.original.id ? (
+            <Badge variant="neutral">Historical</Badge>
+          ) : null}
+        </div>
+      ),
     },
     {
       accessorKey: "created_at",
@@ -212,14 +261,36 @@ function deploymentColumns(
           </Button>
           {canManage &&
           row.original.build_status === "succeeded" &&
-          desiredDeploymentId !== row.original.id ? (
+          row.original.status === "ready" &&
+          desiredDeploymentId !== row.original.id &&
+          (desiredDeploymentId === null ||
+            (desiredVersion !== null &&
+              row.original.version > desiredVersion)) ? (
             <Button
               size="sm"
               variant="outline"
-              disabled={selectionPending}
+              disabled={releaseActionPending}
               onClick={() => void onSelect(row.original.id)}
             >
               Select as desired image
+            </Button>
+          ) : null}
+          {canManage &&
+          row.original.status === "ready" &&
+          row.original.build_status === "succeeded" &&
+          desiredDeploymentId !== row.original.id &&
+          desiredVersion !== null &&
+          row.original.version < desiredVersion &&
+          row.original.image_digest &&
+          row.original.image_archive_sha256 &&
+          row.original.image_size_bytes ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={releaseActionPending}
+              onClick={() => onRollback(row.original)}
+            >
+              Rollback
             </Button>
           ) : null}
         </div>

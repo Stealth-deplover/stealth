@@ -425,6 +425,39 @@ func TestWorkerImportsVerifiedImageAndAppliesCurrentWorkload(t *testing.T) {
 	}
 }
 
+func TestWorkerReimportsEvictedRollbackReleaseFromPersistedArtifact(t *testing.T) {
+	worker, store, driver, job, archive := newRuntimeWorkerFixture(t, false)
+	rollbackWorkload := workloadspec.Default()
+	rollbackWorkload.Resources.CPUMillis = 500
+	rollbackWorkloadDigest, err := workloadspec.Digest(rollbackWorkload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.App.Workload = rollbackWorkload
+	job.App.WorkloadSpecSHA256 = rollbackWorkloadDigest
+	job.App.DesiredGeneration = 6
+	job.App.ObservedGeneration = 5
+	job.Deployment.Version = 1
+	job.Deployment.WorkloadSnapshot = rollbackWorkload
+	job.Deployment.WorkloadSpecSHA256 = rollbackWorkloadDigest
+
+	if err := worker.processApp(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if store.failureCalls != 0 || store.completeCalls != 1 || store.completeStatus != "running" || store.completed == nil {
+		t.Fatalf("rollback runtime completion = status %q container %#v failures=%d", store.completeStatus, store.completed, store.failureCalls)
+	}
+	if driver.ensureImageCalls != 1 || !bytes.Equal(driver.loadedBytes, archive) {
+		t.Fatalf("missing runtime cache was not restored from the persisted rollback archive: calls=%d archive_match=%v", driver.ensureImageCalls, bytes.Equal(driver.loadedBytes, archive))
+	}
+	if driver.createCalls != 1 || driver.startCalls != 1 || driver.createJob.App.Workload.Resources.CPUMillis != 500 {
+		t.Fatalf("rollback WorkloadSpec was not used for a new runtime: create=%d start=%d cpu=%d", driver.createCalls, driver.startCalls, driver.createJob.App.Workload.Resources.CPUMillis)
+	}
+	if store.observedGeneration != 6 || store.completed.ImageDigest == "" || store.completed.ImageID != runtimeTestConfigDigest(archive) {
+		t.Fatalf("rollback generation or verified image identity was not applied: observed=%d container=%+v", store.observedGeneration, store.completed)
+	}
+}
+
 func TestWorkerRejectsMissingOrModifiedImageWithoutAdvancingGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name   string

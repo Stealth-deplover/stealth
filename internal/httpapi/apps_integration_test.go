@@ -172,6 +172,7 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM accounts WHERE id IN ($1,$2,$3)`, ownerRegistration.Account.ID, viewerRegistration.Account.ID, adminRegistration.Account.ID)
 	})
 
+	var readKeyID string
 	createKey := func(project, name string, scopes []string) string {
 		t.Helper()
 		var response struct {
@@ -183,6 +184,9 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		requestJSON(t, ownerClient, http.MethodPost, project+"/api-keys", map[string]any{"name": name, "scopes": scopes}, http.StatusCreated, &response)
 		if response.Key.ID == "" || response.Secret == "" {
 			t.Fatalf("API key response was incomplete for %s", name)
+		}
+		if name == "Apps read scope" {
+			readKeyID = response.Key.ID
 		}
 		return response.Secret
 	}
@@ -212,6 +216,23 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	if created.App.ID == "" || created.App.RuntimeStatus != "not_deployed" || created.App.DesiredGeneration != 1 || created.App.ObservedGeneration != 0 || created.App.RuntimeError != nil {
 		t.Fatalf("created App fabricated runtime state: %+v", created.App)
 	}
+	diagnosticsURL := projectURL + "/apps/" + created.App.ID + "/diagnostics"
+	requestJSON(t, newIntegrationClient(t), http.MethodGet, diagnosticsURL, nil, http.StatusUnauthorized, nil)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, diagnosticsURL, nil, http.StatusForbidden, writeHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/diagnostics", nil, http.StatusNotFound, wrongProjectHeaders)
+	diagnosticsBody := requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, diagnosticsURL, nil, http.StatusOK, readHeaders)
+	var freshDiagnostics domain.AppDiagnostics
+	if err := json.Unmarshal(diagnosticsBody, &freshDiagnostics); err != nil {
+		t.Fatal(err)
+	}
+	if freshDiagnostics.ConvergenceStatus != "not_deployed" || freshDiagnostics.AppID != created.App.ID {
+		t.Fatalf("fresh App diagnostics projection = %+v", freshDiagnostics)
+	}
+	for _, forbidden := range []string{"container_id", "container_name", "container_address", "image_id", "runtime_tag", "route_identity", "health_route_identity", "worker_id", "lease_token", "lease_expires_at", "image_path", "source_path", "artifact_path", "APPS_SECRET_KEY", "value_ciphertext", "ciphertext", "nonce"} {
+		if strings.Contains(string(diagnosticsBody), forbidden) {
+			t.Fatalf("diagnostics exposed forbidden field %q: %s", forbidden, diagnosticsBody)
+		}
+	}
 	variablesURL := projectURL + "/apps/" + created.App.ID + "/variables"
 	requestJSON(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusUnauthorized, nil)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusForbidden, writeHeaders)
@@ -223,6 +244,10 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	}, http.StatusCreated)
 	if strings.Contains(string(variableBody), secretValue) || strings.Contains(string(variableBody), "ciphertext") || strings.Contains(string(variableBody), "nonce") {
 		t.Fatalf("App environment mutation response exposed plaintext or crypto fields: %s", variableBody)
+	}
+	diagnosticsBody = requestJSONRawWithHeaders(t, newIntegrationClient(t), http.MethodGet, diagnosticsURL, nil, http.StatusOK, readHeaders)
+	if strings.Contains(string(diagnosticsBody), secretValue) || strings.Contains(string(diagnosticsBody), "ciphertext") || strings.Contains(string(diagnosticsBody), "nonce") {
+		t.Fatalf("App diagnostics exposed environment plaintext or ciphertext: %s", diagnosticsBody)
 	}
 	var variableResponse struct {
 		Variable domain.AppEnvironmentVariable `json:"variable"`
@@ -476,6 +501,11 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL+"/"+deploymentID, nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL+"/"+deploymentID+"/logs", nil, http.StatusOK, readHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, deploymentURL, nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSON(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/rollback", nil, http.StatusUnauthorized, nil)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/rollback", nil, http.StatusForbidden, readHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/rollback", nil, http.StatusConflict, writeHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/rollback", nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSON(t, ownerClient, http.MethodPost, secondProjectURL+"/apps/"+writeKeyApp.App.ID+"/deployments/"+deploymentID+"/rollback", nil, http.StatusNotFound, nil)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodPost, deploymentURL+"/"+deploymentID+"/select", nil, http.StatusConflict, writeHeaders)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodDelete, deploymentURL+"/"+deploymentID, nil, http.StatusNoContent, writeHeaders)
 
@@ -581,4 +611,6 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	if claimCount != 0 {
 		t.Fatalf("App deletion left %d platform claims", claimCount)
 	}
+	requestJSON(t, ownerClient, http.MethodDelete, projectURL+"/api-keys/"+readKeyID, nil, http.StatusNoContent, nil)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, diagnosticsURL, nil, http.StatusUnauthorized, readHeaders)
 }

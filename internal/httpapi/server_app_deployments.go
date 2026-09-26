@@ -321,6 +321,12 @@ func appDeploymentResourceError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, "deployment_building", "an App deployment with an active build cannot be deleted")
 	case errors.Is(err, repository.ErrAppDeploymentNotReady):
 		writeError(w, http.StatusConflict, "deployment_not_ready", "only a completed verified App image can be selected")
+	case errors.Is(err, repository.ErrAppDeploymentAlreadySelected):
+		writeError(w, http.StatusConflict, "already_selected", "the selected deployment is already the desired App release")
+	case errors.Is(err, repository.ErrAppRollbackNotAvailable):
+		writeError(w, http.StatusConflict, "rollback_not_available", "the deployment is not an eligible older release with a verified artifact")
+	case errors.Is(err, repository.ErrAppRollbackGenerationLimit):
+		writeError(w, http.StatusConflict, "generation_limit", "the App desired generation cannot be advanced")
 	case errors.Is(err, repository.ErrInvalidAppDeployment), errors.Is(err, appbuildspec.ErrInvalidBuildSpec):
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "App deployment settings are invalid")
 	default:

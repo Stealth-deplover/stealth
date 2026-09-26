@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AppHealth_status,
@@ -7,18 +7,24 @@ import {
   AppDeploymentPlatform,
   AppDeploymentSource,
   AppDeploymentStatus,
+  AppDiagnosticsConvergence_status,
+  AppDiagnosticsHealth_status,
+  AppDiagnosticsRoute_status,
+  AppDiagnosticsRuntime_status,
   AppRuntime_status,
   WorkloadHealthCheckProtocol,
 } from "@/api/generated/schema";
-import type { AppDeployment, StealthApp } from "@/api/types";
+import type { AppDeployment, AppDiagnostics, StealthApp } from "@/api/types";
 import { createLogSource } from "@/components/log-viewer";
 import { AppDetailView } from "@/features/apps/app-detail-view";
 
 const mocks = vi.hoisted(() => ({
   app: null as StealthApp | null,
   deployments: [] as AppDeployment[],
+  diagnostics: null as AppDiagnostics | null,
   canManage: false,
   appVariables: [] as Array<Record<string, unknown>>,
+  rollback: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -34,6 +40,13 @@ vi.mock("@/api/queries", () => ({
     refetch: vi.fn(),
   }),
   useApps: () => ({ data: { can_manage: mocks.canManage } }),
+  useAppDiagnostics: () => ({
+    data: mocks.diagnostics ?? undefined,
+    error: null,
+    isError: false,
+    isPending: !mocks.diagnostics,
+    refetch: vi.fn(),
+  }),
   useAppDeployments: () => ({
     data: { deployments: mocks.deployments, pagination: { next_cursor: null } },
     error: null,
@@ -60,6 +73,10 @@ vi.mock("@/api/mutations", () => ({
   useCreateAppDeployment: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSelectAppDeployment: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useRollbackAppDeployment: () => ({
+    isPending: false,
+    mutateAsync: mocks.rollback,
+  }),
   useUpdateApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useCreateAppEnvironmentVariable: () => ({
     isPending: false,
@@ -190,8 +207,10 @@ describe("AppDetailView", () => {
   beforeEach(() => {
     mocks.app = makeApp();
     mocks.deployments = [];
+    mocks.diagnostics = null;
     mocks.canManage = false;
     mocks.appVariables = [];
+    mocks.rollback.mockReset().mockResolvedValue({});
   });
 
   it("states that the App has no deployment and offers no fake deploy action", () => {
@@ -248,6 +267,74 @@ describe("AppDetailView", () => {
     );
     expect(screen.getByTestId("app-build-logs")).not.toHaveTextContent(
       "Runtime logs are not available",
+    );
+  });
+
+  it("distinguishes desired and applied releases and confirms an older rollback", async () => {
+    const app = makeApp();
+    app.desired_deployment_id = "release-v5";
+    mocks.app = app;
+    mocks.canManage = true;
+    mocks.diagnostics = {
+      app_id: app.id,
+      project_id: app.project_id,
+      convergence_status: AppDiagnosticsConvergence_status.reconciling,
+      desired_generation: 8,
+      observed_generation: 7,
+      applied_generation: 7,
+      desired_deployment: { id: "release-v5", version: 5 },
+      applied_deployment: { id: "release-v4", version: 4 },
+      desired_artifact_ready: true,
+      runtime_status: AppDiagnosticsRuntime_status.pending,
+      runtime_error: null,
+      health_status: AppDiagnosticsHealth_status.pending,
+      route_status: AppDiagnosticsRoute_status.waiting_for_runtime,
+      failure_count: 0,
+      next_retry_at: null,
+      last_failure_at: null,
+      last_inspected_at: null,
+      last_transition_at: null,
+      last_started_at: null,
+      last_stopped_at: null,
+      health_checked_at: null,
+      issues: [],
+    };
+    mocks.deployments = [
+      makeDeployment({ id: "release-v4", version: 4, selected: false }),
+      makeDeployment({ id: "release-v5", version: 5, selected: true }),
+      makeDeployment({ id: "release-v6", version: 6, selected: false }),
+    ];
+
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
+
+    expect(screen.getAllByText("Desired generation")).toHaveLength(2);
+    expect(screen.getAllByText("Applied generation")).toHaveLength(1);
+    expect(screen.getByText("Desired")).toBeInTheDocument();
+    expect(screen.getByText("Applied")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Rollback" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: "Select as desired image" }),
+    ).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Rollback" }));
+    expect(
+      screen.getByRole("heading", { name: "Roll back backend from v5 to v4?" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Its captured runtime WorkloadSpec is restored."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Current environment variables and secrets stay as-is."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rollback to v4" }));
+    await waitFor(() =>
+      expect(mocks.rollback).toHaveBeenCalledWith("release-v4"),
     );
   });
 

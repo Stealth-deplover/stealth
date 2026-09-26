@@ -62,6 +62,7 @@ function getStatusVariant(
     case "delivered":
     case "healthy":
     case "completed":
+    case "converged":
       return "success";
     case "failed":
     case "error":
@@ -75,12 +76,17 @@ function getStatusVariant(
     case "processing":
     case "accepted":
     case "deferred":
+    case "reconciling":
+    case "waiting_for_runtime":
+    case "waiting_for_health":
       return "building";
     case "warning":
     case "past_due":
     case "degraded":
     case "cancelled":
     case "canceled":
+    case "unhealthy":
+    case "unavailable":
       return "warning";
     default:
       return "neutral";

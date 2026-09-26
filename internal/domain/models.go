@@ -1019,6 +1019,48 @@ type App struct {
 	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
+// AppDiagnosticDeploymentRef identifies a release without exposing its
+// private artifact locator or Docker runtime identity.
+type AppDiagnosticDeploymentRef struct {
+	ID      string `json:"id"`
+	Version int64  `json:"version"`
+}
+
+// AppDiagnosticIssue is a bounded, user-safe explanation of persisted App
+// convergence state.
+type AppDiagnosticIssue struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// AppDiagnostics is a safe PostgreSQL-derived projection. Worker leases,
+// Docker identities, and artifact paths are intentionally excluded.
+type AppDiagnostics struct {
+	AppID                string                      `json:"app_id"`
+	ProjectID            string                      `json:"project_id"`
+	ConvergenceStatus    string                      `json:"convergence_status"`
+	DesiredGeneration    int64                       `json:"desired_generation"`
+	ObservedGeneration   int64                       `json:"observed_generation"`
+	AppliedGeneration    *int64                      `json:"applied_generation"`
+	DesiredDeployment    *AppDiagnosticDeploymentRef `json:"desired_deployment"`
+	AppliedDeployment    *AppDiagnosticDeploymentRef `json:"applied_deployment"`
+	DesiredArtifactReady bool                        `json:"desired_artifact_ready"`
+	RuntimeStatus        string                      `json:"runtime_status"`
+	RuntimeError         *string                     `json:"runtime_error"`
+	HealthStatus         string                      `json:"health_status"`
+	RouteStatus          string                      `json:"route_status"`
+	FailureCount         int                         `json:"failure_count"`
+	NextRetryAt          *time.Time                  `json:"next_retry_at"`
+	LastFailureAt        *time.Time                  `json:"last_failure_at"`
+	LastInspectedAt      *time.Time                  `json:"last_inspected_at"`
+	LastTransitionAt     *time.Time                  `json:"last_transition_at"`
+	LastStartedAt        *time.Time                  `json:"last_started_at"`
+	LastStoppedAt        *time.Time                  `json:"last_stopped_at"`
+	HealthCheckedAt      *time.Time                  `json:"health_checked_at"`
+	Issues               []AppDiagnosticIssue        `json:"issues"`
+}
+
 // AppEnvironmentVariable is a safe metadata projection. Values are
 // write-only and ciphertext never crosses the repository HTTP boundary.
 type AppEnvironmentVariable struct {

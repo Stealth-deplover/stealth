@@ -49,7 +49,11 @@ platform_app_no_image_id=""
 platform_app_disabled_id=""
 platform_app_deployment_id=""
 platform_app_v1_deployment_id=""
+platform_app_v1_version=""
+platform_app_v1_workload_spec_sha256=""
 platform_app_v1_image_id=""
+platform_app_v2_version=""
+platform_app_v2_workload_spec_sha256=""
 platform_app_runtime_unrelated_tag=""
 platform_app_v1_artifact_row=""
 platform_app_cache_gc_quota_row=""
@@ -1401,11 +1405,25 @@ app_deployment_artifact_row() {
 		sh "$deployment_id" "$app_id" | tr -d '\r'
 }
 
+app_deployment_artifact_readiness_flags() {
+	local deployment_id="$1" app_id="$2"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'deployment_id="$1"; app_id="$2"; case "$deployment_id" in *[!0-9a-f-]*|"") exit 2;; esac; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT (status = '\''ready'\'')::text,(build_status = '\''succeeded'\'')::text,(image_digest ~ '\''^sha256:[0-9a-f]{64}$'\'')::text,(image_archive_sha256 ~ '\''^[0-9a-f]{64}$'\'')::text,(image_size_bytes > 0)::text,(image_path IS NOT NULL)::text,(image_path ~ '\''^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'\'')::text,(image_path = project_id::text || '\''/'\'' || app_id::text || '\''/'\'' || id::text)::text FROM app_deployments WHERE id = '\''$deployment_id'\'' AND app_id = '\''$app_id'\''"' \
+		sh "$deployment_id" "$app_id" | tr -d '\r'
+}
+
 app_artifact_quota_row() {
 	local app_id="$1"
 	"${compose[@]}" exec -T postgres sh -ec \
 		'app_id="$1"; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT artifact_used_bytes,artifact_reserved_bytes FROM project_apps WHERE id = '\''$app_id'\''"' \
 		sh "$app_id" | tr -d '\r'
+}
+
+app_deployment_build_logs_row() {
+	local deployment_id="$1" app_id="$2"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'deployment_id="$1"; app_id="$2"; case "$deployment_id" in *[!0-9a-f-]*|"") exit 2;; esac; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --command "SELECT string_agg(sequence::text || chr(58) || level || chr(58) || message, chr(59) ORDER BY sequence) FROM app_build_logs WHERE deployment_id = '\''$deployment_id'\'' AND app_id = '\''$app_id'\''"' \
+		sh "$deployment_id" "$app_id" | tr -d '\r'
 }
 
 create_app_archive() {
@@ -1437,6 +1455,123 @@ fetch_app_runtime() {
 		printf 'App runtime smoke read returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
+}
+
+fetch_app_diagnostics() {
+	local app_id="${1:-$platform_app_id}" status
+	status="$(platform_request GET "/v1/projects/${platform_project_id}/apps/${app_id}/diagnostics" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'App diagnostics smoke read returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	python3 - "$platform_response" <<'PY'
+import json
+import sys
+
+forbidden = {
+    "container_id", "container_name", "container_address", "image_id",
+    "runtime_tag", "route_identity", "health_route_identity", "worker_id",
+    "lease_token", "lease_expires_at", "image_path", "source_path",
+    "APPS_SECRET_KEY", "value_ciphertext", "ciphertext", "nonce",
+}
+with open(sys.argv[1], encoding="utf-8") as source:
+    value = json.load(source)
+found = set()
+
+def walk(node):
+    if isinstance(node, dict):
+        found.update(forbidden.intersection(node))
+        for child in node.values():
+            walk(child)
+    elif isinstance(node, list):
+        for child in node:
+            walk(child)
+
+walk(value)
+if found:
+    raise SystemExit("App diagnostics exposed forbidden field(s): " + ", ".join(sorted(found)))
+PY
+	if grep -Fq -- 'fake-smoke-secret-not-real-v1' "$platform_response" || grep -Fq -- 'fake-smoke-secret-not-real-v2' "$platform_response"; then
+		printf '%s\n' 'App diagnostics exposed an environment secret value' >&2
+		return 1
+	fi
+}
+
+assert_app_diagnostics() {
+	local expected_status="$1" desired_id="$2" desired_version="$3" applied_id="$4" applied_version="$5"
+	fetch_app_diagnostics
+	if ! python3 - "$platform_response" "$expected_status" "$desired_id" "$desired_version" "$applied_id" "$applied_version" <<'PY'
+import json
+import sys
+
+path, expected_status, desired_id, desired_version, applied_id, applied_version = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    diagnostics = json.load(source)
+desired = diagnostics.get("desired_deployment") or {}
+applied = diagnostics.get("applied_deployment") or {}
+expected = {
+    "convergence_status": expected_status,
+    "desired_id": desired_id,
+    "desired_version": int(desired_version),
+    "applied_id": applied_id,
+    "applied_version": int(applied_version),
+    "runtime_status": "running",
+    "health_status": "healthy",
+    "route_status": "active",
+    "desired_artifact_ready": True,
+}
+actual = {
+    "convergence_status": diagnostics.get("convergence_status"),
+    "desired_id": desired.get("id"),
+    "desired_version": desired.get("version"),
+    "applied_id": applied.get("id"),
+    "applied_version": applied.get("version"),
+    "runtime_status": diagnostics.get("runtime_status"),
+    "health_status": diagnostics.get("health_status"),
+    "route_status": diagnostics.get("route_status"),
+    "desired_artifact_ready": diagnostics.get("desired_artifact_ready"),
+}
+if actual != expected:
+    details = {
+        "desired_generation": diagnostics.get("desired_generation"),
+        "observed_generation": diagnostics.get("observed_generation"),
+        "applied_generation": diagnostics.get("applied_generation"),
+        "issues": diagnostics.get("issues"),
+    }
+    raise SystemExit(f"App diagnostics mismatch: expected={expected!r} actual={actual!r} details={details!r}")
+PY
+then
+	printf 'persisted artifact readiness component flags (status|build|digest|archive checksum|size|locator present|canonical v7 locator|owner locator match): %s\n' \
+		"$(app_deployment_artifact_readiness_flags "$desired_id" "$platform_app_id")" >&2
+	return 1
+fi
+}
+
+assert_app_rollback_pending_diagnostics() {
+	local target_id="$1" target_version="$2" prior_id="$3" prior_version="$4" prior_generation="$5" new_generation="$6"
+	fetch_app_diagnostics
+	python3 - "$platform_response" "$target_id" "$target_version" "$prior_id" "$prior_version" "$prior_generation" "$new_generation" <<'PY'
+import json
+import sys
+
+path, target_id, target_version, prior_id, prior_version, prior_generation, new_generation = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    diagnostics = json.load(source)
+desired = diagnostics.get("desired_deployment") or {}
+applied = diagnostics.get("applied_deployment") or {}
+if diagnostics.get("convergence_status") != "reconciling":
+    raise SystemExit(f"rollback diagnostics did not show reconciling: {diagnostics.get('convergence_status')}")
+if desired.get("id") != target_id or desired.get("version") != int(target_version):
+    raise SystemExit(f"rollback diagnostics desired release mismatch: {desired!r}")
+if applied.get("id") not in {prior_id, target_id}:
+    raise SystemExit(f"rollback diagnostics applied release is unexpected: {applied!r}")
+if applied.get("id") == prior_id and applied.get("version") != int(prior_version):
+    raise SystemExit(f"rollback diagnostics previous applied version mismatch: {applied!r}")
+if diagnostics.get("route_status") == "active":
+    raise SystemExit("rollback diagnostics reported an active route before fresh health")
+if int(new_generation) != int(prior_generation) + 1 or diagnostics.get("desired_generation") != int(new_generation):
+    raise SystemExit("rollback diagnostics generation did not increment exactly once")
+PY
 }
 
 wait_for_app_runtime() {
@@ -2264,6 +2399,8 @@ PY
 	fi
 	if [ -z "$platform_app_v1_deployment_id" ]; then
 		platform_app_v1_deployment_id="$platform_app_deployment_id"
+		platform_app_v1_version="$(platform_json_field "$platform_response" deployment.version)"
+		platform_app_v1_workload_spec_sha256="$(platform_json_field "$platform_response" deployment.workload_spec_sha256)"
 		platform_app_v1_artifact_row="$image_row"
 	fi
 	if ! [[ "$image_path" =~ ^[0-9a-f-]+/[0-9a-f-]+/[0-9a-f-]+$ ]]; then
@@ -2355,6 +2492,7 @@ PY
 		printf 'App runtime did not receive the replacement secret after fresh health convergence: response=%q\n' "$config_body" >&2
 		return 1
 	fi
+	assert_app_diagnostics converged "$platform_app_v1_deployment_id" "$platform_app_v1_version" "$platform_app_v1_deployment_id" "$platform_app_v1_version"
 	printf 'App runtime received variable/secret configuration and a replaced secret on generation %s\n' "$updated_generation"
 	wait_for_app_runtime_log_markers "$smoke_marker" 1 "$runtime_container_id"
 	local runtime_log_counts_before runtime_log_counts_after
@@ -2394,7 +2532,7 @@ PY
 
 verify_app_runtime_image_cache_gc() {
 	local old_tag current_tag old_image_size unrelated_image_id current_image_id deadline status generation observed selected spec_sha
-	local artifact_row quota_row image_path archive_sha digest image_size actual_sha
+	local artifact_row quota_row image_path archive_sha digest image_size actual_sha rollback_source_generation rollback_generation environment_before environment_after v1_build_logs_before v2_build_logs_before
 	if [ -z "$platform_app_v1_deployment_id" ] || [ -z "$platform_app_v1_image_id" ] || [ -z "$platform_app_v1_artifact_row" ]; then
 		printf '%s\n' 'App runtime cache smoke did not capture the first persisted deployment identity' >&2
 		return 1
@@ -2418,9 +2556,11 @@ verify_app_runtime_image_cache_gc() {
 	unrelated_image_id="$(docker image inspect --format '{{.Id}}' postgres:17-alpine)"
 	docker image tag postgres:17-alpine "$platform_app_runtime_unrelated_tag"
 	artifact_row="$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")"
+	v1_build_logs_before="$(app_deployment_build_logs_row "$platform_app_v1_deployment_id" "$platform_app_id")"
+	v2_build_logs_before="$(app_deployment_build_logs_row "$platform_app_deployment_id" "$platform_app_id")"
 	platform_app_cache_gc_quota_row="$(app_artifact_quota_row "$platform_app_id")"
-	if ! [[ "$platform_app_cache_gc_quota_row" =~ ^[0-9]+\|[0-9]+$ ]]; then
-		printf 'App artifact quota metadata is malformed before cache pressure proof: %s\n' "$platform_app_cache_gc_quota_row" >&2
+	if ! [[ "$platform_app_cache_gc_quota_row" =~ ^[0-9]+\|[0-9]+$ ]] || [ -z "$v1_build_logs_before" ] || [ -z "$v2_build_logs_before" ]; then
+		printf 'App artifact quota or deployment build-log metadata is malformed before cache pressure proof: %s\n' "$platform_app_cache_gc_quota_row" >&2
 		return 1
 	fi
 	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ]; then
@@ -2467,29 +2607,102 @@ verify_app_runtime_image_cache_gc() {
 		return 1
 	fi
 
-	status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_v1_deployment_id}/select" '' "$platform_response")"
+	assert_app_diagnostics converged "$platform_app_deployment_id" "$platform_app_v2_version" "$platform_app_deployment_id" "$platform_app_v2_version"
+	fetch_app_runtime
+	rollback_source_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	status="$(platform_request GET "/v1/projects/${platform_project_id}/apps/${platform_app_id}/variables" '' "$platform_response")"
 	if [ "$status" != '200' ]; then
-		printf 'reselecting the evicted persisted App deployment returned HTTP %s\n' "$status" >&2
+		printf 'App environment metadata read before rollback returned HTTP %s\n' "$status" >&2
 		return 1
 	fi
+	environment_before="$(cat "$platform_response")"
+	status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_v1_deployment_id}/rollback" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'rolling back to the evicted persisted App deployment returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	if grep -Fq -- 'fake-smoke-secret-not-real-v1' "$platform_response" || grep -Fq -- 'fake-smoke-secret-not-real-v2' "$platform_response"; then
+		printf '%s\n' 'App rollback response exposed an environment secret value' >&2
+		return 1
+	fi
+	rollback_generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	if [ "$(platform_json_field "$platform_response" app.desired_deployment_id)" != "$platform_app_v1_deployment_id" ] ||
+		[ "$(platform_json_field "$platform_response" app.workload_spec_sha256)" != "$platform_app_v1_workload_spec_sha256" ] ||
+		[ "$(platform_json_field "$platform_response" deployment.id)" != "$platform_app_v1_deployment_id" ] ||
+		[ -z "$rollback_source_generation" ] || [ -z "$rollback_generation" ] ||
+		[ "$rollback_generation" -ne "$((rollback_source_generation + 1))" ]; then
+		printf 'rollback did not restore v1 desired image/spec and advance generation: source=%s target=%s\n' "$rollback_source_generation" "$rollback_generation" >&2
+		return 1
+	fi
+	fetch_app_runtime
+	if [ "$(platform_json_field "$platform_response" app.desired_deployment_id)" != "$platform_app_v1_deployment_id" ] ||
+		[ "$(platform_json_field "$platform_response" app.workload_spec_sha256)" != "$platform_app_v1_workload_spec_sha256" ] ||
+		[ "$(platform_json_field "$platform_response" app.route_status)" = 'active' ]; then
+		printf '%s\n' 'rolled-back generation did not immediately withdraw the route or restore v1 WorkloadSpec' >&2
+		return 1
+	fi
+	assert_app_rollback_pending_diagnostics "$platform_app_v1_deployment_id" "$platform_app_v1_version" "$platform_app_deployment_id" "$platform_app_v2_version" "$rollback_source_generation" "$rollback_generation"
 	wait_for_app_runtime running
-	wait_for_app_health_state healthy active
 	fetch_app_runtime
 	generation="$(platform_json_field "$platform_response" app.desired_generation)"
 	observed="$(platform_json_field "$platform_response" app.observed_generation)"
 	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
 	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
 	new_container="$(app_runtime_container_id)"
-	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_v1_deployment_id" ] || [ "$(docker inspect --format '{{.Image}}' "$new_container")" != "$platform_app_v1_image_id" ]; then
-		printf 'evicted App artifact did not re-import and converge: generation=%s/%s deployment=%s\n' "$observed" "$generation" "$selected" >&2
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_v1_deployment_id" ] || [ "$spec_sha" != "$platform_app_v1_workload_spec_sha256" ]; then
+		printf 'rollback runtime desired state did not converge to v1: generation=%s/%s deployment=%s spec=%s\n' "$observed" "$generation" "$selected" "$spec_sha" >&2
 		return 1
 	fi
-	if [ "$(docker image inspect --format '{{.Id}}' "$old_tag")" != "$platform_app_v1_image_id" ]; then
-		printf '%s\n' 'reimport did not restore the exact Stealth runtime tag from the persisted artifact' >&2
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 500
+	if [ "$(docker image inspect --format '{{.Id}}' "$old_tag")" != "$platform_app_v1_image_id" ] ||
+		[ "$(docker inspect --format '{{.Image}}' "$new_container")" != "$platform_app_v1_image_id" ]; then
+		printf '%s\n' 'rollback did not re-import the evicted v1 runtime tag from its persisted OCI artifact' >&2
 		return 1
 	fi
-	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	docker exec "$new_container" /buildkit-secret-probe verify-runtime-secret-v2
+	wait_for_app_health_state pending waiting_for_health
+	wait_for_app_route_snapshot false
+	status="$(traefik_http_status / "$platform_app_host")"
+	if [ "$status" != '404' ]; then
+		printf 'rolled-back App route returned HTTP %s before fresh health, want 404\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_health_state healthy active
+	wait_for_app_route_snapshot true
+	assert_app_route_uses_container_dns_name
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_runtime_configuration 'app-config-v2'
+	wait_for_app_runtime_log_markers "$smoke_marker" 1 "$new_container"
+	fetch_app_runtime_logs "$new_container"
+	assert_app_diagnostics converged "$platform_app_v1_deployment_id" "$platform_app_v1_version" "$platform_app_v1_deployment_id" "$platform_app_v1_version"
+	status="$(platform_request GET "/v1/projects/${platform_project_id}/apps/${platform_app_id}/variables" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'App environment metadata read after rollback returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	environment_after="$(cat "$platform_response")"
+	if [ "$environment_before" != "$environment_after" ]; then
+		printf '%s\n' 'App rollback changed current environment variable/secret metadata' >&2
+		return 1
+	fi
+	if [ "$(app_deployment_build_logs_row "$platform_app_v1_deployment_id" "$platform_app_id")" != "$v1_build_logs_before" ] ||
+		[ "$(app_deployment_build_logs_row "$platform_app_deployment_id" "$platform_app_id")" != "$v2_build_logs_before" ]; then
+		printf '%s\n' 'App rollback changed immutable deployment build logs' >&2
+		return 1
+	fi
+	if [ "$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")" != "$platform_app_v1_artifact_row" ] || [ "$(app_artifact_quota_row "$platform_app_id")" != "$platform_app_cache_gc_quota_row" ]; then
+		printf '%s\n' 'App rollback changed immutable v1 artifact metadata or artifact quota' >&2
+		return 1
+	fi
+	printf 'explicit rollback restored evicted v1 image and WorkloadSpec at generation %s; current secret metadata and route health gating passed\n' "$generation"
+
+	status="$(platform_request PATCH "/v1/projects/${platform_project_id}/apps/${platform_app_id}" '{"workload":{"resources":{"cpu_millis":750}}}' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'restoring v2 workload intent after rollback smoke returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	wait_for_app_health_state healthy active
 
 	status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_deployment_id}/select" '' "$platform_response")"
 	if [ "$status" != '200' ]; then
@@ -2510,6 +2723,7 @@ verify_app_runtime_image_cache_gc() {
 	fi
 	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_diagnostics converged "$platform_app_deployment_id" "$platform_app_v2_version" "$platform_app_deployment_id" "$platform_app_v2_version"
 	if [ "$(docker image inspect --format '{{.Id}}' "$platform_app_runtime_unrelated_tag")" != "$unrelated_image_id" ]; then
 		printf '%s\n' 'non-Stealth Docker image tag changed during App artifact re-import' >&2
 		return 1
@@ -2520,7 +2734,7 @@ verify_app_runtime_image_cache_gc() {
 	fi
 	docker image rm --force "$platform_app_runtime_unrelated_tag" >/dev/null
 	platform_app_runtime_unrelated_tag=""
-	printf 'runtime cache GC evicted the unused Stealth v1 tag, preserved v2 and a non-Stealth image, then reimported v1 from its unchanged OCI artifact\n'
+	printf 'runtime cache GC evicted Stealth v1; explicit rollback reimported its unchanged OCI artifact, restored its WorkloadSpec, preserved current secrets, and v2 converged again\n'
 }
 
 verify_app_secondary_state_smoke() {
@@ -2701,6 +2915,8 @@ verify_app_runtime_lifecycle() {
 		return 1
 	fi
 	wait_for_app_deployment_ready "$platform_app_deployment_id"
+	platform_app_v2_version="$(platform_json_field "$platform_response" deployment.version)"
+	platform_app_v2_workload_spec_sha256="$(platform_json_field "$platform_response" deployment.workload_spec_sha256)"
 	wait_for_app_runtime running
 	fetch_app_runtime
 	generation="$(platform_json_field "$platform_response" app.desired_generation)"
@@ -2718,6 +2934,7 @@ verify_app_runtime_lifecycle() {
 	docker exec "$new_container" /buildkit-secret-probe verify-runtime
 	wait_for_app_health_state healthy active
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	assert_app_diagnostics converged "$platform_app_deployment_id" "$platform_app_v2_version" "$platform_app_deployment_id" "$platform_app_v2_version"
 	wait_for_app_runtime_log_markers "${smoke_marker}-app-v2" 1 "$new_container"
 	fetch_app_runtime_logs "$new_container"
 	old_v2_stdout_id="$(app_runtime_log_ids "${smoke_marker}-app-v2" stdout | sed -n '1p')"

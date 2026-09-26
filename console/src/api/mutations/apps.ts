@@ -100,6 +100,31 @@ export function useSelectAppDeployment(projectId: string, appId: string) {
   });
 }
 
+export function useRollbackAppDeployment(projectId: string, appId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (deploymentId: string) =>
+      unwrap(
+        await api.POST(
+          "/v1/projects/{projectID}/apps/{appID}/deployments/{deploymentID}/rollback",
+          {
+            params: {
+              path: {
+                projectID: projectId,
+                appID: appId,
+                deploymentID: deploymentId,
+              },
+            },
+          },
+        ),
+      ),
+    onSuccess: (_result, deploymentId) =>
+      applyCacheChanges(queryClient, [
+        { kind: "app-deployment", projectId, appId, deploymentId },
+      ]),
+  });
+}
+
 export function useCreateAppEnvironmentVariable(
   projectId: string,
   appId: string,
