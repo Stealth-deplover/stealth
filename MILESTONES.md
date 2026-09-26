@@ -131,7 +131,7 @@ post-merge required `main` checks were green.
 - [x] PostgreSQL tests cover total-limit create/replace/clear/delete behavior.
 - [x] Production Compose smoke exercises real variable and secret injection,
   replacement, and runtime recovery.
-- [ ] Final-head required CI is green.
+- [x] Final-head required CI is green.
 - [ ] Independent audit passes.
 - [ ] PR merged.
 - [ ] Post-merge `main` required CI is green.
