@@ -48,6 +48,11 @@ platform_app_id=""
 platform_app_no_image_id=""
 platform_app_disabled_id=""
 platform_app_deployment_id=""
+platform_app_v1_deployment_id=""
+platform_app_v1_image_id=""
+platform_app_runtime_unrelated_tag=""
+platform_app_v1_artifact_row=""
+platform_app_v1_quota_row=""
 platform_app_secret_variable_id=""
 platform_disabled_deployment_id=""
 platform_host=""
@@ -139,6 +144,10 @@ restore_traefik_state_after_smoke() {
 
 cleanup() {
 	local exit_code=$? worker_container
+	if [ -n "$platform_app_runtime_unrelated_tag" ]; then
+		docker image rm --force "$platform_app_runtime_unrelated_tag" >/dev/null 2>&1 || true
+		platform_app_runtime_unrelated_tag=""
+	fi
 	if [ "$platform_route_lock_active" = "true" ]; then
 		release_platform_route_reconcile_lock || true
 	fi
@@ -1385,6 +1394,20 @@ else:
 PY
 }
 
+app_deployment_artifact_row() {
+	local deployment_id="$1" app_id="$2"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'deployment_id="$1"; app_id="$2"; case "$deployment_id" in *[!0-9a-f-]*|"") exit 2;; esac; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT image_path,image_archive_sha256,image_digest,image_size_bytes FROM app_deployments WHERE id = '\''$deployment_id'\'' AND app_id = '\''$app_id'\''"' \
+		sh "$deployment_id" "$app_id" | tr -d '\r'
+}
+
+app_artifact_quota_row() {
+	local app_id="$1"
+	"${compose[@]}" exec -T postgres sh -ec \
+		'app_id="$1"; case "$app_id" in *[!0-9a-f-]*|"") exit 2;; esac; psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --tuples-only --no-align --field-separator="|" --command "SELECT artifact_used_bytes,artifact_reserved_bytes FROM project_apps WHERE id = '\''$app_id'\''"' \
+		sh "$app_id" | tr -d '\r'
+}
+
 create_app_archive() {
 	local archive="$1" marker="$2" probe="$3"
 	python3 - "$archive" "$marker" "$probe" <<'PY'
@@ -1955,6 +1978,9 @@ if host.get("Memory") != 536870912 or host.get("MemorySwap") != 536870912 or hos
     errors.append("memory, swap, or process limit")
 if (host.get("RestartPolicy") or {}).get("Name") != "no":
     errors.append("Docker restart policy")
+log_config = host.get("LogConfig") or {}
+if log_config.get("Type") != "json-file" or log_config.get("Config") != {"max-size": "10m", "max-file": "3"}:
+    errors.append("bounded json-file logging")
 if host.get("PidMode") == "host" or host.get("IpcMode") == "host" or host.get("UTSMode") == "host" or host.get("UsernsMode") == "host":
     errors.append("host namespace")
 if host.get("Binds") or host.get("VolumesFrom") or host.get("Devices"):
@@ -1965,6 +1991,11 @@ if host.get("Tmpfs") != {"/tmp": "rw,nosuid,nodev,noexec,size=67108864"}:
     errors.append("unexpected tmpfs configuration")
 if host.get("Init") is not True:
     errors.append("init process")
+ulimits = {item.get("Name"): item for item in host.get("Ulimits") or []}
+if (ulimits.get("nofile") or {}).get("Soft") != 4096 or (ulimits.get("nofile") or {}).get("Hard") != 4096:
+    errors.append("nofile ulimit")
+if (ulimits.get("core") or {}).get("Soft") != 0 or (ulimits.get("core") or {}).get("Hard") != 0:
+    errors.append("disabled core dumps")
 if env_names & forbidden_env:
     errors.append("backend secret environment")
 if errors:
@@ -2231,6 +2262,15 @@ PY
 		printf 'persisted App OCI metadata is incomplete or disagrees with the API: %s\n' "$image_row" >&2
 		return 1
 	fi
+	if [ -z "$platform_app_v1_deployment_id" ]; then
+		platform_app_v1_deployment_id="$platform_app_deployment_id"
+		platform_app_v1_artifact_row="$image_row"
+		platform_app_v1_quota_row="$(app_artifact_quota_row "$platform_app_id")"
+		if ! [[ "$platform_app_v1_quota_row" =~ ^[0-9]+\|[0-9]+$ ]]; then
+			printf 'initial App artifact quota metadata is malformed: %s\n' "$platform_app_v1_quota_row" >&2
+			return 1
+		fi
+	fi
 	if ! [[ "$image_path" =~ ^[0-9a-f-]+/[0-9a-f-]+/[0-9a-f-]+$ ]]; then
 		printf 'persisted App image locator is not UUID-derived: %s\n' "$image_path" >&2
 		return 1
@@ -2254,6 +2294,18 @@ PY
 		return 1
 	fi
 	runtime_container_id="$(app_runtime_container_id)"
+	if [ -z "$platform_app_v1_image_id" ]; then
+		platform_app_v1_image_id="$(docker inspect --format '{{.Image}}' "$runtime_container_id")"
+		if [ "$(docker image inspect --format '{{.Id}}' "stealth-app/${platform_app_v1_deployment_id}:runtime")" != "$platform_app_v1_image_id" ]; then
+			printf '%s\n' 'initial selected deployment did not have its exact Stealth runtime cache tag' >&2
+			return 1
+		fi
+		platform_app_v1_image_size_bytes="$(docker image inspect --format '{{.Size}}' "$platform_app_v1_image_id")"
+		if ! [[ "$platform_app_v1_image_size_bytes" =~ ^[0-9]+$ ]] || [ "$platform_app_v1_image_size_bytes" -le 2097152 ]; then
+			printf 'selected App image is too small to exercise the 2 MiB cache limit: %s bytes\n' "$platform_app_v1_image_size_bytes" >&2
+			return 1
+		fi
+	fi
 	assert_app_runtime_container "$runtime_container_id" "$app_desired_generation" "$app_desired_deployment" "$app_spec_sha256" 500
 	assert_app_runtime_network
 	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime
@@ -2338,7 +2390,135 @@ PY
 	wait_for_app_health_state healthy active
 	wait_for_app_route_snapshot true
 	wait_for_app_public_route 'app-runtime-smoke-ok'
+	if [ "$(docker image inspect --format '{{.Id}}' "stealth-app/${platform_app_v1_deployment_id}:runtime")" != "$platform_app_v1_image_id" ]; then
+		printf '%s\n' 'selected App image was evicted while it remained protected by desired state' >&2
+		return 1
+	fi
 	printf 'real BuildKit App runtime and public route passed: digest=%s archive_sha256=%s generation=%s health=healthy route=active\n' "$image_digest" "$image_archive_sha256" "$app_desired_generation"
+}
+
+verify_app_runtime_image_cache_gc() {
+	local old_tag current_tag old_image_size unrelated_image_id current_image_id deadline status generation observed selected spec_sha
+	local artifact_row quota_row image_path archive_sha digest image_size actual_sha
+	if [ -z "$platform_app_v1_deployment_id" ] || [ -z "$platform_app_v1_image_id" ] || [ -z "$platform_app_v1_artifact_row" ]; then
+		printf '%s\n' 'App runtime cache smoke did not capture the first persisted deployment identity' >&2
+		return 1
+	fi
+	old_tag="stealth-app/${platform_app_v1_deployment_id}:runtime"
+	current_tag="stealth-app/${platform_app_deployment_id}:runtime"
+	current_image_id="$(docker inspect --format '{{.Image}}' "$new_container")"
+	if [ "$(docker image inspect --format '{{.Id}}' "$current_tag")" != "$current_image_id" ]; then
+		printf '%s\n' 'selected App v2 does not have its expected Stealth runtime image tag before GC' >&2
+		return 1
+	fi
+	old_image_size="$(docker image inspect --format '{{.Size}}' "$platform_app_v1_image_id")"
+	if ! [[ "$old_image_size" =~ ^[0-9]+$ ]] || [ "$old_image_size" -le 2097152 ]; then
+		printf 'disposable App image is too small to exercise the 2 MiB cache limit: %s bytes\n' "$old_image_size" >&2
+		return 1
+	fi
+	platform_app_runtime_unrelated_tag="stealth-a6-smoke/${platform_app_id}:retained"
+	unrelated_image_id="$(docker image inspect --format '{{.Id}}' postgres:17-alpine)"
+	docker image tag postgres:17-alpine "$platform_app_runtime_unrelated_tag"
+	artifact_row="$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")"
+	quota_row="$(app_artifact_quota_row "$platform_app_id")"
+	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ] || [ "$quota_row" != "$platform_app_v1_quota_row" ]; then
+		printf '%s\n' 'persisted App artifact metadata or quota changed before cache pressure proof' >&2
+		return 1
+	fi
+
+	# The smoke worker uses a 2 MiB max / 1 MiB target. The selected v2 image
+	# stays protected while the now-unselected v1 Stealth tag is evicted.
+	deadline=$((SECONDS + 240))
+	while docker image inspect "$old_tag" >/dev/null 2>&1; do
+		if [ "$SECONDS" -ge "$deadline" ]; then
+			printf 'Stealth runtime image cache did not evict the safe tag within four minutes: %s\n' "$old_tag" >&2
+			return 1
+		fi
+		sleep 2
+	done
+	if docker image inspect "$platform_app_v1_image_id" >/dev/null 2>&1; then
+		printf 'evicted App image remains addressable after its only runtime tag was removed: %s\n' "$platform_app_v1_image_id" >&2
+		return 1
+	fi
+	if [ "$(docker image inspect --format '{{.Id}}' "$current_tag")" != "$current_image_id" ] || [ "$(docker inspect --format '{{.Image}}' "$new_container")" != "$current_image_id" ]; then
+		printf '%s\n' 'cache eviction changed the selected App v2 image or running container' >&2
+		return 1
+	fi
+	if [ "$(docker image inspect --format '{{.Id}}' "$platform_app_runtime_unrelated_tag")" != "$unrelated_image_id" ]; then
+		printf '%s\n' 'non-Stealth Docker image tag changed during runtime cache GC' >&2
+		return 1
+	fi
+	wait_for_app_health_state healthy active
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	artifact_row="$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")"
+	quota_row="$(app_artifact_quota_row "$platform_app_id")"
+	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ] || [ "$quota_row" != "$platform_app_v1_quota_row" ]; then
+		printf '%s\n' 'runtime image cache GC changed persisted OCI metadata or App artifact quota' >&2
+		return 1
+	fi
+	IFS='|' read -r image_path archive_sha digest image_size <<<"$artifact_row"
+	actual_sha="$("${compose[@]}" exec -T worker sh -ec \
+		'path="$1"; expected="$2"; file="/var/lib/stealth/storage/app-images/$path"; test -s "$file"; actual="$(sha256sum "$file" | cut -d " " -f 1)"; test "$actual" = "$expected"; printf "%s" "$actual"' \
+		sh "$image_path" "$archive_sha")"
+	if [ "$actual_sha" != "$archive_sha" ] || ! [[ "$image_size" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' 'persisted App OCI archive failed checksum or metadata verification after cache eviction' >&2
+		return 1
+	fi
+
+	status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_v1_deployment_id}/select" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'reselecting the evicted persisted App deployment returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	wait_for_app_health_state healthy active
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_v1_deployment_id" ] || [ "$(docker inspect --format '{{.Image}}' "$new_container")" != "$platform_app_v1_image_id" ]; then
+		printf 'evicted App artifact did not re-import and converge: generation=%s/%s deployment=%s\n' "$observed" "$generation" "$selected" >&2
+		return 1
+	fi
+	if [ "$(docker image inspect --format '{{.Id}}' "$old_tag")" != "$platform_app_v1_image_id" ]; then
+		printf '%s\n' 'reimport did not restore the exact Stealth runtime tag from the persisted artifact' >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+
+	status="$(platform_request POST "/v1/projects/${platform_project_id}/apps/${platform_app_id}/deployments/${platform_app_deployment_id}/select" '' "$platform_response")"
+	if [ "$status" != '200' ]; then
+		printf 'restoring App v2 desired state after cache recovery returned HTTP %s\n' "$status" >&2
+		return 1
+	fi
+	wait_for_app_runtime running
+	wait_for_app_health_state healthy active
+	fetch_app_runtime
+	generation="$(platform_json_field "$platform_response" app.desired_generation)"
+	observed="$(platform_json_field "$platform_response" app.observed_generation)"
+	selected="$(platform_json_field "$platform_response" app.desired_deployment_id)"
+	spec_sha="$(platform_json_field "$platform_response" app.workload_spec_sha256)"
+	new_container="$(app_runtime_container_id)"
+	if [ "$observed" != "$generation" ] || [ "$selected" != "$platform_app_deployment_id" ] || [ "$(docker inspect --format '{{.Image}}' "$new_container")" != "$current_image_id" ]; then
+		printf 'App v2 did not recover after cache re-selection: generation=%s/%s deployment=%s\n' "$observed" "$generation" "$selected" >&2
+		return 1
+	fi
+	assert_app_runtime_container "$new_container" "$generation" "$selected" "$spec_sha" 750
+	wait_for_app_public_route 'app-runtime-smoke-ok'
+	if [ "$(docker image inspect --format '{{.Id}}' "$platform_app_runtime_unrelated_tag")" != "$unrelated_image_id" ]; then
+		printf '%s\n' 'non-Stealth Docker image tag changed during App artifact re-import' >&2
+		return 1
+	fi
+	if [ "$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")" != "$platform_app_v1_artifact_row" ] || [ "$(app_artifact_quota_row "$platform_app_id")" != "$platform_app_v1_quota_row" ]; then
+		printf '%s\n' 'App artifact metadata or quota changed during runtime cache recovery' >&2
+		return 1
+	fi
+	docker image rm --force "$platform_app_runtime_unrelated_tag" >/dev/null
+	platform_app_runtime_unrelated_tag=""
+	printf 'runtime cache GC evicted the unused Stealth v1 tag, preserved v2 and a non-Stealth image, then reimported v1 from its unchanged OCI artifact\n'
 }
 
 verify_app_secondary_state_smoke() {
@@ -2540,6 +2720,7 @@ verify_app_runtime_lifecycle() {
 		return 1
 	fi
 	printf 'App v2 deployment switch removed the previous container and converged at generation %s\n' "$generation"
+	verify_app_runtime_image_cache_gc
 
 	old_container="$new_container"
 	runtime_tag="stealth-app/${platform_app_deployment_id}:runtime"
@@ -3058,6 +3239,12 @@ seal_bootstrap_for_smoke() {
 	"${compose[@]}" exec -T postgres sh -ec \
 		'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --command "UPDATE instance_bootstrap SET sealed_at=COALESCE(sealed_at, now()) WHERE id=TRUE"'
 }
+
+# Keep cache pressure bounded and deterministic in this disposable Compose
+# environment so the App smoke proves one eviction without host-wide pruning.
+export APPS_RUNTIME_IMAGE_CACHE_MAX_BYTES=2MiB
+export APPS_RUNTIME_IMAGE_CACHE_TARGET_BYTES=1MiB
+export APPS_RUNTIME_IMAGE_GC_INTERVAL=1m
 
 "${compose[@]}" up -d postgres redis clickhouse
 wait_for_healthy postgres
