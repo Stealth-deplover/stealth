@@ -134,6 +134,35 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, job); err != nil {
 		t.Fatalf("release stale runtime lease before claiming current generation: %v", err)
 	}
+	replacementJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "app-env-replacement-runtime", time.Minute)
+	if err != nil {
+		t.Fatalf("claim runtime job after value replacement: %v", err)
+	}
+	replacementValues, err := f.repo.ListAppRuntimeEnvironment(f.ctx, replacementJob)
+	if err != nil || len(replacementValues) != 2 {
+		t.Fatalf("replacement generation runtime environment = %#v err=%v", replacementValues, err)
+	}
+	secretMatches := false
+	unchangedConfiguredValueMatches := false
+	for _, item := range replacementValues {
+		plaintext, decryptErr := cipher.Decrypt(f.projectOneID, appID, item.ID, item.Ciphertext)
+		if decryptErr != nil {
+			t.Fatalf("decrypt replacement generation value: %v", decryptErr)
+		}
+		switch item.Key {
+		case "API_TOKEN":
+			secretMatches = string(plaintext) == replacement
+		case "WRITE_SCOPE":
+			unchangedConfiguredValueMatches = string(plaintext) == writeValue
+		}
+		clear(plaintext)
+	}
+	if !secretMatches || !unchangedConfiguredValueMatches {
+		t.Fatal("current runtime generation did not read the replaced secret and unchanged configured values")
+	}
+	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, replacementJob); err != nil {
+		t.Fatalf("release replacement runtime lease before clearing values: %v", err)
+	}
 	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, appID, variableID, f.actor, AppEnvironmentVariablePatch{ClearValue: true}); err != nil {
 		t.Fatalf("clear configured App value: %v", err)
 	}

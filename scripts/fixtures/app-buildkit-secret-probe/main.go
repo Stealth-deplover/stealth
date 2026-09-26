@@ -18,8 +18,8 @@ func main() {
 	case len(os.Args) == 2 && os.Args[1] == "verify-runtime":
 		verifyRuntime()
 		return
-	case len(os.Args) == 2 && os.Args[1] == "verify-runtime-v2":
-		verifyRuntimeConfigurationV2()
+	case len(os.Args) == 2 && os.Args[1] == "verify-runtime-secret-v2":
+		verifyRuntimeSecretReplacement()
 		return
 	case len(os.Args) == 2 && os.Args[1] == "set-unhealthy":
 		if err := os.WriteFile("/tmp/stealth-health-unhealthy", []byte("unhealthy\n"), 0o600); err != nil {
@@ -93,12 +93,9 @@ func serve() {
 	http.HandleFunc("/configuration", func(w http.ResponseWriter, _ *http.Request) {
 		mode := os.Getenv("APP_RUNTIME_SMOKE_MODE")
 		secret := os.Getenv("APP_RUNTIME_SMOKE_SECRET")
-		switch {
-		case mode == "v1" && secret == "fake-smoke-secret-not-real-v1":
-			_, _ = w.Write([]byte("app-config-v1\n"))
-		case mode == "v2" && secret == "fake-smoke-secret-not-real-v2":
-			_, _ = w.Write([]byte("app-config-v2\n"))
-		default:
+		if version := runtimeConfigurationVersion(mode, secret); version != "" {
+			_, _ = fmt.Fprintf(w, "app-config-%s\n", version)
+		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte("app-config-unavailable\n"))
 		}
@@ -166,9 +163,20 @@ func verifyRuntime() {
 	os.Exit(6)
 }
 
-func verifyRuntimeConfigurationV2() {
-	if os.Getenv("APP_RUNTIME_SMOKE_MODE") != "v2" {
-		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke variable replacement is missing from the current App container")
+func runtimeConfigurationVersion(mode, secret string) string {
+	switch {
+	case mode == "v1" && secret == "fake-smoke-secret-not-real-v1":
+		return "v1"
+	case mode == "v1" && secret == "fake-smoke-secret-not-real-v2":
+		return "v2"
+	default:
+		return ""
+	}
+}
+
+func verifyRuntimeSecretReplacement() {
+	if os.Getenv("APP_RUNTIME_SMOKE_MODE") != "v1" {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke baseline variable is missing from the current App container")
 		os.Exit(11)
 	}
 	if os.Getenv("APP_RUNTIME_SMOKE_SECRET") != "fake-smoke-secret-not-real-v2" {

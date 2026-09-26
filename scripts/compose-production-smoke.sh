@@ -2300,7 +2300,7 @@ PY
 	wait_for_app_health_state healthy active
 	fetch_app_runtime
 	runtime_container_id="$(app_runtime_container_id)"
-	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime-v2
+	docker exec "$runtime_container_id" /buildkit-secret-probe verify-runtime-secret-v2
 	wait_for_app_route_snapshot true
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	config_body="$(app_public_route_body /configuration)"
