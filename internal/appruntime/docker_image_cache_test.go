@@ -123,6 +123,9 @@ func TestMobyRuntimeImageCacheInventoryIsStrictBoundedAndTyped(t *testing.T) {
 		runner.calls[0].args[1] != "ls" || runner.calls[1].args[1] != "inspect" {
 		t.Fatalf("inventory Docker argv = %#v", runner.calls)
 	}
+	if !strings.Contains(runner.calls[1].args[3], "%v") {
+		t.Fatalf("image size inspect format is not type-neutral: %q", runner.calls[1].args[3])
+	}
 	for _, call := range runner.calls {
 		if call.args[0] == "sh" || call.args[0] == "bash" {
 			t.Fatalf("Docker inventory invoked a shell: %#v", call.args)
@@ -194,6 +197,24 @@ func TestMobyRuntimeImageCacheInspectionFailureHasBoundedSafeReason(t *testing.T
 	}
 	if got := safeRuntimeError(err); got != "runtime image creation time malformed" {
 		t.Fatalf("malformed image metadata diagnostic = %q", got)
+	}
+}
+
+func TestMobyRuntimeImageCacheRejectsUnavailableImageSize(t *testing.T) {
+	deploymentID := newCacheDeploymentID(t)
+	reference := ImageTag(deploymentID)
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	runner := &scriptedRuntimeRunner{results: []CommandResult{
+		{Stdout: []byte(reference + "\n")},
+		{Stdout: []byte(imageID + "\t2026-09-26T08:00:00Z\t-1\t" + reference + "\n")},
+	}}
+	moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	_, err := moby.ListRuntimeImageCache(context.Background())
+	if !errors.Is(err, ErrImageVerification) {
+		t.Fatalf("unavailable image size error = %v, want image verification failure", err)
+	}
+	if got := safeRuntimeError(err); got != "runtime image size is unavailable" {
+		t.Fatalf("unavailable image size diagnostic = %q", got)
 	}
 }
 

@@ -69,7 +69,7 @@ func (m *Moby) ListRuntimeImageCache(ctx context.Context) ([]RuntimeImageCacheEn
 	if len(references) == 0 {
 		return nil, nil
 	}
-	args := []string{"image", "inspect", "--format", `{{printf "%s\t%s\t%d\t%s" .Id .Created .Size (join .RepoTags ",")}}`}
+	args := []string{"image", "inspect", "--format", `{{printf "%s\t%s\t%v\t%s" .Id .Created .Size (join .RepoTags ",")}}`}
 	args = append(args, references...)
 	result, err = m.runAction(ctx, args, nil)
 	if err != nil {
@@ -165,8 +165,11 @@ func parseRuntimeImageInspect(output []byte, references []string) ([]RuntimeImag
 			return nil, runtimeImageCacheInspectionFailure("runtime image creation time malformed")
 		}
 		sizeBytes, err := strconv.ParseInt(fields[2], 10, 64)
-		if err != nil || sizeBytes < 0 {
-			return nil, runtimeImageCacheInspectionFailure("runtime image size malformed")
+		if err != nil {
+			return nil, runtimeImageCacheInspectionFailure("runtime image size is not an integer")
+		}
+		if sizeBytes < 0 {
+			return nil, runtimeImageCacheInspectionFailure("runtime image size is unavailable")
 		}
 		var tags []string
 		if fields[3] != "" {
