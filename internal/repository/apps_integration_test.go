@@ -80,8 +80,7 @@ func TestAppDeploymentSnapshotSelectionAndQuotaIntegration(t *testing.T) {
 	if err != nil || job.Deployment.ID != deployment.ID || job.Deployment.WorkloadSpecSHA256 != workloadHash || job.SourcePath != sourcePath {
 		t.Fatalf("claimed job lost immutable inputs: %#v err=%v", job, err)
 	}
-	imageID := uuid.Must(uuid.NewV7())
-	imagePath := f.projectOneID.String() + "/" + appID.String() + "/" + imageID.String()
+	imagePath := f.projectOneID.String() + "/" + appID.String() + "/" + deploymentID.String()
 	imageCleanup := ArtifactCleanupInput{ProjectID: f.projectOneID, StoreKind: ArtifactCleanupAppImages, Operation: ArtifactCleanupRelative, RelativePath: imagePath}
 	if err := f.repo.ReserveAppImagePublish(f.ctx, f.projectOneID, appID, deploymentID, "build-worker-a", 50, imageCleanup); err != nil {
 		t.Fatal(err)
@@ -525,6 +524,12 @@ func createQueuedAppDeploymentForTest(t *testing.T, f appRepositoryFixture, proj
 
 func completeAppDeploymentForTest(t *testing.T, f appRepositoryFixture, appID uuid.UUID, deploymentID, workerID string) domain.AppDeployment {
 	t.Helper()
+	imagePath := f.projectOneID.String() + "/" + appID.String() + "/" + deploymentID
+	return completeAppDeploymentForTestAtPath(t, f, appID, deploymentID, workerID, imagePath)
+}
+
+func completeAppDeploymentForTestAtPath(t *testing.T, f appRepositoryFixture, appID uuid.UUID, deploymentID, workerID, imagePath string) domain.AppDeployment {
+	t.Helper()
 	job, err := f.repo.ClaimNextAppDeployment(f.ctx, workerID)
 	if err != nil {
 		t.Fatal(err)
@@ -532,8 +537,6 @@ func completeAppDeploymentForTest(t *testing.T, f appRepositoryFixture, appID uu
 	if job.Deployment.ID != deploymentID {
 		t.Fatalf("claimed deployment %q, want %q", job.Deployment.ID, deploymentID)
 	}
-	imageID := uuid.Must(uuid.NewV7())
-	imagePath := f.projectOneID.String() + "/" + appID.String() + "/" + imageID.String()
 	cleanup := ArtifactCleanupInput{ProjectID: f.projectOneID, StoreKind: ArtifactCleanupAppImages, Operation: ArtifactCleanupRelative, RelativePath: imagePath}
 	if err := f.repo.ReserveAppImagePublish(f.ctx, f.projectOneID, appID, uuid.MustParse(deploymentID), workerID, 128, cleanup); err != nil {
 		t.Fatal(err)

@@ -36,6 +36,10 @@ var (
 	ErrAppDeploymentRunning         = errors.New("App deployment build is running")
 	ErrAppArtifactPublishInProgress = errors.New("App artifact publication is in progress")
 	ErrAppDeploymentNotReady        = errors.New("App deployment is not ready for selection")
+	ErrAppDeploymentSnapshotInvalid = errors.New("App deployment WorkloadSpec snapshot is invalid")
+	ErrAppRollbackNotAvailable      = errors.New("App deployment is not available for rollback")
+	ErrAppDeploymentAlreadySelected = errors.New("App deployment is already selected")
+	ErrAppRollbackGenerationLimit   = errors.New("App desired generation cannot be incremented")
 	ErrNoAppDeploymentJob           = errors.New("no App deployment build job available")
 	ErrAppBuildNotOwned             = errors.New("App deployment build lease is no longer owned by this worker")
 	ErrAppBuildTransition           = errors.New("invalid App deployment build transition")
@@ -109,11 +113,11 @@ func scanAppDeploymentFields(row appDeploymentScanner, includePrivate bool) (dom
 	}
 	spec, err := workloadspec.Decode(rawSpec)
 	if err != nil {
-		return domain.AppDeployment{}, "", nil, nil, false, nil, 0, fmt.Errorf("stored AppDeployment WorkloadSpec is invalid: %w", err)
+		return domain.AppDeployment{}, "", nil, nil, false, nil, 0, fmt.Errorf("%w: stored AppDeployment WorkloadSpec: %v", ErrAppDeploymentSnapshotInvalid, err)
 	}
 	digest, err := workloadspec.Digest(spec)
 	if err != nil || digest != item.WorkloadSpecSHA256 {
-		return domain.AppDeployment{}, "", nil, nil, false, nil, 0, fmt.Errorf("stored AppDeployment WorkloadSpec digest does not match its snapshot")
+		return domain.AppDeployment{}, "", nil, nil, false, nil, 0, ErrAppDeploymentSnapshotInvalid
 	}
 	item.WorkloadSnapshot = spec
 	return item, sourcePath, imagePath, workerID, selectRequested, selectionBaseDeploymentID, reservedBytes, nil
@@ -1019,6 +1023,10 @@ func validAppArtifactPath(value string) bool {
 		}
 	}
 	return true
+}
+
+func validAppDeploymentArtifactPath(value string, projectID, appID, deploymentID uuid.UUID) bool {
+	return validAppArtifactPath(value) && value == projectID.String()+"/"+appID.String()+"/"+deploymentID.String()
 }
 
 func validAppSHA256(value string) bool {
