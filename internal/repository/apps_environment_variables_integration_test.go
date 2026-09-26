@@ -99,7 +99,7 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	readKeyID, writeKeyID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	if _, err := f.pool.Exec(f.ctx, `
 		INSERT INTO project_api_keys (id,project_id,name,prefix,secret_hash,scopes)
-		VALUES ($1,$2,'App env reader','stl_appenvread',$3,$4),($5,$2,'App env writer','stl_appenvwrite',$6,$7)`,
+		VALUES ($1,$2,'App env reader','stl_key_read0001',$3,$4),($5,$2,'App env writer','stl_key_write001',$6,$7)`,
 		readKeyID, f.projectOneID, bytesOfZeroes(32), []string{"apps.read"}, writeKeyID, bytesOfOnes(32), []string{"apps.write"}); err != nil {
 		t.Fatal(err)
 	}

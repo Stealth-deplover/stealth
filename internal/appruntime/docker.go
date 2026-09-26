@@ -1125,8 +1125,12 @@ func ContainerMatchesDesiredExceptName(container Container, job repository.AppRu
 	if job.App.Workload.WorkingDirectory != nil {
 		workingDir = *job.App.Workload.WorkingDirectory
 	}
+	// Docker merges the worker-supplied App environment into Config.Env. Runtime
+	// values are fenced by the generation labels and change only when the
+	// worker creates a new container, so Config.Env cannot be compared directly
+	// with the image defaults here.
 	return slices.Equal(container.Config.Cmd, command) && slices.Equal(container.Config.Entrypoint, image.Entrypoint) &&
-		slices.Equal(container.Config.Env, image.Environment) && container.Config.WorkingDir == workingDir && container.Config.User == image.User
+		container.Config.WorkingDir == workingDir && container.Config.User == image.User
 }
 
 func managedAppContainer(container Container) bool {

@@ -700,6 +700,11 @@ func TestContainerMatchesDesiredRejectsPrivilegeAndDrift(t *testing.T) {
 	if !ContainerMatchesDesired(container, job, image, "stealth_app_runtime") {
 		t.Fatal("complete isolated container did not match desired state")
 	}
+	withAppEnvironment := container
+	withAppEnvironment.Config.Env = append(slices.Clone(image.Environment), "TOKEN=fake-runtime-value")
+	if !ContainerMatchesDesired(withAppEnvironment, job, image, "stealth_app_runtime") {
+		t.Fatal("managed App environment was incorrectly treated as image drift")
+	}
 	mutations := []struct {
 		name   string
 		change func(*Container)
