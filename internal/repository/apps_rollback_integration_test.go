@@ -451,13 +451,16 @@ func TestAppDiagnosticsProjectionStatesIntegration(t *testing.T) {
 	if diagnostics.HealthStatus != "pending" || !hasAppDiagnosticIssue(diagnostics.Issues, "health_pending") {
 		t.Fatalf("running App without fresh health diagnostics = %+v", diagnostics)
 	}
-	forceAppHealthCheckDue(t, f, appID)
-	healthJob, err := f.repo.ClaimNextAppHealthCheck(f.ctx, "diagnostics-health-worker", time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.repo.CompleteAppHealthCheck(f.ctx, healthJob, false); err != nil {
-		t.Fatal(err)
+	var healthJob AppHealthCheckJob
+	for attempt := 0; attempt < runtimeJob.App.Workload.HealthCheck.FailureThreshold; attempt++ {
+		forceAppHealthCheckDue(t, f, appID)
+		healthJob, err = f.repo.ClaimNextAppHealthCheck(f.ctx, "diagnostics-health-worker", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.repo.CompleteAppHealthCheck(f.ctx, healthJob, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	diagnostics, err = f.repo.GetAppDiagnostics(f.ctx, f.projectOneID, appID, f.actor)
 	if err != nil {
