@@ -113,7 +113,8 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	}
 	writeActor := AppActor{Kind: AppAPIKeyActor, APIKeyID: writeKeyID, APIKeyScopes: []string{"apps.write"}}
 	writeValue := "write-scope-value"
-	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, uuid.Must(uuid.NewV7()), f.projectOneID, appID, writeActor, AppEnvironmentVariableInput{Key: "WRITE_SCOPE", Value: &writeValue, Cipher: cipher}); err != nil {
+	writeVariableID := uuid.Must(uuid.NewV7())
+	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, writeVariableID, f.projectOneID, appID, writeActor, AppEnvironmentVariableInput{Key: "WRITE_SCOPE", Value: &writeValue, Cipher: cipher}); err != nil {
 		t.Fatalf("apps.write key could not create an App variable: %v", err)
 	}
 	if _, _, _, err := f.repo.ListAppEnvironmentVariables(f.ctx, f.projectTwoID, appID, f.actor, 20, nil); !errors.Is(err, ErrNotFound) {
@@ -132,6 +133,9 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	}
 	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, appID, variableID, f.actor, AppEnvironmentVariablePatch{ClearValue: true}); err != nil {
 		t.Fatalf("clear configured App value: %v", err)
+	}
+	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, appID, writeVariableID, f.actor, AppEnvironmentVariablePatch{ClearValue: true}); err != nil {
+		t.Fatalf("clear apps.write variable value: %v", err)
 	}
 	emptyJob, err := f.repo.ClaimNextAppRuntime(f.ctx, "app-env-empty-runtime", time.Minute)
 	if err != nil {
