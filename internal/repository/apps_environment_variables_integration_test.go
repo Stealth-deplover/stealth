@@ -131,6 +131,9 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	if _, err := f.repo.ListAppRuntimeEnvironment(f.ctx, job); !errors.Is(err, ErrAppRuntimeStale) {
 		t.Fatalf("old runtime lease read after value generation changed = %v, want stale", err)
 	}
+	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, job); err != nil {
+		t.Fatalf("release stale runtime lease before claiming current generation: %v", err)
+	}
 	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, appID, variableID, f.actor, AppEnvironmentVariablePatch{ClearValue: true}); err != nil {
 		t.Fatalf("clear configured App value: %v", err)
 	}
