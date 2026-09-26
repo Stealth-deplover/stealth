@@ -92,12 +92,12 @@ func (r *Repository) GetAppDiagnostics(ctx context.Context, projectID, appID uui
 		LastStartedAt: lastStartedAt, LastStoppedAt: lastStoppedAt,
 		HealthCheckedAt: healthCheckedAt, Issues: make([]domain.AppDiagnosticIssue, 0, 8),
 	}
-	diagnostics.ConvergenceStatus = appDiagnosticsConvergence(app, appliedGeneration, appliedDeployment, desiredArtifactReady)
+	diagnostics.ConvergenceStatus = appDiagnosticsConvergence(app, appliedGeneration, appliedDeployment)
 	diagnostics.Issues = appDiagnosticIssues(app, diagnostics)
 	return diagnostics, nil
 }
 
-func appDiagnosticsConvergence(app domain.App, appliedGeneration *int64, applied *domain.AppDiagnosticDeploymentRef, artifactReady bool) string {
+func appDiagnosticsConvergence(app domain.App, appliedGeneration *int64, applied *domain.AppDiagnosticDeploymentRef) string {
 	if !app.Enabled && (app.RuntimeStatus == "stopped" || app.RuntimeStatus == "not_deployed") {
 		return "stopped"
 	}
@@ -115,7 +115,7 @@ func appDiagnosticsConvergence(app domain.App, appliedGeneration *int64, applied
 	}
 	if app.ObservedGeneration != app.DesiredGeneration || appliedGeneration == nil || *appliedGeneration != app.DesiredGeneration ||
 		app.DesiredDeploymentID == nil || applied == nil || applied.ID != *app.DesiredDeploymentID ||
-		app.RuntimeStatus != "running" || app.HealthStatus != "healthy" || !artifactReady {
+		app.RuntimeStatus != "running" || app.HealthStatus != "healthy" {
 		return "reconciling"
 	}
 	if app.PlatformHostname != nil && app.RouteStatus != "active" {

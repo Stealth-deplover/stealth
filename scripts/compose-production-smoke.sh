@@ -1511,6 +1511,7 @@ expected = {
     "runtime_status": "running",
     "health_status": "healthy",
     "route_status": "active",
+    "desired_artifact_ready": True,
 }
 actual = {
     "convergence_status": diagnostics.get("convergence_status"),
@@ -1521,9 +1522,16 @@ actual = {
     "runtime_status": diagnostics.get("runtime_status"),
     "health_status": diagnostics.get("health_status"),
     "route_status": diagnostics.get("route_status"),
+    "desired_artifact_ready": diagnostics.get("desired_artifact_ready"),
 }
 if actual != expected:
-    raise SystemExit(f"App diagnostics mismatch: expected={expected!r} actual={actual!r}")
+    details = {
+        "desired_generation": diagnostics.get("desired_generation"),
+        "observed_generation": diagnostics.get("observed_generation"),
+        "applied_generation": diagnostics.get("applied_generation"),
+        "issues": diagnostics.get("issues"),
+    }
+    raise SystemExit(f"App diagnostics mismatch: expected={expected!r} actual={actual!r} details={details!r}")
 PY
 }
 

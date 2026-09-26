@@ -67,3 +67,27 @@ func TestCanonicalAppRollbackWorkloadRequiresStoredDigest(t *testing.T) {
 		t.Fatal("snapshot with a mismatched stored digest was accepted")
 	}
 }
+
+func TestAppDiagnosticsConvergenceReflectsRuntimeStateSeparatelyFromArtifactMetadata(t *testing.T) {
+	desiredID := uuid.Must(uuid.NewV7()).String()
+	hostname := "app.example.test"
+	generation := int64(3)
+	app := domain.App{
+		Enabled:             true,
+		PlatformHostname:    &hostname,
+		DesiredGeneration:   generation,
+		ObservedGeneration:  generation,
+		DesiredDeploymentID: &desiredID,
+		RuntimeStatus:       "running",
+		HealthStatus:        "healthy",
+		RouteStatus:         "active",
+	}
+	applied := &domain.AppDiagnosticDeploymentRef{ID: desiredID, Version: 1}
+	if status := appDiagnosticsConvergence(app, &generation, applied); status != "converged" {
+		t.Fatalf("healthy current runtime convergence = %q", status)
+	}
+	app.RouteStatus = "waiting_for_health"
+	if status := appDiagnosticsConvergence(app, &generation, applied); status != "reconciling" {
+		t.Fatalf("route waiting for fresh health convergence = %q", status)
+	}
+}
