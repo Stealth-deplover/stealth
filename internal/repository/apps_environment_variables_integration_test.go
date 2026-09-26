@@ -105,7 +105,7 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	}
 	readActor := AppActor{Kind: AppAPIKeyActor, APIKeyID: readKeyID, APIKeyScopes: []string{"apps.read"}}
 	readItems, _, readCanManage, err := f.repo.ListAppEnvironmentVariables(f.ctx, f.projectOneID, appID, readActor, 20, nil)
-	if err != nil || readCanManage || len(readItems) != 1 {
+	if err != nil || readCanManage || len(readItems) != 2 {
 		t.Fatalf("apps.read access = %#v can_manage=%t err=%v", readItems, readCanManage, err)
 	}
 	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, uuid.Must(uuid.NewV7()), f.projectOneID, appID, readActor, AppEnvironmentVariableInput{Key: "DENIED"}); !errors.Is(err, ErrForbidden) {
