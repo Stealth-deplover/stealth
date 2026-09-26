@@ -461,11 +461,17 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	requestJSON(t, ownerClient, http.MethodPatch, projectURL+"/apps/"+created.App.ID, map[string]any{}, http.StatusUnprocessableEntity, nil)
 
 	newName := "backend"
+	var beforeRename struct {
+		App domain.App `json:"app"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, &beforeRename)
 	var renamed struct {
 		App domain.App `json:"app"`
 	}
 	requestJSON(t, ownerClient, http.MethodPatch, projectURL+"/apps/"+created.App.ID, map[string]any{"name": newName}, http.StatusOK, &renamed)
-	if renamed.App.DesiredGeneration != 1 || renamed.App.WorkloadSpecSHA256 != created.App.WorkloadSpecSHA256 || renamed.App.RuntimeStatus != "not_deployed" {
+	if renamed.App.DesiredGeneration != beforeRename.App.DesiredGeneration ||
+		renamed.App.WorkloadSpecSHA256 != beforeRename.App.WorkloadSpecSHA256 ||
+		renamed.App.RuntimeStatus != beforeRename.App.RuntimeStatus {
 		t.Fatalf("rename changed App runtime identity: %+v", renamed.App)
 	}
 
