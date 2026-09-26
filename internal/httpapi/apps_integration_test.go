@@ -215,7 +215,7 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 	variablesURL := projectURL + "/apps/" + created.App.ID + "/variables"
 	requestJSON(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusUnauthorized, nil)
 	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, variablesURL, nil, http.StatusForbidden, writeHeaders)
-	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/variables", nil, http.StatusUnauthorized, wrongProjectHeaders)
+	requestJSONWithHeaders(t, newIntegrationClient(t), http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/variables", nil, http.StatusNotFound, wrongProjectHeaders)
 	requestJSON(t, ownerClient, http.MethodGet, secondProjectURL+"/apps/"+created.App.ID+"/variables", nil, http.StatusNotFound, nil)
 	secretValue := "API-SECRET-HTTP-NEVER-RETURN-THIS"
 	variableBody := requestJSONRaw(t, ownerClient, http.MethodPost, variablesURL, map[string]any{
