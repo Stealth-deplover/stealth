@@ -18,6 +18,9 @@ func main() {
 	case len(os.Args) == 2 && os.Args[1] == "verify-runtime":
 		verifyRuntime()
 		return
+	case len(os.Args) == 2 && os.Args[1] == "verify-runtime-v2":
+		verifyRuntimeConfigurationV2()
+		return
 	case len(os.Args) == 2 && os.Args[1] == "set-unhealthy":
 		if err := os.WriteFile("/tmp/stealth-health-unhealthy", []byte("unhealthy\n"), 0o600); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, "could not set health fixture state")
@@ -161,4 +164,15 @@ func verifyRuntime() {
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "runtime smoke app listener is unavailable: %v\n", lastErr)
 	os.Exit(6)
+}
+
+func verifyRuntimeConfigurationV2() {
+	if os.Getenv("APP_RUNTIME_SMOKE_MODE") != "v2" {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke variable replacement is missing from the current App container")
+		os.Exit(11)
+	}
+	if os.Getenv("APP_RUNTIME_SMOKE_SECRET") != "fake-smoke-secret-not-real-v2" {
+		_, _ = fmt.Fprintln(os.Stderr, "runtime smoke encrypted value replacement is missing from the current App container")
+		os.Exit(12)
+	}
 }
