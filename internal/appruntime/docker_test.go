@@ -530,6 +530,42 @@ func TestMobyCleanupRemovesOnlyFullIdentityManagedDuplicate(t *testing.T) {
 	}
 }
 
+func TestMobyCleanupTreatsAlreadyAbsentAsSuccessAndRejectsMismatchedOwner(t *testing.T) {
+	job := runtimeTestJob()
+	appID := uuid.MustParse(job.App.ID)
+	projectID := uuid.MustParse(job.App.ProjectID)
+	containerID := strings.Repeat("8", 64)
+	cleanup := repository.AppRuntimeCleanupJob{
+		ID: uuid.Must(uuid.NewV7()), ProjectID: &projectID, AppID: appID, ContainerID: &containerID,
+		ContainerName: job.ContainerName, StopGracePeriodSecs: 15, WorkerID: "runtime-worker", LeaseToken: uuid.Must(uuid.NewV7()),
+	}
+
+	missing := &scriptedRuntimeRunner{errors: []error{&CommandFailure{ExitCode: 1, Stderr: "Error: No such container: " + containerID}}}
+	moby, _ := NewMoby(missing, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	if err := moby.RemoveCleanupTarget(context.Background(), cleanup); err != nil {
+		t.Fatalf("already-removed proven cleanup target = %v, want converged success", err)
+	}
+	if len(missing.calls) != 1 || missing.calls[0].args[0] != "container" || missing.calls[0].args[1] != "inspect" {
+		t.Fatalf("already absent cleanup issued unexpected Docker commands: %#v", missing.calls)
+	}
+
+	foreign := job
+	foreign.App.ID = uuid.Must(uuid.NewV7()).String()
+	labels, err := ContainerLabels(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignJSON := runtimeContainerJSONWithName(foreign, containerID, labels, false, "/"+job.ContainerName)
+	foreignRunner := &scriptedRuntimeRunner{results: []CommandResult{{Stdout: foreignJSON}}}
+	foreignMoby, _ := NewMoby(foreignRunner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
+	if err := foreignMoby.RemoveCleanupTarget(context.Background(), cleanup); !errors.Is(err, ErrRuntimeOwnershipConflict) {
+		t.Fatalf("cleanup with mismatched ownership labels = %v, want fail-closed ownership conflict", err)
+	}
+	if len(foreignRunner.calls) != 1 {
+		t.Fatalf("mismatched cleanup target reached a Docker mutation: %#v", foreignRunner.calls)
+	}
+}
+
 func TestEnsureImageIsIdempotentAndRepairsOnlyExpectedTag(t *testing.T) {
 	configID := "sha256:" + strings.Repeat("b", 64)
 	otherID := "sha256:" + strings.Repeat("c", 64)

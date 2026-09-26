@@ -142,7 +142,13 @@ func queueAppRuntimeCleanupTx(ctx context.Context, tx pgx.Tx, projectID *uuid.UU
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO app_runtime_cleanup_jobs (id,project_id,app_id,container_id,container_name,stop_grace_period_seconds)
-		VALUES ($1,$2,$3,NULLIF($4::text,''),$5,$6) ON CONFLICT DO NOTHING`, id, projectID, appID, containerID, containerName, stopGrace)
+		SELECT $1,$2,$3,NULLIF($4::text,''),$5,$6
+		WHERE NOT EXISTS (
+		  SELECT 1 FROM app_runtime_cleanup_jobs
+		  WHERE app_id=$3 AND container_id IS NOT DISTINCT FROM NULLIF($4::text,'')
+		    AND container_name=$5 AND status='failed'
+		)
+		ON CONFLICT DO NOTHING`, id, projectID, appID, containerID, containerName, stopGrace)
 	return err
 }
 

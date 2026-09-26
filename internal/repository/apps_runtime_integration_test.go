@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +209,172 @@ func TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration(t *testi
 	}
 	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, cleanup); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeImageProtectionIncludesSelectedDisabledAndLiveLeaseDeploymentsIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	selectedAppID, disabledAppID, deletedAppID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, item := range []struct {
+		id      uuid.UUID
+		project uuid.UUID
+		name    string
+	}{
+		{selectedAppID, f.projectOneID, "cache-protected-selected"},
+		{disabledAppID, f.projectTwoID, "cache-protected-disabled"},
+		{deletedAppID, f.projectOneID, "cache-protected-deleted"},
+	} {
+		if _, err := f.repo.CreateApp(f.ctx, item.id, item.project, f.actor, AppInput{Name: item.name, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selectedDeploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, selectedAppID)
+	disabledDeploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectTwoID, disabledAppID)
+	deletedDeploymentID := createReadySelectedRuntimeDeployment(t, f, f.projectOneID, deletedAppID)
+	disabled := false
+	if _, err := f.repo.UpdateApp(f.ctx, f.projectTwoID, disabledAppID, f.actor, AppPatch{Enabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.DeleteApp(f.ctx, f.projectOneID, deletedAppID, f.actor); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []uuid.UUID{selectedDeploymentID, disabledDeploymentID, deletedDeploymentID, uuid.Must(uuid.NewV7())}
+	ids, active, err := f.repo.ListProtectedAppRuntimeDeploymentIDs(f.ctx, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("unclaimed desired state reported an active runtime lease")
+	}
+	if !slices.Contains(ids, selectedDeploymentID) || !slices.Contains(ids, disabledDeploymentID) || slices.Contains(ids, deletedDeploymentID) {
+		t.Fatalf("protected deployment IDs = %v; selected/disabled/deleted = %s/%s/%s", ids, selectedDeploymentID, disabledDeploymentID, deletedDeploymentID)
+	}
+
+	job, err := f.repo.ClaimNextAppRuntime(f.ctx, "cache-protection-worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, active, err = f.repo.ListProtectedAppRuntimeDeploymentIDs(f.ctx, candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active || !slices.Contains(ids, selectedDeploymentID) || !slices.Contains(ids, disabledDeploymentID) {
+		t.Fatalf("runtime lease/deployment protection = active %v IDs %v", active, ids)
+	}
+	if err := f.repo.ReleaseAppRuntimeJob(f.ctx, job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppRuntimeCleanupQueueTerminalDeduplicationAndBoundedRetentionIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	appID := uuid.Must(uuid.NewV7())
+	containerID := strings.Repeat("a", 64)
+	containerName := AppRuntimeContainerName(appID)
+	failedID := uuid.Must(uuid.NewV7())
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO app_runtime_cleanup_jobs (id,project_id,app_id,container_id,container_name,status,last_error,updated_at)
+		VALUES ($1,$2,$3,$4,$5,'failed','container ownership conflict',now()-interval '10 days')`,
+		failedID, f.projectOneID, appID, containerID, containerName); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.QueueAppRuntimeCleanup(f.ctx, &f.projectOneID, appID, containerID, containerName, 15); err != nil {
+		t.Fatal(err)
+	}
+	var duplicateCount int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM app_runtime_cleanup_jobs WHERE app_id=$1`, appID).Scan(&duplicateCount); err != nil {
+		t.Fatal(err)
+	}
+	if duplicateCount != 1 {
+		t.Fatalf("terminal cleanup discovery created %d rows, want 1", duplicateCount)
+	}
+
+	oldCompletedID, oldFailedID, recentFailedID, oldPendingID :=
+		uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, row := range []struct {
+		id        uuid.UUID
+		name      string
+		status    string
+		ageDays   int
+		completed bool
+	}{
+		{oldCompletedID, "old-completed", "completed", 15, true},
+		{oldFailedID, "old-failed", "failed", 91, false},
+		{recentFailedID, "recent-failed", "failed", 30, false},
+		{oldPendingID, "old-pending", "pending", 100, false},
+	} {
+		completedAt := any(nil)
+		if row.completed {
+			completedAt = time.Now().Add(-time.Duration(row.ageDays) * 24 * time.Hour)
+		}
+		if _, err := f.pool.Exec(f.ctx, `
+			INSERT INTO app_runtime_cleanup_jobs (id,project_id,app_id,container_name,status,created_at,updated_at,completed_at)
+			VALUES ($1,$2,$3,$4,$5,now()-($6::int*interval '1 day'),now()-($6::int*interval '1 day'),$7)`,
+			row.id, f.projectOneID, uuid.Must(uuid.NewV7()), row.name, row.status, row.ageDays, completedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted, err := f.repo.PruneAppRuntimeCleanupJobs(f.ctx, 1)
+	if err != nil || deleted != 1 {
+		t.Fatalf("first bounded cleanup-history prune = %d, %v", deleted, err)
+	}
+	deleted, err = f.repo.PruneAppRuntimeCleanupJobs(f.ctx, 100)
+	if err != nil || deleted != 1 {
+		t.Fatalf("second bounded cleanup-history prune = %d, %v; want only old completed row", deleted, err)
+	}
+	var retained int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM app_runtime_cleanup_jobs WHERE id=ANY($1::uuid[])`,
+		[]uuid.UUID{oldCompletedID, oldFailedID, recentFailedID, oldPendingID}).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 2 {
+		t.Fatalf("cleanup history retention left %d rows, want recent failure and pending work", retained)
+	}
+}
+
+func TestAppRuntimeCleanupExpiredLeaseRecoveryFencesStaleWorkerIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cleanupAppRuntimeIntegrationRows(t, f)
+	appID := uuid.Must(uuid.NewV7())
+	containerID := strings.Repeat("b", 64)
+	containerName := AppRuntimeContainerName(appID)
+	if err := f.repo.QueueAppRuntimeCleanup(f.ctx, &f.projectOneID, appID, containerID, containerName, 15); err != nil {
+		t.Fatal(err)
+	}
+	crashedWorkerJob, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "crashed-cleanup-worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE app_runtime_cleanup_jobs SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, crashedWorkerJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	recoveredJob, err := f.repo.ClaimNextAppRuntimeCleanup(f.ctx, "recovery-cleanup-worker", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredJob.ID != crashedWorkerJob.ID || recoveredJob.LeaseToken == crashedWorkerJob.LeaseToken || recoveredJob.WorkerID != "recovery-cleanup-worker" {
+		t.Fatalf("expired cleanup lease was not safely reclaimed: original=%+v recovered=%+v", crashedWorkerJob, recoveredJob)
+	}
+	if err := f.repo.QueueAppRuntimeCleanup(f.ctx, &f.projectOneID, appID, containerID, containerName, 15); err != nil {
+		t.Fatal(err)
+	}
+	var activeRows int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM app_runtime_cleanup_jobs WHERE app_id=$1 AND status IN ('pending','leased')`, appID).Scan(&activeRows); err != nil {
+		t.Fatal(err)
+	}
+	if activeRows != 1 {
+		t.Fatalf("repeated orphan discovery created %d active cleanup rows, want 1", activeRows)
+	}
+	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, crashedWorkerJob); !errors.Is(err, ErrAppRuntimeLeaseLost) {
+		t.Fatalf("stale cleanup completion = %v, want ErrAppRuntimeLeaseLost", err)
+	}
+	if err := f.repo.RenewAppRuntimeCleanupLease(f.ctx, crashedWorkerJob, 30*time.Second); !errors.Is(err, ErrAppRuntimeLeaseLost) {
+		t.Fatalf("stale cleanup renewal = %v, want ErrAppRuntimeLeaseLost", err)
+	}
+	if err := f.repo.CompleteAppRuntimeCleanup(f.ctx, recoveredJob); err != nil {
+		t.Fatalf("reclaimed cleanup completion = %v", err)
 	}
 }
 

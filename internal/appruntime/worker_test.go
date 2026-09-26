@@ -26,28 +26,31 @@ import (
 )
 
 type runtimeTestStore struct {
-	current             bool
-	completeStatus      string
-	completed           *repository.AppRuntimeContainer
-	failureStatus       string
-	failureMessage      string
-	released            int
-	queueCalls          int
-	queuedAppID         uuid.UUID
-	queuedProjectID     *uuid.UUID
-	queuedContainerID   string
-	queuedContainerName string
-	completeCalls       int
-	failureCalls        int
-	completeErr         error
-	currentErr          error
-	observedGeneration  int64
-	cleanupCompleteCall int
-	resetCalls          int
-	resetIdentity       uuid.UUID
-	createIdentity      uuid.UUID
-	runtimeContainerID  string
-	environment         []repository.AppRuntimeEnvironmentCiphertext
+	current              bool
+	completeStatus       string
+	completed            *repository.AppRuntimeContainer
+	failureStatus        string
+	failureMessage       string
+	released             int
+	queueCalls           int
+	queuedAppID          uuid.UUID
+	queuedProjectID      *uuid.UUID
+	queuedContainerID    string
+	queuedContainerName  string
+	completeCalls        int
+	failureCalls         int
+	completeErr          error
+	currentErr           error
+	observedGeneration   int64
+	cleanupCompleteCall  int
+	resetCalls           int
+	resetIdentity        uuid.UUID
+	createIdentity       uuid.UUID
+	runtimeContainerID   string
+	environment          []repository.AppRuntimeEnvironmentCiphertext
+	protectedDeployments []uuid.UUID
+	activeRuntimeLease   bool
+	pruneCleanupCalls    int
 }
 
 func (s *runtimeTestStore) ScheduleAppRuntimeStartupSweep(context.Context) error { return nil }
@@ -114,6 +117,19 @@ func (s *runtimeTestStore) ReleaseAppHealthCheck(context.Context, repository.App
 func (s *runtimeTestStore) AppRuntimeContainerExists(_ context.Context, _ uuid.UUID, _ uuid.UUID, containerID string) (bool, error) {
 	return containerID != "" && containerID == s.runtimeContainerID, nil
 }
+func (s *runtimeTestStore) ListProtectedAppRuntimeDeploymentIDs(_ context.Context, candidates []uuid.UUID) ([]uuid.UUID, bool, error) {
+	candidateSet := make(map[uuid.UUID]struct{}, len(candidates))
+	for _, id := range candidates {
+		candidateSet[id] = struct{}{}
+	}
+	protected := make([]uuid.UUID, 0, len(s.protectedDeployments))
+	for _, id := range s.protectedDeployments {
+		if _, ok := candidateSet[id]; ok {
+			protected = append(protected, id)
+		}
+	}
+	return protected, s.activeRuntimeLease, nil
+}
 
 func (s *runtimeTestStore) QueueAppRuntimeCleanup(_ context.Context, projectID *uuid.UUID, appID uuid.UUID, containerID, containerName string, _ int) error {
 	s.queueCalls++
@@ -135,6 +151,10 @@ func (s *runtimeTestStore) CompleteAppRuntimeCleanup(context.Context, repository
 }
 func (s *runtimeTestStore) FailAppRuntimeCleanup(context.Context, repository.AppRuntimeCleanupJob, string, time.Time, bool) error {
 	return nil
+}
+func (s *runtimeTestStore) PruneAppRuntimeCleanupJobs(context.Context, int) (int64, error) {
+	s.pruneCleanupCalls++
+	return 0, nil
 }
 
 func TestRuntimeEnvironmentDecryptsOnlyAppBoundCiphertextAndClearsPlaintext(t *testing.T) {
@@ -240,6 +260,12 @@ type runtimeTestDriver struct {
 	onRename           func()
 	nextContainerID    string
 	listedContainers   []Container
+	runtimeImageCache  []RuntimeImageCacheEntry
+	containerImageRefs []ManagedAppImageReference
+	removedImageTags   []string
+	listImageCacheErr  error
+	listImageRefsErr   error
+	removeImageTagErr  error
 	removeCleanupCall  int
 }
 
@@ -339,6 +365,16 @@ func (r *runtimeTestDriver) RemoveCleanupTarget(context.Context, repository.AppR
 }
 func (r *runtimeTestDriver) ListManagedAppContainers(context.Context) ([]Container, error) {
 	return append([]Container(nil), r.listedContainers...), nil
+}
+func (r *runtimeTestDriver) ListRuntimeImageCache(context.Context) ([]RuntimeImageCacheEntry, error) {
+	return append([]RuntimeImageCacheEntry(nil), r.runtimeImageCache...), r.listImageCacheErr
+}
+func (r *runtimeTestDriver) RemoveRuntimeImageTag(_ context.Context, entry RuntimeImageCacheEntry) error {
+	r.removedImageTags = append(r.removedImageTags, entry.Reference)
+	return r.removeImageTagErr
+}
+func (r *runtimeTestDriver) ListManagedAppImageReferences(context.Context) ([]ManagedAppImageReference, error) {
+	return append([]ManagedAppImageReference(nil), r.containerImageRefs...), r.listImageRefsErr
 }
 func (r *runtimeTestDriver) imageForJob(job repository.AppRuntimeJob) Image {
 	image := r.image
@@ -813,3 +849,29 @@ func runtimeArchitecture() string {
 
 var _ Persistence = (*runtimeTestStore)(nil)
 var _ Runtime = (*runtimeTestDriver)(nil)
+
+func TestNetworkRetryBackoffIsBoundedAndDeterministic(t *testing.T) {
+	worker := &Worker{}
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	want := []time.Duration{
+		time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		32 * time.Second,
+		maxRuntimeRetry,
+		maxRuntimeRetry,
+	}
+	for attempt, expected := range want {
+		if delay := worker.deferNetworkRetry(now); delay != expected {
+			t.Fatalf("attempt %d delay = %s, want %s", attempt+1, delay, expected)
+		}
+		if got := worker.networkRetryAfter; !got.Equal(now.Add(expected)) {
+			t.Fatalf("attempt %d retry time = %s, want %s", attempt+1, got, now.Add(expected))
+		}
+	}
+	if worker.networkFailureCount != 7 {
+		t.Fatalf("failure count = %d, want capped at 7", worker.networkFailureCount)
+	}
+}

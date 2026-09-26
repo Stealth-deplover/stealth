@@ -20,11 +20,16 @@ import (
 )
 
 const (
-	defaultWorkerPoll       = time.Second
-	defaultWorkerLease      = 2 * time.Minute
-	defaultOrphanSweepEvery = time.Minute
-	maxRuntimeRetry         = time.Minute
-	maxCleanupAttempts      = 20
+	defaultWorkerPoll                   = time.Second
+	defaultWorkerLease                  = 2 * time.Minute
+	defaultOrphanSweepEvery             = time.Minute
+	defaultRuntimeImageCacheMaxBytes    = 20 << 30
+	defaultRuntimeImageCacheTargetBytes = 16 << 30
+	defaultRuntimeImageGCSweepInterval  = 15 * time.Minute
+	defaultCleanupRetentionInterval     = time.Hour
+	cleanupHistoryBatchSize             = 100
+	maxRuntimeRetry                     = time.Minute
+	maxCleanupAttempts                  = 20
 )
 
 var (
@@ -52,11 +57,13 @@ type Persistence interface {
 	InvalidateAppHealthIdentity(context.Context, repository.AppHealthCheckJob) error
 	ReleaseAppHealthCheck(context.Context, repository.AppHealthCheckJob) error
 	AppRuntimeContainerExists(context.Context, uuid.UUID, uuid.UUID, string) (bool, error)
+	ListProtectedAppRuntimeDeploymentIDs(context.Context, []uuid.UUID) ([]uuid.UUID, bool, error)
 	QueueAppRuntimeCleanup(context.Context, *uuid.UUID, uuid.UUID, string, string, int) error
 	ClaimNextAppRuntimeCleanup(context.Context, string, time.Duration) (repository.AppRuntimeCleanupJob, error)
 	RenewAppRuntimeCleanupLease(context.Context, repository.AppRuntimeCleanupJob, time.Duration) error
 	CompleteAppRuntimeCleanup(context.Context, repository.AppRuntimeCleanupJob) error
 	FailAppRuntimeCleanup(context.Context, repository.AppRuntimeCleanupJob, string, time.Time, bool) error
+	PruneAppRuntimeCleanupJobs(context.Context, int) (int64, error)
 }
 
 var _ Persistence = (*repository.Repository)(nil)
@@ -73,24 +80,34 @@ type Runtime interface {
 	RemoveApp(context.Context, repository.AppRuntimeJob, string) error
 	RemoveCleanupTarget(context.Context, repository.AppRuntimeCleanupJob) error
 	ListManagedAppContainers(context.Context) ([]Container, error)
+	ListRuntimeImageCache(context.Context) ([]RuntimeImageCacheEntry, error)
+	RemoveRuntimeImageTag(context.Context, RuntimeImageCacheEntry) error
+	ListManagedAppImageReferences(context.Context) ([]ManagedAppImageReference, error)
 }
 
 type Worker struct {
-	Store             Persistence
-	Artifacts         *appstore.Store
-	Runtime           Runtime
-	AppSecretsCipher  *appsecret.Cipher
-	WorkerID          string
-	PollInterval      time.Duration
-	LeaseAge          time.Duration
-	MaxImageBytes     int64
-	OrphanSweepEvery  time.Duration
-	Logger            *slog.Logger
-	Metrics           *observability.WorkerMetrics
-	startSweepDone    bool
-	networkRetryAfter time.Time
-	lastOrphanSweep   time.Time
-	startupSweepMutex sync.Mutex
+	Store                     Persistence
+	Artifacts                 *appstore.Store
+	Runtime                   Runtime
+	AppSecretsCipher          *appsecret.Cipher
+	WorkerID                  string
+	PollInterval              time.Duration
+	LeaseAge                  time.Duration
+	MaxImageBytes             int64
+	ImageCacheMaxBytes        int64
+	ImageCacheTargetBytes     int64
+	ImageCacheGCSweepInterval time.Duration
+	OrphanSweepEvery          time.Duration
+	Logger                    *slog.Logger
+	Metrics                   *observability.WorkerMetrics
+	startSweepDone            bool
+	cleanupTurn               bool
+	networkRetryAfter         time.Time
+	lastOrphanSweep           time.Time
+	lastImageCacheSweep       time.Time
+	lastCleanupRetentionSweep time.Time
+	networkFailureCount       int
+	startupSweepMutex         sync.Mutex
 }
 
 func New(store Persistence, artifacts *appstore.Store, runtime Runtime, workerID string, pollInterval, leaseAge time.Duration, maxImageBytes int64, logger *slog.Logger) (*Worker, error) {
@@ -115,7 +132,10 @@ func New(store Persistence, artifacts *appstore.Store, runtime Runtime, workerID
 	return &Worker{
 		Store: store, Artifacts: artifacts, Runtime: runtime, WorkerID: workerID,
 		PollInterval: pollInterval, LeaseAge: leaseAge, MaxImageBytes: maxImageBytes,
-		OrphanSweepEvery: defaultOrphanSweepEvery, Logger: logger,
+		ImageCacheMaxBytes:        defaultRuntimeImageCacheMaxBytes,
+		ImageCacheTargetBytes:     defaultRuntimeImageCacheTargetBytes,
+		ImageCacheGCSweepInterval: defaultRuntimeImageGCSweepInterval,
+		OrphanSweepEvery:          defaultOrphanSweepEvery, Logger: logger, cleanupTurn: true,
 		Metrics: observability.NewWorkerMetrics(),
 	}, nil
 }
@@ -163,19 +183,21 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err := w.ensureStartupSweep(ctx); err != nil {
 		w.Logger.Warn("App runtime startup recovery scheduling failed", "error", err)
 	}
+	w.pruneCleanupHistoryIfDue(ctx)
 	if time.Now().After(w.networkRetryAfter) {
 		if err := w.Runtime.EnsureNetwork(ctx); err != nil {
 			if ctx.Err() == nil {
-				w.Logger.Warn("App runtime network is unavailable", "error", err)
-				w.networkRetryAfter = time.Now().Add(30 * time.Second)
+				w.Logger.Warn("App runtime network is unavailable", "error", safeRuntimeError(err))
+				w.deferNetworkRetry(time.Now())
 			}
 		} else {
 			if peerErr := w.Runtime.EnsureRuntimeNetworkPeers(ctx); peerErr != nil {
 				if ctx.Err() == nil {
 					w.Logger.Warn("App routing network peers are unavailable", "error", safeRuntimeError(peerErr))
-					w.networkRetryAfter = time.Now().Add(30 * time.Second)
+					w.deferNetworkRetry(time.Now())
 				}
 			} else {
+				w.networkFailureCount = 0
 				w.networkRetryAfter = time.Now().Add(30 * time.Second)
 			}
 		}
@@ -189,21 +211,28 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.Logger.Warn("App runtime orphan sweep failed", "error", err)
 	}
 
-	cleanup, err := w.Store.ClaimNextAppRuntimeCleanup(ctx, w.WorkerID, w.LeaseAge)
-	if err == nil {
-		return true, w.processCleanup(ctx, cleanup)
-	}
-	if !errors.Is(err, repository.ErrNoAppRuntimeCleanup) {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
+	if w.cleanupTurn {
+		cleanup, cleanupErr := w.Store.ClaimNextAppRuntimeCleanup(ctx, w.WorkerID, w.LeaseAge)
+		if cleanupErr == nil {
+			w.cleanupTurn = false
+			err := w.processCleanup(ctx, cleanup)
+			w.sweepRuntimeImageCacheIfDue(ctx, uuid.Nil)
+			return true, err
 		}
-		return false, err
+		if !errors.Is(cleanupErr, repository.ErrNoAppRuntimeCleanup) {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			return false, cleanupErr
+		}
 	}
+	w.cleanupTurn = true
 
 	job, err := w.Store.ClaimNextAppRuntime(ctx, w.WorkerID, w.LeaseAge)
 	if errors.Is(err, repository.ErrNoAppRuntimeJob) {
 		healthJob, healthErr := w.Store.ClaimNextAppHealthCheck(ctx, w.WorkerID, w.LeaseAge)
 		if errors.Is(healthErr, repository.ErrNoAppHealthCheckJob) {
+			w.sweepRuntimeImageCacheIfDue(ctx, uuid.Nil)
 			return false, nil
 		}
 		if healthErr != nil {
@@ -212,7 +241,9 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 			}
 			return false, healthErr
 		}
-		return true, w.processHealthCheck(ctx, healthJob)
+		err := w.processHealthCheck(ctx, healthJob)
+		w.sweepRuntimeImageCacheIfDue(ctx, uuid.Nil)
+		return true, err
 	}
 	if err != nil {
 		return false, err
@@ -220,7 +251,13 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if w.Metrics != nil {
 		w.Metrics.AppRuntimeJobsClaimed.Inc()
 	}
-	return true, w.processApp(ctx, job)
+	var currentDeploymentID uuid.UUID
+	if job.Deployment.ID != "" {
+		currentDeploymentID, _ = uuid.Parse(job.Deployment.ID)
+	}
+	err = w.processApp(ctx, job)
+	w.sweepRuntimeImageCacheIfDue(ctx, currentDeploymentID)
+	return true, err
 }
 
 func (w *Worker) withAppHeartbeat(parent context.Context, job repository.AppRuntimeJob, action func(context.Context) error) error {
@@ -228,6 +265,15 @@ func (w *Worker) withAppHeartbeat(parent context.Context, job repository.AppRunt
 	return w.withHeartbeat(parent, func(ctx context.Context) error {
 		return w.Store.RenewAppRuntimeLease(ctx, appID, job.WorkerID, job.LeaseToken, w.LeaseAge)
 	}, action)
+}
+
+func (w *Worker) deferNetworkRetry(now time.Time) time.Duration {
+	if w.networkFailureCount < 7 {
+		w.networkFailureCount++
+	}
+	delay := runtimeBackoff(w.networkFailureCount - 1)
+	w.networkRetryAfter = now.Add(delay)
+	return delay
 }
 
 func (w *Worker) withCleanupHeartbeat(parent context.Context, job repository.AppRuntimeCleanupJob, action func(context.Context) error) error {

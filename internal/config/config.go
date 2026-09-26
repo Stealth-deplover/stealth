@@ -83,40 +83,43 @@ type Config struct {
 	// BootstrapCLIKey authenticates the local CLI when it asks the API to mint
 	// a first-run setup session and encrypts short-lived GitHub authorization state.
 	// It is a separate security domain from FunctionsSecretKey.
-	BootstrapCLIKey               []byte
-	GitHubAppClientID             string
-	FunctionsRunnerEnabled        bool
-	FunctionsWorkerID             string
-	FunctionsRunnerPoll           time.Duration
-	FunctionsRunnerLeaseAge       time.Duration
-	FunctionsRunnerBuildTimeout   time.Duration
-	FunctionsRunnerStagingRoot    string
-	FunctionsRunnerStagingVolume  string
-	FunctionsRunnerMetricsAddress string
-	FunctionsRunnerHelperImage    string
-	FunctionsRunnerNodeImage      string
-	FunctionsRunnerPythonImage    string
-	FunctionsRunnerGoImage        string
-	AppsMaxSourceArchiveBytes     int64
-	AppsMaxExpandedSourceBytes    int64
-	AppsMaxSourceFiles            int
-	AppsMaxImageArchiveBytes      int64
-	AppsDefaultArtifactQuotaBytes int64
-	AppsBuildkitAddress           string
-	AppsBuildkitCACert            string
-	AppsBuildkitClientCert        string
-	AppsBuildkitClientKey         string
-	AppsBuildTimeout              time.Duration
-	AppsBuildLeaseAge             time.Duration
-	AppsBuildPollInterval         time.Duration
-	AppsBuildStagingRoot          string
-	AppsBuildStagingVolume        string
-	AppsBuildkitStateVolume       string
-	AppsRuntimeNetworkName        string
-	AppsRuntimePollInterval       time.Duration
-	AppsRuntimeLeaseAge           time.Duration
-	AppsRuntimeActionTimeout      time.Duration
-	AppsRuntimeImageImportTimeout time.Duration
+	BootstrapCLIKey                  []byte
+	GitHubAppClientID                string
+	FunctionsRunnerEnabled           bool
+	FunctionsWorkerID                string
+	FunctionsRunnerPoll              time.Duration
+	FunctionsRunnerLeaseAge          time.Duration
+	FunctionsRunnerBuildTimeout      time.Duration
+	FunctionsRunnerStagingRoot       string
+	FunctionsRunnerStagingVolume     string
+	FunctionsRunnerMetricsAddress    string
+	FunctionsRunnerHelperImage       string
+	FunctionsRunnerNodeImage         string
+	FunctionsRunnerPythonImage       string
+	FunctionsRunnerGoImage           string
+	AppsMaxSourceArchiveBytes        int64
+	AppsMaxExpandedSourceBytes       int64
+	AppsMaxSourceFiles               int
+	AppsMaxImageArchiveBytes         int64
+	AppsDefaultArtifactQuotaBytes    int64
+	AppsBuildkitAddress              string
+	AppsBuildkitCACert               string
+	AppsBuildkitClientCert           string
+	AppsBuildkitClientKey            string
+	AppsBuildTimeout                 time.Duration
+	AppsBuildLeaseAge                time.Duration
+	AppsBuildPollInterval            time.Duration
+	AppsBuildStagingRoot             string
+	AppsBuildStagingVolume           string
+	AppsBuildkitStateVolume          string
+	AppsRuntimeNetworkName           string
+	AppsRuntimePollInterval          time.Duration
+	AppsRuntimeLeaseAge              time.Duration
+	AppsRuntimeActionTimeout         time.Duration
+	AppsRuntimeImageImportTimeout    time.Duration
+	AppsRuntimeImageCacheMaxBytes    int64
+	AppsRuntimeImageCacheTargetBytes int64
+	AppsRuntimeImageGCSweepInterval  time.Duration
 	// Agent runner settings control the trusted queue lifecycle. Provider
 	// adapters remain a separate capability and an empty registry never claims
 	// queued runs.
@@ -375,7 +378,10 @@ func (c Config) ValidateApps() error {
 		c.AppsRuntimePollInterval < 100*time.Millisecond || c.AppsRuntimePollInterval > time.Minute ||
 		c.AppsRuntimeLeaseAge < 30*time.Second || c.AppsRuntimeLeaseAge > 10*time.Minute ||
 		c.AppsRuntimeActionTimeout < 5*time.Second || c.AppsRuntimeActionTimeout > 2*time.Minute ||
-		c.AppsRuntimeImageImportTimeout < time.Minute || c.AppsRuntimeImageImportTimeout > 30*time.Minute {
+		c.AppsRuntimeImageImportTimeout < time.Minute || c.AppsRuntimeImageImportTimeout > 30*time.Minute ||
+		c.AppsRuntimeImageCacheMaxBytes < 1<<20 || c.AppsRuntimeImageCacheMaxBytes > 1<<40 ||
+		c.AppsRuntimeImageCacheTargetBytes < 1<<20 || c.AppsRuntimeImageCacheTargetBytes >= c.AppsRuntimeImageCacheMaxBytes ||
+		c.AppsRuntimeImageGCSweepInterval < time.Minute || c.AppsRuntimeImageGCSweepInterval > 24*time.Hour {
 		return fmt.Errorf("App runtime network, poll, lease, or Docker timeout settings are invalid")
 	}
 	return nil
