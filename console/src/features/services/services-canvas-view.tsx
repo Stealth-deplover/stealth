@@ -225,7 +225,14 @@ export function ServicesCanvasView({
       });
     });
     return nodes;
-  }, [apps.data, buckets.data, databases.data, functions.data, layoutMap, sites.data]);
+  }, [
+    apps.data,
+    buckets.data,
+    databases.data,
+    functions.data,
+    layoutMap,
+    sites.data,
+  ]);
   const [nodes, setNodes, onNodesChange] =
     useNodesState<ResourceNode>(initialNodes);
   const [edges, , onEdgesChange] = useEdgesState([]);

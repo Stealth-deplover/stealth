@@ -23,7 +23,10 @@ describe("AppEditorDialog", () => {
     expect(screen.getByLabelText("Memory (bytes)")).toBeTruthy();
     expect(screen.getByLabelText("PIDs limit")).toBeTruthy();
     expect(screen.getByLabelText("Stop grace period (seconds)")).toBeTruthy();
-    expect(screen.getByLabelText("Restart policy")).toHaveProperty("readOnly", true);
+    expect(screen.getByLabelText("Restart policy")).toHaveProperty(
+      "readOnly",
+      true,
+    );
     expect(screen.queryByLabelText(/secret|environment variable/i)).toBeNull();
   });
 });

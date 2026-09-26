@@ -6,8 +6,13 @@ describe("StatusBadge", () => {
   it("keeps pending status text visible and disables its pulse for reduced motion", () => {
     render(<StatusBadge status="pending" />);
 
-    const indicator = screen.getByText("Pending").parentElement?.querySelector('[aria-hidden="true"]');
-    expect(indicator).toHaveClass("animate-pulse", "motion-reduce:animate-none");
+    const indicator = screen
+      .getByText("Pending")
+      .parentElement?.querySelector('[aria-hidden="true"]');
+    expect(indicator).toHaveClass(
+      "animate-pulse",
+      "motion-reduce:animate-none",
+    );
   });
 });
 

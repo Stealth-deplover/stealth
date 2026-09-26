@@ -4,7 +4,9 @@ import { AppDeploymentDialog } from "@/features/apps/app-deployment-dialog";
 
 describe("AppDeploymentDialog", () => {
   it("maps a source archive and desired-image option to multipart fields", async () => {
-    const onSubmit = vi.fn<(form: FormData) => Promise<void>>().mockResolvedValue(undefined);
+    const onSubmit = vi
+      .fn<(form: FormData) => Promise<void>>()
+      .mockResolvedValue(undefined);
     render(
       <AppDeploymentDialog
         open
@@ -14,7 +16,9 @@ describe("AppDeploymentDialog", () => {
       />,
     );
 
-    const file = new File(["payload"], "source.tar", { type: "application/x-tar" });
+    const file = new File(["payload"], "source.tar", {
+      type: "application/x-tar",
+    });
     fireEvent.change(screen.getByLabelText("Source archive"), {
       target: { files: [file] },
     });
@@ -44,7 +48,9 @@ describe("AppDeploymentDialog", () => {
   });
 
   it("rejects unsafe build paths before submitting", async () => {
-    const onSubmit = vi.fn<(form: FormData) => Promise<void>>().mockResolvedValue(undefined);
+    const onSubmit = vi
+      .fn<(form: FormData) => Promise<void>>()
+      .mockResolvedValue(undefined);
     render(
       <AppDeploymentDialog
         open

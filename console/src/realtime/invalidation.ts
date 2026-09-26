@@ -377,7 +377,9 @@ export function realtimeCacheChanges(
   }
   if (type.startsWith("app.environment_variable.")) {
     const appId = resourceId(event);
-    return appId ? [{ kind: "app-environment-variable", projectId, appId }] : [];
+    return appId
+      ? [{ kind: "app-environment-variable", projectId, appId }]
+      : [];
   }
   if (type.startsWith("app.")) {
     return [{ kind: "app", projectId, appId: resourceId(event) }];

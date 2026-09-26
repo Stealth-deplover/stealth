@@ -387,6 +387,10 @@ jobs:
       - name: Verify generated client is committed
         run: git diff --exit-code -- console/src/api/generated
 
+      - name: Check formatting
+        working-directory: console
+        run: npm run format:check
+
       - name: Typecheck
         working-directory: console
         run: npm run typecheck

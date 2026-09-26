@@ -38,7 +38,8 @@ export function LogsView({
         }}
       />
     );
-  if (functions.isLoading || sites.isLoading || apps.isLoading) return <LoadingState rows={4} />;
+  if (functions.isLoading || sites.isLoading || apps.isLoading)
+    return <LoadingState rows={4} />;
   return (
     <>
       <PageHeader
@@ -89,10 +90,16 @@ export function LogsView({
         {apps.data?.apps.map((item) => (
           <Card key={item.id}>
             <CardContent className="p-5">
-              <AppWindow className="size-5 text-signal-teal" aria-hidden="true" />
-              <h2 className="mt-4 text-sm font-semibold text-white">{item.name}</h2>
+              <AppWindow
+                className="size-5 text-signal-teal"
+                aria-hidden="true"
+              />
+              <h2 className="mt-4 text-sm font-semibold text-white">
+                {item.name}
+              </h2>
               <p className="mt-1 text-xs leading-5 text-slate-500">
-                App build output and retained stdout/stderr from verified runtime containers.
+                App build output and retained stdout/stderr from verified
+                runtime containers.
               </p>
               <Link
                 href={`/organizations/${organizationId}/projects/${projectId}/apps/${item.id}`}
@@ -144,7 +151,9 @@ export function LogsView({
           />
         </Card>
       </div>
-      {!functions.data?.functions.length && !sites.data?.sites.length && !apps.data?.apps.length ? (
+      {!functions.data?.functions.length &&
+      !sites.data?.sites.length &&
+      !apps.data?.apps.length ? (
         <div className="mt-4">
           <EmptyState
             title="No log sources yet"

@@ -61,17 +61,42 @@ vi.mock("@/api/mutations", () => ({
   useDeleteApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSelectAppDeployment: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateApp: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useCreateAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useUpdateAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useDeleteAppEnvironmentVariable: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useCreateAppEnvironmentVariable: () => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  }),
+  useUpdateAppEnvironmentVariable: () => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  }),
+  useDeleteAppEnvironmentVariable: () => ({
+    isPending: false,
+    mutateAsync: vi.fn(),
+  }),
 }));
 
 vi.mock("@/components/log-viewer", async () => {
   const React = await import("react");
   return {
-    createLogSource: vi.fn((context: { kind: string }) => ({ key: context.kind, fetchPage: async () => ({ lines: [] }) })),
-    LogViewer: ({ title, description }: { title: string; description: string }) =>
-      React.createElement("div", { "data-testid": title === "Runtime logs" ? "app-runtime-logs" : "app-build-logs" }, `${title}: ${description}`),
+    createLogSource: vi.fn((context: { kind: string }) => ({
+      key: context.kind,
+      fetchPage: async () => ({ lines: [] }),
+    })),
+    LogViewer: ({
+      title,
+      description,
+    }: {
+      title: string;
+      description: string;
+    }) =>
+      React.createElement(
+        "div",
+        {
+          "data-testid":
+            title === "Runtime logs" ? "app-runtime-logs" : "app-build-logs",
+        },
+        `${title}: ${description}`,
+      ),
   };
 });
 
@@ -202,18 +227,28 @@ describe("AppDetailView", () => {
     );
 
     expect(screen.getByText("Desired image selected")).toBeInTheDocument();
-    expect(screen.getByText(/The runtime is reconciling generation 1/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/The runtime is reconciling generation 1/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Pending")).toBeInTheDocument();
     expect(screen.queryByText("Running")).toBeNull();
     expect(screen.queryByText("Healthy")).toBeNull();
     expect(screen.getByText("Starting")).toBeInTheDocument();
     expect(screen.getByText("Waiting for runtime")).toBeInTheDocument();
-    expect(screen.getByText(/public route waits for the current generation to pass its configured health check/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /public route waits for the current generation to pass its configured health check/i,
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getAllByText(`sha256:${"c".repeat(64)}`)).toHaveLength(2);
-    expect(screen.getByTestId("app-build-logs")).toHaveTextContent("Build logs");
-    expect(screen.getByTestId("app-build-logs")).not.toHaveTextContent("Runtime logs are not available");
+    expect(screen.getByTestId("app-build-logs")).toHaveTextContent(
+      "Build logs",
+    );
+    expect(screen.getByTestId("app-build-logs")).not.toHaveTextContent(
+      "Runtime logs are not available",
+    );
   });
 
   it("keeps retained runtime logs visible for stopped or unhealthy Apps", () => {
@@ -223,10 +258,22 @@ describe("AppDetailView", () => {
     app.route_status = AppRoute_status.not_available;
     mocks.app = app;
 
-    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
 
-    expect(screen.getByTestId("app-runtime-logs")).toHaveTextContent("stdout/stderr captured from verified App containers");
-    expect(createLogSource).toHaveBeenCalledWith({ kind: "app-runtime", projectId: "project-1", appId: "app-1" });
+    expect(screen.getByTestId("app-runtime-logs")).toHaveTextContent(
+      "stdout/stderr captured from verified App containers",
+    );
+    expect(createLogSource).toHaveBeenCalledWith({
+      kind: "app-runtime",
+      projectId: "project-1",
+      appId: "app-1",
+    });
   });
 
   it("shows a healthy current generation with its active hostname", () => {
@@ -241,7 +288,13 @@ describe("AppDetailView", () => {
     mocks.app = app;
     mocks.deployments = [makeDeployment()];
 
-    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
 
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Healthy")).toBeInTheDocument();
@@ -249,7 +302,10 @@ describe("AppDetailView", () => {
     const hostnameLink = screen.getByRole("link", {
       name: "backend.apps.example.com (opens in a new tab)",
     });
-    expect(hostnameLink).toHaveAttribute("href", "https://backend.apps.example.com");
+    expect(hostnameLink).toHaveAttribute(
+      "href",
+      "https://backend.apps.example.com",
+    );
     expect(hostnameLink).toHaveClass("min-h-11");
   });
 
@@ -263,13 +319,21 @@ describe("AppDetailView", () => {
     app.route_status = AppRoute_status.waiting_for_health;
     mocks.app = app;
 
-    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
 
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Starting")).toBeInTheDocument();
     expect(screen.getByText("Waiting for health")).toBeInTheDocument();
     expect(screen.getByText("backend.apps.example.com")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "backend.apps.example.com" })).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "backend.apps.example.com" }),
+    ).toBeNull();
     expect(screen.queryByText(/publicly available/i)).toBeNull();
   });
 
@@ -284,12 +348,20 @@ describe("AppDetailView", () => {
     app.route_status = AppRoute_status.waiting_for_health;
     mocks.app = app;
 
-    render(<AppDetailView organizationId="org-1" projectId="project-1" appId="app-1" />);
+    render(
+      <AppDetailView
+        organizationId="org-1"
+        projectId="project-1"
+        appId="app-1"
+      />,
+    );
 
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Unhealthy")).toBeInTheDocument();
     expect(screen.getByText("Not published")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "backend.apps.example.com" })).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "backend.apps.example.com" }),
+    ).toBeNull();
     expect(screen.queryByText(/publicly available/i)).toBeNull();
   });
 
@@ -308,8 +380,14 @@ describe("AppDetailView", () => {
       />,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("image verification failed");
-    expect(screen.getByText(/Generation 0 remains the last successfully applied state/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "image verification failed",
+    );
+    expect(
+      screen.getByText(
+        /Generation 0 remains the last successfully applied state/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows build failure details and never offers failed output for selection", () => {
@@ -336,7 +414,9 @@ describe("AppDetailView", () => {
 
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Not reported")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Select as desired image" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Select as desired image" }),
+    ).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     expect(screen.getByText("Dockerfile build failed")).toBeInTheDocument();
   });

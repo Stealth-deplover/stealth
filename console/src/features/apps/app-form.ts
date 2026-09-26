@@ -45,9 +45,7 @@ export function appFormValues(app?: StealthApp): AppFormValues {
     cpu_millis: String(app.workload.resources.cpu_millis),
     memory_bytes: String(app.workload.resources.memory_bytes),
     pids_limit: String(app.workload.resources.pids_limit),
-    stop_grace_period_seconds: String(
-      app.workload.stop_grace_period_seconds,
-    ),
+    stop_grace_period_seconds: String(app.workload.stop_grace_period_seconds),
   };
 }
 
@@ -102,12 +100,15 @@ function workloadPayload(
   const args = values.command_arguments
     .split(/\r\n|\n|\r/)
     .filter((argument) => argument.length > 0);
-  if (args.length > 64) throw new Error("Command can contain at most 64 arguments.");
+  if (args.length > 64)
+    throw new Error("Command can contain at most 64 arguments.");
   let aggregateBytes = 0;
   for (const argument of args) {
     const argumentBytes = new TextEncoder().encode(argument).length;
-    if (argument.includes("\0")) throw new Error("Command arguments cannot contain NUL.");
-    if (argumentBytes > 4096) throw new Error("Each command argument must be 4096 bytes or fewer.");
+    if (argument.includes("\0"))
+      throw new Error("Command arguments cannot contain NUL.");
+    if (argumentBytes > 4096)
+      throw new Error("Each command argument must be 4096 bytes or fewer.");
     aggregateBytes += argumentBytes + 1;
   }
   if (aggregateBytes > 32 * 1024) {
@@ -164,7 +165,12 @@ function workloadPayload(
     );
   }
   if (values.pids_limit.trim()) {
-    resources.pids_limit = integerInRange(values.pids_limit, "PIDs limit", 16, 2048);
+    resources.pids_limit = integerInRange(
+      values.pids_limit,
+      "PIDs limit",
+      16,
+      2048,
+    );
   }
   if (Object.keys(resources).length) workload.resources = resources;
 
@@ -180,7 +186,12 @@ function workloadPayload(
   return hasWorkloadField() ? workload : undefined;
 }
 
-function integerInRange(value: string, label: string, min: number, max: number) {
+function integerInRange(
+  value: string,
+  label: string,
+  min: number,
+  max: number,
+) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
     throw new Error(`${label} must be an integer between ${min} and ${max}.`);

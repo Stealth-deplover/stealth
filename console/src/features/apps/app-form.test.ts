@@ -58,15 +58,18 @@ describe("App configuration form", () => {
     );
     expect(() =>
       createAppPayload(
-        values({ health_protocol: "http", health_path: "https://outside.test/health" }),
+        values({
+          health_protocol: "http",
+          health_path: "https://outside.test/health",
+        }),
       ),
     ).toThrow("HTTP health path must be a local path beginning with /.");
     expect(() => createAppPayload(values({ cpu_millis: "49" }))).toThrow(
       "CPU must be an integer between 50 and 8000.",
     );
-    expect(() => createAppPayload(values({ working_directory: "relative" }))).toThrow(
-      "Working directory must be a safe absolute POSIX path.",
-    );
+    expect(() =>
+      createAppPayload(values({ working_directory: "relative" })),
+    ).toThrow("Working directory must be a safe absolute POSIX path.");
   });
 
   it("requires an HTTP path and keeps TCP path null", () => {
@@ -74,7 +77,8 @@ describe("App configuration form", () => {
       "HTTP health path must be a local path beginning with /.",
     );
     expect(
-      createAppPayload(values({ health_protocol: "tcp" })).workload?.health_check,
+      createAppPayload(values({ health_protocol: "tcp" })).workload
+        ?.health_check,
     ).toEqual({ protocol: "tcp", path: null });
   });
 
@@ -99,7 +103,11 @@ describe("App configuration form", () => {
           initial_delay_seconds: 5,
           failure_threshold: 3,
         },
-        resources: { cpu_millis: 700, memory_bytes: 1073741824, pids_limit: 128 },
+        resources: {
+          cpu_millis: 700,
+          memory_bytes: 1073741824,
+          pids_limit: 128,
+        },
         stop_grace_period_seconds: 20,
         restart_policy: "always",
       },
