@@ -125,8 +125,12 @@ func TestMobyRuntimeImageCacheInventoryRejectsMalformedAndTruncatedData(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			runner := &scriptedRuntimeRunner{results: []CommandResult{test.result}}
 			moby, _ := NewMoby(runner, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
-			if _, err := moby.ListRuntimeImageCache(context.Background()); !errors.Is(err, test.wantErr) {
+			_, err := moby.ListRuntimeImageCache(context.Background())
+			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("ListRuntimeImageCache() = %v, want %v", err, test.wantErr)
+			}
+			if test.name == "malformed reference" && safeRuntimeError(err) != "runtime image tag ownership verification failed" {
+				t.Fatalf("malformed reference diagnostic = %q", safeRuntimeError(err))
 			}
 			if len(runner.calls) != 1 {
 				t.Fatalf("invalid list caused further Docker commands: %#v", runner.calls)
@@ -139,8 +143,12 @@ func TestMobyRuntimeImageCacheInventoryRejectsMalformedAndTruncatedData(t *testi
 		results: []CommandResult{{Stdout: []byte(reference + "\n")}, {Stdout: []byte("partial"), StdoutTruncated: true}},
 	}
 	truncatedMoby, _ := NewMoby(truncatedInspect, "stealth_app_runtime", 30*time.Second, 10*time.Minute)
-	if _, err := truncatedMoby.ListRuntimeImageCache(context.Background()); !errors.Is(err, ErrDockerOutputTooLarge) {
+	_, err := truncatedMoby.ListRuntimeImageCache(context.Background())
+	if !errors.Is(err, ErrDockerOutputTooLarge) {
 		t.Fatalf("truncated inspect output = %v, want bounded-output error", err)
+	}
+	if safeRuntimeError(err) != "runtime image inspection exceeded bounds" {
+		t.Fatalf("truncated inspect diagnostic = %q", safeRuntimeError(err))
 	}
 
 	ids := make([]string, maxRuntimeImageCacheEntries+1)

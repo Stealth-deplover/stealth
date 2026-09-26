@@ -3,6 +3,7 @@ package appruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,11 @@ const (
 	maxRuntimeImageCacheEntries  = 256
 	maxRuntimeImageCacheRemovals = 4
 	runtimeImageRepositoryPrefix = "stealth-app/"
+)
+
+var (
+	errRuntimeImageCacheReferenceList = errors.New("runtime image cache reference inventory failed")
+	errRuntimeImageCacheInspection    = errors.New("runtime image cache inspection failed")
 )
 
 // RuntimeImageCacheEntry describes one exact Stealth deployment tag. Multiple
@@ -50,14 +56,14 @@ func (m *Moby) ListRuntimeImageCache(ctx context.Context) ([]RuntimeImageCacheEn
 		"--format", "{{.Repository}}:{{.Tag}}",
 	}, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheReferenceList, err)
 	}
 	if result.StdoutTruncated {
-		return nil, ErrDockerOutputTooLarge
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheReferenceList, ErrDockerOutputTooLarge)
 	}
 	references, err := parseRuntimeImageReferenceList(result.Stdout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheReferenceList, err)
 	}
 	if len(references) == 0 {
 		return nil, nil
@@ -66,12 +72,16 @@ func (m *Moby) ListRuntimeImageCache(ctx context.Context) ([]RuntimeImageCacheEn
 	args = append(args, references...)
 	result, err = m.runAction(ctx, args, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheInspection, err)
 	}
 	if result.StdoutTruncated {
-		return nil, ErrDockerOutputTooLarge
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheInspection, ErrDockerOutputTooLarge)
 	}
-	return parseRuntimeImageInspect(result.Stdout, references)
+	entries, err := parseRuntimeImageInspect(result.Stdout, references)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errRuntimeImageCacheInspection, err)
+	}
+	return entries, nil
 }
 
 func parseRuntimeImageReferenceList(output []byte) ([]string, error) {

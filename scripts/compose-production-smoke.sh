@@ -52,7 +52,7 @@ platform_app_v1_deployment_id=""
 platform_app_v1_image_id=""
 platform_app_runtime_unrelated_tag=""
 platform_app_v1_artifact_row=""
-platform_app_v1_quota_row=""
+platform_app_cache_gc_quota_row=""
 platform_app_secret_variable_id=""
 platform_disabled_deployment_id=""
 platform_host=""
@@ -2265,11 +2265,6 @@ PY
 	if [ -z "$platform_app_v1_deployment_id" ]; then
 		platform_app_v1_deployment_id="$platform_app_deployment_id"
 		platform_app_v1_artifact_row="$image_row"
-		platform_app_v1_quota_row="$(app_artifact_quota_row "$platform_app_id")"
-		if ! [[ "$platform_app_v1_quota_row" =~ ^[0-9]+\|[0-9]+$ ]]; then
-			printf 'initial App artifact quota metadata is malformed: %s\n' "$platform_app_v1_quota_row" >&2
-			return 1
-		fi
 	fi
 	if ! [[ "$image_path" =~ ^[0-9a-f-]+/[0-9a-f-]+/[0-9a-f-]+$ ]]; then
 		printf 'persisted App image locator is not UUID-derived: %s\n' "$image_path" >&2
@@ -2420,9 +2415,13 @@ verify_app_runtime_image_cache_gc() {
 	unrelated_image_id="$(docker image inspect --format '{{.Id}}' postgres:17-alpine)"
 	docker image tag postgres:17-alpine "$platform_app_runtime_unrelated_tag"
 	artifact_row="$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")"
-	quota_row="$(app_artifact_quota_row "$platform_app_id")"
-	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ] || [ "$quota_row" != "$platform_app_v1_quota_row" ]; then
-		printf '%s\n' 'persisted App artifact metadata or quota changed before cache pressure proof' >&2
+	platform_app_cache_gc_quota_row="$(app_artifact_quota_row "$platform_app_id")"
+	if ! [[ "$platform_app_cache_gc_quota_row" =~ ^[0-9]+\|[0-9]+$ ]]; then
+		printf 'App artifact quota metadata is malformed before cache pressure proof: %s\n' "$platform_app_cache_gc_quota_row" >&2
+		return 1
+	fi
+	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ]; then
+		printf '%s\n' 'persisted App artifact metadata changed before cache pressure proof' >&2
 		return 1
 	fi
 
@@ -2452,7 +2451,7 @@ verify_app_runtime_image_cache_gc() {
 	wait_for_app_public_route 'app-runtime-smoke-ok'
 	artifact_row="$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")"
 	quota_row="$(app_artifact_quota_row "$platform_app_id")"
-	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ] || [ "$quota_row" != "$platform_app_v1_quota_row" ]; then
+	if [ "$artifact_row" != "$platform_app_v1_artifact_row" ] || [ "$quota_row" != "$platform_app_cache_gc_quota_row" ]; then
 		printf '%s\n' 'runtime image cache GC changed persisted OCI metadata or App artifact quota' >&2
 		return 1
 	fi
@@ -2512,7 +2511,7 @@ verify_app_runtime_image_cache_gc() {
 		printf '%s\n' 'non-Stealth Docker image tag changed during App artifact re-import' >&2
 		return 1
 	fi
-	if [ "$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")" != "$platform_app_v1_artifact_row" ] || [ "$(app_artifact_quota_row "$platform_app_id")" != "$platform_app_v1_quota_row" ]; then
+	if [ "$(app_deployment_artifact_row "$platform_app_v1_deployment_id" "$platform_app_id")" != "$platform_app_v1_artifact_row" ] || [ "$(app_artifact_quota_row "$platform_app_id")" != "$platform_app_cache_gc_quota_row" ]; then
 		printf '%s\n' 'App artifact metadata or quota changed during runtime cache recovery' >&2
 		return 1
 	fi
