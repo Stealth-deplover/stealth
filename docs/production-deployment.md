@@ -382,6 +382,34 @@ available only while ClickHouse retains them. A telemetry outage degrades log
 reads but does not stop Apps. Configured App variables and secrets are
 encrypted with `APPS_SECRET_KEY`; database restore requires the matching key.
 
+### Deployment history, rollback, and diagnostics
+
+`AppDeployment` rows are the immutable release history. Selecting a deployment
+chooses a desired image; it does not mean that the worker has applied it. The
+diagnostics endpoint defines **Desired** as the release selected in PostgreSQL
+and **Applied** as the release last confirmed by the trusted runtime worker.
+It reads persisted PostgreSQL state only and does not call Docker or inspect
+artifact files. The projection omits container and image identities, routing
+identities, worker leases, private artifact paths, environment values, and
+secrets.
+
+The explicit deployment rollback endpoint accepts only an older ready release
+with verified immutable OCI metadata and a canonical captured WorkloadSpec.
+One transaction restores that WorkloadSpec, selects the release, advances the
+desired generation once, resets runtime retry state, and records safe audit
+metadata. Current environment variables and secrets, App name, enabled state,
+hostname, and artifact quota are kept as-is. Rollback is not point-in-time
+configuration restore: env/secret history is not stored. It does not clone or
+rewrite deployment history and does not automatically roll back after a health
+failure.
+
+The persisted OCI archive and checksum remain the recovery source if A6 evicted
+the Docker runtime cache tag. The worker reopens and verifies the archive,
+imports it, and uses the ordinary fenced runtime reconciliation path. A rolled
+back generation remains out of public routing until it passes fresh health
+checks. If archive verification fails, the worker fails closed and does not
+automatically select the newer release.
+
 ### Manual host-reboot acceptance
 
 For an operator acceptance check, record the App's desired and observed
