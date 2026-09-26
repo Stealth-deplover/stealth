@@ -169,10 +169,10 @@ Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
 
 #### Regression proof
 
-- [ ] Backend unit and integration tests green.
-- [ ] Required PostgreSQL Apps suites ran and passed.
-- [ ] Console lint, typecheck, tests, build, and E2E green.
-- [ ] Production Compose Smoke green.
+- [x] Backend unit and integration tests green.
+- [x] Required PostgreSQL Apps suites ran and passed.
+- [x] Console lint, typecheck, tests, build, and E2E green.
+- [x] Production Compose Smoke green, including the real v0.2.5 upgrade smoke.
 - [x] No dependency additions.
 - [ ] Independent audit passes.
 - [ ] PR merged.

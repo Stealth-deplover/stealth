@@ -30,6 +30,13 @@ For the console, run `cd console && npm ci`, then the needed `npm run` scripts: 
 
 Run `gofmt`; CI rejects unformatted Go files. Use idiomatic Go names and lowercase packages. Console code uses strict TypeScript, ESLint, and Prettier; use PascalCase for components/types, `use...` for hooks, and lower camelCase for helpers. Never hand-edit generated API files.
 
+Keep production files cohesive and split them by responsibility. Use line counts
+as review prompts: under 300 lines is normally fine; 300–600 merits a
+responsibility review; 600–1000 is a strong refactor candidate; above 1000 needs
+a compelling reason to remain monolithic. These ranges are guidance, not CI
+limits. Tests and generated files are exceptions, and cohesion remains the
+deciding factor.
+
 ## Testing Guidelines
 
 Go tests use `*_test.go`; `internal/httpapi` integration tests include `Integration` in their names and require `TEST_DATABASE_URL` (and `TEST_REDIS_URL` where relevant). Console unit tests match `src/**/*.test.{ts,tsx}` and use Vitest; E2E tests live in `console/tests/e2e/` and use Playwright. No coverage threshold is configured, but all CI checks must pass.
