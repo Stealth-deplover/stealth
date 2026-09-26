@@ -2406,7 +2406,10 @@ verify_app_runtime_image_cache_gc() {
 		printf '%s\n' 'selected App v2 does not have its expected Stealth runtime image tag before GC' >&2
 		return 1
 	fi
-	old_image_size="$(docker image inspect --format '{{.Size}}' "$platform_app_v1_image_id")"
+	# The worker may evict A1 immediately after the A2 selection converges.
+	# Use the size captured while A1 was selected instead of inspecting a cache
+	# entry that this proof expects the worker to have removed.
+	old_image_size="$platform_app_v1_image_size_bytes"
 	if ! [[ "$old_image_size" =~ ^[0-9]+$ ]] || [ "$old_image_size" -le 2097152 ]; then
 		printf 'disposable App image is too small to exercise the 2 MiB cache limit: %s bytes\n' "$old_image_size" >&2
 		return 1
@@ -2603,7 +2606,7 @@ wait_for_app_deployment_ready() {
 
 verify_app_runtime_lifecycle() {
 	local status old_container old_image_id new_container new_image_id generation observed selected spec_sha peer_container
-	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag buildkit_container replacement_image_id
+	local disabled_generation foreign_managed_label runtime_name new_runtime_name foreign_container_name network_name worker worker_image upload_status runtime_tag old_tag buildkit_container replacement_image_id
 	local old_route_target new_route_target body old_v2_stdout_id old_v2_stderr_id old_restart_stdout_id old_restart_stderr_id
 	local old_restart_cursor resume_stdout_count resume_stderr_count
 	local orphan_app orphan_project orphan_name
@@ -2673,6 +2676,11 @@ verify_app_runtime_lifecycle() {
 	assert_app_runtime_configuration 'app-config-v2'
 	printf 'App CPU update replaced the container and converged at generation %s\n' "$generation"
 
+	old_tag="stealth-app/${platform_app_v1_deployment_id}:runtime"
+	if [ "$(docker image inspect --format '{{.Id}}' "$old_tag")" != "$platform_app_v1_image_id" ]; then
+		printf '%s\n' 'selected App v1 lost its runtime cache tag before the deployment switch' >&2
+		return 1
+	fi
 	old_container="$new_container"
 	app_archive_v2="$(mktemp "${TMPDIR:-/tmp}/stealth-app-build-smoke-v2.XXXXXX.zip")"
 	create_app_archive "$app_archive_v2" "${smoke_marker}-app-v2" "$app_probe_binary"
