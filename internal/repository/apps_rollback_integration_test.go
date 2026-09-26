@@ -69,13 +69,11 @@ func TestAppRollbackRestoresWorkloadAndPreservesEnvironmentIntegration(t *testin
 		WHERE project_id=$1 AND id=$3`, f.projectOneID, before.DesiredGeneration, appID); err != nil {
 		t.Fatal(err)
 	}
+	ensureAppRuntimeStateForRollbackTest(t, f, f.projectOneID, appID)
 	if _, err := f.pool.Exec(f.ctx, `
-		INSERT INTO app_runtime_state (app_id,project_id,applied_deployment_id,applied_generation,failure_count,next_retry_at,last_failure_at)
-		VALUES ($1,$2,$3,$4,5,now()+interval '1 hour',now())
-		ON CONFLICT (app_id) DO UPDATE SET applied_deployment_id=EXCLUDED.applied_deployment_id,
-		  applied_generation=EXCLUDED.applied_generation,failure_count=EXCLUDED.failure_count,
-		  next_retry_at=EXCLUDED.next_retry_at,last_failure_at=EXCLUDED.last_failure_at`,
-		appID, f.projectOneID, uuid.MustParse(second.ID), before.DesiredGeneration); err != nil {
+		UPDATE app_runtime_state SET applied_deployment_id=$2,applied_generation=$3,failure_count=5,
+		  next_retry_at=now()+interval '1 hour',last_failure_at=now()
+		WHERE app_id=$1`, appID, uuid.MustParse(second.ID), before.DesiredGeneration); err != nil {
 		t.Fatal(err)
 	}
 	firstBefore, err := f.repo.GetAppDeployment(f.ctx, f.projectOneID, appID, uuid.MustParse(first.ID), f.actor)
@@ -167,6 +165,7 @@ func TestAppRollbackRejectionsPreserveDesiredStateIntegration(t *testing.T) {
 	if _, err := f.repo.CreateApp(f.ctx, appID, f.projectOneID, f.actor, AppInput{Name: "rollback-reject", Enabled: true, ArtifactQuotaBytes: 8192}); err != nil {
 		t.Fatal(err)
 	}
+	ensureAppRuntimeStateForRollbackTest(t, f, f.projectOneID, appID)
 	initial, err := f.repo.GetApp(f.ctx, f.projectOneID, appID, f.actor)
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +298,18 @@ func TestAppRollbackRejectionsPreserveDesiredStateIntegration(t *testing.T) {
 	}
 	if pathRollbackAuditCount != 0 {
 		t.Fatalf("rejected malformed artifact locator wrote %d rollback audit rows", pathRollbackAuditCount)
+	}
+}
+
+func ensureAppRuntimeStateForRollbackTest(t *testing.T, f appRepositoryFixture, projectID, appID uuid.UUID) {
+	t.Helper()
+	routeIdentity := uuid.Must(uuid.NewV7())
+	containerName := AppRuntimeContainerNameForIncarnation(appID, routeIdentity)
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO app_runtime_state (app_id,project_id,route_identity,container_name)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (app_id) DO NOTHING`, appID, projectID, routeIdentity, containerName); err != nil {
+		t.Fatal(err)
 	}
 }
 
