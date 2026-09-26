@@ -184,13 +184,43 @@ configuration while the container exists, so host operators with Docker access
 can inspect it. The current runtime uses Moby directly; gVisor is not
 configured yet.
 
-All Apps currently share the runtime bridge with Traefik, so one App may be
-able to reach another App and services listening on Traefik. This is not
-per-tenant network isolation or a sandbox boundary. App filesystems are
-ephemeral: only `/tmp` is writable, as a bounded tmpfs, and OCI images
-declaring Dockerfile `VOLUME` paths are rejected. The host Docker image cache
-can consume disk; Stealth does not garbage-collect it automatically.
+All Apps currently share a user-defined bridge with the trusted worker and
+Traefik. Docker's bridge DNS/container names and peer IPs make other Apps
+reachable, and an App can connect to any port listening on another App's
+container address. Traefik listens on 8080 and health ping on 8081 on that
+bridge. The worker listener on 9091 exposes liveness and version endpoints;
+`/metrics` requires `METRICS_TOKEN` and otherwise returns not found. Through
+Traefik's 8080 entrypoint an App can reach the public Host-routed API and
+Console. API and Console containers, PostgreSQL, Redis, ClickHouse, BuildKit,
+and telemetry services are not attached to the App bridge and are not directly
+available there through their Compose DNS names. The bridge is not Docker's
+`internal` network: outbound traffic follows Docker bridge NAT and host
+firewall policy. This shared east-west and egress boundary is a known
+limitation deferred to Phase C1; it is not per-tenant network isolation or a
+sandbox boundary. The host root account and Docker daemon remain trusted.
 Production acceptance targets cgroup v2.
+
+Stealth manages only exact `stealth-app/<deployment-uuid>:runtime` Docker tags
+as the recoverable App runtime image cache. By default, when the estimated
+cache exceeds 20 GiB, a worker sweep processes the byte-bounded inventory in
+batches of 128 image IDs, with container ownership inspected in batches of
+128 and selected deployment protection queried in batches of 256. There is no
+low lifetime tag-count ceiling that disables maintenance. Each sweep removes
+at most four oldest safe tags; if pressure remains after successful progress,
+the next sweep is scheduled one minute later. Selected deployments (including
+disabled Apps), deployments named by verified managed containers, and any
+deployment protected by a live runtime lease are retained. Removal uses the
+exact validated Stealth tag; malformed ownership fails closed, Docker output
+remains byte-bounded, and Stealth never runs global Docker prune commands.
+The estimate sums Docker image sizes once per image ID. Docker layers shared
+across different image IDs can make it overstate disk use and reclaimed host
+space; the metrics are cache-accounting estimates, not filesystem accounting.
+Persistent source and OCI archives remain the App artifact quota and recovery
+source of truth. Runtime cache eviction does not change artifact metadata or
+quota; the worker verifies and imports a persisted OCI archive again when it
+is selected. App filesystems are ephemeral: only `/tmp` is writable, as a
+bounded tmpfs, and OCI images declaring Dockerfile `VOLUME` paths are
+rejected.
 
 An `AppDeployment` is an immutable build input snapshot and durable result.
 Uploaded source bytes, the Dockerfile build definition, and the current

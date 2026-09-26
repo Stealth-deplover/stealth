@@ -202,9 +202,13 @@ jobs:
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration|TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration|TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration|TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration|TestAppEnvironmentAggregateValueLimitIsTransactionalIntegration)$' \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestRuntimeImageProtectionIncludesSelectedDisabledAndLiveLeaseDeploymentsIntegration|TestRuntimeImageProtectionBatchesLargeCandidateInventoryIntegration|TestAppRuntimeCleanupQueueTerminalDeduplicationAndBoundedRetentionIntegration|TestAppRuntimeCleanupExpiredLeaseRecoveryFencesStaleWorkerIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration|TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration|TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration|TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration|TestAppEnvironmentAggregateValueLimitIsTransactionalIntegration)$' \
             TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
             TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
+            TestRuntimeImageProtectionIncludesSelectedDisabledAndLiveLeaseDeploymentsIntegration \
+            TestRuntimeImageProtectionBatchesLargeCandidateInventoryIntegration \
+            TestAppRuntimeCleanupQueueTerminalDeduplicationAndBoundedRetentionIntegration \
+            TestAppRuntimeCleanupExpiredLeaseRecoveryFencesStaleWorkerIntegration \
             TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration \
             TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration \
             TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration \

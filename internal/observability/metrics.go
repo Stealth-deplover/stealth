@@ -113,49 +113,56 @@ func (m *APIMetrics) Handler() http.Handler {
 // Labels deliberately contain only a small fixed vocabulary so one tenant or
 // function cannot create unbounded Prometheus time series.
 type WorkerMetrics struct {
-	Registry                   *prometheus.Registry
-	Polls                      prometheus.Counter
-	JobsClaimed                prometheus.Counter
-	JobsCompleted              *prometheus.CounterVec
-	JobDuration                *prometheus.HistogramVec
-	Requeued                   prometheus.Counter
-	Errors                     *prometheus.CounterVec
-	InFlight                   prometheus.Gauge
-	BuildsClaimed              prometheus.Counter
-	BuildsCompleted            *prometheus.CounterVec
-	BuildDuration              *prometheus.HistogramVec
-	BuildRequeued              prometheus.Counter
-	BuildInFlight              prometheus.Gauge
-	AppBuildsClaimed           prometheus.Counter
-	AppBuildsCompleted         *prometheus.CounterVec
-	AppBuildDuration           *prometheus.HistogramVec
-	AppBuildRequeued           prometheus.Counter
-	AppBuildInFlight           prometheus.Gauge
-	AppBuildErrors             *prometheus.CounterVec
-	AppRuntimePolls            prometheus.Counter
-	AppRuntimeJobsClaimed      prometheus.Counter
-	AppRuntimeJobsCompleted    *prometheus.CounterVec
-	AppRuntimeDuration         *prometheus.HistogramVec
-	AppRuntimeRequeued         prometheus.Counter
-	AppRuntimeErrors           *prometheus.CounterVec
-	AppRuntimeInFlight         prometheus.Gauge
-	AppRuntimeOrphansQueued    prometheus.Counter
-	AppRuntimeCleanupCompleted *prometheus.CounterVec
-	AppRuntimeCleanupDuration  prometheus.Histogram
-	AppRuntimeCleanupInFlight  prometheus.Gauge
-	AgentPolls                 prometheus.Counter
-	AgentJobsClaimed           prometheus.Counter
-	AgentJobsCompleted         *prometheus.CounterVec
-	AgentJobDuration           *prometheus.HistogramVec
-	AgentRequeued              prometheus.Counter
-	AgentErrors                *prometheus.CounterVec
-	AgentInFlight              prometheus.Gauge
-	OutboxPublishAttempts      prometheus.Counter
-	OutboxPending              prometheus.Gauge
-	OutboxSkipped              prometheus.Counter
-	OutboxPublished            prometheus.Counter
-	OutboxFailed               prometheus.Counter
-	OutboxPublishDuration      prometheus.Histogram
+	Registry                        *prometheus.Registry
+	Polls                           prometheus.Counter
+	JobsClaimed                     prometheus.Counter
+	JobsCompleted                   *prometheus.CounterVec
+	JobDuration                     *prometheus.HistogramVec
+	Requeued                        prometheus.Counter
+	Errors                          *prometheus.CounterVec
+	InFlight                        prometheus.Gauge
+	BuildsClaimed                   prometheus.Counter
+	BuildsCompleted                 *prometheus.CounterVec
+	BuildDuration                   *prometheus.HistogramVec
+	BuildRequeued                   prometheus.Counter
+	BuildInFlight                   prometheus.Gauge
+	AppBuildsClaimed                prometheus.Counter
+	AppBuildsCompleted              *prometheus.CounterVec
+	AppBuildDuration                *prometheus.HistogramVec
+	AppBuildRequeued                prometheus.Counter
+	AppBuildInFlight                prometheus.Gauge
+	AppBuildErrors                  *prometheus.CounterVec
+	AppRuntimePolls                 prometheus.Counter
+	AppRuntimeJobsClaimed           prometheus.Counter
+	AppRuntimeJobsCompleted         *prometheus.CounterVec
+	AppRuntimeDuration              *prometheus.HistogramVec
+	AppRuntimeRequeued              prometheus.Counter
+	AppRuntimeErrors                *prometheus.CounterVec
+	AppRuntimeInFlight              prometheus.Gauge
+	AppRuntimeOrphansQueued         prometheus.Counter
+	AppRuntimeCleanupCompleted      *prometheus.CounterVec
+	AppRuntimeCleanupDuration       prometheus.Histogram
+	AppRuntimeCleanupInFlight       prometheus.Gauge
+	AppRuntimeImageCacheBytes       prometheus.Gauge
+	AppRuntimeImageCacheLimitBytes  prometheus.Gauge
+	AppRuntimeImageCacheAvailable   prometheus.Gauge
+	AppRuntimeImageCachePressure    prometheus.Gauge
+	AppRuntimeImageGCTotal          *prometheus.CounterVec
+	AppRuntimeImageGCReclaimedBytes prometheus.Counter
+	AppRuntimeProcessExits          *prometheus.CounterVec
+	AgentPolls                      prometheus.Counter
+	AgentJobsClaimed                prometheus.Counter
+	AgentJobsCompleted              *prometheus.CounterVec
+	AgentJobDuration                *prometheus.HistogramVec
+	AgentRequeued                   prometheus.Counter
+	AgentErrors                     *prometheus.CounterVec
+	AgentInFlight                   prometheus.Gauge
+	OutboxPublishAttempts           prometheus.Counter
+	OutboxPending                   prometheus.Gauge
+	OutboxSkipped                   prometheus.Counter
+	OutboxPublished                 prometheus.Counter
+	OutboxFailed                    prometheus.Counter
+	OutboxPublishDuration           prometheus.Histogram
 }
 
 // NewWorkerMetrics constructs a separate worker registry. It can be served
@@ -322,6 +329,34 @@ func NewWorkerMetrics() *WorkerMetrics {
 			Namespace: "stealth", Subsystem: "apps_runtime_worker", Name: "cleanup_jobs_in_flight",
 			Help: "App runtime cleanup jobs currently in progress.",
 		}),
+		AppRuntimeImageCacheBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_cache_bytes",
+			Help: "Estimated bytes represented by unique Stealth runtime image IDs in the Docker cache.",
+		}),
+		AppRuntimeImageCacheLimitBytes: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_cache_limit_bytes",
+			Help: "Configured maximum bytes for the recoverable Stealth Docker runtime image cache.",
+		}),
+		AppRuntimeImageCacheAvailable: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_cache_inventory_available",
+			Help: "Whether the worker has a current, ownership-validated runtime image cache inventory.",
+		}),
+		AppRuntimeImageCachePressure: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_cache_pressure",
+			Help: "One when the managed runtime cache remains above its maximum after a bounded sweep.",
+		}),
+		AppRuntimeImageGCTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_gc_total",
+			Help: "Bounded Stealth runtime image cache sweep outcomes.",
+		}, []string{"result"}),
+		AppRuntimeImageGCReclaimedBytes: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_image_gc_reclaimed_bytes_total",
+			Help: "Estimated unique-image bytes removed from Stealth runtime cache accounting.",
+		}),
+		AppRuntimeProcessExits: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "stealth", Subsystem: "apps_worker", Name: "runtime_process_exits_total",
+			Help: "Stopped managed App process observations grouped by a fixed exit reason.",
+		}, []string{"reason"}),
 		AgentPolls: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "stealth",
 			Subsystem: "agent_worker",
@@ -391,7 +426,7 @@ func NewWorkerMetrics() *WorkerMetrics {
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 		}),
 	}
-	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AppBuildsClaimed, metrics.AppBuildsCompleted, metrics.AppBuildDuration, metrics.AppBuildRequeued, metrics.AppBuildInFlight, metrics.AppBuildErrors, metrics.AppRuntimePolls, metrics.AppRuntimeJobsClaimed, metrics.AppRuntimeJobsCompleted, metrics.AppRuntimeDuration, metrics.AppRuntimeRequeued, metrics.AppRuntimeErrors, metrics.AppRuntimeInFlight, metrics.AppRuntimeOrphansQueued, metrics.AppRuntimeCleanupCompleted, metrics.AppRuntimeCleanupDuration, metrics.AppRuntimeCleanupInFlight, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, metrics.OutboxPublishAttempts, metrics.OutboxPending, metrics.OutboxSkipped, metrics.OutboxPublished, metrics.OutboxFailed, metrics.OutboxPublishDuration, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	registry.MustRegister(metrics.Polls, metrics.JobsClaimed, metrics.JobsCompleted, metrics.JobDuration, metrics.Requeued, metrics.Errors, metrics.InFlight, metrics.BuildsClaimed, metrics.BuildsCompleted, metrics.BuildDuration, metrics.BuildRequeued, metrics.BuildInFlight, metrics.AppBuildsClaimed, metrics.AppBuildsCompleted, metrics.AppBuildDuration, metrics.AppBuildRequeued, metrics.AppBuildInFlight, metrics.AppBuildErrors, metrics.AppRuntimePolls, metrics.AppRuntimeJobsClaimed, metrics.AppRuntimeJobsCompleted, metrics.AppRuntimeDuration, metrics.AppRuntimeRequeued, metrics.AppRuntimeErrors, metrics.AppRuntimeInFlight, metrics.AppRuntimeOrphansQueued, metrics.AppRuntimeCleanupCompleted, metrics.AppRuntimeCleanupDuration, metrics.AppRuntimeCleanupInFlight, metrics.AppRuntimeImageCacheBytes, metrics.AppRuntimeImageCacheLimitBytes, metrics.AppRuntimeImageCacheAvailable, metrics.AppRuntimeImageCachePressure, metrics.AppRuntimeImageGCTotal, metrics.AppRuntimeImageGCReclaimedBytes, metrics.AppRuntimeProcessExits, metrics.AgentPolls, metrics.AgentJobsClaimed, metrics.AgentJobsCompleted, metrics.AgentJobDuration, metrics.AgentRequeued, metrics.AgentErrors, metrics.AgentInFlight, metrics.OutboxPublishAttempts, metrics.OutboxPending, metrics.OutboxSkipped, metrics.OutboxPublished, metrics.OutboxFailed, metrics.OutboxPublishDuration, prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	return metrics
 }
 

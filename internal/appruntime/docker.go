@@ -76,6 +76,28 @@ func safeRuntimeError(err error) string {
 		return "runtime network conflict"
 	case errors.Is(err, ErrRuntimeOwnershipConflict):
 		return "container ownership conflict"
+	case errors.Is(err, errRuntimeImageCacheReferenceList):
+		switch {
+		case errors.Is(err, ErrImageVerification):
+			return "runtime image tag ownership verification failed"
+		case errors.Is(err, ErrDockerOutputTooLarge):
+			return "runtime image inventory exceeded bounds"
+		default:
+			return "runtime image inventory unavailable"
+		}
+	case errors.Is(err, errRuntimeImageCacheInspection):
+		var inspectionFailure runtimeImageCacheInspectionFailure
+		if errors.As(err, &inspectionFailure) {
+			return string(inspectionFailure)
+		}
+		switch {
+		case errors.Is(err, ErrImageVerification):
+			return "runtime image metadata verification failed"
+		case errors.Is(err, ErrDockerOutputTooLarge):
+			return "runtime image inspection exceeded bounds"
+		default:
+			return "runtime image inspection unavailable"
+		}
 	case errors.Is(err, ErrImageVerification), errors.Is(err, ociartifact.ErrInvalidArchive):
 		return "image verification failed"
 	case errors.Is(err, ErrImageArtifactUnavailable), errors.Is(err, ErrDockerObjectNotFound):

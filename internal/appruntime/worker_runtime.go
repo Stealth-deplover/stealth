@@ -134,6 +134,9 @@ func (w *Worker) reconcile(ctx context.Context, job repository.AppRuntimeJob) er
 	if found && !managedForApp(container, appID, projectID) {
 		return ErrRuntimeOwnershipConflict
 	}
+	if found && !container.State.Running {
+		w.recordAppProcessExit(job, container)
+	}
 	if found && ContainerMatchesDesiredExceptName(container, job, image, w.runtimeNetworkName()) {
 		if strings.TrimPrefix(container.Name, "/") != job.ContainerName {
 			if err := w.requireCurrent(ctx, job); err != nil {
@@ -337,6 +340,22 @@ func runtimeBackoff(attempt int) time.Duration {
 		return maxRuntimeRetry
 	}
 	return delay
+}
+
+func (w *Worker) recordAppProcessExit(job repository.AppRuntimeJob, container Container) {
+	reason := "unknown"
+	switch {
+	case container.State.OOMKilled:
+		reason = "oom"
+	case container.State.Status == "exited" && container.State.ExitCode == 0:
+		reason = "clean_exit"
+	case container.State.Status == "exited" && container.State.ExitCode != 0:
+		reason = "nonzero_exit"
+	}
+	if w.Metrics != nil {
+		w.Metrics.AppRuntimeProcessExits.WithLabelValues(reason).Inc()
+	}
+	w.Logger.Warn("App runtime process is stopped", "app_id", job.App.ID, "generation", job.App.DesiredGeneration, "reason", reason, "exit_code", container.State.ExitCode)
 }
 
 func supportedRuntimePlatform(deploymentPlatform string, image ociartifact.ImageInfo) bool {

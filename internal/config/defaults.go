@@ -81,4 +81,13 @@ func (c *Config) applyAppBuildDefaults() {
 	if c.AppsRuntimeImageImportTimeout <= 0 {
 		c.AppsRuntimeImageImportTimeout = 10 * time.Minute
 	}
+	if c.AppsRuntimeImageCacheMaxBytes <= 0 {
+		c.AppsRuntimeImageCacheMaxBytes = 20 << 30
+	}
+	if c.AppsRuntimeImageCacheTargetBytes <= 0 {
+		c.AppsRuntimeImageCacheTargetBytes = 16 << 30
+	}
+	if c.AppsRuntimeImageGCSweepInterval <= 0 {
+		c.AppsRuntimeImageGCSweepInterval = 15 * time.Minute
+	}
 }

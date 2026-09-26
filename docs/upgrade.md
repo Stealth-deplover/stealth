@@ -105,6 +105,14 @@ release. Persistent database, object-storage, and Collector state volumes are
 not deleted or recreated by this migration. External PostgreSQL/Redis settings
 remain external and are not replaced with bundled services.
 
+App runtime image-cache controls are Compose settings, not database state:
+`APPS_RUNTIME_IMAGE_CACHE_MAX_BYTES` (20 GiB default),
+`APPS_RUNTIME_IMAGE_CACHE_TARGET_BYTES` (16 GiB default), and
+`APPS_RUNTIME_IMAGE_GC_INTERVAL` (15 minute default). An existing valid value
+is preserved; a missing setting uses the production Compose default. These
+settings add no database migration and do not change persisted App OCI
+artifacts or quota.
+
 Compose configuration is validated before image pulls or service recreation.
 The migration journal is durable through these states: `PREPARED`,
 `BACKED_UP`, `ASSETS_ACTIVATED`, `CONFIG_ACTIVATED`, `VERSION_ACTIVATED`,

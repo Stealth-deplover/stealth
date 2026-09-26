@@ -35,9 +35,9 @@ ClickHouse → project-scoped App runtime-log API → Console
 The Docker socket is mounted only into the trusted worker for Docker-backed
 build and runtime work. API, Console, BuildKit, Traefik, and App containers do
 not receive it. The managed `stealth_app_runtime` bridge is separate from
-Compose networks and has no App port publishing or Traefik route. App
-containers can make outbound connections through the host bridge, but cannot
-resolve services on Stealth's Compose networks. The worker validates ownership
+Compose networks. App containers publish no host ports; eligible App routes
+are served by the Traefik peer attached to the bridge. App containers can make
+outbound connections through the host bridge. The worker validates ownership
 labels and the bridge network before adopting or removing runtime resources.
 
 The worker and BuildKit authenticate the private TCP control endpoint with
@@ -265,11 +265,27 @@ working directory, and user are retained. WorkloadSpec command and
 working-directory overrides are applied as container argv/config, never
 through a shell.
 
-All Apps currently share this bridge with the trusted worker and Traefik. An
-App may be able to reach another App and services listening on Traefik; this is
-not per-tenant network isolation or a sandbox boundary. The runtime uses
-Docker's default runtime, not gVisor. Treat uploaded App images as untrusted
-code with the protections and limitations described here.
+All Apps currently share the same user-defined bridge with the trusted worker
+and Traefik. Docker bridge DNS exposes peer container names, including other
+Apps' incarnation-specific names and the worker/Traefik container names. An
+App can connect to any port listening on another App's container address, not
+only its configured public port. It can reach Traefik on bridge port 8080 and
+its health ping on 8081. Traefik routes requests with the configured public
+Host header to the API or Console on the separate `stealth_ingress` network.
+The API and Console are therefore reachable indirectly through this public
+router; their normal authentication and route behavior still applies. The
+worker's bridge listener on port 9091 serves `/healthz` and `/version`;
+`/metrics` requires `METRICS_TOKEN` and otherwise returns not found. The API,
+PostgreSQL, Redis, ClickHouse, BuildKit, and telemetry containers are not
+attached to the App bridge and their Compose DNS names are not available there
+as direct peers. No per-App network boundary filters east-west connections.
+
+The bridge is a local bridge with `Internal=false`, so outbound traffic follows
+Docker bridge NAT and host firewall policy. This shared east-west/egress
+limitation is documented for Phase C1. It is not tenant isolation or a
+sandbox boundary. The runtime uses Docker's default runtime, not gVisor. Treat
+uploaded App images as untrusted code with the protections and limitations
+described here; host root and Docker daemon access remain trusted.
 
 App filesystems are ephemeral in this release. The root filesystem is
 read-only, `/tmp` is a bounded tmpfs, and image-declared Dockerfile `VOLUME`
@@ -290,13 +306,60 @@ are limited to 512 KiB total per App. NUL and CR/LF are unsupported because
 the current Docker `--env-file` transport is line-based; multiline values are
 not supported.
 
-The runtime image cache lives in the host Docker data root and may grow as
-deployments change. Stealth does not run automatic image garbage collection;
-monitor host disk use and use Docker's supported maintenance process. Completed
-OCI archives in Stealth storage remain authoritative if the local Docker image
-cache is lost, and the worker can import the selected image again. Production
-acceptance targets Docker Engine with Compose v2 and cgroup v2 resource
-accounting; verify the host with `docker info --format '{{.CgroupVersion}}'`.
+The host Docker runtime image cache is separate from App artifact storage and
+artifact quota. App source uploads and immutable OCI archives count toward the
+App artifact quota; imported Docker images are a recoverable runtime cache.
+Defaults are a 20 GiB cache maximum, a 16 GiB target, and a 15 minute sweep
+interval. The fixed 4 GiB gap is hysteresis that limits repeated collection
+when usage hovers around the maximum; the 20 GiB ceiling gives a modest
+single-host install a predictable cache budget without deriving policy from
+changing host free space. Operators can tune both values for their App image
+sizes and storage budget. `APPS_RUNTIME_IMAGE_CACHE_MAX_BYTES` and
+`APPS_RUNTIME_IMAGE_CACHE_TARGET_BYTES` each accept 1 MiB through 1 TiB, and
+the target must be lower than the maximum. `APPS_RUNTIME_IMAGE_GC_INTERVAL`
+accepts 1 minute through 24 hours. Missing values use these defaults; invalid
+values stop configuration loading with an error.
+
+When the cache estimate exceeds its maximum, the worker inventories only
+strictly validated `stealth-app/<deployment-uuid>:runtime` tags, protects all
+selected deployments (including disabled Apps), verified container references,
+and live fenced runtime work, then removes at most four oldest safe tags per
+sweep. Ties use deployment UUID ordering. Image IDs are inspected in batches
+of 128, managed container IDs in batches of 128, and PostgreSQL protection
+candidates in batches of 256. Docker output remains byte-bounded, but a large
+valid lifetime tag count does not disable cache maintenance. Malformed
+Stealth-looking ownership or truncated output fails closed before deletion.
+When successful removals leave the cache above its maximum, the next sweep is
+scheduled one minute later; each worker turn remains bounded so App
+reconciliation, health checks, and cleanup continue to run. A Docker image is
+removed by its exact Stealth tag; Stealth never runs `docker system prune`,
+`docker image prune`, `docker builder prune`, or `docker volume prune`. Cache
+pressure, inventory availability, GC outcome, and estimated reclaimed bytes
+are exported as low-cardinality worker metrics. A failed or unsafe cache
+operation skips deletion and does not fail an unrelated App; unresolved
+pressure is logged and retried later.
+
+Accounting uses Docker's per-image size once per image ID. Images with shared
+layers under different IDs can count shared layers more than once, so cache
+size and reclaimed-byte metrics are estimates and do not claim exact host
+filesystem reclaim. Runtime cache GC never deletes persistent source or OCI
+archives, updates deployment metadata, or changes artifact quota. When an
+evicted deployment is selected again, the worker verifies the persisted OCI
+archive checksum/digest and imports it into Docker before the App converges.
+This archive remains the recovery source and supports future rollback.
+
+Orphan cleanup stays ownership-validated and durable. Completed cleanup rows
+are retained for 14 days and terminal failures for 90 days; at most 100 old
+terminal rows are pruned hourly. Runtime retries use bounded exponential
+backoff capped at one minute; orphan-inventory errors back off from the sweep
+interval up to one hour, and runtime-image GC errors back off from the
+configured interval up to 24 hours. Successful maintenance resets its backoff.
+Cleanup retries stop after 20 attempts, while ownership conflicts fail
+terminally. Health probes continue at the WorkloadSpec interval, bounded to
+5–300 seconds; this configured probe cadence is not an immediate retry loop.
+Production acceptance targets Docker Engine with Compose v2 and cgroup v2
+resource accounting; verify the host with
+`docker info --format '{{.CgroupVersion}}'`.
 
 `running` means Moby reports the current expected container process running.
 `healthy` means the configured TCP or HTTP probe has converged for the same
@@ -382,10 +445,12 @@ Strongly recommended values:
 App runtime bounds have validated defaults in
 [`.env.production.example`](../.env.production.example): network name
 `stealth_app_runtime`, one-second worker poll interval, two-minute lease,
-30-second Docker action timeout, and ten-minute image-import timeout. Adjust
+30-second Docker action timeout, ten-minute image-import timeout, and the
+20 GiB/16 GiB/15 minute cache defaults above. Adjust
 `APPS_RUNTIME_NETWORK_NAME`, `APPS_RUNTIME_POLL_INTERVAL`,
-`APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`, or
-`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT` only within the accepted limits.
+`APPS_RUNTIME_LEASE_AGE`, `APPS_RUNTIME_ACTION_TIMEOUT`,
+`APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT`, or the runtime image-cache settings only
+within their accepted limits.
 
 Development-only defaults remain in [`.env.example`](../.env.example). Do not
 copy its local database password or `COOKIE_SECURE=false` setting into a

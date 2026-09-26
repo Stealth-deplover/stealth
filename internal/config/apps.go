@@ -11,26 +11,29 @@ import (
 )
 
 type appBuildSettings struct {
-	maxSourceArchiveBytes     int64
-	maxExpandedSourceBytes    int64
-	maxSourceFiles            int
-	maxImageArchiveBytes      int64
-	defaultArtifactQuotaBytes int64
-	buildkitAddress           string
-	buildkitCACert            string
-	buildkitClientCert        string
-	buildkitClientKey         string
-	buildTimeout              time.Duration
-	buildLeaseAge             time.Duration
-	buildPollInterval         time.Duration
-	buildStagingRoot          string
-	buildStagingVolume        string
-	buildkitStateVolume       string
-	runtimeNetworkName        string
-	runtimePollInterval       time.Duration
-	runtimeLeaseAge           time.Duration
-	runtimeActionTimeout      time.Duration
-	runtimeImageImportTimeout time.Duration
+	maxSourceArchiveBytes        int64
+	maxExpandedSourceBytes       int64
+	maxSourceFiles               int
+	maxImageArchiveBytes         int64
+	defaultArtifactQuotaBytes    int64
+	buildkitAddress              string
+	buildkitCACert               string
+	buildkitClientCert           string
+	buildkitClientKey            string
+	buildTimeout                 time.Duration
+	buildLeaseAge                time.Duration
+	buildPollInterval            time.Duration
+	buildStagingRoot             string
+	buildStagingVolume           string
+	buildkitStateVolume          string
+	runtimeNetworkName           string
+	runtimePollInterval          time.Duration
+	runtimeLeaseAge              time.Duration
+	runtimeActionTimeout         time.Duration
+	runtimeImageImportTimeout    time.Duration
+	runtimeImageCacheMaxBytes    int64
+	runtimeImageCacheTargetBytes int64
+	runtimeImageGCSweepInterval  time.Duration
 }
 
 func loadAppBuildSettings() (appBuildSettings, error) {
@@ -114,6 +117,19 @@ func loadAppBuildSettings() (appBuildSettings, error) {
 	if err != nil || settings.runtimeImageImportTimeout < time.Minute || settings.runtimeImageImportTimeout > 30*time.Minute {
 		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_IMAGE_IMPORT_TIMEOUT must be between 1m and 30m")
 	}
+	if settings.runtimeImageCacheMaxBytes, err = boundedAppBytes("APPS_RUNTIME_IMAGE_CACHE_MAX_BYTES", "20GiB", 1<<20, 1<<40); err != nil {
+		return appBuildSettings{}, err
+	}
+	if settings.runtimeImageCacheTargetBytes, err = boundedAppBytes("APPS_RUNTIME_IMAGE_CACHE_TARGET_BYTES", "16GiB", 1<<20, 1<<40); err != nil {
+		return appBuildSettings{}, err
+	}
+	if settings.runtimeImageCacheTargetBytes >= settings.runtimeImageCacheMaxBytes {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_IMAGE_CACHE_TARGET_BYTES must be less than APPS_RUNTIME_IMAGE_CACHE_MAX_BYTES")
+	}
+	settings.runtimeImageGCSweepInterval, err = time.ParseDuration(value("APPS_RUNTIME_IMAGE_GC_INTERVAL", "15m"))
+	if err != nil || settings.runtimeImageGCSweepInterval < time.Minute || settings.runtimeImageGCSweepInterval > 24*time.Hour {
+		return appBuildSettings{}, fmt.Errorf("APPS_RUNTIME_IMAGE_GC_INTERVAL must be between 1m and 24h")
+	}
 	return settings, nil
 }
 
@@ -159,6 +175,9 @@ func (s appBuildSettings) apply(config *Config) {
 	config.AppsRuntimeLeaseAge = s.runtimeLeaseAge
 	config.AppsRuntimeActionTimeout = s.runtimeActionTimeout
 	config.AppsRuntimeImageImportTimeout = s.runtimeImageImportTimeout
+	config.AppsRuntimeImageCacheMaxBytes = s.runtimeImageCacheMaxBytes
+	config.AppsRuntimeImageCacheTargetBytes = s.runtimeImageCacheTargetBytes
+	config.AppsRuntimeImageGCSweepInterval = s.runtimeImageGCSweepInterval
 }
 
 func defaultBuildKitPath(key string) string {

@@ -140,9 +140,14 @@ passed.
 - [x] PR merged.
 - [x] Post-merge `main` required CI is green.
 
-### [ ] ▶ CURRENT A5.5. Codebase Quality & Refactor Baseline
+### [x] A5.5. Codebase Quality & Refactor Baseline
 
-Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
+PR: #103
+merge commit: `a4d1c34c324440d1f4f3c73d04970e542723d7bc`
+post-merge main SHA: `a4d1c34c324440d1f4f3c73d04970e542723d7bc`
+audit verdict: READY TO MERGE / passed
+post-merge required checks: Backend, Console, Installer/release, CodeQL Go,
+and CodeQL JavaScript/TypeScript passed on the verified main SHA.
 
 #### Formatting / static quality
 
@@ -174,16 +179,62 @@ Base: `8c09819d84d53b4e65ded23a6744d7c23e84802b` (green post-PR #102 `main`).
 - [x] Console lint, typecheck, tests, build, and E2E green.
 - [x] Production Compose Smoke green, including the real v0.2.5 upgrade smoke.
 - [x] No dependency additions.
+- [x] Independent audit passes.
+- [x] PR merged.
+- [x] Post-merge `main` CI green.
+
+### [ ] ▶ CURRENT A6. App Resource + Operational Hardening
+
+#### Runtime image cache
+
+- [x] Stealth-owned runtime image inventory is strict, byte-bounded, and processed in batches without a low lifetime count ceiling.
+- [x] Desired/current deployment images are protected.
+- [x] GC removes only safe Stealth runtime tags; global Docker prune is forbidden.
+- [x] Runtime cache has validated max/target/interval configuration.
+- [x] GC ordering and per-sweep work are deterministic and bounded; pressure with successful progress schedules another sweep after one minute.
+- [x] Persisted OCI artifacts and artifact quota survive cache eviction.
+- [x] An evicted deployment can be re-imported and converge.
+
+#### Cleanup and recovery
+
+- [x] Orphan container discovery remains ownership-fenced and idempotent.
+- [x] Expired cleanup leases recover and stale workers are fenced.
+- [x] Already-absent proven targets converge successfully.
+- [x] Runtime, health, cleanup, and network retries remain bounded.
+- [x] Completed and terminal cleanup history has a bounded retention policy.
+
+#### Resource enforcement
+
+- [x] Real runtime CPU limit is verified.
+- [x] Real runtime memory and swap limits are verified.
+- [x] Real runtime PID limit is verified.
+- [x] Docker security profile and namespace constraints are verified.
+- [x] Runtime log rotation settings are verified.
+
+#### Operational visibility
+
+- [x] Runtime image cache size, limit, pressure, GC result, and reclaim estimates are exposed.
+- [x] OOM and process exit metrics use fixed low-cardinality reasons.
+- [x] Safe structured diagnostics contain no secrets or unbounded metric labels.
+
+#### Network review
+
+- [x] Shared App bridge peers, reachable ports, and routing are documented.
+- [x] Direct control-plane database/build networks remain unattached to the App bridge.
+- [x] App containers are rejected if they gain unexpected network attachments.
+- [x] Shared-bridge east-west traffic is documented and deferred to Phase C1.
+
+#### Regression proof
+
+- [x] Backend unit/integration tests green.
+- [x] Required PostgreSQL Apps tests actually run and pass, including high-cardinality protection batching.
+- [x] Production Compose Smoke verifies GC, image recovery, and actual HostConfig.
+- [x] Existing Apps routing, health, logs, encrypted environment, and recovery smoke stays green.
+- [x] Backend, Console, Installer/release, CodeQL Go, CodeQL JavaScript/TypeScript, and Production Compose Smoke CI green.
+- [x] No dependency expansion.
 - [ ] Independent audit passes.
 - [ ] PR merged.
 - [ ] Post-merge `main` CI green.
-
-### [ ] A6. App Resource + Operational Hardening
-
-- [ ] Disk/image pressure management and safe garbage collection.
-- [ ] Orphan cleanup convergence and resource enforcement under pressure.
-- [ ] Network isolation review and bounded retry/backoff tuning.
-- [ ] Operator-visible runtime diagnostics.
 
 ### [ ] A7. Deployment History + Rollback + Diagnostics
 
@@ -211,7 +262,7 @@ Completion of A8 means the Apps Production Runtime phase is complete.
 
 ## Phase C — Security Hardening
 
-- [ ] C1. Tenant isolation review.
+- [ ] C1. Tenant isolation review, including per-App east-west network isolation.
 - [ ] C2. Quotas and abuse limits.
 - [ ] C3. Security acceptance suite.
 

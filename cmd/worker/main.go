@@ -262,6 +262,9 @@ func main() {
 		logger.Error("App runtime worker configuration error", "error", err)
 		os.Exit(1)
 	}
+	appRuntimeWorker.ImageCacheMaxBytes = cfg.AppsRuntimeImageCacheMaxBytes
+	appRuntimeWorker.ImageCacheTargetBytes = cfg.AppsRuntimeImageCacheTargetBytes
+	appRuntimeWorker.ImageCacheGCSweepInterval = cfg.AppsRuntimeImageGCSweepInterval
 	appRuntimeWorker.AppSecretsCipher = appSecretsCipher
 	var agentWorker *agentrunner.Worker
 	if cfg.AgentRunnerEnabled {
