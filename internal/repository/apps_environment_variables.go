@@ -16,6 +16,7 @@ import (
 
 const (
 	AppEnvironmentVariableMaxValueBytes       = 64 * 1024
+	AppEnvironmentVariableMaxTotalValueBytes  = 512 * 1024
 	AppEnvironmentVariableMaxDescriptionBytes = 2000
 	AppEnvironmentVariableMaxCount            = 128
 )
@@ -24,6 +25,7 @@ var (
 	ErrInvalidAppEnvironmentVariable = errors.New("invalid App environment variable")
 	ErrAppSecretUnavailable          = errors.New("App environment encryption is unavailable")
 	ErrAppEnvironmentVariableLimit   = errors.New("App environment variable limit reached")
+	ErrAppEnvironmentTotalSizeLimit  = errors.New("App environment total value size limit reached")
 	appEnvironmentVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,119}$`)
 )
 
@@ -143,10 +145,19 @@ func (r *Repository) CreateAppEnvironmentVariable(ctx context.Context, id, proje
 	if count >= AppEnvironmentVariableMaxCount {
 		return domain.AppEnvironmentVariable{}, ErrAppEnvironmentVariableLimit
 	}
+	if input.Value != nil {
+		total, err := appEnvironmentConfiguredValueBytesTx(ctx, tx, projectID, appID)
+		if err != nil {
+			return domain.AppEnvironmentVariable{}, err
+		}
+		if total+int64(len(*input.Value)) > AppEnvironmentVariableMaxTotalValueBytes {
+			return domain.AppEnvironmentVariable{}, ErrAppEnvironmentTotalSizeLimit
+		}
+	}
 	item, err := scanAppEnvironmentVariable(tx.QueryRow(ctx, `
-		INSERT INTO app_environment_variables (id,app_id,project_id,key,is_secret,value_ciphertext,description)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING `+appEnvironmentVariableProjection,
-		id, appID, projectID, input.Key, input.IsSecret, ciphertext, input.Description))
+		INSERT INTO app_environment_variables (id,app_id,project_id,key,is_secret,value_ciphertext,value_plaintext_bytes,description)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING `+appEnvironmentVariableProjection,
+		id, appID, projectID, input.Key, input.IsSecret, ciphertext, configuredPlaintextBytes(input.Value), input.Description))
 	if err != nil {
 		return domain.AppEnvironmentVariable{}, mapError(err)
 	}
@@ -192,9 +203,10 @@ func (r *Repository) UpdateAppEnvironmentVariable(ctx context.Context, projectID
 	}
 	var existing domain.AppEnvironmentVariable
 	var oldCiphertext []byte
-	err = tx.QueryRow(ctx, `SELECT `+appEnvironmentVariableProjection+`,value_ciphertext FROM app_environment_variables
+	var oldValueBytes int64
+	err = tx.QueryRow(ctx, `SELECT `+appEnvironmentVariableProjection+`,value_ciphertext,value_plaintext_bytes FROM app_environment_variables
 		WHERE project_id=$1 AND app_id=$2 AND id=$3 FOR UPDATE`, projectID, appID, variableID).Scan(
-		&existing.ID, &existing.AppID, &existing.ProjectID, &existing.Key, &existing.IsSecret, &existing.HasValue, &existing.Description, &existing.CreatedAt, &existing.UpdatedAt, &oldCiphertext)
+		&existing.ID, &existing.AppID, &existing.ProjectID, &existing.Key, &existing.IsSecret, &existing.HasValue, &existing.Description, &existing.CreatedAt, &existing.UpdatedAt, &oldCiphertext, &oldValueBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AppEnvironmentVariable{}, ErrNotFound
 	}
@@ -221,6 +233,19 @@ func (r *Repository) UpdateAppEnvironmentVariable(ctx context.Context, projectID
 		return domain.AppEnvironmentVariable{}, ErrInvalidAppEnvironmentVariable
 	}
 	if patch.Value != nil {
+		total, err := appEnvironmentConfiguredValueBytesTx(ctx, tx, projectID, appID)
+		if err != nil {
+			return domain.AppEnvironmentVariable{}, err
+		}
+		if oldValueBytes < 0 || (existing.HasValue && total < oldValueBytes) {
+			return domain.AppEnvironmentVariable{}, ErrInvalidAppEnvironmentVariable
+		}
+		if existing.HasValue {
+			total -= oldValueBytes
+		}
+		if total+int64(len(*patch.Value)) > AppEnvironmentVariableMaxTotalValueBytes {
+			return domain.AppEnvironmentVariable{}, ErrAppEnvironmentTotalSizeLimit
+		}
 		plaintext := []byte(*patch.Value)
 		value, err = patch.Cipher.Encrypt(projectID, appID, variableID, plaintext)
 		clear(plaintext)
@@ -228,13 +253,19 @@ func (r *Repository) UpdateAppEnvironmentVariable(ctx context.Context, projectID
 			return domain.AppEnvironmentVariable{}, ErrAppSecretUnavailable
 		}
 	}
+	newValueBytes := oldValueBytes
+	if patch.ClearValue {
+		newValueBytes = 0
+	} else if patch.Value != nil {
+		newValueBytes = int64(len(*patch.Value))
+	}
 	if patch.Key == nil && patch.IsSecret == nil && !patch.SetDescription && patch.Value == nil && !patch.ClearValue {
 		return domain.AppEnvironmentVariable{}, ErrInvalidAppEnvironmentVariable
 	}
 	item, err := scanAppEnvironmentVariable(tx.QueryRow(ctx, `UPDATE app_environment_variables
-		SET key=$4,is_secret=$5,value_ciphertext=$6,description=$7,updated_at=now()
+		SET key=$4,is_secret=$5,value_ciphertext=$6,value_plaintext_bytes=$7,description=$8,updated_at=now()
 		WHERE project_id=$1 AND app_id=$2 AND id=$3 RETURNING `+appEnvironmentVariableProjection,
-		projectID, appID, variableID, key, isSecret, value, description))
+		projectID, appID, variableID, key, isSecret, value, newValueBytes, description))
 	if err != nil {
 		return domain.AppEnvironmentVariable{}, mapError(err)
 	}
@@ -270,6 +301,20 @@ func (r *Repository) UpdateAppEnvironmentVariable(ctx context.Context, projectID
 		return domain.AppEnvironmentVariable{}, err
 	}
 	return item, nil
+}
+
+func configuredPlaintextBytes(value *string) int64 {
+	if value == nil {
+		return 0
+	}
+	return int64(len(*value))
+}
+
+func appEnvironmentConfiguredValueBytesTx(ctx context.Context, tx pgx.Tx, projectID, appID uuid.UUID) (int64, error) {
+	var total int64
+	err := tx.QueryRow(ctx, `SELECT COALESCE(sum(value_plaintext_bytes),0)::bigint
+		FROM app_environment_variables WHERE project_id=$1 AND app_id=$2 AND value_ciphertext IS NOT NULL`, projectID, appID).Scan(&total)
+	return total, err
 }
 
 func (r *Repository) DeleteAppEnvironmentVariable(ctx context.Context, projectID, appID, variableID uuid.UUID, actor AppActor) error {

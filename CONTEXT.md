@@ -234,7 +234,9 @@ Console; configured values are encrypted in PostgreSQL with a dedicated
 operator key. The trusted worker decrypts values only for container creation,
 using a short-lived memory-backed env file that is removed after the Docker
 command. Runtime values are not sent to BuildKit. The operator key is required
-to recover encrypted values from a database backup.
+to recover encrypted values from a database backup. Configured values are
+limited to 65,536 bytes each and 512 KiB total per App. NUL and line breaks
+are unsupported by the current line-based Docker env-file transport.
 
 The App build worker transfers untrusted source to a dedicated rootless
 BuildKit daemon on an isolated build network. Build execution receives no

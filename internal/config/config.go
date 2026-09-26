@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net"
 	"net/mail"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Stealth-deplover/stealth/internal/secretkey"
 )
 
 type Config struct {
@@ -269,12 +270,8 @@ func boundedInt32(name, fallback string, minimum, maximum int32) (int32, error) 
 }
 
 func decodeSecretKey(raw, name string) ([]byte, error) {
-	key, err := base64.StdEncoding.DecodeString(raw)
+	key, err := secretkey.Decode32ByteKey(raw)
 	if err != nil {
-		// Raw URL encoding is convenient for env files that avoid '='.
-		key, err = base64.RawURLEncoding.DecodeString(raw)
-	}
-	if err != nil || len(key) != 32 {
 		return nil, fmt.Errorf("%s must be base64-encoded 32 bytes", name)
 	}
 	return key, nil

@@ -199,7 +199,9 @@ These are intentional boundaries, not hidden reliability claims:
   and per-App network isolation remain deferred. The current Moby `running`
   status confirms process liveness only; `healthy` confirms the configured
   probe, and route eligibility additionally requires the current enabled
-  desired generation and inspected runtime identity.
+  desired generation and inspected runtime identity. Values are limited to
+  65,536 bytes each and 512 KiB total per App. NUL and CR/LF are rejected
+  because Docker `--env-file` is line-based; multiline values are unsupported.
 
 - External provider side effects cannot be made exactly-once by PostgreSQL.
   Webhook consumers have a stable delivery ID, and messaging has database

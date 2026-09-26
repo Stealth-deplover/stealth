@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	runtimeEnvironmentDirectory = "/dev/shm"
-	runtimeEnvironmentFileLimit = repository.AppEnvironmentVariableMaxCount * (120 + repository.AppEnvironmentVariableMaxValueBytes + 2)
+	runtimeEnvironmentDirectory    = "/dev/shm"
+	runtimeEnvironmentFileOverhead = repository.AppEnvironmentVariableMaxCount * (120 + 2)
+	runtimeEnvironmentFileLimit    = repository.AppEnvironmentVariableMaxTotalValueBytes + runtimeEnvironmentFileOverhead
 )
 
 // writeRuntimeEnvironmentFile creates a short-lived Docker --env-file in the
@@ -28,6 +29,7 @@ func writeRuntimeEnvironmentFile(values []RuntimeEnvironmentVariable) (string, f
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Key < ordered[j].Key })
 	seen := make(map[string]struct{}, len(ordered))
 	total := 0
+	totalValueBytes := 0
 	for _, item := range ordered {
 		if !appRuntimeEnvironmentKey.MatchString(item.Key) || len(item.Value) > repository.AppEnvironmentVariableMaxValueBytes || bytes.IndexAny(item.Value, "\x00\r\n") >= 0 {
 			return "", nil, ErrContainerCreate
@@ -36,6 +38,10 @@ func writeRuntimeEnvironmentFile(values []RuntimeEnvironmentVariable) (string, f
 			return "", nil, ErrContainerCreate
 		}
 		seen[item.Key] = struct{}{}
+		totalValueBytes += len(item.Value)
+		if totalValueBytes > repository.AppEnvironmentVariableMaxTotalValueBytes {
+			return "", nil, ErrContainerCreate
+		}
 		total += len(item.Key) + len(item.Value) + 2
 		if total > runtimeEnvironmentFileLimit {
 			return "", nil, ErrContainerCreate

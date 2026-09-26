@@ -380,6 +380,8 @@ func appEnvironmentResourceError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusUnprocessableEntity, "validation_error", "App environment variable configuration is invalid")
 	case errors.Is(err, repository.ErrAppEnvironmentVariableLimit):
 		writeError(w, http.StatusConflict, "limit_exceeded", "App environment variable limit reached")
+	case errors.Is(err, repository.ErrAppEnvironmentTotalSizeLimit):
+		writeError(w, http.StatusConflict, "limit_exceeded", "App environment exceeds the maximum total configured value size")
 	case errors.Is(err, repository.ErrAppSecretUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "App environment encryption is not ready")
 	default:

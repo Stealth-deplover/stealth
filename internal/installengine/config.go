@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/Stealth-deplover/stealth/internal/secretkey"
 )
 
 var (
@@ -369,8 +371,9 @@ func MigrateReleaseConfig(values map[string]string, targetVersion, installedVers
 		}
 		updates["APPS_SECRET_KEY"] = key
 	} else {
-		key, err := base64.StdEncoding.DecodeString(result["APPS_SECRET_KEY"])
-		if err != nil || len(key) != 32 {
+		key, err := secretkey.Decode32ByteKey(result["APPS_SECRET_KEY"])
+		clear(key)
+		if err != nil {
 			return "", errorsf("existing APPS_SECRET_KEY must be base64-encoded 32 bytes; refusing to replace it")
 		}
 	}

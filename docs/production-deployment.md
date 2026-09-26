@@ -285,6 +285,10 @@ Docker command. Docker retains the effective environment in its container
 configuration while the container exists, so a host operator with Docker
 access can inspect it. The API does not return image configuration or
 configured values; do not bake secrets into Dockerfile `ENV` instructions.
+Each configured value is limited to 65,536 UTF-8 bytes and configured values
+are limited to 512 KiB total per App. NUL and CR/LF are unsupported because
+the current Docker `--env-file` transport is line-based; multiline values are
+not supported.
 
 The runtime image cache lives in the host Docker data root and may grow as
 deployments change. Stealth does not run automatic image garbage collection;

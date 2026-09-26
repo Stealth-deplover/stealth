@@ -268,6 +268,46 @@ func TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration(t *testing.T) 
 		t.Fatalf("App environment plaintext appeared in audit metadata: %s", auditMetadata)
 	}
 	requestJSON(t, ownerClient, http.MethodDelete, variablesURL+"/"+variableResponse.Variable.ID, nil, http.StatusNoContent, nil)
+	var writeVariableID string
+	for _, variable := range variablesPage.Variables {
+		if variable.Key == "WRITE_ALLOWED" {
+			writeVariableID = variable.ID
+		}
+	}
+	if writeVariableID == "" {
+		t.Fatal("apps.write variable was not present in the authorized metadata page")
+	}
+	requestJSON(t, ownerClient, http.MethodDelete, variablesURL+"/"+writeVariableID, nil, http.StatusNoContent, nil)
+	maxValue := strings.Repeat("v", repository.AppEnvironmentVariableMaxValueBytes)
+	for index := 0; index < repository.AppEnvironmentVariableMaxTotalValueBytes/repository.AppEnvironmentVariableMaxValueBytes; index++ {
+		requestJSON(t, ownerClient, http.MethodPost, variablesURL, map[string]any{
+			"key": fmt.Sprintf("LIMIT_VALUE_%d", index), "value": maxValue,
+		}, http.StatusCreated, nil)
+	}
+	var atLimitApp struct {
+		App domain.App `json:"app"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, &atLimitApp)
+	overLimitBody := requestJSONRaw(t, ownerClient, http.MethodPost, variablesURL, map[string]any{"key": "OVER_LIMIT", "value": "x"}, http.StatusConflict)
+	var overLimitResponse struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(overLimitBody, &overLimitResponse); err != nil {
+		t.Fatal(err)
+	}
+	if overLimitResponse.Error.Code != "limit_exceeded" || overLimitResponse.Error.Message != "App environment exceeds the maximum total configured value size" {
+		t.Fatalf("aggregate size error = %+v", overLimitResponse.Error)
+	}
+	var afterLimitApp struct {
+		App domain.App `json:"app"`
+	}
+	requestJSON(t, ownerClient, http.MethodGet, projectURL+"/apps/"+created.App.ID, nil, http.StatusOK, &afterLimitApp)
+	if afterLimitApp.App.DesiredGeneration != atLimitApp.App.DesiredGeneration {
+		t.Fatalf("over-limit API mutation advanced desired generation from %d to %d", atLimitApp.App.DesiredGeneration, afterLimitApp.App.DesiredGeneration)
+	}
 	if created.App.Workload.SchemaVersion != "v1" || created.App.Workload.Port != 8080 || created.App.Workload.Resources.MemoryBytes != 536870912 || created.App.Workload.RestartPolicy != "always" {
 		t.Fatalf("created App did not return complete normalized WorkloadSpec: %+v", created.App.Workload)
 	}

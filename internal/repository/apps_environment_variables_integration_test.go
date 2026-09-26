@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -183,5 +184,146 @@ func TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencing
 	}
 	if strings.Contains(auditText, initialValue) || strings.Contains(auditText, replacement) || strings.Contains(auditText, duplicateValue) {
 		t.Fatalf("App environment plaintext was recorded in audit metadata: %s", auditText)
+	}
+}
+
+func TestAppEnvironmentAggregateValueLimitIsTransactionalIntegration(t *testing.T) {
+	f := newAppRepositoryFixture(t)
+	cipher, err := appsecret.New(bytesOfOnes(appsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createApp := func(name string) uuid.UUID {
+		t.Helper()
+		id := uuid.Must(uuid.NewV7())
+		if _, err := f.repo.CreateApp(f.ctx, id, f.projectOneID, f.actor, AppInput{Name: name, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	createValue := func(appID uuid.UUID, key, value string) uuid.UUID {
+		t.Helper()
+		id := uuid.Must(uuid.NewV7())
+		if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, id, f.projectOneID, appID, f.actor, AppEnvironmentVariableInput{
+			Key: key, Value: &value, Cipher: cipher,
+		}); err != nil {
+			t.Fatalf("create %s: %v", key, err)
+		}
+		return id
+	}
+
+	// Eight maximum-sized values fill the public total exactly. A rejected
+	// ninth value must roll back without advancing desired runtime state.
+	limitAppID := createApp("environment-total-at-limit")
+	fullValue := strings.Repeat("v", AppEnvironmentVariableMaxValueBytes)
+	var firstID uuid.UUID
+	for index := 0; index < 8; index++ {
+		id := createValue(limitAppID, "LIMIT_"+string(rune('A'+index)), fullValue)
+		if index == 0 {
+			firstID = id
+		}
+	}
+	atLimit, err := f.repo.GetApp(f.ctx, f.projectOneID, limitAppID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooMuch := "x"
+	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, uuid.Must(uuid.NewV7()), f.projectOneID, limitAppID, f.actor, AppEnvironmentVariableInput{
+		Key: "OVER_LIMIT", Value: &tooMuch, Cipher: cipher,
+	}); !errors.Is(err, ErrAppEnvironmentTotalSizeLimit) {
+		t.Fatalf("over-limit create = %v, want total size limit", err)
+	}
+	afterRejectedCreate, err := f.repo.GetApp(f.ctx, f.projectOneID, limitAppID, f.actor)
+	if err != nil || afterRejectedCreate.DesiredGeneration != atLimit.DesiredGeneration {
+		t.Fatalf("rejected create changed desired generation: before=%d after=%d err=%v", atLimit.DesiredGeneration, afterRejectedCreate.DesiredGeneration, err)
+	}
+	items, _, _, err := f.repo.ListAppEnvironmentVariables(f.ctx, f.projectOneID, limitAppID, f.actor, 20, nil)
+	if err != nil || len(items) != 8 {
+		t.Fatalf("rejected create persisted a row: rows=%d err=%v", len(items), err)
+	}
+	if err := f.repo.DeleteAppEnvironmentVariable(f.ctx, f.projectOneID, limitAppID, firstID, f.actor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, uuid.Must(uuid.NewV7()), f.projectOneID, limitAppID, f.actor, AppEnvironmentVariableInput{
+		Key: "FREED_CAPACITY", Value: &fullValue, Cipher: cipher,
+	}); err != nil {
+		t.Fatalf("create at limit after delete freed capacity: %v", err)
+	}
+
+	// Exercise replacement accounting with a configured old value, while a
+	// distinct metadata-only value can be assigned only if its new size fits.
+	replaceAppID := createApp("environment-total-replacement")
+	for index := 0; index < 7; index++ {
+		createValue(replaceAppID, "FULL_"+string(rune('A'+index)), fullValue)
+	}
+	partial := strings.Repeat("p", 41248)
+	createValue(replaceAppID, "PARTIAL", partial) // Other values total 500000 bytes.
+	old := "o"
+	targetID := createValue(replaceAppID, "TARGET", old)
+	within := strings.Repeat("w", 10000)
+	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, targetID, f.actor, AppEnvironmentVariablePatch{Value: &within, Cipher: cipher}); err != nil {
+		t.Fatalf("replacement within aggregate limit: %v", err)
+	}
+	beforeOverReplace, err := f.repo.GetApp(f.ctx, f.projectOneID, replaceAppID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeCiphertext []byte
+	if err := f.pool.QueryRow(f.ctx, `SELECT value_ciphertext FROM app_environment_variables WHERE id=$1`, targetID).Scan(&beforeCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	replacement := fullValue
+	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, targetID, f.actor, AppEnvironmentVariablePatch{Value: &replacement, Cipher: cipher}); !errors.Is(err, ErrAppEnvironmentTotalSizeLimit) {
+		t.Fatalf("over-limit replacement = %v, want total size limit", err)
+	}
+	var afterCiphertext []byte
+	if err := f.pool.QueryRow(f.ctx, `SELECT value_ciphertext FROM app_environment_variables WHERE id=$1`, targetID).Scan(&afterCiphertext); err != nil {
+		t.Fatal(err)
+	}
+	afterOverReplace, err := f.repo.GetApp(f.ctx, f.projectOneID, replaceAppID, f.actor)
+	if err != nil || afterOverReplace.DesiredGeneration != beforeOverReplace.DesiredGeneration || !bytes.Equal(beforeCiphertext, afterCiphertext) {
+		t.Fatalf("rejected replacement changed ciphertext or generation: generation %d→%d ciphertextPreserved=%t err=%v", beforeOverReplace.DesiredGeneration, afterOverReplace.DesiredGeneration, bytes.Equal(beforeCiphertext, afterCiphertext), err)
+	}
+	description := "metadata only"
+	metadataApp, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, targetID, f.actor, AppEnvironmentVariablePatch{
+		SetDescription: true, Description: &description,
+	})
+	if err != nil || metadataApp.Description == nil || *metadataApp.Description != description {
+		t.Fatalf("metadata-only edit at near-limit total = %+v err=%v", metadataApp, err)
+	}
+	metaGeneration, err := f.repo.GetApp(f.ctx, f.projectOneID, replaceAppID, f.actor)
+	if err != nil || metaGeneration.DesiredGeneration != beforeOverReplace.DesiredGeneration {
+		t.Fatalf("metadata-only edit changed generation: before=%d after=%d err=%v", beforeOverReplace.DesiredGeneration, metaGeneration.DesiredGeneration, err)
+	}
+	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, targetID, f.actor, AppEnvironmentVariablePatch{ClearValue: true}); err != nil {
+		t.Fatalf("clear value to free aggregate capacity: %v", err)
+	}
+	isSecret := true
+	renamed := "TARGET_RENAMED"
+	beforeMetadata, err := f.repo.GetApp(f.ctx, f.projectOneID, replaceAppID, f.actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.UpdateAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, targetID, f.actor, AppEnvironmentVariablePatch{Key: &renamed, IsSecret: &isSecret}); err != nil {
+		t.Fatalf("rename/classify cleared metadata: %v", err)
+	}
+	var totalBytes int64
+	if err := f.pool.QueryRow(f.ctx, `SELECT COALESCE(sum(value_plaintext_bytes),0)::bigint FROM app_environment_variables WHERE app_id=$1 AND project_id=$2`, replaceAppID, f.projectOneID).Scan(&totalBytes); err != nil {
+		t.Fatal(err)
+	}
+	afterMetadata, err := f.repo.GetApp(f.ctx, f.projectOneID, replaceAppID, f.actor)
+	if err != nil || totalBytes != 500000 || afterMetadata.DesiredGeneration != beforeMetadata.DesiredGeneration {
+		t.Fatalf("rename/classification changed configured usage or generation: bytes=%d generation %d→%d err=%v", totalBytes, beforeMetadata.DesiredGeneration, afterMetadata.DesiredGeneration, err)
+	}
+	freed := strings.Repeat("f", 24000)
+	freedID := createValue(replaceAppID, "CLEARED_CAPACITY", freed)
+	if err := f.repo.DeleteAppEnvironmentVariable(f.ctx, f.projectOneID, replaceAppID, freedID, f.actor); err != nil {
+		t.Fatalf("delete configured value to free aggregate capacity: %v", err)
+	}
+	if _, err := f.repo.CreateAppEnvironmentVariable(f.ctx, uuid.Must(uuid.NewV7()), f.projectOneID, replaceAppID, f.actor, AppEnvironmentVariableInput{
+		Key: "DELETED_CAPACITY", Value: &freed, Cipher: cipher,
+	}); err != nil {
+		t.Fatalf("create after delete freed aggregate capacity: %v", err)
 	}
 }

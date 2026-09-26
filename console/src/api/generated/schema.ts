@@ -5565,14 +5565,14 @@ export interface components {
             key: string;
             /** @default false */
             is_secret: boolean;
-            /** @description Plaintext is accepted only for this mutation and encrypted before durable persistence. */
+            /** @description Plaintext is encrypted before durable persistence and never returned. Each value is limited to 65536 UTF-8 bytes and configured values are limited to 512 KiB total per App. NUL and CR/LF are unsupported by the line-based Docker env-file transport; multiline values are not supported. */
             value?: string;
             description?: string;
         };
         UpdateAppEnvironmentVariableRequest: {
             key?: string;
             is_secret?: boolean;
-            /** @description Replacement plaintext is never returned. */
+            /** @description Replacement plaintext is never returned. Each value is limited to 65536 UTF-8 bytes and configured values are limited to 512 KiB total per App. NUL and CR/LF are unsupported by the line-based Docker env-file transport; multiline values are not supported. */
             value?: string;
             /** @description Remove the configured value without deleting its metadata. Cannot be combined with value. */
             clear_value?: boolean;

@@ -185,13 +185,14 @@ jobs:
             done
           }
           run_and_require_tests ./internal/migrate \
-            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration|TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration|TestAppRuntimeLogSourcesMigrationBackfillConstraintsAndDownIntegration|TestAppEnvironmentVariablesMigrationPreservesExistingAppsAndDownIntegration)$' \
+            '^(TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration|TestAppDeploymentMigrationPreservesExistingAppsIntegration|TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration|TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration|TestAppRuntimeLogSourcesMigrationBackfillConstraintsAndDownIntegration|TestAppEnvironmentVariablesMigrationPreservesExistingAppsAndDownIntegration|TestAppEnvironmentValueSizeMigrationBackfillsAndRollsBackIntegration)$' \
             TestAppsPlatformHostnameMigrationPreservesExistingStateIntegration \
             TestAppDeploymentMigrationPreservesExistingAppsIntegration \
             TestAppHealthMigrationKeepsExistingRuntimeNonRoutableIntegration \
             TestAppRouteIncarnationMigrationDownRestoresPriorSchemaIntegration \
             TestAppRuntimeLogSourcesMigrationBackfillConstraintsAndDownIntegration \
-            TestAppEnvironmentVariablesMigrationPreservesExistingAppsAndDownIntegration
+            TestAppEnvironmentVariablesMigrationPreservesExistingAppsAndDownIntegration \
+            TestAppEnvironmentValueSizeMigrationBackfillsAndRollsBackIntegration
           run_and_require_tests ./internal/repository \
             '^(TestAppsPersistenceGenerationAndPlanLimitIntegration|TestAppsSharedHostnameNamespaceConcurrencyAndSiteRouteIsolationIntegration|TestAppDeploymentSnapshotSelectionAndQuotaIntegration|TestAppDeploymentConcurrentVersionsAndLeaseFencingIntegration|TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration|TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration)$' \
             TestAppsPersistenceGenerationAndPlanLimitIntegration \
@@ -201,7 +202,7 @@ jobs:
             TestAppDeploymentSelectionRollbackQuotaAndDeletionCleanupIntegration \
             TestAppAndProjectDeletionWaitForArtifactPublishReservationsIntegration
           run_and_require_tests ./internal/repository \
-            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration|TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration|TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration|TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration)$' \
+            '^(TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration|TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration|TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration|TestAppHealthConvergenceFencesStaleProbesAndControlsRouteSnapshotIntegration|TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration|TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration|TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration|TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration|TestAppEnvironmentAggregateValueLimitIsTransactionalIntegration)$' \
             TestAppRuntimeLeaseFencingFailureRecoveryAndConvergenceIntegration \
             TestProjectDeletionQueuesRuntimeCleanupBeforeAppCascadeIntegration \
             TestAppRuntimeMigrationCanBeAppliedWithoutLegacyRuntimeStateIntegration \
@@ -209,7 +210,8 @@ jobs:
             TestAppRuntimeAddressValidityProjectionAndIngressParityIntegration \
             TestAppSameContainerRestartRequiresFreshHealthBeforeRoutingIntegration \
             TestAppRuntimeLogSourcesRetainVerifiedContainerHistoryIntegration \
-            TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration
+            TestAppEnvironmentVariablePersistenceGenerationAuthorizationAndLeaseFencingIntegration \
+            TestAppEnvironmentAggregateValueLimitIsTransactionalIntegration
           run_and_require_tests ./internal/httpapi \
             '^TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration$' \
             TestAppsAPIControlPlaneAuthorizationAndProjectionIntegration

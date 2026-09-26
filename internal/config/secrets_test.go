@@ -11,7 +11,7 @@ func TestLoadSecretSettings(t *testing.T) {
 	appsKey := []byte(strings.Repeat("a", 32))
 	bootstrapKey := []byte(strings.Repeat("b", 32))
 	t.Setenv("FUNCTIONS_SECRET_KEY", base64.StdEncoding.EncodeToString(functionsKey))
-	t.Setenv("APPS_SECRET_KEY", base64.StdEncoding.EncodeToString(appsKey))
+	t.Setenv("APPS_SECRET_KEY", base64.RawURLEncoding.EncodeToString(appsKey))
 	t.Setenv("BOOTSTRAP_CLI_KEY", base64.StdEncoding.EncodeToString(bootstrapKey))
 	t.Setenv("GITHUB_APP_CLIENT_ID", "  Iv1.test-client-id  ")
 

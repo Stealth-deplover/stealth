@@ -170,6 +170,47 @@ func TestRuntimeEnvironmentDecryptsOnlyAppBoundCiphertextAndClearsPlaintext(t *t
 	}
 }
 
+func TestWorkerRejectsAggregateRuntimeEnvironmentBeforeContainerCreate(t *testing.T) {
+	worker, store, driver, job, _ := newRuntimeWorkerFixture(t, false)
+	projectID, appID := uuid.MustParse(job.App.ProjectID), uuid.MustParse(job.App.ID)
+	cipher, err := appsecret.New(bytes.Repeat([]byte{0x38}, appsecret.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.AppSecretsCipher = cipher
+	value := bytes.Repeat([]byte("v"), repository.AppEnvironmentVariableMaxValueBytes)
+	store.environment = make([]repository.AppRuntimeEnvironmentCiphertext, 0, 9)
+	for index := 0; index < 8; index++ {
+		id := uuid.Must(uuid.NewV7())
+		encoded, err := cipher.Encrypt(projectID, appID, id, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.environment = append(store.environment, repository.AppRuntimeEnvironmentCiphertext{ID: id, Key: fmt.Sprintf("VALUE_%d", index), Ciphertext: encoded})
+	}
+	values, err := worker.runtimeEnvironment(context.Background(), job)
+	if err != nil || len(values) != 8 {
+		t.Fatalf("worker rejected environment at aggregate limit: values=%d err=%v", len(values), err)
+	}
+	wipeRuntimeEnvironment(values)
+	extraID := uuid.Must(uuid.NewV7())
+	extraCiphertext, err := cipher.Encrypt(projectID, appID, extraID, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.environment = append(store.environment, repository.AppRuntimeEnvironmentCiphertext{ID: extraID, Key: "VALUE_EXTRA", Ciphertext: extraCiphertext})
+
+	if err := worker.processApp(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if driver.createCalls != 0 || driver.startCalls != 0 || store.completeCalls != 0 {
+		t.Fatalf("over-limit runtime environment reached container execution: create=%d start=%d complete=%d", driver.createCalls, driver.startCalls, store.completeCalls)
+	}
+	if store.failureCalls != 1 || store.failureMessage != "runtime unavailable" {
+		t.Fatalf("worker did not record a sanitized failure: calls=%d message=%q", store.failureCalls, store.failureMessage)
+	}
+}
+
 type runtimeTestDriver struct {
 	store              *runtimeTestStore
 	image              Image

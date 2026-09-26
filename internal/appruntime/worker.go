@@ -590,6 +590,7 @@ func (w *Worker) runtimeEnvironment(ctx context.Context, job repository.AppRunti
 	}
 	values := make([]RuntimeEnvironmentVariable, 0, len(encrypted))
 	seen := make(map[string]struct{}, len(encrypted))
+	totalValueBytes := 0
 	for _, item := range encrypted {
 		if item.ID == uuid.Nil || !appRuntimeEnvironmentKey.MatchString(item.Key) {
 			wipeRuntimeEnvironment(values)
@@ -606,6 +607,12 @@ func (w *Worker) runtimeEnvironment(ctx context.Context, job repository.AppRunti
 			wipeRuntimeEnvironment(values)
 			return nil, ErrAppEnvironmentDecryption
 		}
+		if len(plaintext) > repository.AppEnvironmentVariableMaxTotalValueBytes-totalValueBytes {
+			clear(plaintext)
+			wipeRuntimeEnvironment(values)
+			return nil, ErrAppEnvironmentDecryption
+		}
+		totalValueBytes += len(plaintext)
 		values = append(values, RuntimeEnvironmentVariable{Key: item.Key, Value: plaintext})
 	}
 	return values, nil

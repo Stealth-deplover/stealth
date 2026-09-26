@@ -150,6 +150,26 @@ func TestRuntimeEnvironmentFileRejectsLineInjectionAndDuplicateKeys(t *testing.T
 	}
 }
 
+func TestRuntimeEnvironmentFileUsesAggregateProductLimit(t *testing.T) {
+	value := bytes.Repeat([]byte("v"), repository.AppEnvironmentVariableMaxValueBytes)
+	values := make([]RuntimeEnvironmentVariable, 0, 9)
+	for index := 0; index < 8; index++ {
+		values = append(values, RuntimeEnvironmentVariable{Key: fmt.Sprintf("VALUE_%d", index), Value: append([]byte(nil), value...)})
+	}
+	_, cleanup, err := writeRuntimeEnvironmentFile(values)
+	if err != nil {
+		t.Fatalf("write exactly-at-limit environment: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	values = append(values, RuntimeEnvironmentVariable{Key: "VALUE_EXTRA", Value: []byte("x")})
+	if path, cleanup, err := writeRuntimeEnvironmentFile(values); err == nil {
+		_ = cleanup()
+		t.Fatalf("aggregate over-limit environment was written to %q", path)
+	}
+}
+
 func TestExecCommandRunnerPassesArgvWithoutShellExpansionAndBoundsOutput(t *testing.T) {
 	printf, err := exec.LookPath("printf")
 	if err != nil {

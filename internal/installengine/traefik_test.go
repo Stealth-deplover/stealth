@@ -1,6 +1,7 @@
 package installengine
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"os"
@@ -321,16 +322,40 @@ func TestAppSecretKeyIsGeneratedOncePreservedAndNeverSilentlyReplaced(t *testing
 	if err != nil || len(key) != 32 {
 		t.Fatalf("upgrade-generated App key length=%d err=%v", len(key), err)
 	}
-	preserved, err := MigrateReleaseConfig(values, "v1.2.4", "v1.2.3")
+	repeated, err := MigrateReleaseConfig(values, "v1.2.4", "v1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	preservedValues, err := ParseEnvContents(preserved)
-	if err != nil || preservedValues["APPS_SECRET_KEY"] != values["APPS_SECRET_KEY"] {
-		t.Fatalf("existing App key changed during release migration: got=%q want=%q err=%v", preservedValues["APPS_SECRET_KEY"], values["APPS_SECRET_KEY"], err)
+	repeatedValues, err := ParseEnvContents(repeated)
+	if err != nil || repeatedValues["APPS_SECRET_KEY"] != values["APPS_SECRET_KEY"] {
+		t.Fatalf("repeated migration changed generated App key: got=%q want=%q err=%v", repeatedValues["APPS_SECRET_KEY"], values["APPS_SECRET_KEY"], err)
 	}
-	if _, err := MigrateReleaseConfig(map[string]string{"APPS_SECRET_KEY": "invalid-existing-key"}, "v1.2.3", "v1.2.2"); err == nil || !strings.Contains(err.Error(), "refusing to replace it") {
-		t.Fatalf("invalid existing App key was not rejected safely: %v", err)
+
+	for name, encoded := range map[string]string{
+		"standard base64": values["APPS_SECRET_KEY"],
+		"raw url base64":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x93}, 32)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			contents, err := MigrateReleaseConfig(map[string]string{"APPS_SECRET_KEY": encoded}, "v1.2.4", "v1.2.3")
+			if err != nil {
+				t.Fatalf("valid existing key was rejected: %v", err)
+			}
+			migrated, err := ParseEnvContents(contents)
+			if err != nil || migrated["APPS_SECRET_KEY"] != encoded {
+				t.Fatalf("existing App key changed: got=%q want=%q err=%v", migrated["APPS_SECRET_KEY"], encoded, err)
+			}
+		})
+	}
+
+	for name, invalid := range map[string]string{
+		"invalid base64":       "invalid-existing-key",
+		"wrong decoded length": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x93}, 31)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := MigrateReleaseConfig(map[string]string{"APPS_SECRET_KEY": invalid}, "v1.2.3", "v1.2.2"); err == nil || !strings.Contains(err.Error(), "refusing to replace it") {
+				t.Fatalf("invalid existing App key was not rejected safely: %v", err)
+			}
+		})
 	}
 }
 
